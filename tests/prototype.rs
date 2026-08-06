@@ -1,6 +1,6 @@
 use rust_validator::{
-    Action, ActionTerm, Bump, CompileError, Decision, Event, Head, PrincipalTerm, Regex, Request,
-    ResourceTerm, Rule, RuleMode, Test, Validator,
+    Action, Bump, CompileError, ComponentPattern, Decision, Event, Head, Regex, Request, Rule,
+    RuleMode, Test, Validator,
 };
 
 fn event(principal: &str, action: Action, path: &[&str]) -> Event {
@@ -15,16 +15,16 @@ fn same_actor_edit_before_stage() -> Rule {
     Rule::new(
         RuleMode::Require,
         Head::new(
-            PrincipalTerm::variable("actor"),
-            ActionTerm::constant(Action::Stage),
-            ResourceTerm::variable("target"),
+            ComponentPattern::variable("actor"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::variable("target"),
         ),
         Regex::concat([
             Regex::All,
             Regex::test(Test::and([
-                Test::EqPrincipal(PrincipalTerm::variable("actor")),
-                Test::EqAction(ActionTerm::constant(Action::Edit)),
-                Test::EqResource(ResourceTerm::variable("target")),
+                Test::EqPrincipal(ComponentPattern::variable("actor")),
+                Test::EqAction(ComponentPattern::constant(Action::Edit)),
+                Test::EqResource(ComponentPattern::variable("target")),
             ])),
         ]),
     )
@@ -51,15 +51,15 @@ fn require_rule_uses_only_committed_pre_candidate_history() {
 fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
     let arena = Bump::new();
     let matching_commit = Regex::test(Test::and([
-        Test::EqAction(ActionTerm::constant(Action::commit("ship"))),
-        Test::EqResource(ResourceTerm::variable("target")),
+        Test::EqAction(ComponentPattern::constant(Action::commit("ship"))),
+        Test::EqResource(ComponentPattern::variable("target")),
     ]));
     let rule = Rule::new(
         RuleMode::Forbid,
         Head::new(
-            PrincipalTerm::variable("actor"),
-            ActionTerm::constant(Action::commit("ship")),
-            ResourceTerm::variable("target"),
+            ComponentPattern::variable("actor"),
+            ComponentPattern::constant(Action::commit("ship")),
+            ComponentPattern::variable("target"),
         ),
         Regex::concat([Regex::All, matching_commit, Regex::All]),
     );
@@ -88,15 +88,15 @@ fn complement_is_exact_over_complete_history() {
     let arena = Bump::new();
     let no_edit = Regex::not(Regex::concat([
         Regex::All,
-        Regex::test(Test::EqAction(ActionTerm::constant(Action::Edit))),
+        Regex::test(Test::EqAction(ComponentPattern::constant(Action::Edit))),
         Regex::All,
     ]));
     let rule = Rule::new(
         RuleMode::Require,
         Head::new(
-            PrincipalTerm::variable("actor"),
-            ActionTerm::constant(Action::Stage),
-            ResourceTerm::variable("target"),
+            ComponentPattern::variable("actor"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::variable("target"),
         ),
         no_edit,
     );
@@ -124,11 +124,11 @@ fn compile_rejects_unbound_and_cross_component_variables() {
     let missing = Rule::new(
         RuleMode::Require,
         Head::new(
-            PrincipalTerm::variable("actor"),
-            ActionTerm::constant(Action::Stage),
-            ResourceTerm::variable("target"),
+            ComponentPattern::variable("actor"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::variable("target"),
         ),
-        Regex::test(Test::EqPrincipal(PrincipalTerm::variable("missing"))),
+        Regex::test(Test::EqPrincipal(ComponentPattern::variable("missing"))),
     );
     assert!(matches!(
         Validator::compile(&arena, [missing]),
@@ -138,9 +138,9 @@ fn compile_rejects_unbound_and_cross_component_variables() {
     let conflict = Rule::new(
         RuleMode::Require,
         Head::new(
-            PrincipalTerm::variable("same"),
-            ActionTerm::variable("same"),
-            ResourceTerm::constant(["a"]),
+            ComponentPattern::variable("same"),
+            ComponentPattern::variable("same"),
+            ComponentPattern::constant(["a"]),
         ),
         Regex::All,
     );

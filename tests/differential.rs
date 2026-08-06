@@ -1,6 +1,5 @@
 use rust_validator::{
-    Action, ActionTerm, Bump, Event, Head, PrincipalTerm, Regex, Request, ResourceTerm, Rule,
-    RuleMode, Test, Validator,
+    Action, Bump, ComponentPattern, Event, Head, Regex, Request, Rule, RuleMode, Test, Validator,
 };
 
 fn event(action: Action) -> Event {
@@ -11,16 +10,16 @@ fn eval_test(test: &Test, event: &Event) -> bool {
     match test {
         Test::True => true,
         Test::False => false,
-        Test::EqAction(ActionTerm::Constant(expected)) => &event.action == expected,
-        Test::NeAction(ActionTerm::Constant(expected)) => &event.action != expected,
+        Test::EqAction(ComponentPattern::Constant(expected)) => &event.action == expected,
+        Test::NeAction(ComponentPattern::Constant(expected)) => &event.action != expected,
         Test::And(children) => children.iter().all(|child| eval_test(child, event)),
         Test::Or(children) => children.iter().any(|child| eval_test(child, event)),
         Test::EqPrincipal(_)
         | Test::NePrincipal(_)
         | Test::EqResource(_)
         | Test::NeResource(_)
-        | Test::EqAction(ActionTerm::Variable(_))
-        | Test::NeAction(ActionTerm::Variable(_)) => {
+        | Test::EqAction(ComponentPattern::Variable(_))
+        | Test::NeAction(ComponentPattern::Variable(_)) => {
             panic!("generator emitted a test outside its reference fragment")
         }
     }
@@ -79,11 +78,11 @@ impl Generator {
             return match self.next(5) {
                 0 => Test::True,
                 1 => Test::False,
-                2 => Test::EqAction(ActionTerm::constant(self.action())),
-                3 => Test::NeAction(ActionTerm::constant(self.action())),
+                2 => Test::EqAction(ComponentPattern::constant(self.action())),
+                3 => Test::NeAction(ComponentPattern::constant(self.action())),
                 _ => Test::and([
-                    Test::EqAction(ActionTerm::constant(self.action())),
-                    Test::NeAction(ActionTerm::constant(self.action())),
+                    Test::EqAction(ComponentPattern::constant(self.action())),
+                    Test::NeAction(ComponentPattern::constant(self.action())),
                 ]),
             };
         }
@@ -123,9 +122,9 @@ fn implementation_accepts(regex: Regex, history: &[Event]) -> bool {
     let rule = Rule::new(
         RuleMode::Require,
         Head::new(
-            PrincipalTerm::constant("probe"),
-            ActionTerm::constant(Action::History),
-            ResourceTerm::constant(["probe"]),
+            ComponentPattern::constant("probe"),
+            ComponentPattern::constant(Action::History),
+            ComponentPattern::constant(["probe"]),
         ),
         regex,
     );
@@ -170,9 +169,9 @@ fn histories(max_len: usize) -> Vec<Vec<Event>> {
 
 #[test]
 fn every_short_word_matches_the_reference_for_boundary_expressions() {
-    let read = Regex::test(Test::EqAction(ActionTerm::constant(Action::Read)));
-    let edit = Regex::test(Test::EqAction(ActionTerm::constant(Action::Edit)));
-    let stage = Regex::test(Test::EqAction(ActionTerm::constant(Action::Stage)));
+    let read = Regex::test(Test::EqAction(ComponentPattern::constant(Action::Read)));
+    let edit = Regex::test(Test::EqAction(ComponentPattern::constant(Action::Edit)));
+    let stage = Regex::test(Test::EqAction(ComponentPattern::constant(Action::Stage)));
     let read_or_edit = Regex::union([read.clone(), edit.clone()]);
     let contains_edit = Regex::concat([Regex::All, edit.clone(), Regex::All]);
     let corpus = vec![

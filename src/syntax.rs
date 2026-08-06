@@ -8,45 +8,13 @@ use crate::model::{Action, Event, Principal, Resource};
 use crate::validator::CompileError;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum PrincipalTerm {
-    Constant(Principal),
+pub enum ComponentPattern<T> {
+    Constant(T),
     Variable(String),
 }
 
-impl PrincipalTerm {
-    pub fn constant(value: impl Into<Principal>) -> Self {
-        Self::Constant(value.into())
-    }
-
-    pub fn variable(name: impl Into<String>) -> Self {
-        Self::Variable(name.into())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ActionTerm {
-    Constant(Action),
-    Variable(String),
-}
-
-impl ActionTerm {
-    pub fn constant(value: Action) -> Self {
-        Self::Constant(value)
-    }
-
-    pub fn variable(name: impl Into<String>) -> Self {
-        Self::Variable(name.into())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ResourceTerm {
-    Constant(Resource),
-    Variable(String),
-}
-
-impl ResourceTerm {
-    pub fn constant(value: impl Into<Resource>) -> Self {
+impl<T> ComponentPattern<T> {
+    pub fn constant(value: impl Into<T>) -> Self {
         Self::Constant(value.into())
     }
 
@@ -57,13 +25,17 @@ impl ResourceTerm {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Head {
-    pub principal: PrincipalTerm,
-    pub action: ActionTerm,
-    pub resource: ResourceTerm,
+    pub principal: ComponentPattern<Principal>,
+    pub action: ComponentPattern<Action>,
+    pub resource: ComponentPattern<Resource>,
 }
 
 impl Head {
-    pub fn new(principal: PrincipalTerm, action: ActionTerm, resource: ResourceTerm) -> Self {
+    pub fn new(
+        principal: ComponentPattern<Principal>,
+        action: ComponentPattern<Action>,
+        resource: ComponentPattern<Resource>,
+    ) -> Self {
         Self {
             principal,
             action,
@@ -76,12 +48,12 @@ impl Head {
 pub enum Test {
     True,
     False,
-    EqPrincipal(PrincipalTerm),
-    NePrincipal(PrincipalTerm),
-    EqAction(ActionTerm),
-    NeAction(ActionTerm),
-    EqResource(ResourceTerm),
-    NeResource(ResourceTerm),
+    EqPrincipal(ComponentPattern<Principal>),
+    NePrincipal(ComponentPattern<Principal>),
+    EqAction(ComponentPattern<Action>),
+    NeAction(ComponentPattern<Action>),
+    EqResource(ComponentPattern<Resource>),
+    NeResource(ComponentPattern<Resource>),
     And(Vec<Test>),
     Or(Vec<Test>),
 }
@@ -396,6 +368,36 @@ pub(crate) struct SyntaxContext<'a> {
     epsilon: RegexId<'a>,
 }
 
+trait ArenaComponent<'a>: Sized {
+    const COMPONENT: Component;
+
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> TermValue<'a>;
+}
+
+impl<'a> ArenaComponent<'a> for Principal {
+    const COMPONENT: Component = Component::Principal;
+
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> TermValue<'a> {
+        TermValue::Principal(context.alloc_principal(value))
+    }
+}
+
+impl<'a> ArenaComponent<'a> for Action {
+    const COMPONENT: Component = Component::Action;
+
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> TermValue<'a> {
+        TermValue::Action(ActionValue::from_action(context.arena(), value))
+    }
+}
+
+impl<'a> ArenaComponent<'a> for Resource {
+    const COMPONENT: Component = Component::Resource;
+
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> TermValue<'a> {
+        TermValue::Resource(context.alloc_resource(value))
+    }
+}
+
 impl<'a> SyntaxContext<'a> {
     pub(crate) fn new(arena: &'a Bump) -> Self {
         let mut test_consign = BHConsign::with_capacity(arena, 128);
@@ -430,9 +432,9 @@ impl<'a> SyntaxContext<'a> {
         tail: &Regex,
     ) -> Result<(CompiledHead<'a>, RegexId<'a>), CompileError> {
         let mut scope = Scope::default();
-        let principal = self.compile_head_principal(rule, &head.principal, &mut scope)?;
-        let action = self.compile_head_action(rule, &head.action, &mut scope)?;
-        let resource = self.compile_head_resource(rule, &head.resource, &mut scope)?;
+        let principal = self.compile_head_pattern(rule, &head.principal, &mut scope)?;
+        let action = self.compile_head_pattern(rule, &head.action, &mut scope)?;
+        let resource = self.compile_head_pattern(rule, &head.resource, &mut scope)?;
         let binding_count = scope.variables.len();
         let tail = self.compile_regex(rule, tail, &scope)?;
         Ok((
@@ -463,90 +465,30 @@ impl<'a> SyntaxContext<'a> {
         self.arena().alloc_slice_copy(&segments)
     }
 
-    fn compile_head_principal(
+    fn compile_head_pattern<T: ArenaComponent<'a>>(
         &self,
         rule: usize,
-        term: &PrincipalTerm,
+        pattern: &ComponentPattern<T>,
         scope: &mut Scope,
     ) -> Result<TermValue<'a>, CompileError> {
-        Ok(match term {
-            PrincipalTerm::Constant(value) => TermValue::Principal(self.alloc_principal(value)),
-            PrincipalTerm::Variable(name) => {
-                TermValue::Variable(scope.bind(rule, name, Component::Principal)?)
+        Ok(match pattern {
+            ComponentPattern::Constant(value) => T::intern(self, value),
+            ComponentPattern::Variable(name) => {
+                TermValue::Variable(scope.bind(rule, name, T::COMPONENT)?)
             }
         })
     }
 
-    fn compile_head_action(
+    fn compile_pattern<T: ArenaComponent<'a>>(
         &self,
         rule: usize,
-        term: &ActionTerm,
-        scope: &mut Scope,
-    ) -> Result<TermValue<'a>, CompileError> {
-        Ok(match term {
-            ActionTerm::Constant(value) => {
-                TermValue::Action(ActionValue::from_action(self.arena(), value))
-            }
-            ActionTerm::Variable(name) => {
-                TermValue::Variable(scope.bind(rule, name, Component::Action)?)
-            }
-        })
-    }
-
-    fn compile_head_resource(
-        &self,
-        rule: usize,
-        term: &ResourceTerm,
-        scope: &mut Scope,
-    ) -> Result<TermValue<'a>, CompileError> {
-        Ok(match term {
-            ResourceTerm::Constant(value) => TermValue::Resource(self.alloc_resource(value)),
-            ResourceTerm::Variable(name) => {
-                TermValue::Variable(scope.bind(rule, name, Component::Resource)?)
-            }
-        })
-    }
-
-    fn compile_principal_term(
-        &self,
-        rule: usize,
-        term: &PrincipalTerm,
+        pattern: &ComponentPattern<T>,
         scope: &Scope,
     ) -> Result<TermValue<'a>, CompileError> {
-        Ok(match term {
-            PrincipalTerm::Constant(value) => TermValue::Principal(self.alloc_principal(value)),
-            PrincipalTerm::Variable(name) => {
-                TermValue::Variable(scope.resolve(rule, name, Component::Principal)?)
-            }
-        })
-    }
-
-    fn compile_action_term(
-        &self,
-        rule: usize,
-        term: &ActionTerm,
-        scope: &Scope,
-    ) -> Result<TermValue<'a>, CompileError> {
-        Ok(match term {
-            ActionTerm::Constant(value) => {
-                TermValue::Action(ActionValue::from_action(self.arena(), value))
-            }
-            ActionTerm::Variable(name) => {
-                TermValue::Variable(scope.resolve(rule, name, Component::Action)?)
-            }
-        })
-    }
-
-    fn compile_resource_term(
-        &self,
-        rule: usize,
-        term: &ResourceTerm,
-        scope: &Scope,
-    ) -> Result<TermValue<'a>, CompileError> {
-        Ok(match term {
-            ResourceTerm::Constant(value) => TermValue::Resource(self.alloc_resource(value)),
-            ResourceTerm::Variable(name) => {
-                TermValue::Variable(scope.resolve(rule, name, Component::Resource)?)
+        Ok(match pattern {
+            ComponentPattern::Constant(value) => T::intern(self, value),
+            ComponentPattern::Variable(name) => {
+                TermValue::Variable(scope.resolve(rule, name, T::COMPONENT)?)
             }
         })
     }
@@ -561,32 +503,32 @@ impl<'a> SyntaxContext<'a> {
             Test::True => self.test_true,
             Test::False => self.test_false,
             Test::EqPrincipal(term) => {
-                let term = self.compile_principal_term(rule, term, scope)?;
+                let term = self.compile_pattern(rule, term, scope)?;
                 self.test_consign
                     .mk(TestNode::Equal(Component::Principal, term))
             }
             Test::NePrincipal(term) => {
-                let term = self.compile_principal_term(rule, term, scope)?;
+                let term = self.compile_pattern(rule, term, scope)?;
                 self.test_consign
                     .mk(TestNode::NotEqual(Component::Principal, term))
             }
             Test::EqAction(term) => {
-                let term = self.compile_action_term(rule, term, scope)?;
+                let term = self.compile_pattern(rule, term, scope)?;
                 self.test_consign
                     .mk(TestNode::Equal(Component::Action, term))
             }
             Test::NeAction(term) => {
-                let term = self.compile_action_term(rule, term, scope)?;
+                let term = self.compile_pattern(rule, term, scope)?;
                 self.test_consign
                     .mk(TestNode::NotEqual(Component::Action, term))
             }
             Test::EqResource(term) => {
-                let term = self.compile_resource_term(rule, term, scope)?;
+                let term = self.compile_pattern(rule, term, scope)?;
                 self.test_consign
                     .mk(TestNode::Equal(Component::Resource, term))
             }
             Test::NeResource(term) => {
-                let term = self.compile_resource_term(rule, term, scope)?;
+                let term = self.compile_pattern(rule, term, scope)?;
                 self.test_consign
                     .mk(TestNode::NotEqual(Component::Resource, term))
             }
@@ -983,9 +925,9 @@ mod tests {
 
     fn variable_head() -> Head {
         Head::new(
-            PrincipalTerm::variable("principal"),
-            ActionTerm::variable("action"),
-            ResourceTerm::variable("resource"),
+            ComponentPattern::variable("principal"),
+            ComponentPattern::variable("action"),
+            ComponentPattern::variable("resource"),
         )
     }
 
@@ -993,8 +935,8 @@ mod tests {
     fn aci_and_identity_normalization_reuse_handles() {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
-        let read = Regex::test(Test::EqAction(ActionTerm::constant(Action::Read)));
-        let edit = Regex::test(Test::EqAction(ActionTerm::constant(Action::Edit)));
+        let read = Regex::test(Test::EqAction(ComponentPattern::constant(Action::Read)));
+        let edit = Regex::test(Test::EqAction(ComponentPattern::constant(Action::Edit)));
 
         let (_, left) = syntax
             .compile_rule_parts(
@@ -1039,8 +981,8 @@ mod tests {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
         let cycle = Regex::star(Regex::union([
-            Regex::test(Test::EqAction(ActionTerm::constant(Action::Read))),
-            Regex::test(Test::EqAction(ActionTerm::constant(Action::Edit))),
+            Regex::test(Test::EqAction(ComponentPattern::constant(Action::Read))),
+            Regex::test(Test::EqAction(ComponentPattern::constant(Action::Edit))),
         ]));
         let (head, initial) = syntax
             .compile_rule_parts(1, &variable_head(), &cycle)
