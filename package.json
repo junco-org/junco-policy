@@ -1,0 +1,10 @@
+{
+  "name": "rust-validator",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "cargo build",
+    "typecheck": "cargo check",
+    "test": "cargo test"
+  }
+}
