@@ -181,12 +181,14 @@ pub(crate) type RegexId<'a> = BHConsed<'a, RegexNode<'a>>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Test<'a> {
     context: u64,
+    scope: u64,
     id: TestId<'a>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Regex<'a> {
     context: u64,
+    scope: u64,
     id: RegexId<'a>,
 }
 
@@ -772,6 +774,7 @@ impl<'a> SyntaxContext<'a> {
 pub struct RuleSyntax<'context, 'arena> {
     syntax: &'context mut SyntaxContext<'arena>,
     rule: usize,
+    scope_id: u64,
     scope: Scope,
 }
 
@@ -779,6 +782,7 @@ impl<'context, 'arena> RuleSyntax<'context, 'arena> {
     pub(crate) fn new(
         syntax: &'context mut SyntaxContext<'arena>,
         rule: usize,
+        scope_id: u64,
         head: &Head,
     ) -> Result<(CompiledHead<'arena>, Self), CompileError> {
         let (head, scope) = syntax.compile_head(rule, head)?;
@@ -787,6 +791,7 @@ impl<'context, 'arena> RuleSyntax<'context, 'arena> {
             Self {
                 syntax,
                 rule,
+                scope_id,
                 scope,
             },
         ))
@@ -795,6 +800,7 @@ impl<'context, 'arena> RuleSyntax<'context, 'arena> {
     fn wrap_test(&self, id: TestId<'arena>) -> Test<'arena> {
         Test {
             context: self.syntax.context_id,
+            scope: self.scope_id,
             id,
         }
     }
@@ -804,12 +810,17 @@ impl<'context, 'arena> RuleSyntax<'context, 'arena> {
             test.context, self.syntax.context_id,
             "test belongs to another syntax context"
         );
+        assert_eq!(
+            test.scope, self.scope_id,
+            "test belongs to another rule scope"
+        );
         test.id
     }
 
     fn wrap_regex(&self, id: RegexId<'arena>) -> Regex<'arena> {
         Regex {
             context: self.syntax.context_id,
+            scope: self.scope_id,
             id,
         }
     }
@@ -819,7 +830,21 @@ impl<'context, 'arena> RuleSyntax<'context, 'arena> {
             regex.context, self.syntax.context_id,
             "regex belongs to another syntax context"
         );
+        assert_eq!(
+            regex.scope, self.scope_id,
+            "regex belongs to another rule scope"
+        );
         regex.id
+    }
+
+    pub(crate) fn finish_regex(
+        &self,
+        regex: Regex<'arena>,
+    ) -> Result<RegexId<'arena>, CompileError> {
+        if regex.context != self.syntax.context_id || regex.scope != self.scope_id {
+            return Err(CompileError::ForeignRuleHandle { rule: self.rule });
+        }
+        Ok(regex.id)
     }
 
     pub fn true_test(&self) -> Test<'arena> {
@@ -1010,7 +1035,7 @@ mod tests {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
 
-        let (_, mut first) = RuleSyntax::new(&mut syntax, 1, &variable_head()).unwrap();
+        let (_, mut first) = RuleSyntax::new(&mut syntax, 1, 1, &variable_head()).unwrap();
         let read = action_regex(&mut first, Action::Read);
         let edit = action_regex(&mut first, Action::Edit);
         let empty = first.empty();
@@ -1018,7 +1043,7 @@ mod tests {
         let left = first.regex_id(left);
         drop(first);
 
-        let (_, mut second) = RuleSyntax::new(&mut syntax, 2, &variable_head()).unwrap();
+        let (_, mut second) = RuleSyntax::new(&mut syntax, 2, 2, &variable_head()).unwrap();
         let edit = action_regex(&mut second, Action::Edit);
         let read = action_regex(&mut second, Action::Read);
         let right = second.union([edit, read]);
@@ -1026,20 +1051,20 @@ mod tests {
         assert_eq!(left, right);
         drop(second);
 
-        let (_, mut third) = RuleSyntax::new(&mut syntax, 3, &variable_head()).unwrap();
+        let (_, mut third) = RuleSyntax::new(&mut syntax, 3, 3, &variable_head()).unwrap();
         let epsilon = third.epsilon();
         let read = action_regex(&mut third, Action::Read);
         let concat = third.concat([epsilon, read, epsilon]);
         let concat = third.regex_id(concat);
         drop(third);
 
-        let (_, mut fourth) = RuleSyntax::new(&mut syntax, 4, &variable_head()).unwrap();
+        let (_, mut fourth) = RuleSyntax::new(&mut syntax, 4, 4, &variable_head()).unwrap();
         let single = action_regex(&mut fourth, Action::Read);
         let single = fourth.regex_id(single);
         assert_eq!(concat, single);
         drop(fourth);
 
-        let (_, mut fifth) = RuleSyntax::new(&mut syntax, 5, &variable_head()).unwrap();
+        let (_, mut fifth) = RuleSyntax::new(&mut syntax, 5, 5, &variable_head()).unwrap();
         let edit = action_regex(&mut fifth, Action::Edit);
         let not_edit = fifth.not(edit);
         let contradiction = fifth.intersect([edit, not_edit]);
@@ -1051,9 +1076,9 @@ mod tests {
     fn variable_names_share_interned_symbols_across_rules() {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
-        let (first, first_syntax) = RuleSyntax::new(&mut syntax, 1, &variable_head()).unwrap();
+        let (first, first_syntax) = RuleSyntax::new(&mut syntax, 1, 1, &variable_head()).unwrap();
         drop(first_syntax);
-        let (second, second_syntax) = RuleSyntax::new(&mut syntax, 2, &variable_head()).unwrap();
+        let (second, second_syntax) = RuleSyntax::new(&mut syntax, 2, 2, &variable_head()).unwrap();
         drop(second_syntax);
 
         let TermValue::Variable {
@@ -1081,7 +1106,7 @@ mod tests {
     fn derivative_cycle_returns_the_same_hashconsed_state() {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
-        let (head, mut rule) = RuleSyntax::new(&mut syntax, 1, &variable_head()).unwrap();
+        let (head, mut rule) = RuleSyntax::new(&mut syntax, 1, 1, &variable_head()).unwrap();
         let read = action_regex(&mut rule, Action::Read);
         let edit = action_regex(&mut rule, Action::Edit);
         let alternatives = rule.union([read, edit]);

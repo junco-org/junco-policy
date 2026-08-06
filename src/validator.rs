@@ -10,6 +10,8 @@ pub enum CompileError {
     VariableComponentConflict { rule: usize, name: String },
     #[error("rule {rule}: tail variable {name:?} is not bound by the head")]
     UnboundVariable { rule: usize, name: String },
+    #[error("rule {rule}: returned syntax was built for another rule scope")]
+    ForeignRuleHandle { rule: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +44,7 @@ struct CompiledRule<'a> {
 pub struct ValidatorBuilder<'a> {
     syntax: SyntaxContext<'a>,
     rules: Vec<CompiledRule<'a>>,
+    next_scope_id: u64,
 }
 
 impl<'a> ValidatorBuilder<'a> {
@@ -49,6 +52,7 @@ impl<'a> ValidatorBuilder<'a> {
         Self {
             syntax: SyntaxContext::new(arena),
             rules: Vec::new(),
+            next_scope_id: 1,
         }
     }
 
@@ -62,10 +66,16 @@ impl<'a> ValidatorBuilder<'a> {
         F: FnOnce(&mut RuleSyntax<'_, 'a>) -> Result<Regex<'a>, CompileError>,
     {
         let rule_index = self.rules.len() + 1;
+        let scope_id = self.next_scope_id;
+        self.next_scope_id = self
+            .next_scope_id
+            .checked_add(1)
+            .expect("rule scope identifier space exhausted");
         let (head, tail) = {
-            let (head, mut rule_syntax) = RuleSyntax::new(&mut self.syntax, rule_index, &head)?;
+            let (head, mut rule_syntax) =
+                RuleSyntax::new(&mut self.syntax, rule_index, scope_id, &head)?;
             let tail = build(&mut rule_syntax)?;
-            let tail = rule_syntax.regex_id(tail);
+            let tail = rule_syntax.finish_regex(tail)?;
             (head, tail)
         };
         self.rules.push(CompiledRule { mode, head, tail });

@@ -194,6 +194,46 @@ fn construction_rejects_unbound_and_cross_component_variables() {
 }
 
 #[test]
+fn hashconsed_handles_cannot_cross_rule_scopes() {
+    let arena = Bump::new();
+    let mut builder = Validator::builder(&arena);
+    let mut leaked = None;
+    builder
+        .add_rule(
+            RuleMode::Require,
+            Head::new(
+                ComponentPattern::variable("actor"),
+                ComponentPattern::constant(Action::Stage),
+                ComponentPattern::constant(["a"]),
+            ),
+            |syntax| {
+                let actor = syntax.atom(
+                    Comparison::Eq,
+                    AtomPattern::Principal(ComponentPattern::variable("actor")),
+                )?;
+                let actor = syntax.test(actor);
+                leaked = Some(actor);
+                Ok(actor)
+            },
+        )
+        .unwrap();
+
+    let result = builder.add_rule(
+        RuleMode::Require,
+        Head::new(
+            ComponentPattern::constant("bob"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(["b"]),
+        ),
+        |_| Ok(leaked.unwrap()),
+    );
+    assert!(matches!(
+        result,
+        Err(CompileError::ForeignRuleHandle { rule: 2 })
+    ));
+}
+
+#[test]
 fn checkpoint_restores_append_only_history() {
     let arena = Bump::new();
     let mut validator = Validator::builder(&arena).finish();
