@@ -12,8 +12,12 @@ fn eval_test(test: &Test, event: &Event) -> bool {
         Test::True => true,
         Test::False => false,
         Test::Atom(atom) => match (atom.comparison(), atom.pattern()) {
-            (Comparison::Eq, AtomPattern::Action(expected)) => &event.action == expected,
-            (Comparison::Neq, AtomPattern::Action(expected)) => &event.action != expected,
+            (Comparison::Eq, AtomPattern::Action(ComponentPattern::Constant(expected))) => {
+                &event.action == expected
+            }
+            (Comparison::Neq, AtomPattern::Action(ComponentPattern::Constant(expected))) => {
+                &event.action != expected
+            }
             _ => panic!("generator emitted an atom outside its reference fragment"),
         },
         Test::And(children) => children.iter().all(|child| eval_test(child, event)),
@@ -74,11 +78,19 @@ impl Generator {
             return match self.next(5) {
                 0 => Test::True,
                 1 => Test::False,
-                2 => Test::eq(AtomPattern::action(self.action())),
-                3 => Test::neq(AtomPattern::action(self.action())),
+                2 => Test::eq(AtomPattern::Action(ComponentPattern::constant(
+                    self.action(),
+                ))),
+                3 => Test::neq(AtomPattern::Action(ComponentPattern::constant(
+                    self.action(),
+                ))),
                 _ => Test::and([
-                    Test::eq(AtomPattern::action(self.action())),
-                    Test::neq(AtomPattern::action(self.action())),
+                    Test::eq(AtomPattern::Action(ComponentPattern::constant(
+                        self.action(),
+                    ))),
+                    Test::neq(AtomPattern::Action(ComponentPattern::constant(
+                        self.action(),
+                    ))),
                 ]),
             };
         }
@@ -165,9 +177,15 @@ fn histories(max_len: usize) -> Vec<Vec<Event>> {
 
 #[test]
 fn every_short_word_matches_the_reference_for_boundary_expressions() {
-    let read = Regex::test(Test::eq(AtomPattern::action(Action::Read)));
-    let edit = Regex::test(Test::eq(AtomPattern::action(Action::Edit)));
-    let stage = Regex::test(Test::eq(AtomPattern::action(Action::Stage)));
+    let read = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+        Action::Read,
+    ))));
+    let edit = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+        Action::Edit,
+    ))));
+    let stage = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+        Action::Stage,
+    ))));
     let read_or_edit = Regex::union([read.clone(), edit.clone()]);
     let contains_edit = Regex::concat([Regex::All, edit.clone(), Regex::All]);
     let corpus = vec![

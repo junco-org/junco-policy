@@ -1,6 +1,6 @@
 use rust_validator::{
-    Action, AtomPattern, Bump, CompileError, Component, ComponentPattern, Decision, Event, Head,
-    Regex, Request, Rule, RuleMode, Test, Validator,
+    Action, AtomPattern, Bump, CompileError, ComponentPattern, Decision, Event, Head, Regex,
+    Request, Rule, RuleMode, Test, Validator,
 };
 
 fn event(principal: &str, action: Action, path: &[&str]) -> Event {
@@ -22,9 +22,11 @@ fn same_actor_edit_before_stage() -> Rule {
         Regex::concat([
             Regex::All,
             Regex::test(Test::and([
-                Test::eq(AtomPattern::variable(Component::Principal, "actor")),
-                Test::eq(AtomPattern::action(Action::Edit)),
-                Test::eq(AtomPattern::variable(Component::Resource, "target")),
+                Test::eq(AtomPattern::Principal(ComponentPattern::variable("actor"))),
+                Test::eq(AtomPattern::Action(ComponentPattern::constant(
+                    Action::Edit,
+                ))),
+                Test::eq(AtomPattern::Resource(ComponentPattern::variable("target"))),
             ])),
         ]),
     )
@@ -51,8 +53,10 @@ fn require_rule_uses_only_committed_pre_candidate_history() {
 fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
     let arena = Bump::new();
     let matching_commit = Regex::test(Test::and([
-        Test::eq(AtomPattern::action(Action::commit("ship"))),
-        Test::eq(AtomPattern::variable(Component::Resource, "target")),
+        Test::eq(AtomPattern::Action(ComponentPattern::constant(
+            Action::commit("ship"),
+        ))),
+        Test::eq(AtomPattern::Resource(ComponentPattern::variable("target"))),
     ]));
     let rule = Rule::new(
         RuleMode::Forbid,
@@ -88,7 +92,9 @@ fn complement_is_exact_over_complete_history() {
     let arena = Bump::new();
     let no_edit = Regex::not(Regex::concat([
         Regex::All,
-        Regex::test(Test::eq(AtomPattern::action(Action::Edit))),
+        Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+            Action::Edit,
+        )))),
         Regex::All,
     ]));
     let rule = Rule::new(
@@ -128,9 +134,8 @@ fn compile_rejects_unbound_and_cross_component_variables() {
             ComponentPattern::constant(Action::Stage),
             ComponentPattern::variable("target"),
         ),
-        Regex::test(Test::eq(AtomPattern::variable(
-            Component::Principal,
-            "missing",
+        Regex::test(Test::eq(AtomPattern::Principal(
+            ComponentPattern::variable("missing"),
         ))),
     );
     assert!(matches!(

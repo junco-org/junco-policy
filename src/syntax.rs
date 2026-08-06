@@ -60,35 +60,14 @@ pub enum Comparison {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AtomPattern {
-    Variable { component: Component, name: String },
-    Principal(Principal),
-    Action(Action),
-    Resource(Resource),
+    Principal(ComponentPattern<Principal>),
+    Action(ComponentPattern<Action>),
+    Resource(ComponentPattern<Resource>),
 }
 
 impl AtomPattern {
-    pub fn variable(component: Component, name: impl Into<String>) -> Self {
-        Self::Variable {
-            component,
-            name: name.into(),
-        }
-    }
-
-    pub fn principal(value: impl Into<Principal>) -> Self {
-        Self::Principal(value.into())
-    }
-
-    pub fn action(value: Action) -> Self {
-        Self::Action(value)
-    }
-
-    pub fn resource(value: impl Into<Resource>) -> Self {
-        Self::Resource(value.into())
-    }
-
     pub fn component(&self) -> Component {
         match self {
-            Self::Variable { component, .. } => *component,
             Self::Principal(_) => Component::Principal,
             Self::Action(_) => Component::Action,
             Self::Resource(_) => Component::Resource,
@@ -579,6 +558,30 @@ impl<'a> SyntaxContext<'a> {
         })
     }
 
+    fn compile_pattern<T: ArenaComponent<'a>>(
+        &self,
+        rule: usize,
+        pattern: &ComponentPattern<T>,
+        scope: &Scope,
+    ) -> Result<TermValue<'a>, CompileError> {
+        Ok(match pattern {
+            ComponentPattern::Constant(value) => T::intern(self, value),
+            ComponentPattern::Variable(name) => {
+                let Some(symbol) = self.variables.get(name) else {
+                    return Err(CompileError::UnboundVariable {
+                        rule,
+                        name: name.to_owned(),
+                    });
+                };
+                scope.resolve(rule, name, symbol, T::COMPONENT)?;
+                TermValue::Variable {
+                    component: T::COMPONENT,
+                    symbol,
+                }
+            }
+        })
+    }
+
     fn compile_atom_pattern(
         &self,
         rule: usize,
@@ -586,22 +589,9 @@ impl<'a> SyntaxContext<'a> {
         scope: &Scope,
     ) -> Result<TermValue<'a>, CompileError> {
         Ok(match pattern {
-            AtomPattern::Variable { component, name } => {
-                let Some(symbol) = self.variables.get(name) else {
-                    return Err(CompileError::UnboundVariable {
-                        rule,
-                        name: name.to_owned(),
-                    });
-                };
-                scope.resolve(rule, name, symbol, *component)?;
-                TermValue::Variable {
-                    component: *component,
-                    symbol,
-                }
-            }
-            AtomPattern::Principal(value) => Principal::intern(self, value),
-            AtomPattern::Action(value) => Action::intern(self, value),
-            AtomPattern::Resource(value) => Resource::intern(self, value),
+            AtomPattern::Principal(pattern) => self.compile_pattern(rule, pattern, scope)?,
+            AtomPattern::Action(pattern) => self.compile_pattern(rule, pattern, scope)?,
+            AtomPattern::Resource(pattern) => self.compile_pattern(rule, pattern, scope)?,
         })
     }
 
@@ -1025,8 +1015,12 @@ mod tests {
     fn aci_and_identity_normalization_reuse_handles() {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
-        let read = Regex::test(Test::eq(AtomPattern::action(Action::Read)));
-        let edit = Regex::test(Test::eq(AtomPattern::action(Action::Edit)));
+        let read = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+            Action::Read,
+        ))));
+        let edit = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+            Action::Edit,
+        ))));
 
         let (_, left) = syntax
             .compile_rule_parts(
@@ -1103,8 +1097,12 @@ mod tests {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
         let cycle = Regex::star(Regex::union([
-            Regex::test(Test::eq(AtomPattern::action(Action::Read))),
-            Regex::test(Test::eq(AtomPattern::action(Action::Edit))),
+            Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+                Action::Read,
+            )))),
+            Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+                Action::Edit,
+            )))),
         ]));
         let (head, initial) = syntax
             .compile_rule_parts(1, &variable_head(), &cycle)
