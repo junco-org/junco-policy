@@ -1,41 +1,56 @@
 use rust_validator::{
-    Action, AtomPattern, Bump, Comparison, ComponentPattern, Event, Head, Regex, Request, Rule,
-    RuleMode, Test, Validator,
+    Action, AtomPattern, Bump, Comparison, ComponentPattern, Event, Head, Regex, Request, RuleMode,
+    RuleSyntax, Test, Validator,
 };
+
+#[derive(Clone, Debug)]
+enum RefTest {
+    True,
+    False,
+    Action(Comparison, Action),
+    And(Vec<RefTest>),
+    Or(Vec<RefTest>),
+}
+
+#[derive(Clone, Debug)]
+enum RefRegex {
+    Empty,
+    All,
+    Epsilon,
+    Test(RefTest),
+    Union(Vec<RefRegex>),
+    Concat(Vec<RefRegex>),
+    Star(Box<RefRegex>),
+    Intersect(Vec<RefRegex>),
+    Not(Box<RefRegex>),
+}
 
 fn event(action: Action) -> Event {
     Event::new("history", action, ["history"])
 }
 
-fn eval_test(test: &Test, event: &Event) -> bool {
+fn eval_test(test: &RefTest, event: &Event) -> bool {
     match test {
-        Test::True => true,
-        Test::False => false,
-        Test::Atom(atom) => match (atom.comparison(), atom.pattern()) {
-            (Comparison::Eq, AtomPattern::Action(ComponentPattern::Constant(expected))) => {
-                &event.action == expected
-            }
-            (Comparison::Neq, AtomPattern::Action(ComponentPattern::Constant(expected))) => {
-                &event.action != expected
-            }
-            _ => panic!("generator emitted an atom outside its reference fragment"),
-        },
-        Test::And(children) => children.iter().all(|child| eval_test(child, event)),
-        Test::Or(children) => children.iter().any(|child| eval_test(child, event)),
+        RefTest::True => true,
+        RefTest::False => false,
+        RefTest::Action(Comparison::Eq, expected) => &event.action == expected,
+        RefTest::Action(Comparison::Neq, expected) => &event.action != expected,
+        RefTest::And(children) => children.iter().all(|child| eval_test(child, event)),
+        RefTest::Or(children) => children.iter().any(|child| eval_test(child, event)),
     }
 }
 
-fn accepts(regex: &Regex, history: &[Event]) -> bool {
+fn accepts(regex: &RefRegex, history: &[Event]) -> bool {
     match regex {
-        Regex::Empty => false,
-        Regex::All => true,
-        Regex::Epsilon => history.is_empty(),
-        Regex::Test(test) => history.len() == 1 && eval_test(test, &history[0]),
-        Regex::Union(children) => children.iter().any(|child| accepts(child, history)),
-        Regex::Intersect(children) => children.iter().all(|child| accepts(child, history)),
-        Regex::Not(inner) => !accepts(inner, history),
-        Regex::Concat(factors) => accepts_concat(factors, history),
-        Regex::Star(inner) => {
+        RefRegex::Empty => false,
+        RefRegex::All => true,
+        RefRegex::Epsilon => history.is_empty(),
+        RefRegex::Test(test) => history.len() == 1 && eval_test(test, &history[0]),
+        RefRegex::Union(children) => children.iter().any(|child| accepts(child, history)),
+        RefRegex::Intersect(children) => children.iter().all(|child| accepts(child, history)),
+        RefRegex::Not(inner) => !accepts(inner, history),
+        RefRegex::Concat(factors) => accepts_concat(factors, history),
+        RefRegex::Star(inner) => {
             history.is_empty()
                 || (1..=history.len()).any(|split| {
                     accepts(inner, &history[..split]) && accepts(regex, &history[split..])
@@ -44,7 +59,7 @@ fn accepts(regex: &Regex, history: &[Event]) -> bool {
     }
 }
 
-fn accepts_concat(factors: &[Regex], history: &[Event]) -> bool {
+fn accepts_concat(factors: &[RefRegex], history: &[Event]) -> bool {
     match factors {
         [] => history.is_empty(),
         [only] => accepts(only, history),
@@ -52,6 +67,78 @@ fn accepts_concat(factors: &[Regex], history: &[Event]) -> bool {
             accepts(first, &history[..split]) && accepts_concat(rest, &history[split..])
         }),
     }
+}
+
+fn compile_test<'a>(
+    source: &RefTest,
+    syntax: &mut RuleSyntax<'_, 'a>,
+) -> Result<Test<'a>, rust_validator::CompileError> {
+    Ok(match source {
+        RefTest::True => syntax.true_test(),
+        RefTest::False => syntax.false_test(),
+        RefTest::Action(comparison, action) => syntax.atom(
+            *comparison,
+            AtomPattern::Action(ComponentPattern::constant(action.clone())),
+        )?,
+        RefTest::And(children) => {
+            let children = children
+                .iter()
+                .map(|child| compile_test(child, syntax))
+                .collect::<Result<Vec<_>, _>>()?;
+            syntax.and(children)
+        }
+        RefTest::Or(children) => {
+            let children = children
+                .iter()
+                .map(|child| compile_test(child, syntax))
+                .collect::<Result<Vec<_>, _>>()?;
+            syntax.or(children)
+        }
+    })
+}
+
+fn compile_regex<'a>(
+    source: &RefRegex,
+    syntax: &mut RuleSyntax<'_, 'a>,
+) -> Result<Regex<'a>, rust_validator::CompileError> {
+    Ok(match source {
+        RefRegex::Empty => syntax.empty(),
+        RefRegex::All => syntax.all(),
+        RefRegex::Epsilon => syntax.epsilon(),
+        RefRegex::Test(test) => {
+            let test = compile_test(test, syntax)?;
+            syntax.test(test)
+        }
+        RefRegex::Union(children) => {
+            let children = children
+                .iter()
+                .map(|child| compile_regex(child, syntax))
+                .collect::<Result<Vec<_>, _>>()?;
+            syntax.union(children)
+        }
+        RefRegex::Concat(children) => {
+            let children = children
+                .iter()
+                .map(|child| compile_regex(child, syntax))
+                .collect::<Result<Vec<_>, _>>()?;
+            syntax.concat(children)
+        }
+        RefRegex::Star(inner) => {
+            let inner = compile_regex(inner, syntax)?;
+            syntax.star(inner)
+        }
+        RefRegex::Intersect(children) => {
+            let children = children
+                .iter()
+                .map(|child| compile_regex(child, syntax))
+                .collect::<Result<Vec<_>, _>>()?;
+            syntax.intersect(children)
+        }
+        RefRegex::Not(inner) => {
+            let inner = compile_regex(inner, syntax)?;
+            syntax.not(inner)
+        }
+    })
 }
 
 struct Generator(u64);
@@ -73,70 +160,65 @@ impl Generator {
         }
     }
 
-    fn test(&mut self, depth: usize) -> Test {
+    fn test(&mut self, depth: usize) -> RefTest {
         if depth == 0 {
             return match self.next(5) {
-                0 => Test::True,
-                1 => Test::False,
-                2 => Test::eq(AtomPattern::Action(ComponentPattern::constant(
-                    self.action(),
-                ))),
-                3 => Test::neq(AtomPattern::Action(ComponentPattern::constant(
-                    self.action(),
-                ))),
-                _ => Test::and([
-                    Test::eq(AtomPattern::Action(ComponentPattern::constant(
-                        self.action(),
-                    ))),
-                    Test::neq(AtomPattern::Action(ComponentPattern::constant(
-                        self.action(),
-                    ))),
+                0 => RefTest::True,
+                1 => RefTest::False,
+                2 => RefTest::Action(Comparison::Eq, self.action()),
+                3 => RefTest::Action(Comparison::Neq, self.action()),
+                _ => RefTest::And(vec![
+                    RefTest::Action(Comparison::Eq, self.action()),
+                    RefTest::Action(Comparison::Neq, self.action()),
                 ]),
             };
         }
         match self.next(4) {
-            0 => Test::and([self.test(depth - 1), self.test(depth - 1)]),
-            1 => Test::or([self.test(depth - 1), self.test(depth - 1)]),
+            0 => RefTest::And(vec![self.test(depth - 1), self.test(depth - 1)]),
+            1 => RefTest::Or(vec![self.test(depth - 1), self.test(depth - 1)]),
             _ => self.test(0),
         }
     }
 
-    fn regex(&mut self, depth: usize) -> Regex {
+    fn regex(&mut self, depth: usize) -> RefRegex {
         if depth == 0 {
             return match self.next(5) {
-                0 => Regex::Empty,
-                1 => Regex::All,
-                2 => Regex::Epsilon,
-                _ => Regex::test(self.test(1)),
+                0 => RefRegex::Empty,
+                1 => RefRegex::All,
+                2 => RefRegex::Epsilon,
+                _ => RefRegex::Test(self.test(1)),
             };
         }
         match self.next(9) {
-            0 => Regex::Empty,
-            1 => Regex::All,
-            2 => Regex::Epsilon,
-            3 => Regex::test(self.test(1)),
-            4 => Regex::union([self.regex(depth - 1), self.regex(depth - 1)]),
-            5 => Regex::concat([self.regex(depth - 1), self.regex(depth - 1)]),
-            6 => Regex::star(self.regex(depth - 1)),
-            7 => Regex::intersect([self.regex(depth - 1), self.regex(depth - 1)]),
-            _ => Regex::not(self.regex(depth - 1)),
+            0 => RefRegex::Empty,
+            1 => RefRegex::All,
+            2 => RefRegex::Epsilon,
+            3 => RefRegex::Test(self.test(1)),
+            4 => RefRegex::Union(vec![self.regex(depth - 1), self.regex(depth - 1)]),
+            5 => RefRegex::Concat(vec![self.regex(depth - 1), self.regex(depth - 1)]),
+            6 => RefRegex::Star(Box::new(self.regex(depth - 1))),
+            7 => RefRegex::Intersect(vec![self.regex(depth - 1), self.regex(depth - 1)]),
+            _ => RefRegex::Not(Box::new(self.regex(depth - 1))),
         }
     }
 }
 
-fn implementation_accepts(regex: Regex, history: &[Event]) -> bool {
+fn implementation_accepts(regex: &RefRegex, history: &[Event]) -> bool {
     let arena = Bump::new();
     let probe = Event::new("probe", Action::History, ["probe"]);
-    let rule = Rule::new(
-        RuleMode::Require,
-        Head::new(
-            ComponentPattern::constant("probe"),
-            ComponentPattern::constant(Action::History),
-            ComponentPattern::constant(["probe"]),
-        ),
-        regex,
-    );
-    let mut validator = Validator::compile(&arena, [rule]).unwrap();
+    let mut builder = Validator::builder(&arena);
+    builder
+        .add_rule(
+            RuleMode::Require,
+            Head::new(
+                ComponentPattern::constant("probe"),
+                ComponentPattern::constant(Action::History),
+                ComponentPattern::constant(["probe"]),
+            ),
+            |syntax| compile_regex(regex, syntax),
+        )
+        .unwrap();
+    let mut validator = builder.finish();
     for event in history {
         assert!(validator.check(Request::new(event.clone(), ())).is_grant());
     }
@@ -152,7 +234,7 @@ fn derivatives_match_an_independent_language_interpreter() {
             .map(|_| event(generator.action()))
             .collect();
         let expected = accepts(&regex, &history);
-        let actual = implementation_accepts(regex.clone(), &history);
+        let actual = implementation_accepts(&regex, &history);
         assert_eq!(actual, expected, "case {case}: {regex:?} over {history:?}");
     }
 }
@@ -177,33 +259,27 @@ fn histories(max_len: usize) -> Vec<Vec<Event>> {
 
 #[test]
 fn every_short_word_matches_the_reference_for_boundary_expressions() {
-    let read = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-        Action::Read,
-    ))));
-    let edit = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-        Action::Edit,
-    ))));
-    let stage = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-        Action::Stage,
-    ))));
-    let read_or_edit = Regex::union([read.clone(), edit.clone()]);
-    let contains_edit = Regex::concat([Regex::All, edit.clone(), Regex::All]);
+    let read = RefRegex::Test(RefTest::Action(Comparison::Eq, Action::Read));
+    let edit = RefRegex::Test(RefTest::Action(Comparison::Eq, Action::Edit));
+    let stage = RefRegex::Test(RefTest::Action(Comparison::Eq, Action::Stage));
+    let read_or_edit = RefRegex::Union(vec![read.clone(), edit.clone()]);
+    let contains_edit = RefRegex::Concat(vec![RefRegex::All, edit.clone(), RefRegex::All]);
     let corpus = vec![
-        Regex::Empty,
-        Regex::All,
-        Regex::Epsilon,
+        RefRegex::Empty,
+        RefRegex::All,
+        RefRegex::Epsilon,
         read.clone(),
-        Regex::not(read.clone()),
+        RefRegex::Not(Box::new(read.clone())),
         read_or_edit.clone(),
-        Regex::concat([read.clone(), edit.clone()]),
-        Regex::concat([Regex::Epsilon, read.clone(), Regex::Epsilon]),
-        Regex::star(read.clone()),
-        Regex::star(read_or_edit.clone()),
-        Regex::intersect([read_or_edit.clone(), read.clone()]),
-        Regex::intersect([read.clone(), Regex::not(read.clone())]),
+        RefRegex::Concat(vec![read.clone(), edit.clone()]),
+        RefRegex::Concat(vec![RefRegex::Epsilon, read.clone(), RefRegex::Epsilon]),
+        RefRegex::Star(Box::new(read.clone())),
+        RefRegex::Star(Box::new(read_or_edit.clone())),
+        RefRegex::Intersect(vec![read_or_edit.clone(), read.clone()]),
+        RefRegex::Intersect(vec![read.clone(), RefRegex::Not(Box::new(read.clone()))]),
         contains_edit.clone(),
-        Regex::not(contains_edit),
-        Regex::union([stage, Regex::not(read_or_edit)]),
+        RefRegex::Not(Box::new(contains_edit)),
+        RefRegex::Union(vec![stage, RefRegex::Not(Box::new(read_or_edit))]),
     ];
 
     for (expression, history) in corpus.into_iter().flat_map(|expression| {
@@ -212,7 +288,7 @@ fn every_short_word_matches_the_reference_for_boundary_expressions() {
             .map(move |history| (expression.clone(), history))
     }) {
         assert_eq!(
-            implementation_accepts(expression.clone(), &history),
+            implementation_accepts(&expression, &history),
             accepts(&expression, &history),
             "{expression:?} over {history:?}"
         );

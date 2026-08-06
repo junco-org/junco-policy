@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 use bumpalo::Bump;
 use hashconsing::{BHConsed, BHConsign};
@@ -75,117 +78,10 @@ impl AtomPattern {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct TestAtom {
-    comparison: Comparison,
-    pattern: AtomPattern,
-}
-
-impl TestAtom {
-    pub fn comparison(&self) -> Comparison {
-        self.comparison
-    }
-
-    pub fn component(&self) -> Component {
-        self.pattern.component()
-    }
-
-    pub fn pattern(&self) -> &AtomPattern {
-        &self.pattern
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Test {
-    True,
-    False,
-    Atom(TestAtom),
-    And(Vec<Test>),
-    Or(Vec<Test>),
-}
-
-impl Test {
-    pub fn atom(comparison: Comparison, pattern: AtomPattern) -> Self {
-        Self::Atom(TestAtom {
-            comparison,
-            pattern,
-        })
-    }
-
-    pub fn eq(pattern: AtomPattern) -> Self {
-        Self::atom(Comparison::Eq, pattern)
-    }
-
-    pub fn neq(pattern: AtomPattern) -> Self {
-        Self::atom(Comparison::Neq, pattern)
-    }
-
-    pub fn and(tests: impl IntoIterator<Item = Test>) -> Self {
-        Self::And(tests.into_iter().collect())
-    }
-
-    pub fn or(tests: impl IntoIterator<Item = Test>) -> Self {
-        Self::Or(tests.into_iter().collect())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Regex {
-    Empty,
-    All,
-    Epsilon,
-    Test(Test),
-    Union(Vec<Regex>),
-    Concat(Vec<Regex>),
-    Star(Box<Regex>),
-    Intersect(Vec<Regex>),
-    Not(Box<Regex>),
-}
-
-impl Regex {
-    pub fn test(test: Test) -> Self {
-        Self::Test(test)
-    }
-
-    pub fn union(regexes: impl IntoIterator<Item = Regex>) -> Self {
-        Self::Union(regexes.into_iter().collect())
-    }
-
-    pub fn concat(regexes: impl IntoIterator<Item = Regex>) -> Self {
-        Self::Concat(regexes.into_iter().collect())
-    }
-
-    pub fn star(regex: Regex) -> Self {
-        Self::Star(Box::new(regex))
-    }
-
-    pub fn intersect(regexes: impl IntoIterator<Item = Regex>) -> Self {
-        Self::Intersect(regexes.into_iter().collect())
-    }
-
-    #[allow(clippy::should_implement_trait)]
-    pub fn not(regex: Regex) -> Self {
-        Self::Not(Box::new(regex))
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RuleMode {
     Require,
     Forbid,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Rule {
-    pub mode: RuleMode,
-    pub head: Head,
-    pub tail: Regex,
-}
-
-impl Rule {
-    pub fn new(mode: RuleMode, head: Head, tail: Regex) -> Self {
-        Self { mode, head, tail }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -281,6 +177,18 @@ pub(crate) enum RegexNode<'a> {
 }
 
 pub(crate) type RegexId<'a> = BHConsed<'a, RegexNode<'a>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Test<'a> {
+    context: u64,
+    id: TestId<'a>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Regex<'a> {
+    context: u64,
+    id: RegexId<'a>,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum BoundValue<'event> {
@@ -432,6 +340,7 @@ impl Scope {
 }
 
 pub(crate) struct SyntaxContext<'a> {
+    context_id: u64,
     variables: DefaultStringInterner,
     test_consign: BHConsign<'a, TestNode<'a>>,
     regex_consign: BHConsign<'a, RegexNode<'a>>,
@@ -475,6 +384,8 @@ impl<'a> ArenaComponent<'a> for Resource {
 
 impl<'a> SyntaxContext<'a> {
     pub(crate) fn new(arena: &'a Bump) -> Self {
+        let context_id = NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(context_id, 0, "syntax context identifier space exhausted");
         let mut test_consign = BHConsign::with_capacity(arena, 128);
         let test_true = test_consign.mk(TestNode::True);
         let test_false = test_consign.mk(TestNode::False);
@@ -489,6 +400,7 @@ impl<'a> SyntaxContext<'a> {
         regex_nullable.push(true);
 
         Self {
+            context_id,
             variables: DefaultStringInterner::with_capacity(64),
             test_consign,
             regex_consign,
@@ -501,24 +413,22 @@ impl<'a> SyntaxContext<'a> {
         }
     }
 
-    pub(crate) fn compile_rule_parts(
+    fn compile_head(
         &mut self,
         rule: usize,
         head: &Head,
-        tail: &Regex,
-    ) -> Result<(CompiledHead<'a>, RegexId<'a>), CompileError> {
+    ) -> Result<(CompiledHead<'a>, Scope), CompileError> {
         let mut scope = Scope::default();
         let principal = self.compile_head_pattern(rule, &head.principal, &mut scope)?;
         let action = self.compile_head_pattern(rule, &head.action, &mut scope)?;
         let resource = self.compile_head_pattern(rule, &head.resource, &mut scope)?;
-        let tail = self.compile_regex(rule, tail, &scope)?;
         Ok((
             CompiledHead {
                 principal,
                 action,
                 resource,
             },
-            tail,
+            scope,
         ))
     }
 
@@ -595,36 +505,6 @@ impl<'a> SyntaxContext<'a> {
         })
     }
 
-    fn compile_test(
-        &mut self,
-        rule: usize,
-        test: &Test,
-        scope: &Scope,
-    ) -> Result<TestId<'a>, CompileError> {
-        Ok(match test {
-            Test::True => self.test_true,
-            Test::False => self.test_false,
-            Test::Atom(atom) => {
-                let term = self.compile_atom_pattern(rule, &atom.pattern, scope)?;
-                self.test_consign.mk(TestNode::Atom(atom.comparison, term))
-            }
-            Test::And(children) => {
-                let children = children
-                    .iter()
-                    .map(|child| self.compile_test(rule, child, scope))
-                    .collect::<Result<Vec<_>, _>>()?;
-                self.test_and(children)
-            }
-            Test::Or(children) => {
-                let children = children
-                    .iter()
-                    .map(|child| self.compile_test(rule, child, scope))
-                    .collect::<Result<Vec<_>, _>>()?;
-                self.test_or(children)
-            }
-        })
-    }
-
     fn test_and(&mut self, children: Vec<TestId<'a>>) -> TestId<'a> {
         let mut flat = Vec::with_capacity(children.len());
         for child in children {
@@ -673,52 +553,6 @@ impl<'a> SyntaxContext<'a> {
                 self.test_consign.mk(TestNode::Or(values))
             }
         }
-    }
-
-    fn compile_regex(
-        &mut self,
-        rule: usize,
-        regex: &Regex,
-        scope: &Scope,
-    ) -> Result<RegexId<'a>, CompileError> {
-        Ok(match regex {
-            Regex::Empty => self.empty,
-            Regex::All => self.all,
-            Regex::Epsilon => self.epsilon,
-            Regex::Test(test) => {
-                let test = self.compile_test(rule, test, scope)?;
-                self.regex_test(test)
-            }
-            Regex::Union(children) => {
-                let children = children
-                    .iter()
-                    .map(|child| self.compile_regex(rule, child, scope))
-                    .collect::<Result<Vec<_>, _>>()?;
-                self.regex_union(children)
-            }
-            Regex::Concat(children) => {
-                let children = children
-                    .iter()
-                    .map(|child| self.compile_regex(rule, child, scope))
-                    .collect::<Result<Vec<_>, _>>()?;
-                self.regex_concat(children)
-            }
-            Regex::Star(inner) => {
-                let inner = self.compile_regex(rule, inner, scope)?;
-                self.regex_star(inner)
-            }
-            Regex::Intersect(children) => {
-                let children = children
-                    .iter()
-                    .map(|child| self.compile_regex(rule, child, scope))
-                    .collect::<Result<Vec<_>, _>>()?;
-                self.regex_intersect(children)
-            }
-            Regex::Not(inner) => {
-                let inner = self.compile_regex(rule, inner, scope)?;
-                self.regex_not(inner)
-            }
-        })
     }
 
     fn intern_regex(&mut self, node: RegexNode<'a>, nullable: bool) -> RegexId<'a> {
@@ -935,6 +769,156 @@ impl<'a> SyntaxContext<'a> {
     }
 }
 
+pub struct RuleSyntax<'context, 'arena> {
+    syntax: &'context mut SyntaxContext<'arena>,
+    rule: usize,
+    scope: Scope,
+}
+
+impl<'context, 'arena> RuleSyntax<'context, 'arena> {
+    pub(crate) fn new(
+        syntax: &'context mut SyntaxContext<'arena>,
+        rule: usize,
+        head: &Head,
+    ) -> Result<(CompiledHead<'arena>, Self), CompileError> {
+        let (head, scope) = syntax.compile_head(rule, head)?;
+        Ok((
+            head,
+            Self {
+                syntax,
+                rule,
+                scope,
+            },
+        ))
+    }
+
+    fn wrap_test(&self, id: TestId<'arena>) -> Test<'arena> {
+        Test {
+            context: self.syntax.context_id,
+            id,
+        }
+    }
+
+    fn test_id(&self, test: Test<'arena>) -> TestId<'arena> {
+        assert_eq!(
+            test.context, self.syntax.context_id,
+            "test belongs to another syntax context"
+        );
+        test.id
+    }
+
+    fn wrap_regex(&self, id: RegexId<'arena>) -> Regex<'arena> {
+        Regex {
+            context: self.syntax.context_id,
+            id,
+        }
+    }
+
+    pub(crate) fn regex_id(&self, regex: Regex<'arena>) -> RegexId<'arena> {
+        assert_eq!(
+            regex.context, self.syntax.context_id,
+            "regex belongs to another syntax context"
+        );
+        regex.id
+    }
+
+    pub fn true_test(&self) -> Test<'arena> {
+        self.wrap_test(self.syntax.test_true)
+    }
+
+    pub fn false_test(&self) -> Test<'arena> {
+        self.wrap_test(self.syntax.test_false)
+    }
+
+    pub fn atom(
+        &mut self,
+        comparison: Comparison,
+        pattern: AtomPattern,
+    ) -> Result<Test<'arena>, CompileError> {
+        let term = self
+            .syntax
+            .compile_atom_pattern(self.rule, &pattern, &self.scope)?;
+        let id = self
+            .syntax
+            .test_consign
+            .mk(TestNode::Atom(comparison, term));
+        Ok(self.wrap_test(id))
+    }
+
+    pub fn and(&mut self, tests: impl IntoIterator<Item = Test<'arena>>) -> Test<'arena> {
+        let ids = tests.into_iter().map(|test| self.test_id(test)).collect();
+        let id = self.syntax.test_and(ids);
+        self.wrap_test(id)
+    }
+
+    pub fn or(&mut self, tests: impl IntoIterator<Item = Test<'arena>>) -> Test<'arena> {
+        let ids = tests.into_iter().map(|test| self.test_id(test)).collect();
+        let id = self.syntax.test_or(ids);
+        self.wrap_test(id)
+    }
+
+    pub fn empty(&self) -> Regex<'arena> {
+        self.wrap_regex(self.syntax.empty)
+    }
+
+    pub fn all(&self) -> Regex<'arena> {
+        self.wrap_regex(self.syntax.all)
+    }
+
+    pub fn epsilon(&self) -> Regex<'arena> {
+        self.wrap_regex(self.syntax.epsilon)
+    }
+
+    pub fn test(&mut self, test: Test<'arena>) -> Regex<'arena> {
+        let test = self.test_id(test);
+        let id = self.syntax.regex_test(test);
+        self.wrap_regex(id)
+    }
+
+    pub fn union(&mut self, regexes: impl IntoIterator<Item = Regex<'arena>>) -> Regex<'arena> {
+        let ids = regexes
+            .into_iter()
+            .map(|regex| self.regex_id(regex))
+            .collect();
+        let id = self.syntax.regex_union(ids);
+        self.wrap_regex(id)
+    }
+
+    pub fn concat(&mut self, regexes: impl IntoIterator<Item = Regex<'arena>>) -> Regex<'arena> {
+        let ids = regexes
+            .into_iter()
+            .map(|regex| self.regex_id(regex))
+            .collect();
+        let id = self.syntax.regex_concat(ids);
+        self.wrap_regex(id)
+    }
+
+    pub fn star(&mut self, regex: Regex<'arena>) -> Regex<'arena> {
+        let regex = self.regex_id(regex);
+        let id = self.syntax.regex_star(regex);
+        self.wrap_regex(id)
+    }
+
+    pub fn intersect(&mut self, regexes: impl IntoIterator<Item = Regex<'arena>>) -> Regex<'arena> {
+        let ids = regexes
+            .into_iter()
+            .map(|regex| self.regex_id(regex))
+            .collect();
+        let id = self.syntax.regex_intersect(ids);
+        self.wrap_regex(id)
+    }
+
+    pub fn not(&mut self, regex: Regex<'arena>) -> Regex<'arena> {
+        let regex = self.regex_id(regex);
+        let id = self.syntax.regex_not(regex);
+        self.wrap_regex(id)
+    }
+
+    pub fn nullable(&self, regex: Regex<'arena>) -> bool {
+        self.syntax.nullable(self.regex_id(regex))
+    }
+}
+
 fn eval_atom<'event>(
     term: TermValue<'_>,
     event: &'event Event,
@@ -1011,52 +995,55 @@ mod tests {
         )
     }
 
+    fn action_regex<'a>(syntax: &mut RuleSyntax<'_, 'a>, action: Action) -> Regex<'a> {
+        let test = syntax
+            .atom(
+                Comparison::Eq,
+                AtomPattern::Action(ComponentPattern::constant(action)),
+            )
+            .unwrap();
+        syntax.test(test)
+    }
+
     #[test]
     fn aci_and_identity_normalization_reuse_handles() {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
-        let read = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-            Action::Read,
-        ))));
-        let edit = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-            Action::Edit,
-        ))));
 
-        let (_, left) = syntax
-            .compile_rule_parts(
-                1,
-                &variable_head(),
-                &Regex::union([read.clone(), Regex::Empty, edit.clone(), read.clone()]),
-            )
-            .unwrap();
-        let (_, right) = syntax
-            .compile_rule_parts(
-                2,
-                &variable_head(),
-                &Regex::union([edit.clone(), read.clone()]),
-            )
-            .unwrap();
+        let (_, mut first) = RuleSyntax::new(&mut syntax, 1, &variable_head()).unwrap();
+        let read = action_regex(&mut first, Action::Read);
+        let edit = action_regex(&mut first, Action::Edit);
+        let empty = first.empty();
+        let left = first.union([read, empty, edit, read]);
+        let left = first.regex_id(left);
+        drop(first);
+
+        let (_, mut second) = RuleSyntax::new(&mut syntax, 2, &variable_head()).unwrap();
+        let edit = action_regex(&mut second, Action::Edit);
+        let read = action_regex(&mut second, Action::Read);
+        let right = second.union([edit, read]);
+        let right = second.regex_id(right);
         assert_eq!(left, right);
+        drop(second);
 
-        let (_, concat) = syntax
-            .compile_rule_parts(
-                3,
-                &variable_head(),
-                &Regex::concat([Regex::Epsilon, read.clone(), Regex::Epsilon]),
-            )
-            .unwrap();
-        let (_, single) = syntax
-            .compile_rule_parts(4, &variable_head(), &read)
-            .unwrap();
+        let (_, mut third) = RuleSyntax::new(&mut syntax, 3, &variable_head()).unwrap();
+        let epsilon = third.epsilon();
+        let read = action_regex(&mut third, Action::Read);
+        let concat = third.concat([epsilon, read, epsilon]);
+        let concat = third.regex_id(concat);
+        drop(third);
+
+        let (_, mut fourth) = RuleSyntax::new(&mut syntax, 4, &variable_head()).unwrap();
+        let single = action_regex(&mut fourth, Action::Read);
+        let single = fourth.regex_id(single);
         assert_eq!(concat, single);
+        drop(fourth);
 
-        let (_, contradiction) = syntax
-            .compile_rule_parts(
-                5,
-                &variable_head(),
-                &Regex::intersect([edit.clone(), Regex::not(edit)]),
-            )
-            .unwrap();
+        let (_, mut fifth) = RuleSyntax::new(&mut syntax, 5, &variable_head()).unwrap();
+        let edit = action_regex(&mut fifth, Action::Edit);
+        let not_edit = fifth.not(edit);
+        let contradiction = fifth.intersect([edit, not_edit]);
+        let contradiction = fifth.regex_id(contradiction);
         assert_eq!(contradiction, syntax.empty);
     }
 
@@ -1064,12 +1051,10 @@ mod tests {
     fn variable_names_share_interned_symbols_across_rules() {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
-        let (first, _) = syntax
-            .compile_rule_parts(1, &variable_head(), &Regex::All)
-            .unwrap();
-        let (second, _) = syntax
-            .compile_rule_parts(2, &variable_head(), &Regex::All)
-            .unwrap();
+        let (first, first_syntax) = RuleSyntax::new(&mut syntax, 1, &variable_head()).unwrap();
+        drop(first_syntax);
+        let (second, second_syntax) = RuleSyntax::new(&mut syntax, 2, &variable_head()).unwrap();
+        drop(second_syntax);
 
         let TermValue::Variable {
             component: first_component,
@@ -1096,17 +1081,14 @@ mod tests {
     fn derivative_cycle_returns_the_same_hashconsed_state() {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
-        let cycle = Regex::star(Regex::union([
-            Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-                Action::Read,
-            )))),
-            Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-                Action::Edit,
-            )))),
-        ]));
-        let (head, initial) = syntax
-            .compile_rule_parts(1, &variable_head(), &cycle)
-            .unwrap();
+        let (head, mut rule) = RuleSyntax::new(&mut syntax, 1, &variable_head()).unwrap();
+        let read = action_regex(&mut rule, Action::Read);
+        let edit = action_regex(&mut rule, Action::Edit);
+        let alternatives = rule.union([read, edit]);
+        let initial = rule.star(alternatives);
+        let initial = rule.regex_id(initial);
+        drop(rule);
+
         let event = Event::new("alice", Action::Read, ["a"]);
         let bindings = head.matches(&event).unwrap();
         let before = syntax.regex_node_count();

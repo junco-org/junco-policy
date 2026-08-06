@@ -2,7 +2,7 @@ use bumpalo::Bump;
 use thiserror::Error;
 
 use crate::model::{Event, Grant, Request};
-use crate::syntax::{CompiledHead, RegexId, Rule, RuleMode, SyntaxContext};
+use crate::syntax::{CompiledHead, Head, Regex, RegexId, RuleMode, RuleSyntax, SyntaxContext};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CompileError {
@@ -39,6 +39,48 @@ struct CompiledRule<'a> {
     tail: RegexId<'a>,
 }
 
+pub struct ValidatorBuilder<'a> {
+    syntax: SyntaxContext<'a>,
+    rules: Vec<CompiledRule<'a>>,
+}
+
+impl<'a> ValidatorBuilder<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        Self {
+            syntax: SyntaxContext::new(arena),
+            rules: Vec::new(),
+        }
+    }
+
+    pub fn add_rule<F>(
+        &mut self,
+        mode: RuleMode,
+        head: Head,
+        build: F,
+    ) -> Result<&mut Self, CompileError>
+    where
+        F: FnOnce(&mut RuleSyntax<'_, 'a>) -> Result<Regex<'a>, CompileError>,
+    {
+        let rule_index = self.rules.len() + 1;
+        let (head, tail) = {
+            let (head, mut rule_syntax) = RuleSyntax::new(&mut self.syntax, rule_index, &head)?;
+            let tail = build(&mut rule_syntax)?;
+            let tail = rule_syntax.regex_id(tail);
+            (head, tail)
+        };
+        self.rules.push(CompiledRule { mode, head, tail });
+        Ok(self)
+    }
+
+    pub fn finish(self) -> Validator<'a> {
+        Validator {
+            syntax: self.syntax,
+            rules: self.rules,
+            history: Vec::new(),
+        }
+    }
+}
+
 pub struct Validator<'a> {
     syntax: SyntaxContext<'a>,
     rules: Vec<CompiledRule<'a>>,
@@ -46,26 +88,8 @@ pub struct Validator<'a> {
 }
 
 impl<'a> Validator<'a> {
-    pub fn compile(
-        arena: &'a Bump,
-        rules: impl IntoIterator<Item = Rule>,
-    ) -> Result<Self, CompileError> {
-        let mut syntax = SyntaxContext::new(arena);
-        let mut compiled = Vec::new();
-        for (index, rule) in rules.into_iter().enumerate() {
-            let rule_index = index + 1;
-            let (head, tail) = syntax.compile_rule_parts(rule_index, &rule.head, &rule.tail)?;
-            compiled.push(CompiledRule {
-                mode: rule.mode,
-                head,
-                tail,
-            });
-        }
-        Ok(Self {
-            syntax,
-            rules: compiled,
-            history: Vec::new(),
-        })
+    pub fn builder(arena: &'a Bump) -> ValidatorBuilder<'a> {
+        ValidatorBuilder::new(arena)
     }
 
     pub fn check<M>(&mut self, request: Request<M>) -> Decision<M> {

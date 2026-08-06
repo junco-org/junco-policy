@@ -1,6 +1,6 @@
 use rust_validator::{
-    Action, AtomPattern, Bump, CompileError, ComponentPattern, Decision, Event, Head, Regex,
-    Request, Rule, RuleMode, Test, Validator,
+    Action, AtomPattern, Bump, Comparison, CompileError, ComponentPattern, Decision, Event, Head,
+    Request, RuleMode, Validator,
 };
 
 fn event(principal: &str, action: Action, path: &[&str]) -> Event {
@@ -11,31 +11,43 @@ fn request<M>(principal: &str, action: Action, path: &[&str], metadata: M) -> Re
     Request::new(event(principal, action, path), metadata)
 }
 
-fn same_actor_edit_before_stage() -> Rule {
-    Rule::new(
-        RuleMode::Require,
-        Head::new(
-            ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
-            ComponentPattern::variable("target"),
-        ),
-        Regex::concat([
-            Regex::All,
-            Regex::test(Test::and([
-                Test::eq(AtomPattern::Principal(ComponentPattern::variable("actor"))),
-                Test::eq(AtomPattern::Action(ComponentPattern::constant(
-                    Action::Edit,
-                ))),
-                Test::eq(AtomPattern::Resource(ComponentPattern::variable("target"))),
-            ])),
-        ]),
-    )
+fn add_same_actor_edit_before_stage(validator: &mut rust_validator::ValidatorBuilder<'_>) {
+    validator
+        .add_rule(
+            RuleMode::Require,
+            Head::new(
+                ComponentPattern::variable("actor"),
+                ComponentPattern::constant(Action::Stage),
+                ComponentPattern::variable("target"),
+            ),
+            |syntax| {
+                let principal = syntax.atom(
+                    Comparison::Eq,
+                    AtomPattern::Principal(ComponentPattern::variable("actor")),
+                )?;
+                let action = syntax.atom(
+                    Comparison::Eq,
+                    AtomPattern::Action(ComponentPattern::constant(Action::Edit)),
+                )?;
+                let resource = syntax.atom(
+                    Comparison::Eq,
+                    AtomPattern::Resource(ComponentPattern::variable("target")),
+                )?;
+                let predicate = syntax.and([principal, action, resource]);
+                let event = syntax.test(predicate);
+                let all = syntax.all();
+                Ok(syntax.concat([all, event]))
+            },
+        )
+        .unwrap();
 }
 
 #[test]
 fn require_rule_uses_only_committed_pre_candidate_history() {
     let arena = Bump::new();
-    let mut validator = Validator::compile(&arena, [same_actor_edit_before_stage()]).unwrap();
+    let mut builder = Validator::builder(&arena);
+    add_same_actor_edit_before_stage(&mut builder);
+    let mut validator = builder.finish();
 
     let denied = validator.check(request("alice", Action::Stage, &["src", "a.rs"], 1));
     assert!(matches!(denied, Decision::Denied(_)));
@@ -52,22 +64,33 @@ fn require_rule_uses_only_committed_pre_candidate_history() {
 #[test]
 fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
     let arena = Bump::new();
-    let matching_commit = Regex::test(Test::and([
-        Test::eq(AtomPattern::Action(ComponentPattern::constant(
-            Action::commit("ship"),
-        ))),
-        Test::eq(AtomPattern::Resource(ComponentPattern::variable("target"))),
-    ]));
-    let rule = Rule::new(
-        RuleMode::Forbid,
-        Head::new(
-            ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::commit("ship")),
-            ComponentPattern::variable("target"),
-        ),
-        Regex::concat([Regex::All, matching_commit, Regex::All]),
-    );
-    let mut validator = Validator::compile(&arena, [rule]).unwrap();
+    let mut builder = Validator::builder(&arena);
+    builder
+        .add_rule(
+            RuleMode::Forbid,
+            Head::new(
+                ComponentPattern::variable("actor"),
+                ComponentPattern::constant(Action::commit("ship")),
+                ComponentPattern::variable("target"),
+            ),
+            |syntax| {
+                let action = syntax.atom(
+                    Comparison::Eq,
+                    AtomPattern::Action(ComponentPattern::constant(Action::commit("ship"))),
+                )?;
+                let resource = syntax.atom(
+                    Comparison::Eq,
+                    AtomPattern::Resource(ComponentPattern::variable("target")),
+                )?;
+                let matching_commit = syntax.and([action, resource]);
+                let matching_commit = syntax.test(matching_commit);
+                let prefix = syntax.all();
+                let suffix = syntax.all();
+                Ok(syntax.concat([prefix, matching_commit, suffix]))
+            },
+        )
+        .unwrap();
+    let mut validator = builder.finish();
 
     assert!(
         validator
@@ -90,23 +113,29 @@ fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
 #[test]
 fn complement_is_exact_over_complete_history() {
     let arena = Bump::new();
-    let no_edit = Regex::not(Regex::concat([
-        Regex::All,
-        Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-            Action::Edit,
-        )))),
-        Regex::All,
-    ]));
-    let rule = Rule::new(
-        RuleMode::Require,
-        Head::new(
-            ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
-            ComponentPattern::variable("target"),
-        ),
-        no_edit,
-    );
-    let mut validator = Validator::compile(&arena, [rule]).unwrap();
+    let mut builder = Validator::builder(&arena);
+    builder
+        .add_rule(
+            RuleMode::Require,
+            Head::new(
+                ComponentPattern::variable("actor"),
+                ComponentPattern::constant(Action::Stage),
+                ComponentPattern::variable("target"),
+            ),
+            |syntax| {
+                let edit = syntax.atom(
+                    Comparison::Eq,
+                    AtomPattern::Action(ComponentPattern::constant(Action::Edit)),
+                )?;
+                let edit = syntax.test(edit);
+                let prefix = syntax.all();
+                let suffix = syntax.all();
+                let contains_edit = syntax.concat([prefix, edit, suffix]);
+                Ok(syntax.not(contains_edit))
+            },
+        )
+        .unwrap();
+    let mut validator = builder.finish();
 
     assert!(
         validator
@@ -125,35 +154,41 @@ fn complement_is_exact_over_complete_history() {
 }
 
 #[test]
-fn compile_rejects_unbound_and_cross_component_variables() {
+fn construction_rejects_unbound_and_cross_component_variables() {
     let arena = Bump::new();
-    let missing = Rule::new(
+    let mut builder = Validator::builder(&arena);
+    let missing = builder.add_rule(
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("actor"),
             ComponentPattern::constant(Action::Stage),
             ComponentPattern::variable("target"),
         ),
-        Regex::test(Test::eq(AtomPattern::Principal(
-            ComponentPattern::variable("missing"),
-        ))),
+        |syntax| {
+            let test = syntax.atom(
+                Comparison::Eq,
+                AtomPattern::Principal(ComponentPattern::variable("missing")),
+            )?;
+            Ok(syntax.test(test))
+        },
     );
     assert!(matches!(
-        Validator::compile(&arena, [missing]),
+        missing,
         Err(CompileError::UnboundVariable { rule: 1, .. })
     ));
 
-    let conflict = Rule::new(
+    let mut builder = Validator::builder(&arena);
+    let conflict = builder.add_rule(
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("same"),
             ComponentPattern::variable("same"),
             ComponentPattern::constant(["a"]),
         ),
-        Regex::All,
+        |syntax| Ok(syntax.all()),
     );
     assert!(matches!(
-        Validator::compile(&arena, [conflict]),
+        conflict,
         Err(CompileError::VariableComponentConflict { rule: 1, .. })
     ));
 }
@@ -161,7 +196,7 @@ fn compile_rejects_unbound_and_cross_component_variables() {
 #[test]
 fn checkpoint_restores_append_only_history() {
     let arena = Bump::new();
-    let mut validator = Validator::compile(&arena, []).unwrap();
+    let mut validator = Validator::builder(&arena).finish();
     assert!(
         validator
             .check(request("alice", Action::Read, &["a"], ()))
