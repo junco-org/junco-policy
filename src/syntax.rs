@@ -3,6 +3,7 @@ use std::hash::Hash;
 
 use bumpalo::Bump;
 use hashconsing::{BHConsed, BHConsign};
+use string_interner::{DefaultStringInterner, DefaultSymbol};
 
 use crate::model::{Action, Event, Principal, Resource};
 use crate::validator::CompileError;
@@ -59,14 +60,35 @@ pub enum Comparison {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AtomPattern {
-    Principal(ComponentPattern<Principal>),
-    Action(ComponentPattern<Action>),
-    Resource(ComponentPattern<Resource>),
+    Variable { component: Component, name: String },
+    Principal(Principal),
+    Action(Action),
+    Resource(Resource),
 }
 
 impl AtomPattern {
+    pub fn variable(component: Component, name: impl Into<String>) -> Self {
+        Self::Variable {
+            component,
+            name: name.into(),
+        }
+    }
+
+    pub fn principal(value: impl Into<Principal>) -> Self {
+        Self::Principal(value.into())
+    }
+
+    pub fn action(value: Action) -> Self {
+        Self::Action(value)
+    }
+
+    pub fn resource(value: impl Into<Resource>) -> Self {
+        Self::Resource(value.into())
+    }
+
     pub fn component(&self) -> Component {
         match self {
+            Self::Variable { component, .. } => *component,
             Self::Principal(_) => Component::Principal,
             Self::Action(_) => Component::Action,
             Self::Resource(_) => Component::Resource,
@@ -235,17 +257,31 @@ impl<'a> CompiledAction<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TermValue<'a> {
-    Variable(u16),
+    Variable {
+        component: Component,
+        symbol: DefaultSymbol,
+    },
     Principal(&'a str),
     Action(CompiledAction<'a>),
     Resource(&'a [&'a str]),
+}
+
+impl TermValue<'_> {
+    fn component(self) -> Component {
+        match self {
+            Self::Variable { component, .. } => component,
+            Self::Principal(_) => Component::Principal,
+            Self::Action(_) => Component::Action,
+            Self::Resource(_) => Component::Resource,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TestNode<'a> {
     True,
     False,
-    Atom(Comparison, Component, TermValue<'a>),
+    Atom(Comparison, TermValue<'a>),
     And(&'a [TestId<'a>]),
     Or(&'a [TestId<'a>]),
 }
@@ -293,31 +329,27 @@ impl BoundValue<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Bindings<'event> {
-    values: Vec<Option<BoundValue<'event>>>,
+    values: HashMap<DefaultSymbol, BoundValue<'event>>,
 }
 
 impl<'event> Bindings<'event> {
-    fn new(count: usize) -> Self {
-        Self {
-            values: vec![None; count],
-        }
-    }
-
-    fn bind(&mut self, slot: u16, value: BoundValue<'event>) -> bool {
-        let entry = &mut self.values[slot as usize];
-        match *entry {
+    fn bind(&mut self, symbol: DefaultSymbol, value: BoundValue<'event>) -> bool {
+        match self.values.get(&symbol).copied() {
             Some(existing) => existing.equals(value),
             None => {
-                *entry = Some(value);
+                self.values.insert(symbol, value);
                 true
             }
         }
     }
 
-    fn get(&self, slot: u16) -> BoundValue<'event> {
-        self.values[slot as usize].expect("compiled head binds every tail variable")
+    fn get(&self, symbol: DefaultSymbol) -> BoundValue<'event> {
+        self.values
+            .get(&symbol)
+            .copied()
+            .expect("compiled head binds every tail variable")
     }
 }
 
@@ -326,12 +358,11 @@ pub(crate) struct CompiledHead<'a> {
     principal: TermValue<'a>,
     action: TermValue<'a>,
     resource: TermValue<'a>,
-    binding_count: usize,
 }
 
 impl<'a> CompiledHead<'a> {
     pub(crate) fn matches<'event>(&self, event: &'event Event) -> Option<Bindings<'event>> {
-        let mut bindings = Bindings::new(self.binding_count);
+        let mut bindings = Bindings::default();
         if !match_head_term(
             self.principal,
             BoundValue::Principal(&event.principal),
@@ -357,7 +388,9 @@ fn match_head_term<'event>(
     bindings: &mut Bindings<'event>,
 ) -> bool {
     match term {
-        TermValue::Variable(slot) => bindings.bind(slot, value),
+        TermValue::Variable { component, symbol } => {
+            component == value.component() && bindings.bind(symbol, value)
+        }
         TermValue::Principal(expected) => {
             matches!(value, BoundValue::Principal(actual) if actual.as_str() == expected)
         }
@@ -372,28 +405,38 @@ fn match_head_term<'event>(
 
 #[derive(Default)]
 struct Scope {
-    variables: HashMap<String, (Component, u16)>,
+    variables: HashMap<DefaultSymbol, Component>,
 }
 
 impl Scope {
-    fn bind(&mut self, rule: usize, name: &str, component: Component) -> Result<u16, CompileError> {
-        if let Some(&(bound_component, slot)) = self.variables.get(name) {
+    fn bind(
+        &mut self,
+        rule: usize,
+        name: &str,
+        symbol: DefaultSymbol,
+        component: Component,
+    ) -> Result<(), CompileError> {
+        if let Some(&bound_component) = self.variables.get(&symbol) {
             if bound_component != component {
                 return Err(CompileError::VariableComponentConflict {
                     rule,
                     name: name.to_owned(),
                 });
             }
-            return Ok(slot);
+            return Ok(());
         }
-        let slot = u16::try_from(self.variables.len())
-            .map_err(|_| CompileError::TooManyVariables { rule })?;
-        self.variables.insert(name.to_owned(), (component, slot));
-        Ok(slot)
+        self.variables.insert(symbol, component);
+        Ok(())
     }
 
-    fn resolve(&self, rule: usize, name: &str, component: Component) -> Result<u16, CompileError> {
-        let Some(&(bound_component, slot)) = self.variables.get(name) else {
+    fn resolve(
+        &self,
+        rule: usize,
+        name: &str,
+        symbol: DefaultSymbol,
+        component: Component,
+    ) -> Result<(), CompileError> {
+        let Some(&bound_component) = self.variables.get(&symbol) else {
             return Err(CompileError::UnboundVariable {
                 rule,
                 name: name.to_owned(),
@@ -405,11 +448,12 @@ impl Scope {
                 name: name.to_owned(),
             });
         }
-        Ok(slot)
+        Ok(())
     }
 }
 
 pub(crate) struct SyntaxContext<'a> {
+    variables: DefaultStringInterner,
     test_consign: BHConsign<'a, TestNode<'a>>,
     regex_consign: BHConsign<'a, RegexNode<'a>>,
     regex_nullable: Vec<bool>,
@@ -466,6 +510,7 @@ impl<'a> SyntaxContext<'a> {
         regex_nullable.push(true);
 
         Self {
+            variables: DefaultStringInterner::with_capacity(64),
             test_consign,
             regex_consign,
             regex_nullable,
@@ -487,14 +532,12 @@ impl<'a> SyntaxContext<'a> {
         let principal = self.compile_head_pattern(rule, &head.principal, &mut scope)?;
         let action = self.compile_head_pattern(rule, &head.action, &mut scope)?;
         let resource = self.compile_head_pattern(rule, &head.resource, &mut scope)?;
-        let binding_count = scope.variables.len();
         let tail = self.compile_regex(rule, tail, &scope)?;
         Ok((
             CompiledHead {
                 principal,
                 action,
                 resource,
-                binding_count,
             },
             tail,
         ))
@@ -518,7 +561,7 @@ impl<'a> SyntaxContext<'a> {
     }
 
     fn compile_head_pattern<T: ArenaComponent<'a>>(
-        &self,
+        &mut self,
         rule: usize,
         pattern: &ComponentPattern<T>,
         scope: &mut Scope,
@@ -526,21 +569,12 @@ impl<'a> SyntaxContext<'a> {
         Ok(match pattern {
             ComponentPattern::Constant(value) => T::intern(self, value),
             ComponentPattern::Variable(name) => {
-                TermValue::Variable(scope.bind(rule, name, T::COMPONENT)?)
-            }
-        })
-    }
-
-    fn compile_pattern<T: ArenaComponent<'a>>(
-        &self,
-        rule: usize,
-        pattern: &ComponentPattern<T>,
-        scope: &Scope,
-    ) -> Result<TermValue<'a>, CompileError> {
-        Ok(match pattern {
-            ComponentPattern::Constant(value) => T::intern(self, value),
-            ComponentPattern::Variable(name) => {
-                TermValue::Variable(scope.resolve(rule, name, T::COMPONENT)?)
+                let symbol = self.variables.get_or_intern(name);
+                scope.bind(rule, name, symbol, T::COMPONENT)?;
+                TermValue::Variable {
+                    component: T::COMPONENT,
+                    symbol,
+                }
             }
         })
     }
@@ -550,14 +584,25 @@ impl<'a> SyntaxContext<'a> {
         rule: usize,
         pattern: &AtomPattern,
         scope: &Scope,
-    ) -> Result<(Component, TermValue<'a>), CompileError> {
-        let component = pattern.component();
-        let term = match pattern {
-            AtomPattern::Principal(pattern) => self.compile_pattern(rule, pattern, scope)?,
-            AtomPattern::Action(pattern) => self.compile_pattern(rule, pattern, scope)?,
-            AtomPattern::Resource(pattern) => self.compile_pattern(rule, pattern, scope)?,
-        };
-        Ok((component, term))
+    ) -> Result<TermValue<'a>, CompileError> {
+        Ok(match pattern {
+            AtomPattern::Variable { component, name } => {
+                let Some(symbol) = self.variables.get(name) else {
+                    return Err(CompileError::UnboundVariable {
+                        rule,
+                        name: name.to_owned(),
+                    });
+                };
+                scope.resolve(rule, name, symbol, *component)?;
+                TermValue::Variable {
+                    component: *component,
+                    symbol,
+                }
+            }
+            AtomPattern::Principal(value) => Principal::intern(self, value),
+            AtomPattern::Action(value) => Action::intern(self, value),
+            AtomPattern::Resource(value) => Resource::intern(self, value),
+        })
     }
 
     fn compile_test(
@@ -570,9 +615,8 @@ impl<'a> SyntaxContext<'a> {
             Test::True => self.test_true,
             Test::False => self.test_false,
             Test::Atom(atom) => {
-                let (component, term) = self.compile_atom_pattern(rule, &atom.pattern, scope)?;
-                self.test_consign
-                    .mk(TestNode::Atom(atom.comparison, component, term))
+                let term = self.compile_atom_pattern(rule, &atom.pattern, scope)?;
+                self.test_consign.mk(TestNode::Atom(atom.comparison, term))
             }
             Test::And(children) => {
                 let children = children
@@ -879,8 +923,8 @@ impl<'a> SyntaxContext<'a> {
         match *test.get() {
             TestNode::True => true,
             TestNode::False => false,
-            TestNode::Atom(comparison, component, term) => {
-                let equal = eval_atom(component, term, event, bindings);
+            TestNode::Atom(comparison, term) => {
+                let equal = eval_atom(term, event, bindings);
                 match comparison {
                     Comparison::Eq => equal,
                     Comparison::Neq => !equal,
@@ -902,21 +946,18 @@ impl<'a> SyntaxContext<'a> {
 }
 
 fn eval_atom<'event>(
-    component: Component,
     term: TermValue<'_>,
     event: &'event Event,
     bindings: &Bindings<'event>,
 ) -> bool {
+    let component = term.component();
     let actual = match component {
         Component::Principal => BoundValue::Principal(&event.principal),
         Component::Action => BoundValue::Action(&event.action),
         Component::Resource => BoundValue::Resource(&event.resource),
     };
     match term {
-        TermValue::Variable(slot) => {
-            let expected = bindings.get(slot);
-            expected.component() == component && expected.equals(actual)
-        }
+        TermValue::Variable { symbol, .. } => bindings.get(symbol).equals(actual),
         TermValue::Principal(expected) => {
             matches!(actual, BoundValue::Principal(value) if value.as_str() == expected)
         }
@@ -948,13 +989,9 @@ fn has_complementary_tests(tests: &[TestId<'_>]) -> bool {
 fn complementary_test(left: TestId<'_>, right: TestId<'_>) -> bool {
     match (*left.get(), *right.get()) {
         (
-            TestNode::Atom(left_comparison, left_component, left_term),
-            TestNode::Atom(right_comparison, right_component, right_term),
-        ) => {
-            left_comparison != right_comparison
-                && left_component == right_component
-                && left_term == right_term
-        }
+            TestNode::Atom(left_comparison, left_term),
+            TestNode::Atom(right_comparison, right_term),
+        ) => left_comparison != right_comparison && left_term == right_term,
         _ => false,
     }
 }
@@ -988,12 +1025,8 @@ mod tests {
     fn aci_and_identity_normalization_reuse_handles() {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
-        let read = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-            Action::Read,
-        ))));
-        let edit = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-            Action::Edit,
-        ))));
+        let read = Regex::test(Test::eq(AtomPattern::action(Action::Read)));
+        let edit = Regex::test(Test::eq(AtomPattern::action(Action::Edit)));
 
         let (_, left) = syntax
             .compile_rule_parts(
@@ -1034,16 +1067,44 @@ mod tests {
     }
 
     #[test]
+    fn variable_names_share_interned_symbols_across_rules() {
+        let arena = Bump::new();
+        let mut syntax = SyntaxContext::new(&arena);
+        let (first, _) = syntax
+            .compile_rule_parts(1, &variable_head(), &Regex::All)
+            .unwrap();
+        let (second, _) = syntax
+            .compile_rule_parts(2, &variable_head(), &Regex::All)
+            .unwrap();
+
+        let TermValue::Variable {
+            component: first_component,
+            symbol: first_symbol,
+        } = first.principal
+        else {
+            panic!("principal head pattern was not compiled as a variable")
+        };
+        let TermValue::Variable {
+            component: second_component,
+            symbol: second_symbol,
+        } = second.principal
+        else {
+            panic!("principal head pattern was not compiled as a variable")
+        };
+        assert_eq!(first_component, Component::Principal);
+        assert_eq!(second_component, Component::Principal);
+        assert_eq!(first_symbol, second_symbol);
+        assert_eq!(syntax.variables.resolve(first_symbol), Some("principal"));
+        assert_eq!(syntax.variables.len(), 3);
+    }
+
+    #[test]
     fn derivative_cycle_returns_the_same_hashconsed_state() {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
         let cycle = Regex::star(Regex::union([
-            Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-                Action::Read,
-            )))),
-            Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
-                Action::Edit,
-            )))),
+            Regex::test(Test::eq(AtomPattern::action(Action::Read))),
+            Regex::test(Test::eq(AtomPattern::action(Action::Edit))),
         ]));
         let (head, initial) = syntax
             .compile_rule_parts(1, &variable_head(), &cycle)

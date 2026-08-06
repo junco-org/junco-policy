@@ -10,8 +10,6 @@ pub enum CompileError {
     VariableComponentConflict { rule: usize, name: String },
     #[error("rule {rule}: tail variable {name:?} is not bound by the head")]
     UnboundVariable { rule: usize, name: String },
-    #[error("rule {rule}: more than 65535 head variables are not supported")]
-    TooManyVariables { rule: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
