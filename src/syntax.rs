@@ -11,13 +11,13 @@ use string_interner::{DefaultStringInterner, DefaultSymbol};
 use crate::model::{Action, Event, Principal, Resource};
 use crate::validator::CompileError;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ComponentPattern<T> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ComponentPattern<T, Variable = String> {
     Constant(T),
-    Variable(String),
+    Variable(Variable),
 }
 
-impl<T> ComponentPattern<T> {
+impl<T> ComponentPattern<T, String> {
     pub fn constant(value: impl Into<T>) -> Self {
         Self::Constant(value.into())
     }
@@ -61,14 +61,21 @@ pub enum Comparison {
     Neq,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum AtomPattern {
-    Principal(ComponentPattern<Principal>),
-    Action(ComponentPattern<Action>),
-    Resource(ComponentPattern<Resource>),
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AtomPattern<
+    PrincipalValue = Principal,
+    ActionValue = Action,
+    ResourceValue = Resource,
+    Variable = String,
+> {
+    Principal(ComponentPattern<PrincipalValue, Variable>),
+    Action(ComponentPattern<ActionValue, Variable>),
+    Resource(ComponentPattern<ResourceValue, Variable>),
 }
 
-impl AtomPattern {
+impl<PrincipalValue, ActionValue, ResourceValue, Variable>
+    AtomPattern<PrincipalValue, ActionValue, ResourceValue, Variable>
+{
     pub fn component(&self) -> Component {
         match self {
             Self::Principal(_) => Component::Principal,
@@ -130,27 +137,8 @@ impl<'a> CompiledAction<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ComponentValue<'a> {
-    Variable {
-        component: Component,
-        symbol: DefaultSymbol,
-    },
-    Principal(&'a str),
-    Action(CompiledAction<'a>),
-    Resource(&'a [&'a str]),
-}
-
-impl ComponentValue<'_> {
-    fn component(self) -> Component {
-        match self {
-            Self::Variable { component, .. } => component,
-            Self::Principal(_) => Component::Principal,
-            Self::Action(_) => Component::Action,
-            Self::Resource(_) => Component::Resource,
-        }
-    }
-}
+pub(crate) type CompiledAtomPattern<'a> =
+    AtomPattern<&'a str, CompiledAction<'a>, &'a [&'a str], DefaultSymbol>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TestNode<'a> {
@@ -158,7 +146,7 @@ pub(crate) enum TestNode<'a> {
     False,
     Atom {
         comparison: Comparison,
-        pattern: ComponentValue<'a>,
+        pattern: CompiledAtomPattern<'a>,
     },
     And(&'a [TestId<'a>]),
     Or(&'a [TestId<'a>]),
@@ -203,14 +191,6 @@ pub(crate) enum BoundValue<'event> {
 }
 
 impl BoundValue<'_> {
-    fn component(self) -> Component {
-        match self {
-            Self::Principal(_) => Component::Principal,
-            Self::Action(_) => Component::Action,
-            Self::Resource(_) => Component::Resource,
-        }
-    }
-
     fn equals(self, other: Self) -> bool {
         match (self, other) {
             (Self::Principal(left), Self::Principal(right)) => left == right,
@@ -245,53 +225,59 @@ impl<'event> Bindings<'event> {
     }
 }
 
+fn resource_matches(expected: &[&str], actual: &Resource) -> bool {
+    expected.len() == actual.segments().len()
+        && expected
+            .iter()
+            .zip(actual.segments())
+            .all(|(left, right)| *left == right)
+}
+
+fn match_head_pattern<'event, Constant: Copy, Actual>(
+    pattern: ComponentPattern<Constant, DefaultSymbol>,
+    actual: &Actual,
+    bound: BoundValue<'event>,
+    bindings: &mut Bindings<'event>,
+    constant_matches: impl FnOnce(Constant, &Actual) -> bool,
+) -> bool {
+    match pattern {
+        ComponentPattern::Constant(expected) => constant_matches(expected, actual),
+        ComponentPattern::Variable(symbol) => bindings.bind(symbol, bound),
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CompiledHead<'a> {
-    principal: ComponentValue<'a>,
-    action: ComponentValue<'a>,
-    resource: ComponentValue<'a>,
+    principal: ComponentPattern<&'a str, DefaultSymbol>,
+    action: ComponentPattern<CompiledAction<'a>, DefaultSymbol>,
+    resource: ComponentPattern<&'a [&'a str], DefaultSymbol>,
 }
 
 impl<'a> CompiledHead<'a> {
     pub(crate) fn matches<'event>(&self, event: &'event Event) -> Option<Bindings<'event>> {
         let mut bindings = Bindings::default();
-        if !match_head_term(
+        if !match_head_pattern(
             self.principal,
+            &event.principal,
             BoundValue::Principal(&event.principal),
             &mut bindings,
-        ) || !match_head_term(
+            |expected, actual| actual.as_str() == expected,
+        ) || !match_head_pattern(
             self.action,
+            &event.action,
             BoundValue::Action(&event.action),
             &mut bindings,
-        ) || !match_head_term(
+            |expected, actual| expected.matches(actual),
+        ) || !match_head_pattern(
             self.resource,
+            &event.resource,
             BoundValue::Resource(&event.resource),
             &mut bindings,
+            resource_matches,
         ) {
             return None;
         }
         Some(bindings)
-    }
-}
-
-fn match_head_term<'event>(
-    term: ComponentValue<'_>,
-    value: BoundValue<'event>,
-    bindings: &mut Bindings<'event>,
-) -> bool {
-    match term {
-        ComponentValue::Variable { component, symbol } => {
-            component == value.component() && bindings.bind(symbol, value)
-        }
-        ComponentValue::Principal(expected) => {
-            matches!(value, BoundValue::Principal(actual) if actual.as_str() == expected)
-        }
-        ComponentValue::Action(expected) => {
-            matches!(value, BoundValue::Action(actual) if expected.matches(actual))
-        }
-        ComponentValue::Resource(expected) => {
-            matches!(value, BoundValue::Resource(actual) if resource_matches(expected, actual))
-        }
     }
 }
 
@@ -359,31 +345,35 @@ pub(crate) struct SyntaxContext<'a> {
 
 trait ArenaComponent<'a>: Sized {
     const COMPONENT: Component;
+    type Compiled: Clone + Copy + std::fmt::Debug + PartialEq + Eq + Hash;
 
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> ComponentValue<'a>;
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> Self::Compiled;
 }
 
 impl<'a> ArenaComponent<'a> for Principal {
     const COMPONENT: Component = Component::Principal;
+    type Compiled = &'a str;
 
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> ComponentValue<'a> {
-        ComponentValue::Principal(context.alloc_principal(value))
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> Self::Compiled {
+        context.alloc_principal(value)
     }
 }
 
 impl<'a> ArenaComponent<'a> for Action {
     const COMPONENT: Component = Component::Action;
+    type Compiled = CompiledAction<'a>;
 
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> ComponentValue<'a> {
-        ComponentValue::Action(CompiledAction::from_action(context.arena(), value))
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> Self::Compiled {
+        CompiledAction::from_action(context.arena(), value)
     }
 }
 
 impl<'a> ArenaComponent<'a> for Resource {
     const COMPONENT: Component = Component::Resource;
+    type Compiled = &'a [&'a str];
 
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> ComponentValue<'a> {
-        ComponentValue::Resource(context.alloc_resource(value))
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> Self::Compiled {
+        context.alloc_resource(value)
     }
 }
 
@@ -418,25 +408,6 @@ impl<'a> SyntaxContext<'a> {
         }
     }
 
-    fn compile_head(
-        &mut self,
-        rule: usize,
-        head: &Head,
-    ) -> Result<(CompiledHead<'a>, Scope), CompileError> {
-        let mut scope = Scope::default();
-        let principal = self.compile_head_pattern(rule, &head.principal, &mut scope)?;
-        let action = self.compile_head_pattern(rule, &head.action, &mut scope)?;
-        let resource = self.compile_head_pattern(rule, &head.resource, &mut scope)?;
-        Ok((
-            CompiledHead {
-                principal,
-                action,
-                resource,
-            },
-            scope,
-        ))
-    }
-
     fn arena(&self) -> &'a Bump {
         self.test_consign.arena()
     }
@@ -459,16 +430,13 @@ impl<'a> SyntaxContext<'a> {
         rule: usize,
         pattern: &ComponentPattern<T>,
         scope: &mut Scope,
-    ) -> Result<ComponentValue<'a>, CompileError> {
+    ) -> Result<ComponentPattern<T::Compiled, DefaultSymbol>, CompileError> {
         Ok(match pattern {
-            ComponentPattern::Constant(value) => T::intern(self, value),
+            ComponentPattern::Constant(value) => ComponentPattern::Constant(T::intern(self, value)),
             ComponentPattern::Variable(name) => {
                 let symbol = self.variables.get_or_intern(name);
                 scope.bind(rule, name, symbol, T::COMPONENT)?;
-                ComponentValue::Variable {
-                    component: T::COMPONENT,
-                    symbol,
-                }
+                ComponentPattern::Variable(symbol)
             }
         })
     }
@@ -478,9 +446,9 @@ impl<'a> SyntaxContext<'a> {
         rule: usize,
         pattern: &ComponentPattern<T>,
         scope: &Scope,
-    ) -> Result<ComponentValue<'a>, CompileError> {
+    ) -> Result<ComponentPattern<T::Compiled, DefaultSymbol>, CompileError> {
         Ok(match pattern {
-            ComponentPattern::Constant(value) => T::intern(self, value),
+            ComponentPattern::Constant(value) => ComponentPattern::Constant(T::intern(self, value)),
             ComponentPattern::Variable(name) => {
                 let Some(symbol) = self.variables.get(name) else {
                     return Err(CompileError::UnboundVariable {
@@ -489,10 +457,7 @@ impl<'a> SyntaxContext<'a> {
                     });
                 };
                 scope.resolve(rule, name, symbol, T::COMPONENT)?;
-                ComponentValue::Variable {
-                    component: T::COMPONENT,
-                    symbol,
-                }
+                ComponentPattern::Variable(symbol)
             }
         })
     }
@@ -502,12 +467,37 @@ impl<'a> SyntaxContext<'a> {
         rule: usize,
         pattern: &AtomPattern,
         scope: &Scope,
-    ) -> Result<ComponentValue<'a>, CompileError> {
+    ) -> Result<CompiledAtomPattern<'a>, CompileError> {
         Ok(match pattern {
-            AtomPattern::Principal(pattern) => self.compile_pattern(rule, pattern, scope)?,
-            AtomPattern::Action(pattern) => self.compile_pattern(rule, pattern, scope)?,
-            AtomPattern::Resource(pattern) => self.compile_pattern(rule, pattern, scope)?,
+            AtomPattern::Principal(pattern) => {
+                AtomPattern::Principal(self.compile_pattern(rule, pattern, scope)?)
+            }
+            AtomPattern::Action(pattern) => {
+                AtomPattern::Action(self.compile_pattern(rule, pattern, scope)?)
+            }
+            AtomPattern::Resource(pattern) => {
+                AtomPattern::Resource(self.compile_pattern(rule, pattern, scope)?)
+            }
         })
+    }
+
+    fn compile_head(
+        &mut self,
+        rule: usize,
+        head: &Head,
+    ) -> Result<(CompiledHead<'a>, Scope), CompileError> {
+        let mut scope = Scope::default();
+        let principal = self.compile_head_pattern(rule, &head.principal, &mut scope)?;
+        let action = self.compile_head_pattern(rule, &head.action, &mut scope)?;
+        let resource = self.compile_head_pattern(rule, &head.resource, &mut scope)?;
+        Ok((
+            CompiledHead {
+                principal,
+                action,
+                resource,
+            },
+            scope,
+        ))
     }
 
     fn test_and(&mut self, children: Vec<TestId<'a>>) -> TestId<'a> {
@@ -950,37 +940,47 @@ impl<'context, 'arena> RuleSyntax<'context, 'arena> {
     }
 }
 
-fn eval_atom<'event>(
-    term: ComponentValue<'_>,
-    event: &'event Event,
+fn eval_component_pattern<'event, Constant: Copy, Actual>(
+    pattern: ComponentPattern<Constant, DefaultSymbol>,
+    actual: &Actual,
+    bound: BoundValue<'event>,
     bindings: &Bindings<'event>,
+    constant_matches: impl FnOnce(Constant, &Actual) -> bool,
 ) -> bool {
-    let component = term.component();
-    let actual = match component {
-        Component::Principal => BoundValue::Principal(&event.principal),
-        Component::Action => BoundValue::Action(&event.action),
-        Component::Resource => BoundValue::Resource(&event.resource),
-    };
-    match term {
-        ComponentValue::Variable { symbol, .. } => bindings.get(symbol).equals(actual),
-        ComponentValue::Principal(expected) => {
-            matches!(actual, BoundValue::Principal(value) if value.as_str() == expected)
-        }
-        ComponentValue::Action(expected) => {
-            matches!(actual, BoundValue::Action(value) if expected.matches(value))
-        }
-        ComponentValue::Resource(expected) => {
-            matches!(actual, BoundValue::Resource(value) if resource_matches(expected, value))
-        }
+    match pattern {
+        ComponentPattern::Constant(expected) => constant_matches(expected, actual),
+        ComponentPattern::Variable(symbol) => bindings.get(symbol).equals(bound),
     }
 }
 
-fn resource_matches(expected: &[&str], actual: &Resource) -> bool {
-    expected.len() == actual.segments().len()
-        && expected
-            .iter()
-            .zip(actual.segments())
-            .all(|(left, right)| *left == right)
+fn eval_atom<'event>(
+    pattern: CompiledAtomPattern<'_>,
+    event: &'event Event,
+    bindings: &Bindings<'event>,
+) -> bool {
+    match pattern {
+        AtomPattern::Principal(pattern) => eval_component_pattern(
+            pattern,
+            &event.principal,
+            BoundValue::Principal(&event.principal),
+            bindings,
+            |expected, actual| actual.as_str() == expected,
+        ),
+        AtomPattern::Action(pattern) => eval_component_pattern(
+            pattern,
+            &event.action,
+            BoundValue::Action(&event.action),
+            bindings,
+            |expected, actual| expected.matches(actual),
+        ),
+        AtomPattern::Resource(pattern) => eval_component_pattern(
+            pattern,
+            &event.resource,
+            BoundValue::Resource(&event.resource),
+            bindings,
+            resource_matches,
+        ),
+    }
 }
 
 fn has_complementary_tests(tests: &[TestId<'_>]) -> bool {
@@ -1093,22 +1093,12 @@ mod tests {
         let (second, second_syntax) = RuleSyntax::new(&mut syntax, 2, 2, &variable_head()).unwrap();
         drop(second_syntax);
 
-        let ComponentValue::Variable {
-            component: first_component,
-            symbol: first_symbol,
-        } = first.principal
-        else {
+        let ComponentPattern::Variable(first_symbol) = first.principal else {
             panic!("principal head pattern was not compiled as a variable")
         };
-        let ComponentValue::Variable {
-            component: second_component,
-            symbol: second_symbol,
-        } = second.principal
-        else {
+        let ComponentPattern::Variable(second_symbol) = second.principal else {
             panic!("principal head pattern was not compiled as a variable")
         };
-        assert_eq!(first_component, Component::Principal);
-        assert_eq!(second_component, Component::Principal);
         assert_eq!(first_symbol, second_symbol);
         assert_eq!(syntax.variables.resolve(first_symbol), Some("principal"));
         assert_eq!(syntax.variables.len(), 3);
