@@ -131,7 +131,7 @@ impl<'a> CompiledAction<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum TermValue<'a> {
+pub(crate) enum ComponentValue<'a> {
     Variable {
         component: Component,
         symbol: DefaultSymbol,
@@ -141,7 +141,7 @@ pub(crate) enum TermValue<'a> {
     Resource(&'a [&'a str]),
 }
 
-impl TermValue<'_> {
+impl ComponentValue<'_> {
     fn component(self) -> Component {
         match self {
             Self::Variable { component, .. } => component,
@@ -156,7 +156,10 @@ impl TermValue<'_> {
 pub(crate) enum TestNode<'a> {
     True,
     False,
-    Atom(Comparison, TermValue<'a>),
+    Atom {
+        comparison: Comparison,
+        pattern: ComponentValue<'a>,
+    },
     And(&'a [TestId<'a>]),
     Or(&'a [TestId<'a>]),
 }
@@ -244,9 +247,9 @@ impl<'event> Bindings<'event> {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CompiledHead<'a> {
-    principal: TermValue<'a>,
-    action: TermValue<'a>,
-    resource: TermValue<'a>,
+    principal: ComponentValue<'a>,
+    action: ComponentValue<'a>,
+    resource: ComponentValue<'a>,
 }
 
 impl<'a> CompiledHead<'a> {
@@ -272,21 +275,21 @@ impl<'a> CompiledHead<'a> {
 }
 
 fn match_head_term<'event>(
-    term: TermValue<'_>,
+    term: ComponentValue<'_>,
     value: BoundValue<'event>,
     bindings: &mut Bindings<'event>,
 ) -> bool {
     match term {
-        TermValue::Variable { component, symbol } => {
+        ComponentValue::Variable { component, symbol } => {
             component == value.component() && bindings.bind(symbol, value)
         }
-        TermValue::Principal(expected) => {
+        ComponentValue::Principal(expected) => {
             matches!(value, BoundValue::Principal(actual) if actual.as_str() == expected)
         }
-        TermValue::Action(expected) => {
+        ComponentValue::Action(expected) => {
             matches!(value, BoundValue::Action(actual) if expected.matches(actual))
         }
-        TermValue::Resource(expected) => {
+        ComponentValue::Resource(expected) => {
             matches!(value, BoundValue::Resource(actual) if resource_matches(expected, actual))
         }
     }
@@ -357,30 +360,30 @@ pub(crate) struct SyntaxContext<'a> {
 trait ArenaComponent<'a>: Sized {
     const COMPONENT: Component;
 
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> TermValue<'a>;
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> ComponentValue<'a>;
 }
 
 impl<'a> ArenaComponent<'a> for Principal {
     const COMPONENT: Component = Component::Principal;
 
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> TermValue<'a> {
-        TermValue::Principal(context.alloc_principal(value))
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> ComponentValue<'a> {
+        ComponentValue::Principal(context.alloc_principal(value))
     }
 }
 
 impl<'a> ArenaComponent<'a> for Action {
     const COMPONENT: Component = Component::Action;
 
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> TermValue<'a> {
-        TermValue::Action(CompiledAction::from_action(context.arena(), value))
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> ComponentValue<'a> {
+        ComponentValue::Action(CompiledAction::from_action(context.arena(), value))
     }
 }
 
 impl<'a> ArenaComponent<'a> for Resource {
     const COMPONENT: Component = Component::Resource;
 
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> TermValue<'a> {
-        TermValue::Resource(context.alloc_resource(value))
+    fn intern(context: &SyntaxContext<'a>, value: &Self) -> ComponentValue<'a> {
+        ComponentValue::Resource(context.alloc_resource(value))
     }
 }
 
@@ -456,13 +459,13 @@ impl<'a> SyntaxContext<'a> {
         rule: usize,
         pattern: &ComponentPattern<T>,
         scope: &mut Scope,
-    ) -> Result<TermValue<'a>, CompileError> {
+    ) -> Result<ComponentValue<'a>, CompileError> {
         Ok(match pattern {
             ComponentPattern::Constant(value) => T::intern(self, value),
             ComponentPattern::Variable(name) => {
                 let symbol = self.variables.get_or_intern(name);
                 scope.bind(rule, name, symbol, T::COMPONENT)?;
-                TermValue::Variable {
+                ComponentValue::Variable {
                     component: T::COMPONENT,
                     symbol,
                 }
@@ -475,7 +478,7 @@ impl<'a> SyntaxContext<'a> {
         rule: usize,
         pattern: &ComponentPattern<T>,
         scope: &Scope,
-    ) -> Result<TermValue<'a>, CompileError> {
+    ) -> Result<ComponentValue<'a>, CompileError> {
         Ok(match pattern {
             ComponentPattern::Constant(value) => T::intern(self, value),
             ComponentPattern::Variable(name) => {
@@ -486,7 +489,7 @@ impl<'a> SyntaxContext<'a> {
                     });
                 };
                 scope.resolve(rule, name, symbol, T::COMPONENT)?;
-                TermValue::Variable {
+                ComponentValue::Variable {
                     component: T::COMPONENT,
                     symbol,
                 }
@@ -499,7 +502,7 @@ impl<'a> SyntaxContext<'a> {
         rule: usize,
         pattern: &AtomPattern,
         scope: &Scope,
-    ) -> Result<TermValue<'a>, CompileError> {
+    ) -> Result<ComponentValue<'a>, CompileError> {
         Ok(match pattern {
             AtomPattern::Principal(pattern) => self.compile_pattern(rule, pattern, scope)?,
             AtomPattern::Action(pattern) => self.compile_pattern(rule, pattern, scope)?,
@@ -749,8 +752,11 @@ impl<'a> SyntaxContext<'a> {
         match *test.get() {
             TestNode::True => true,
             TestNode::False => false,
-            TestNode::Atom(comparison, term) => {
-                let equal = eval_atom(term, event, bindings);
+            TestNode::Atom {
+                comparison,
+                pattern,
+            } => {
+                let equal = eval_atom(pattern, event, bindings);
                 match comparison {
                     Comparison::Eq => equal,
                     Comparison::Neq => !equal,
@@ -863,10 +869,10 @@ impl<'context, 'arena> RuleSyntax<'context, 'arena> {
         let term = self
             .syntax
             .compile_atom_pattern(self.rule, &pattern, &self.scope)?;
-        let id = self
-            .syntax
-            .test_consign
-            .mk(TestNode::Atom(comparison, term));
+        let id = self.syntax.test_consign.mk(TestNode::Atom {
+            comparison,
+            pattern: term,
+        });
         Ok(self.wrap_test(id))
     }
 
@@ -945,7 +951,7 @@ impl<'context, 'arena> RuleSyntax<'context, 'arena> {
 }
 
 fn eval_atom<'event>(
-    term: TermValue<'_>,
+    term: ComponentValue<'_>,
     event: &'event Event,
     bindings: &Bindings<'event>,
 ) -> bool {
@@ -956,14 +962,14 @@ fn eval_atom<'event>(
         Component::Resource => BoundValue::Resource(&event.resource),
     };
     match term {
-        TermValue::Variable { symbol, .. } => bindings.get(symbol).equals(actual),
-        TermValue::Principal(expected) => {
+        ComponentValue::Variable { symbol, .. } => bindings.get(symbol).equals(actual),
+        ComponentValue::Principal(expected) => {
             matches!(actual, BoundValue::Principal(value) if value.as_str() == expected)
         }
-        TermValue::Action(expected) => {
+        ComponentValue::Action(expected) => {
             matches!(actual, BoundValue::Action(value) if expected.matches(value))
         }
-        TermValue::Resource(expected) => {
+        ComponentValue::Resource(expected) => {
             matches!(actual, BoundValue::Resource(value) if resource_matches(expected, value))
         }
     }
@@ -988,9 +994,15 @@ fn has_complementary_tests(tests: &[TestId<'_>]) -> bool {
 fn complementary_test(left: TestId<'_>, right: TestId<'_>) -> bool {
     match (*left.get(), *right.get()) {
         (
-            TestNode::Atom(left_comparison, left_term),
-            TestNode::Atom(right_comparison, right_term),
-        ) => left_comparison != right_comparison && left_term == right_term,
+            TestNode::Atom {
+                comparison: left_comparison,
+                pattern: left_pattern,
+            },
+            TestNode::Atom {
+                comparison: right_comparison,
+                pattern: right_pattern,
+            },
+        ) => left_comparison != right_comparison && left_pattern == right_pattern,
         _ => false,
     }
 }
@@ -1081,14 +1093,14 @@ mod tests {
         let (second, second_syntax) = RuleSyntax::new(&mut syntax, 2, 2, &variable_head()).unwrap();
         drop(second_syntax);
 
-        let TermValue::Variable {
+        let ComponentValue::Variable {
             component: first_component,
             symbol: first_symbol,
         } = first.principal
         else {
             panic!("principal head pattern was not compiled as a variable")
         };
-        let TermValue::Variable {
+        let ComponentValue::Variable {
             component: second_component,
             symbol: second_symbol,
         } = second.principal
