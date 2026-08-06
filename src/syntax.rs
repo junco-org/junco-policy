@@ -551,20 +551,13 @@ impl<'a> SyntaxContext<'a> {
         pattern: &AtomPattern,
         scope: &Scope,
     ) -> Result<(Component, TermValue<'a>), CompileError> {
-        match pattern {
-            AtomPattern::Principal(pattern) => Ok((
-                Component::Principal,
-                self.compile_pattern(rule, pattern, scope)?,
-            )),
-            AtomPattern::Action(pattern) => Ok((
-                Component::Action,
-                self.compile_pattern(rule, pattern, scope)?,
-            )),
-            AtomPattern::Resource(pattern) => Ok((
-                Component::Resource,
-                self.compile_pattern(rule, pattern, scope)?,
-            )),
-        }
+        let component = pattern.component();
+        let term = match pattern {
+            AtomPattern::Principal(pattern) => self.compile_pattern(rule, pattern, scope)?,
+            AtomPattern::Action(pattern) => self.compile_pattern(rule, pattern, scope)?,
+            AtomPattern::Resource(pattern) => self.compile_pattern(rule, pattern, scope)?,
+        };
+        Ok((component, term))
     }
 
     fn compile_test(
