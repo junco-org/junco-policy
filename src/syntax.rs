@@ -44,21 +44,81 @@ impl Head {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Component {
+    Principal,
+    Action,
+    Resource,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Comparison {
+    Eq,
+    Neq,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AtomPattern {
+    Principal(ComponentPattern<Principal>),
+    Action(ComponentPattern<Action>),
+    Resource(ComponentPattern<Resource>),
+}
+
+impl AtomPattern {
+    pub fn component(&self) -> Component {
+        match self {
+            Self::Principal(_) => Component::Principal,
+            Self::Action(_) => Component::Action,
+            Self::Resource(_) => Component::Resource,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TestAtom {
+    comparison: Comparison,
+    pattern: AtomPattern,
+}
+
+impl TestAtom {
+    pub fn comparison(&self) -> Comparison {
+        self.comparison
+    }
+
+    pub fn component(&self) -> Component {
+        self.pattern.component()
+    }
+
+    pub fn pattern(&self) -> &AtomPattern {
+        &self.pattern
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Test {
     True,
     False,
-    EqPrincipal(ComponentPattern<Principal>),
-    NePrincipal(ComponentPattern<Principal>),
-    EqAction(ComponentPattern<Action>),
-    NeAction(ComponentPattern<Action>),
-    EqResource(ComponentPattern<Resource>),
-    NeResource(ComponentPattern<Resource>),
+    Atom(TestAtom),
     And(Vec<Test>),
     Or(Vec<Test>),
 }
 
 impl Test {
+    pub fn atom(comparison: Comparison, pattern: AtomPattern) -> Self {
+        Self::Atom(TestAtom {
+            comparison,
+            pattern,
+        })
+    }
+
+    pub fn eq(pattern: AtomPattern) -> Self {
+        Self::atom(Comparison::Eq, pattern)
+    }
+
+    pub fn neq(pattern: AtomPattern) -> Self {
+        Self::atom(Comparison::Neq, pattern)
+    }
+
     pub fn and(tests: impl IntoIterator<Item = Test>) -> Self {
         Self::And(tests.into_iter().collect())
     }
@@ -127,15 +187,8 @@ impl Rule {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum Component {
-    Principal,
-    Action,
-    Resource,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ActionValue<'a> {
+pub(crate) enum CompiledAction<'a> {
     Read,
     Edit,
     Stage,
@@ -147,7 +200,7 @@ pub(crate) enum ActionValue<'a> {
     History,
 }
 
-impl<'a> ActionValue<'a> {
+impl<'a> CompiledAction<'a> {
     fn from_action(arena: &'a Bump, action: &Action) -> Self {
         match action {
             Action::Read => Self::Read,
@@ -184,7 +237,7 @@ impl<'a> ActionValue<'a> {
 pub(crate) enum TermValue<'a> {
     Variable(u16),
     Principal(&'a str),
-    Action(ActionValue<'a>),
+    Action(CompiledAction<'a>),
     Resource(&'a [&'a str]),
 }
 
@@ -192,8 +245,7 @@ pub(crate) enum TermValue<'a> {
 pub(crate) enum TestNode<'a> {
     True,
     False,
-    Equal(Component, TermValue<'a>),
-    NotEqual(Component, TermValue<'a>),
+    Atom(Comparison, Component, TermValue<'a>),
     And(&'a [TestId<'a>]),
     Or(&'a [TestId<'a>]),
 }
@@ -386,7 +438,7 @@ impl<'a> ArenaComponent<'a> for Action {
     const COMPONENT: Component = Component::Action;
 
     fn intern(context: &SyntaxContext<'a>, value: &Self) -> TermValue<'a> {
-        TermValue::Action(ActionValue::from_action(context.arena(), value))
+        TermValue::Action(CompiledAction::from_action(context.arena(), value))
     }
 }
 
@@ -493,6 +545,28 @@ impl<'a> SyntaxContext<'a> {
         })
     }
 
+    fn compile_atom_pattern(
+        &self,
+        rule: usize,
+        pattern: &AtomPattern,
+        scope: &Scope,
+    ) -> Result<(Component, TermValue<'a>), CompileError> {
+        match pattern {
+            AtomPattern::Principal(pattern) => Ok((
+                Component::Principal,
+                self.compile_pattern(rule, pattern, scope)?,
+            )),
+            AtomPattern::Action(pattern) => Ok((
+                Component::Action,
+                self.compile_pattern(rule, pattern, scope)?,
+            )),
+            AtomPattern::Resource(pattern) => Ok((
+                Component::Resource,
+                self.compile_pattern(rule, pattern, scope)?,
+            )),
+        }
+    }
+
     fn compile_test(
         &mut self,
         rule: usize,
@@ -502,35 +576,10 @@ impl<'a> SyntaxContext<'a> {
         Ok(match test {
             Test::True => self.test_true,
             Test::False => self.test_false,
-            Test::EqPrincipal(term) => {
-                let term = self.compile_pattern(rule, term, scope)?;
+            Test::Atom(atom) => {
+                let (component, term) = self.compile_atom_pattern(rule, &atom.pattern, scope)?;
                 self.test_consign
-                    .mk(TestNode::Equal(Component::Principal, term))
-            }
-            Test::NePrincipal(term) => {
-                let term = self.compile_pattern(rule, term, scope)?;
-                self.test_consign
-                    .mk(TestNode::NotEqual(Component::Principal, term))
-            }
-            Test::EqAction(term) => {
-                let term = self.compile_pattern(rule, term, scope)?;
-                self.test_consign
-                    .mk(TestNode::Equal(Component::Action, term))
-            }
-            Test::NeAction(term) => {
-                let term = self.compile_pattern(rule, term, scope)?;
-                self.test_consign
-                    .mk(TestNode::NotEqual(Component::Action, term))
-            }
-            Test::EqResource(term) => {
-                let term = self.compile_pattern(rule, term, scope)?;
-                self.test_consign
-                    .mk(TestNode::Equal(Component::Resource, term))
-            }
-            Test::NeResource(term) => {
-                let term = self.compile_pattern(rule, term, scope)?;
-                self.test_consign
-                    .mk(TestNode::NotEqual(Component::Resource, term))
+                    .mk(TestNode::Atom(atom.comparison, component, term))
             }
             Test::And(children) => {
                 let children = children
@@ -837,8 +886,13 @@ impl<'a> SyntaxContext<'a> {
         match *test.get() {
             TestNode::True => true,
             TestNode::False => false,
-            TestNode::Equal(component, term) => eval_atom(component, term, event, bindings),
-            TestNode::NotEqual(component, term) => !eval_atom(component, term, event, bindings),
+            TestNode::Atom(comparison, component, term) => {
+                let equal = eval_atom(component, term, event, bindings);
+                match comparison {
+                    Comparison::Eq => equal,
+                    Comparison::Neq => !equal,
+                }
+            }
             TestNode::And(children) => children
                 .iter()
                 .all(|child| self.eval_test(*child, event, bindings)),
@@ -900,8 +954,14 @@ fn has_complementary_tests(tests: &[TestId<'_>]) -> bool {
 
 fn complementary_test(left: TestId<'_>, right: TestId<'_>) -> bool {
     match (*left.get(), *right.get()) {
-        (TestNode::Equal(lc, lt), TestNode::NotEqual(rc, rt))
-        | (TestNode::NotEqual(lc, lt), TestNode::Equal(rc, rt)) => lc == rc && lt == rt,
+        (
+            TestNode::Atom(left_comparison, left_component, left_term),
+            TestNode::Atom(right_comparison, right_component, right_term),
+        ) => {
+            left_comparison != right_comparison
+                && left_component == right_component
+                && left_term == right_term
+        }
         _ => false,
     }
 }
@@ -935,8 +995,12 @@ mod tests {
     fn aci_and_identity_normalization_reuse_handles() {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
-        let read = Regex::test(Test::EqAction(ComponentPattern::constant(Action::Read)));
-        let edit = Regex::test(Test::EqAction(ComponentPattern::constant(Action::Edit)));
+        let read = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+            Action::Read,
+        ))));
+        let edit = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+            Action::Edit,
+        ))));
 
         let (_, left) = syntax
             .compile_rule_parts(
@@ -981,8 +1045,12 @@ mod tests {
         let arena = Bump::new();
         let mut syntax = SyntaxContext::new(&arena);
         let cycle = Regex::star(Regex::union([
-            Regex::test(Test::EqAction(ComponentPattern::constant(Action::Read))),
-            Regex::test(Test::EqAction(ComponentPattern::constant(Action::Edit))),
+            Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+                Action::Read,
+            )))),
+            Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+                Action::Edit,
+            )))),
         ]));
         let (head, initial) = syntax
             .compile_rule_parts(1, &variable_head(), &cycle)

@@ -1,5 +1,6 @@
 use rust_validator::{
-    Action, Bump, ComponentPattern, Event, Head, Regex, Request, Rule, RuleMode, Test, Validator,
+    Action, AtomPattern, Bump, Comparison, ComponentPattern, Event, Head, Regex, Request, Rule,
+    RuleMode, Test, Validator,
 };
 
 fn event(action: Action) -> Event {
@@ -10,18 +11,17 @@ fn eval_test(test: &Test, event: &Event) -> bool {
     match test {
         Test::True => true,
         Test::False => false,
-        Test::EqAction(ComponentPattern::Constant(expected)) => &event.action == expected,
-        Test::NeAction(ComponentPattern::Constant(expected)) => &event.action != expected,
+        Test::Atom(atom) => match (atom.comparison(), atom.pattern()) {
+            (Comparison::Eq, AtomPattern::Action(ComponentPattern::Constant(expected))) => {
+                &event.action == expected
+            }
+            (Comparison::Neq, AtomPattern::Action(ComponentPattern::Constant(expected))) => {
+                &event.action != expected
+            }
+            _ => panic!("generator emitted an atom outside its reference fragment"),
+        },
         Test::And(children) => children.iter().all(|child| eval_test(child, event)),
         Test::Or(children) => children.iter().any(|child| eval_test(child, event)),
-        Test::EqPrincipal(_)
-        | Test::NePrincipal(_)
-        | Test::EqResource(_)
-        | Test::NeResource(_)
-        | Test::EqAction(ComponentPattern::Variable(_))
-        | Test::NeAction(ComponentPattern::Variable(_)) => {
-            panic!("generator emitted a test outside its reference fragment")
-        }
     }
 }
 
@@ -78,11 +78,19 @@ impl Generator {
             return match self.next(5) {
                 0 => Test::True,
                 1 => Test::False,
-                2 => Test::EqAction(ComponentPattern::constant(self.action())),
-                3 => Test::NeAction(ComponentPattern::constant(self.action())),
+                2 => Test::eq(AtomPattern::Action(ComponentPattern::constant(
+                    self.action(),
+                ))),
+                3 => Test::neq(AtomPattern::Action(ComponentPattern::constant(
+                    self.action(),
+                ))),
                 _ => Test::and([
-                    Test::EqAction(ComponentPattern::constant(self.action())),
-                    Test::NeAction(ComponentPattern::constant(self.action())),
+                    Test::eq(AtomPattern::Action(ComponentPattern::constant(
+                        self.action(),
+                    ))),
+                    Test::neq(AtomPattern::Action(ComponentPattern::constant(
+                        self.action(),
+                    ))),
                 ]),
             };
         }
@@ -169,9 +177,15 @@ fn histories(max_len: usize) -> Vec<Vec<Event>> {
 
 #[test]
 fn every_short_word_matches_the_reference_for_boundary_expressions() {
-    let read = Regex::test(Test::EqAction(ComponentPattern::constant(Action::Read)));
-    let edit = Regex::test(Test::EqAction(ComponentPattern::constant(Action::Edit)));
-    let stage = Regex::test(Test::EqAction(ComponentPattern::constant(Action::Stage)));
+    let read = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+        Action::Read,
+    ))));
+    let edit = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+        Action::Edit,
+    ))));
+    let stage = Regex::test(Test::eq(AtomPattern::Action(ComponentPattern::constant(
+        Action::Stage,
+    ))));
     let read_or_edit = Regex::union([read.clone(), edit.clone()]);
     let contains_edit = Regex::concat([Regex::All, edit.clone(), Regex::All]);
     let corpus = vec![
