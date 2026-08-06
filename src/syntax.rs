@@ -137,16 +137,13 @@ impl<'a> CompiledAction<'a> {
     }
 }
 
-pub(crate) type CompiledAtomPattern<'a> =
-    AtomPattern<&'a str, CompiledAction<'a>, &'a [&'a str], DefaultSymbol>;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TestNode<'a> {
     True,
     False,
     Atom {
         comparison: Comparison,
-        pattern: CompiledAtomPattern<'a>,
+        pattern: AtomPattern<&'a str, CompiledAction<'a>, &'a [&'a str], DefaultSymbol>,
     },
     And(&'a [TestId<'a>]),
     Or(&'a [TestId<'a>]),
@@ -467,7 +464,8 @@ impl<'a> SyntaxContext<'a> {
         rule: usize,
         pattern: &AtomPattern,
         scope: &Scope,
-    ) -> Result<CompiledAtomPattern<'a>, CompileError> {
+    ) -> Result<AtomPattern<&'a str, CompiledAction<'a>, &'a [&'a str], DefaultSymbol>, CompileError>
+    {
         Ok(match pattern {
             AtomPattern::Principal(pattern) => {
                 AtomPattern::Principal(self.compile_pattern(rule, pattern, scope)?)
@@ -953,8 +951,8 @@ fn eval_component_pattern<'event, Constant: Copy, Actual>(
     }
 }
 
-fn eval_atom<'event>(
-    pattern: CompiledAtomPattern<'_>,
+fn eval_atom<'arena, 'event>(
+    pattern: AtomPattern<&'arena str, CompiledAction<'arena>, &'arena [&'arena str], DefaultSymbol>,
     event: &'event Event,
     bindings: &Bindings<'event>,
 ) -> bool {
