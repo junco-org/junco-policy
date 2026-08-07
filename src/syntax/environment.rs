@@ -87,8 +87,8 @@ impl VariableEnvironment {
         symbol: DefaultSymbol,
         component: Component,
     ) -> Result<(), Component> {
-        match self.variables.get(&symbol).copied() {
-            Some(bound_component) if bound_component != component => Err(bound_component),
+        match self.variables.get(&symbol) {
+            Some(&bound_component) if bound_component != component => Err(bound_component),
             Some(_) => Ok(()),
             None => {
                 self.variables.insert(symbol, component);
@@ -103,8 +103,8 @@ impl VariableEnvironment {
         symbol: DefaultSymbol,
         component: Component,
     ) -> Result<(), ResolveError> {
-        match self.variables.get(&symbol).copied() {
-            Some(bound_component) if bound_component != component => {
+        match self.variables.get(&symbol) {
+            Some(&bound_component) if bound_component != component => {
                 Err(ResolveError::ComponentConflict)
             }
             Some(_) => Ok(()),
