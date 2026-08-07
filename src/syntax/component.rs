@@ -5,7 +5,7 @@
 //! typed map in [`CandidateSubstitution`]. Principal matching therefore cannot accidentally produce
 //! or retrieve a resource binding.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -40,6 +40,73 @@ pub(crate) struct CandidateSubstitution<'event> {
     principals: HashMap<DefaultSymbol, &'event Principal>,
     actions: HashMap<DefaultSymbol, &'event Action>,
     resources: HashMap<DefaultSymbol, &'event Resource>,
+}
+
+/// Returns whether two maps assign any common variable symbol, regardless of value type.
+fn symbols_overlap<Left, Right>(
+    left: &HashMap<DefaultSymbol, Left>,
+    right: &HashMap<DefaultSymbol, Right>,
+) -> bool {
+    left.keys().any(|symbol| right.contains_key(symbol))
+}
+
+/// Extends `target` with `source` when common keys have equal values.
+fn merge_map<Key, Value>(target: &mut HashMap<Key, Value>, source: HashMap<Key, Value>) -> bool
+where
+    Key: Eq + Hash,
+    Value: Eq,
+{
+    if target.is_empty() {
+        *target = source;
+        return true;
+    }
+    for (key, value) in source {
+        match target.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(value);
+            }
+            Entry::Occupied(entry) if entry.get() == &value => {}
+            Entry::Occupied(_) => return false,
+        }
+    }
+    true
+}
+
+impl<'event> CandidateSubstitution<'event> {
+    /// Returns whether no symbol is assigned in more than one component domain.
+    fn is_well_typed(&self) -> bool {
+        !symbols_overlap(&self.principals, &self.actions)
+            && !symbols_overlap(&self.principals, &self.resources)
+            && !symbols_overlap(&self.actions, &self.resources)
+    }
+
+    /// Combines two substitutions when overlapping assignments are equal and have the same domain.
+    ///
+    /// The method consumes both inputs. A failed merge cannot expose a partially combined value.
+    pub(super) fn merge(mut self, other: Self) -> Option<Self> {
+        let cross_domain_conflict = symbols_overlap(&self.principals, &other.actions)
+            || symbols_overlap(&self.principals, &other.resources)
+            || symbols_overlap(&self.actions, &other.principals)
+            || symbols_overlap(&self.actions, &other.resources)
+            || symbols_overlap(&self.resources, &other.principals)
+            || symbols_overlap(&self.resources, &other.actions);
+        if !self.is_well_typed() || !other.is_well_typed() || cross_domain_conflict {
+            return None;
+        }
+
+        let Self {
+            principals,
+            actions,
+            resources,
+        } = other;
+        if !merge_map(&mut self.principals, principals)
+            || !merge_map(&mut self.actions, actions)
+            || !merge_map(&mut self.resources, resources)
+        {
+            return None;
+        }
+        Some(self)
+    }
 }
 
 /// Compiles and matches one capability-product component.
@@ -199,3 +266,60 @@ pub(super) type CompiledPattern<'arena, ComponentType> =
 
 /// Concrete, structurally hashable atom representation stored in [`TestNode`](super::node::TestNode).
 pub(super) type CompiledAtomPattern<'arena> = AtomPattern<CompiledRepresentation<'arena>>;
+
+#[cfg(test)]
+mod tests {
+    use string_interner::DefaultStringInterner;
+
+    use super::*;
+
+    #[test]
+    fn merge_accepts_disjoint_and_equal_assignments() {
+        let mut symbols = DefaultStringInterner::default();
+        let actor = symbols.get_or_intern("actor");
+        let operation = symbols.get_or_intern("operation");
+        let alice = Principal::new("alice");
+        let same_alice = Principal::new("alice");
+        let read = Action::Read;
+
+        let mut left = CandidateSubstitution::default();
+        left.principals.insert(actor, &alice);
+        let mut right = CandidateSubstitution::default();
+        right.principals.insert(actor, &same_alice);
+        right.actions.insert(operation, &read);
+
+        let merged = left.merge(right).expect("assignments are compatible");
+        assert_eq!(merged.principals.get(&actor), Some(&&alice));
+        assert_eq!(merged.actions.get(&operation), Some(&&read));
+    }
+
+    #[test]
+    fn merge_rejects_unequal_assignments_in_one_domain() {
+        let mut symbols = DefaultStringInterner::default();
+        let actor = symbols.get_or_intern("actor");
+        let alice = Principal::new("alice");
+        let bob = Principal::new("bob");
+
+        let mut left = CandidateSubstitution::default();
+        left.principals.insert(actor, &alice);
+        let mut right = CandidateSubstitution::default();
+        right.principals.insert(actor, &bob);
+
+        assert!(left.merge(right).is_none());
+    }
+
+    #[test]
+    fn merge_rejects_one_symbol_in_different_domains() {
+        let mut symbols = DefaultStringInterner::default();
+        let value = symbols.get_or_intern("value");
+        let alice = Principal::new("alice");
+        let read = Action::Read;
+
+        let mut left = CandidateSubstitution::default();
+        left.principals.insert(value, &alice);
+        let mut right = CandidateSubstitution::default();
+        right.actions.insert(value, &read);
+
+        assert!(left.merge(right).is_none());
+    }
+}

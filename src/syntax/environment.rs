@@ -14,28 +14,22 @@ use crate::validator::{CompileError, RuleIndex};
 use super::component::{CandidateSubstitution, CompiledPattern, ComponentDomain};
 use super::source::{Component, ComponentPattern};
 
-/// Matches one typed head coordinate and updates the candidate substitution.
+/// Matches one typed head coordinate and returns its partial substitution.
 fn match_head_pattern<'arena, 'event, ComponentType>(
     pattern: CompiledPattern<'arena, ComponentType>,
     actual: &'event ComponentType,
-    substitution: &mut CandidateSubstitution<'event>,
-) -> bool
+) -> Option<CandidateSubstitution<'event>>
 where
     ComponentType: ComponentDomain<'arena> + 'event,
 {
     match pattern {
-        ComponentPattern::Constant(expected) => ComponentType::constant_matches(expected, actual),
+        ComponentPattern::Constant(expected) => {
+            ComponentType::constant_matches(expected, actual).then(CandidateSubstitution::default)
+        }
         ComponentPattern::Variable(symbol) => {
-            match ComponentType::bindings_mut(substitution)
-                .get(&symbol)
-                .copied()
-            {
-                Some(existing) => existing == actual,
-                None => {
-                    ComponentType::bindings_mut(substitution).insert(symbol, actual);
-                    true
-                }
-            }
+            let mut substitution = CandidateSubstitution::default();
+            ComponentType::bindings_mut(&mut substitution).insert(symbol, actual);
+            Some(substitution)
         }
     }
 }
@@ -49,19 +43,20 @@ pub(crate) struct CompiledHead<'arena> {
 }
 
 impl<'arena> CompiledHead<'arena> {
-    /// Matches the candidate and returns its rule-local substitution.
+    /// Matches the candidate and merges the three compatible partial substitutions.
     pub(crate) fn match_candidate<'event>(
         &self,
         event: &'event Event,
     ) -> Option<CandidateSubstitution<'event>> {
-        let mut substitution = CandidateSubstitution::default();
-        if !match_head_pattern(self.principal, &event.principal, &mut substitution)
-            || !match_head_pattern(self.action, &event.action, &mut substitution)
-            || !match_head_pattern(self.resource, &event.resource, &mut substitution)
-        {
-            return None;
-        }
-        Some(substitution)
+        match_head_pattern(self.principal, &event.principal)
+            .and_then(|principal| {
+                match_head_pattern(self.action, &event.action)
+                    .and_then(|action| principal.merge(action))
+            })
+            .and_then(|principal_action| {
+                match_head_pattern(self.resource, &event.resource)
+                    .and_then(|resource| principal_action.merge(resource))
+            })
     }
 }
 
