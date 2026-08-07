@@ -15,7 +15,8 @@ mod source;
 mod store;
 
 pub use source::{
-    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Head, PatternRepresentation, RegexExpr,
+    Rule, RuleMode, SourceRepresentation, TestExpr,
 };
 
 pub(crate) use compile::{CompiledRule, compile_rule};

@@ -62,7 +62,8 @@ mod validator;
 pub use bumpalo::Bump;
 pub use model::{Action, Event, Grant, Principal, Request, Resource};
 pub use syntax::{
-    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Head, PatternRepresentation, RegexExpr,
+    Rule, RuleMode, SourceRepresentation, TestExpr,
 };
 pub use validator::{
     Checkpoint, CompileError, Decision, Denial, RuleIndex, Validator, ValidatorBuilder,

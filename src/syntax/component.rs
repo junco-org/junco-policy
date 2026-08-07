@@ -8,13 +8,14 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::marker::PhantomData;
 
 use bumpalo::Bump;
 use string_interner::DefaultSymbol;
 
 use crate::model::{Action, Principal, Resource};
 
-use super::source::{AtomPattern, Component, ComponentPattern};
+use super::source::{AtomPattern, Component, ComponentPattern, PatternRepresentation};
 
 /// Arena-backed action value used by compiled patterns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -181,14 +182,20 @@ impl<'arena> ComponentDomain<'arena> for Resource {
     }
 }
 
+/// Arena-backed representation used by compiled atom patterns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct CompiledRepresentation<'arena>(PhantomData<&'arena ()>);
+
+impl<'arena> PatternRepresentation for CompiledRepresentation<'arena> {
+    type PrincipalValue = <Principal as ComponentDomain<'arena>>::Compiled;
+    type ActionValue = <Action as ComponentDomain<'arena>>::Compiled;
+    type ResourceValue = <Resource as ComponentDomain<'arena>>::Compiled;
+    type Variable = DefaultSymbol;
+}
+
 /// Compiled pattern for one statically selected component type.
 pub(super) type CompiledPattern<'arena, ComponentType> =
     ComponentPattern<<ComponentType as ComponentDomain<'arena>>::Compiled, DefaultSymbol>;
 
 /// Concrete, structurally hashable atom representation stored in [`TestNode`](super::node::TestNode).
-pub(super) type CompiledAtomPattern<'arena> = AtomPattern<
-    <Principal as ComponentDomain<'arena>>::Compiled,
-    <Action as ComponentDomain<'arena>>::Compiled,
-    <Resource as ComponentDomain<'arena>>::Compiled,
-    DefaultSymbol,
->;
+pub(super) type CompiledAtomPattern<'arena> = AtomPattern<CompiledRepresentation<'arena>>;

@@ -18,7 +18,7 @@ fn has_complementary_tests(tests: &[TestId<'_>]) -> bool {
 }
 
 /// Recognizes `Eq(pattern)` paired with `Neq(pattern)`.
-fn complementary_test(left: TestId<'_>, right: TestId<'_>) -> bool {
+fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bool {
     match (*left.get(), *right.get()) {
         (
             TestNode::Atom {
