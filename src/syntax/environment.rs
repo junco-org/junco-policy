@@ -6,18 +6,17 @@
 
 use std::collections::HashMap;
 
-use string_interner::DefaultSymbol;
-
 use crate::model::{Action, Event, Principal, Resource};
 
 use super::component::{CandidateSubstitution, CompiledPattern, ComponentDomain};
 use super::source::{Component, ComponentPattern};
+use super::variable::VariableName;
 
 /// Matches one typed head coordinate and returns its partial substitution.
 fn match_head_pattern<'arena, 'event, ComponentType>(
     pattern: CompiledPattern<'arena, ComponentType>,
     actual: &'event ComponentType,
-) -> Option<CandidateSubstitution<'event>>
+) -> Option<CandidateSubstitution<'arena, 'event>>
 where
     ComponentType: ComponentDomain<'arena> + 'event,
 {
@@ -25,9 +24,9 @@ where
         ComponentPattern::Constant(expected) => {
             ComponentType::constant_matches(expected, actual).then(CandidateSubstitution::default)
         }
-        ComponentPattern::Variable(symbol) => {
+        ComponentPattern::Variable(variable) => {
             let mut substitution = CandidateSubstitution::default();
-            ComponentType::bindings_mut(&mut substitution).insert(symbol, actual);
+            ComponentType::bindings_mut(&mut substitution).insert(variable, actual);
             Some(substitution)
         }
     }
@@ -46,7 +45,7 @@ impl<'arena> CompiledHead<'arena> {
     pub(crate) fn match_candidate<'event>(
         &self,
         event: &'event Event,
-    ) -> Option<CandidateSubstitution<'event>> {
+    ) -> Option<CandidateSubstitution<'arena, 'event>> {
         match_head_pattern(self.principal, &event.principal)
             .and_then(|principal| {
                 match_head_pattern(self.action, &event.action)
@@ -59,39 +58,39 @@ impl<'arena> CompiledHead<'arena> {
     }
 }
 
-/// Structural failure while resolving a compiled variable symbol.
+/// Structural failure while resolving a compiled variable reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ResolveError {
-    /// The rule head did not declare the symbol.
+    /// The rule head did not declare the variable.
     Unbound,
-    /// The head declared the symbol in another component domain.
+    /// The head declared the variable in another component domain.
     ComponentConflict,
 }
 
 /// Rule-local type environment declared by a source head.
 ///
-/// The map records which interned names exist and the product component occupied by each name. It
+/// The map records which arena-backed names exist and the product component occupied by each name. It
 /// is a transient compiler input and is dropped after the tail has been compiled.
 #[derive(Default)]
-pub(crate) struct VariableEnvironment {
-    variables: HashMap<DefaultSymbol, Component>,
+pub(crate) struct VariableEnvironment<'arena> {
+    variables: HashMap<VariableName<'arena>, Component>,
 }
 
-impl VariableEnvironment {
+impl<'arena> VariableEnvironment<'arena> {
     /// Records one head occurrence.
     ///
-    /// Returns the existing component when the symbol was previously bound in a different domain;
-    /// the compiler caller owns source names, rule indexes, and diagnostic construction.
+    /// Returns the existing component when the variable was previously bound in a different domain;
+    /// the compiler caller owns source names and diagnostic construction.
     pub(super) fn bind(
         &mut self,
-        symbol: DefaultSymbol,
+        variable: VariableName<'arena>,
         component: Component,
     ) -> Result<(), Component> {
-        match self.variables.get(&symbol) {
+        match self.variables.get(&variable) {
             Some(&bound_component) if bound_component != component => Err(bound_component),
             Some(_) => Ok(()),
             None => {
-                self.variables.insert(symbol, component);
+                self.variables.insert(variable, component);
                 Ok(())
             }
         }
@@ -100,10 +99,10 @@ impl VariableEnvironment {
     /// Verifies that a tail occurrence is declared by the head in the same component domain.
     pub(super) fn resolve(
         &self,
-        symbol: DefaultSymbol,
+        variable: VariableName<'arena>,
         component: Component,
     ) -> Result<(), ResolveError> {
-        match self.variables.get(&symbol) {
+        match self.variables.get(&variable) {
             Some(&bound_component) if bound_component != component => {
                 Err(ResolveError::ComponentConflict)
             }

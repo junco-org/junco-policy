@@ -16,7 +16,7 @@ use super::store::CanonicalStore;
 fn eval_atom<'arena, 'event>(
     pattern: CompiledAtomPattern<'arena>,
     event: &'event Event,
-    substitution: &CandidateSubstitution<'event>,
+    substitution: &CandidateSubstitution<'arena, 'event>,
 ) -> bool {
     pattern
         .subst(substitution)
@@ -28,7 +28,7 @@ pub(crate) fn accepts<'arena, 'event>(
     store: &mut CanonicalStore<'arena>,
     root: RegexId<'arena>,
     history: impl IntoIterator<Item = &'event Event>,
-    substitution: &CandidateSubstitution<'event>,
+    substitution: &CandidateSubstitution<'arena, 'event>,
 ) -> bool {
     let mut state = root;
     for event in history {
@@ -42,7 +42,7 @@ pub(super) fn derive<'arena, 'event>(
     store: &mut CanonicalStore<'arena>,
     regex: RegexId<'arena>,
     event: &'event Event,
-    substitution: &CandidateSubstitution<'event>,
+    substitution: &CandidateSubstitution<'arena, 'event>,
 ) -> RegexId<'arena> {
     match regex.get().kind {
         RegexKind::Empty | RegexKind::Epsilon => store.empty,
@@ -74,15 +74,17 @@ pub(super) fn derive<'arena, 'event>(
         }
         RegexKind::Concat(factors) => {
             let mut alternatives = Vec::new();
-            for (index, factor) in factors.iter().enumerate() {
+            let mut remaining = factors;
+            while let Some((factor, suffix)) = remaining.split_first() {
                 let derivative = derive(store, *factor, event, substitution);
-                let mut product = Vec::with_capacity(factors.len() - index);
+                let mut product = Vec::with_capacity(1 + suffix.len());
                 product.push(derivative);
-                product.extend_from_slice(&factors[index + 1..]);
+                product.extend_from_slice(suffix);
                 alternatives.push(store.regex_concat(product));
                 if !store.nullable(*factor) {
                     break;
                 }
+                remaining = suffix;
             }
             store.regex_union(alternatives)
         }
@@ -97,7 +99,7 @@ pub(super) fn derive<'arena, 'event>(
 fn eval_test<'arena, 'event>(
     test: TestId<'arena>,
     event: &'event Event,
-    substitution: &CandidateSubstitution<'event>,
+    substitution: &CandidateSubstitution<'arena, 'event>,
 ) -> bool {
     match *test.get() {
         TestNode::True => true,

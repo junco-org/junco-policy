@@ -11,11 +11,11 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
 use bumpalo::Bump;
-use string_interner::DefaultSymbol;
 
 use crate::model::{Action, Event, Principal, Resource};
 
 use super::source::{AtomPattern, Component, ComponentPattern, PatternRepresentation};
+use super::variable::VariableName;
 
 /// Arena-backed action value used by compiled patterns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -36,10 +36,10 @@ pub(super) enum CompiledAction<'arena> {
 /// Separate maps preserve the component type through storage and lookup. The map choice is an
 /// associated operation of [`ComponentDomain`], rather than an erased enum returned by component code.
 #[derive(Debug, Default)]
-pub(crate) struct CandidateSubstitution<'event> {
-    principals: HashMap<DefaultSymbol, &'event Principal>,
-    actions: HashMap<DefaultSymbol, &'event Action>,
-    resources: HashMap<DefaultSymbol, &'event Resource>,
+pub(crate) struct CandidateSubstitution<'arena, 'event> {
+    principals: HashMap<VariableName<'arena>, &'event Principal>,
+    actions: HashMap<VariableName<'arena>, &'event Action>,
+    resources: HashMap<VariableName<'arena>, &'event Resource>,
 }
 
 /// Structural application of a substitution to a pattern-like value.
@@ -81,7 +81,7 @@ pub(super) struct CompiledComponentPattern<'arena, ComponentType>
 where
     ComponentType: ComponentDomain<'arena>,
 {
-    inner: ComponentPattern<ComponentType::Compiled, DefaultSymbol>,
+    inner: ComponentPattern<ComponentType::Compiled, VariableName<'arena>>,
     component: PhantomData<fn() -> ComponentType>,
 }
 
@@ -90,7 +90,9 @@ where
     ComponentType: ComponentDomain<'arena>,
 {
     /// Wraps the structurally stored compiled pattern with its component-domain marker.
-    pub(super) fn new(inner: ComponentPattern<ComponentType::Compiled, DefaultSymbol>) -> Self {
+    pub(super) fn new(
+        inner: ComponentPattern<ComponentType::Compiled, VariableName<'arena>>,
+    ) -> Self {
         Self {
             inner,
             component: PhantomData,
@@ -98,7 +100,9 @@ where
     }
 
     /// Returns the structural representation stored by compiled atom nodes.
-    pub(super) fn into_inner(self) -> ComponentPattern<ComponentType::Compiled, DefaultSymbol> {
+    pub(super) fn into_inner(
+        self,
+    ) -> ComponentPattern<ComponentType::Compiled, VariableName<'arena>> {
         self.inner
     }
 }
@@ -149,12 +153,12 @@ where
     }
 }
 
-/// Returns whether two maps assign any common variable symbol, regardless of value type.
-fn symbols_overlap<Left, Right>(
-    left: &HashMap<DefaultSymbol, Left>,
-    right: &HashMap<DefaultSymbol, Right>,
+/// Returns whether two maps assign any common variable, regardless of value type.
+fn variables_overlap<'arena, Left, Right>(
+    left: &HashMap<VariableName<'arena>, Left>,
+    right: &HashMap<VariableName<'arena>, Right>,
 ) -> bool {
-    left.keys().any(|symbol| right.contains_key(symbol))
+    left.keys().any(|variable| right.contains_key(variable))
 }
 
 /// Extends `target` with `source` when common keys have equal values.
@@ -179,24 +183,24 @@ where
     true
 }
 
-impl<'event> CandidateSubstitution<'event> {
-    /// Returns whether no symbol is assigned in more than one component domain.
+impl<'arena, 'event> CandidateSubstitution<'arena, 'event> {
+    /// Returns whether no variable is assigned in more than one component domain.
     fn is_well_typed(&self) -> bool {
-        !symbols_overlap(&self.principals, &self.actions)
-            && !symbols_overlap(&self.principals, &self.resources)
-            && !symbols_overlap(&self.actions, &self.resources)
+        !variables_overlap(&self.principals, &self.actions)
+            && !variables_overlap(&self.principals, &self.resources)
+            && !variables_overlap(&self.actions, &self.resources)
     }
 
     /// Combines two substitutions when overlapping assignments are equal and have the same domain.
     ///
     /// The method consumes both inputs. A failed merge cannot expose a partially combined value.
     pub(super) fn merge(mut self, other: Self) -> Option<Self> {
-        let cross_domain_conflict = symbols_overlap(&self.principals, &other.actions)
-            || symbols_overlap(&self.principals, &other.resources)
-            || symbols_overlap(&self.actions, &other.principals)
-            || symbols_overlap(&self.actions, &other.resources)
-            || symbols_overlap(&self.resources, &other.principals)
-            || symbols_overlap(&self.resources, &other.actions);
+        let cross_domain_conflict = variables_overlap(&self.principals, &other.actions)
+            || variables_overlap(&self.principals, &other.resources)
+            || variables_overlap(&self.actions, &other.principals)
+            || variables_overlap(&self.actions, &other.resources)
+            || variables_overlap(&self.resources, &other.principals)
+            || variables_overlap(&self.resources, &other.actions);
         if !self.is_well_typed() || !other.is_well_typed() || cross_domain_conflict {
             return None;
         }
@@ -236,13 +240,13 @@ pub(super) trait ComponentDomain<'arena>: Sized + Eq {
 
     /// Returns the immutable substitution map belonging to this component.
     fn bindings<'substitution, 'event>(
-        substitution: &'substitution CandidateSubstitution<'event>,
-    ) -> &'substitution HashMap<DefaultSymbol, &'event Self>;
+        substitution: &'substitution CandidateSubstitution<'arena, 'event>,
+    ) -> &'substitution HashMap<VariableName<'arena>, &'event Self>;
 
     /// Returns the mutable substitution map belonging to this component.
     fn bindings_mut<'substitution, 'event>(
-        substitution: &'substitution mut CandidateSubstitution<'event>,
-    ) -> &'substitution mut HashMap<DefaultSymbol, &'event Self>;
+        substitution: &'substitution mut CandidateSubstitution<'arena, 'event>,
+    ) -> &'substitution mut HashMap<VariableName<'arena>, &'event Self>;
 }
 
 impl<'arena> ComponentDomain<'arena> for Principal {
@@ -258,14 +262,14 @@ impl<'arena> ComponentDomain<'arena> for Principal {
     }
 
     fn bindings<'substitution, 'event>(
-        substitution: &'substitution CandidateSubstitution<'event>,
-    ) -> &'substitution HashMap<DefaultSymbol, &'event Self> {
+        substitution: &'substitution CandidateSubstitution<'arena, 'event>,
+    ) -> &'substitution HashMap<VariableName<'arena>, &'event Self> {
         &substitution.principals
     }
 
     fn bindings_mut<'substitution, 'event>(
-        substitution: &'substitution mut CandidateSubstitution<'event>,
-    ) -> &'substitution mut HashMap<DefaultSymbol, &'event Self> {
+        substitution: &'substitution mut CandidateSubstitution<'arena, 'event>,
+    ) -> &'substitution mut HashMap<VariableName<'arena>, &'event Self> {
         &mut substitution.principals
     }
 }
@@ -310,14 +314,14 @@ impl<'arena> ComponentDomain<'arena> for Action {
     }
 
     fn bindings<'substitution, 'event>(
-        substitution: &'substitution CandidateSubstitution<'event>,
-    ) -> &'substitution HashMap<DefaultSymbol, &'event Self> {
+        substitution: &'substitution CandidateSubstitution<'arena, 'event>,
+    ) -> &'substitution HashMap<VariableName<'arena>, &'event Self> {
         &substitution.actions
     }
 
     fn bindings_mut<'substitution, 'event>(
-        substitution: &'substitution mut CandidateSubstitution<'event>,
-    ) -> &'substitution mut HashMap<DefaultSymbol, &'event Self> {
+        substitution: &'substitution mut CandidateSubstitution<'arena, 'event>,
+    ) -> &'substitution mut HashMap<VariableName<'arena>, &'event Self> {
         &mut substitution.actions
     }
 }
@@ -344,14 +348,14 @@ impl<'arena> ComponentDomain<'arena> for Resource {
     }
 
     fn bindings<'substitution, 'event>(
-        substitution: &'substitution CandidateSubstitution<'event>,
-    ) -> &'substitution HashMap<DefaultSymbol, &'event Self> {
+        substitution: &'substitution CandidateSubstitution<'arena, 'event>,
+    ) -> &'substitution HashMap<VariableName<'arena>, &'event Self> {
         &substitution.resources
     }
 
     fn bindings_mut<'substitution, 'event>(
-        substitution: &'substitution mut CandidateSubstitution<'event>,
-    ) -> &'substitution mut HashMap<DefaultSymbol, &'event Self> {
+        substitution: &'substitution mut CandidateSubstitution<'arena, 'event>,
+    ) -> &'substitution mut HashMap<VariableName<'arena>, &'event Self> {
         &mut substitution.resources
     }
 }
@@ -364,7 +368,7 @@ impl<'arena> PatternRepresentation for CompiledRepresentation<'arena> {
     type PrincipalValue = <Principal as ComponentDomain<'arena>>::Compiled;
     type ActionValue = <Action as ComponentDomain<'arena>>::Compiled;
     type ResourceValue = <Resource as ComponentDomain<'arena>>::Compiled;
-    type Variable = DefaultSymbol;
+    type Variable = VariableName<'arena>;
 }
 
 /// Compiled pattern for one statically selected component type.
@@ -391,28 +395,34 @@ impl PartialEq<Event> for ConcreteAtom<'_, '_> {
     }
 }
 
-impl<'arena, 'event, ComponentType> Subst<CandidateSubstitution<'event>>
+impl<'arena, 'event, ComponentType> Subst<CandidateSubstitution<'arena, 'event>>
     for CompiledComponentPattern<'arena, ComponentType>
 where
     ComponentType: ComponentDomain<'arena> + 'event,
 {
     type Concrete = AppliedPattern<'arena, 'event, ComponentType>;
 
-    fn subst(&self, substitution: &CandidateSubstitution<'event>) -> Option<Self::Concrete> {
+    fn subst(
+        &self,
+        substitution: &CandidateSubstitution<'arena, 'event>,
+    ) -> Option<Self::Concrete> {
         match self.inner {
             ComponentPattern::Constant(expected) => Some(AppliedPattern::Constant(expected)),
-            ComponentPattern::Variable(symbol) => ComponentType::bindings(substitution)
-                .get(&symbol)
+            ComponentPattern::Variable(variable) => ComponentType::bindings(substitution)
+                .get(&variable)
                 .copied()
                 .map(AppliedPattern::Bound),
         }
     }
 }
 
-impl<'arena, 'event> Subst<CandidateSubstitution<'event>> for CompiledAtomPattern<'arena> {
+impl<'arena, 'event> Subst<CandidateSubstitution<'arena, 'event>> for CompiledAtomPattern<'arena> {
     type Concrete = ConcreteAtom<'arena, 'event>;
 
-    fn subst(&self, substitution: &CandidateSubstitution<'event>) -> Option<Self::Concrete> {
+    fn subst(
+        &self,
+        substitution: &CandidateSubstitution<'arena, 'event>,
+    ) -> Option<Self::Concrete> {
         match self {
             AtomPattern::Principal(pattern) => CompiledComponentPattern::<Principal>::new(*pattern)
                 .subst(substitution)
@@ -429,15 +439,13 @@ impl<'arena, 'event> Subst<CandidateSubstitution<'event>> for CompiledAtomPatter
 
 #[cfg(test)]
 mod tests {
-    use string_interner::DefaultStringInterner;
 
     use super::*;
 
     #[test]
     fn merge_accepts_disjoint_and_equal_assignments() {
-        let mut symbols = DefaultStringInterner::default();
-        let actor = symbols.get_or_intern("actor");
-        let operation = symbols.get_or_intern("operation");
+        let actor = VariableName::new("actor");
+        let operation = VariableName::new("operation");
         let alice = Principal::new("alice");
         let same_alice = Principal::new("alice");
         let read = Action::Read;
@@ -455,8 +463,7 @@ mod tests {
 
     #[test]
     fn merge_rejects_unequal_assignments_in_one_domain() {
-        let mut symbols = DefaultStringInterner::default();
-        let actor = symbols.get_or_intern("actor");
+        let actor = VariableName::new("actor");
         let alice = Principal::new("alice");
         let bob = Principal::new("bob");
 
@@ -469,9 +476,8 @@ mod tests {
     }
 
     #[test]
-    fn merge_rejects_one_symbol_in_different_domains() {
-        let mut symbols = DefaultStringInterner::default();
-        let value = symbols.get_or_intern("value");
+    fn merge_rejects_one_variable_in_different_domains() {
+        let value = VariableName::new("value");
         let alice = Principal::new("alice");
         let read = Action::Read;
 
@@ -485,8 +491,7 @@ mod tests {
 
     #[test]
     fn subst_resolves_components_and_atoms() {
-        let mut symbols = DefaultStringInterner::default();
-        let actor = symbols.get_or_intern("actor");
+        let actor = VariableName::new("actor");
         let alice = Principal::new("alice");
         let bob = Principal::new("bob");
         let mut substitution = CandidateSubstitution::default();

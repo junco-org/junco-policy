@@ -9,7 +9,6 @@ use super::source::{
 };
 use super::store::CanonicalStore;
 use crate::model::{Action, Event};
-use crate::validator::RuleIndex;
 
 fn variable_head() -> Head {
     Head::new(
@@ -30,10 +29,6 @@ fn action_regex(action: Action) -> RegexExpr {
     ))
 }
 
-fn index(one_based: usize) -> RuleIndex {
-    RuleIndex::new(one_based).expect("test rule indexes are non-zero")
-}
-
 #[test]
 fn aci_and_identity_normalization_reuse_handles() {
     let arena = Bump::new();
@@ -45,14 +40,10 @@ fn aci_and_identity_normalization_reuse_handles() {
         action_regex(Action::Edit),
         action_regex(Action::Read),
     ]);
-    let left = compile_rule(&mut store, index(1), &rule(left))
-        .unwrap()
-        .tail;
+    let left = compile_rule(&mut store, &rule(left)).unwrap().tail;
 
     let right = RegexExpr::union([action_regex(Action::Edit), action_regex(Action::Read)]);
-    let right = compile_rule(&mut store, index(2), &rule(right))
-        .unwrap()
-        .tail;
+    let right = compile_rule(&mut store, &rule(right)).unwrap().tail;
     assert_eq!(left, right);
 
     let concat = RegexExpr::concat([
@@ -60,37 +51,37 @@ fn aci_and_identity_normalization_reuse_handles() {
         action_regex(Action::Read),
         RegexExpr::epsilon(),
     ]);
-    let concat = compile_rule(&mut store, index(3), &rule(concat))
-        .unwrap()
-        .tail;
-    let single = compile_rule(&mut store, index(4), &rule(action_regex(Action::Read)))
+    let concat = compile_rule(&mut store, &rule(concat)).unwrap().tail;
+    let single = compile_rule(&mut store, &rule(action_regex(Action::Read)))
         .unwrap()
         .tail;
     assert_eq!(concat, single);
 
     let edit = action_regex(Action::Edit);
     let contradiction = RegexExpr::intersect([edit.clone(), RegexExpr::complement(edit)]);
-    let contradiction = compile_rule(&mut store, index(5), &rule(contradiction))
-        .unwrap()
-        .tail;
+    let contradiction = compile_rule(&mut store, &rule(contradiction)).unwrap().tail;
     assert_eq!(contradiction, store.empty);
 }
 
 #[test]
-fn variable_names_share_interned_symbols_across_rules() {
+fn variable_names_share_arena_references_across_rules() {
     let arena = Bump::new();
     let mut store = CanonicalStore::new(&arena);
-    let first = compile_rule(&mut store, index(1), &rule(RegexExpr::all())).unwrap();
-    let second = compile_rule(&mut store, index(2), &rule(RegexExpr::all())).unwrap();
+    let first = compile_rule(&mut store, &rule(RegexExpr::all())).unwrap();
+    let second = compile_rule(&mut store, &rule(RegexExpr::all())).unwrap();
 
-    let ComponentPattern::Variable(first_symbol) = first.head.principal.into_inner() else {
+    let ComponentPattern::Variable(first_variable) = first.head.principal.into_inner() else {
         panic!("principal head pattern was not compiled as a variable")
     };
-    let ComponentPattern::Variable(second_symbol) = second.head.principal.into_inner() else {
+    let ComponentPattern::Variable(second_variable) = second.head.principal.into_inner() else {
         panic!("principal head pattern was not compiled as a variable")
     };
-    assert_eq!(first_symbol, second_symbol);
-    assert_eq!(store.variables.resolve(first_symbol), Some("principal"));
+    assert_eq!(first_variable, second_variable);
+    assert_eq!(
+        first_variable,
+        super::variable::VariableName::new("principal")
+    );
+    assert!(store.variables.contains("principal"));
     assert_eq!(store.variables.len(), 3);
 }
 
@@ -102,7 +93,7 @@ fn derivative_cycle_returns_the_same_hashconsed_state() {
         action_regex(Action::Read),
         action_regex(Action::Edit),
     ]));
-    let compiled = compile_rule(&mut store, index(1), &rule(cycle)).unwrap();
+    let compiled = compile_rule(&mut store, &rule(cycle)).unwrap();
 
     let event = Event::new("alice", Action::Read, ["a"]);
     let substitution = compiled.head.match_candidate(&event).unwrap();

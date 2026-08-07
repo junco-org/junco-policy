@@ -65,6 +65,4 @@ pub use syntax::{
     AtomPattern, Comparison, Component, ComponentPattern, Head, PatternRepresentation, RegexExpr,
     Rule, RuleMode, SourceRepresentation, TestExpr,
 };
-pub use validator::{
-    Checkpoint, CompileError, Decision, Denial, RuleIndex, Validator, ValidatorBuilder,
-};
+pub use validator::{Checkpoint, CompileError, Decision, Denial, Validator, ValidatorBuilder};

@@ -10,11 +10,17 @@ use super::store::CanonicalStore;
 
 /// Returns whether a test set contains both an atom and its disequality complement.
 fn has_complementary_tests(tests: &[TestId<'_>]) -> bool {
-    tests.iter().enumerate().any(|(index, left)| {
-        tests[index + 1..]
+    let mut remaining = tests;
+    while let Some((left, right)) = remaining.split_first() {
+        if right
             .iter()
-            .any(|right| complementary_test(*left, *right))
-    })
+            .any(|candidate| complementary_test(*left, *candidate))
+        {
+            return true;
+        }
+        remaining = right;
+    }
+    false
 }
 
 /// Recognizes `Eq(pattern)` paired with `Neq(pattern)`.
@@ -36,11 +42,17 @@ fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bo
 
 /// Returns whether a regex set contains a node and its whole-language complement.
 fn has_complementary_regexes(regexes: &[RegexId<'_>]) -> bool {
-    regexes.iter().enumerate().any(|(index, left)| {
-        regexes[index + 1..]
+    let mut remaining = regexes;
+    while let Some((left, right)) = remaining.split_first() {
+        if right
             .iter()
-            .any(|right| complementary_regex(*left, *right))
-    })
+            .any(|candidate| complementary_regex(*left, *candidate))
+        {
+            return true;
+        }
+        remaining = right;
+    }
+    false
 }
 
 /// Recognizes `r` paired with `Not(r)` using canonical handle equality.

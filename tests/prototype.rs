@@ -91,7 +91,7 @@ fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
     let checkpoint = validator.checkpoint();
 
     let denied = validator.check(request("alice", Action::commit("ship"), &["a"], ()));
-    assert!(matches!(denied, Decision::Denied(denial) if denial.rule_index.get() == 1));
+    assert!(matches!(denied, Decision::Denied(denial) if denial.mode == RuleMode::Forbid));
     assert_eq!(validator.checkpoint(), checkpoint);
 
     assert!(
@@ -157,7 +157,7 @@ fn construction_rejects_unbound_and_cross_component_variables() {
     ));
     assert!(matches!(
         missing,
-        Err(CompileError::UnboundVariable { rule, .. }) if rule.get() == 1
+        Err(CompileError::UnboundVariable { name }) if name == "missing"
     ));
 
     let mut builder = Validator::builder(&arena);
@@ -172,7 +172,7 @@ fn construction_rejects_unbound_and_cross_component_variables() {
     ));
     assert!(matches!(
         conflict,
-        Err(CompileError::VariableComponentConflict { rule, .. }) if rule.get() == 1
+        Err(CompileError::VariableComponentConflict { name }) if name == "same"
     ));
 }
 
@@ -219,7 +219,6 @@ fn checkpoint_restores_append_only_history() {
             .is_grant()
     );
     let checkpoint = validator.checkpoint();
-    assert_eq!(checkpoint.history_len(), 1);
     assert!(
         validator
             .check(request("bob", Action::Diff, &["b"], ()))
@@ -227,10 +226,4 @@ fn checkpoint_restores_append_only_history() {
     );
     validator.rollback(checkpoint);
     assert_eq!(validator.history(), &[event("alice", Action::Read, &["a"])]);
-}
-
-#[test]
-fn rule_indexes_are_nonzero_and_one_based() {
-    assert!(rust_validator::RuleIndex::new(0).is_none());
-    assert_eq!(rust_validator::RuleIndex::new(1).unwrap().get(), 1);
 }

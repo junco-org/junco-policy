@@ -4,16 +4,18 @@
 //! arena. It has no active-rule, variable-environment, candidate, history, or validator
 //! backreferences. Compiler and evaluator functions receive the store explicitly.
 
+use std::collections::HashSet;
+
 use bumpalo::Bump;
 use hashconsing::BHConsign;
-use string_interner::DefaultStringInterner;
 
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
+use super::variable::VariableName;
 
 /// Shared canonical node store used by all compiled rules in one validator.
 pub(crate) struct CanonicalStore<'arena> {
-    /// Global spelling interner. Rule-local validity is handled by `VariableEnvironment`.
-    pub(super) variables: DefaultStringInterner,
+    /// Arena-backed variable spellings shared by compiled rules.
+    pub(super) variables: HashSet<VariableName<'arena>>,
     /// Canonical table for boolean event tests.
     pub(super) tests: BHConsign<'arena, TestNode<'arena>>,
     /// Canonical table for normalized regular-expression nodes.
@@ -43,7 +45,7 @@ impl<'arena> CanonicalStore<'arena> {
         let epsilon = regexes.mk(RegexNode::new(RegexKind::Epsilon, true));
 
         Self {
-            variables: DefaultStringInterner::with_capacity(64),
+            variables: HashSet::with_capacity(64),
             tests,
             regexes,
             test_true,
@@ -57,6 +59,16 @@ impl<'arena> CanonicalStore<'arena> {
     /// Returns the arena that owns every compiled payload and canonical node.
     pub(super) fn arena(&self) -> &'arena Bump {
         self.tests.arena()
+    }
+
+    /// Returns one stable reference for each distinct variable spelling.
+    pub(super) fn intern_variable(&mut self, name: &str) -> VariableName<'arena> {
+        if let Some(variable) = self.variables.get(name).copied() {
+            return variable;
+        }
+        let variable = VariableName::new(self.arena().alloc_str(name));
+        self.variables.insert(variable);
+        variable
     }
 
     /// Number of canonical regex nodes, used to assert that derivative cycles stabilize.

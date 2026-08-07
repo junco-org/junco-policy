@@ -3,10 +3,10 @@
 //! Every function receives the canonical store and rule-local variable environment explicitly.
 //! Source expressions remain context-free; compiled nodes contain only immutable values and child
 //! references. The variable environment is created from the head and dropped after the tail is
-//! compiled.
+//! compiled. Errors are relative to the one source rule passed to [`compile_rule`].
 
 use crate::model::{Action, Principal, Resource};
-use crate::validator::{CompileError, RuleIndex};
+use crate::validator::CompileError;
 
 use super::component::{CompiledAtomPattern, CompiledPattern, ComponentDomain};
 use super::environment::{CompiledHead, ResolveError, VariableEnvironment};
@@ -25,11 +25,10 @@ pub(crate) struct CompiledRule<'arena> {
 /// Compiles and validates one complete source rule.
 pub(crate) fn compile_rule<'arena>(
     store: &mut CanonicalStore<'arena>,
-    rule_index: RuleIndex,
     source: &Rule,
 ) -> Result<CompiledRule<'arena>, CompileError> {
-    let (head, variables) = compile_head(store, rule_index, &source.head)?;
-    let tail = compile_regex(store, rule_index, &variables, &source.tail)?;
+    let (head, variables) = compile_head(store, &source.head)?;
+    let tail = compile_regex(store, &variables, &source.tail)?;
     Ok(CompiledRule {
         mode: source.mode,
         head,
@@ -40,23 +39,21 @@ pub(crate) fn compile_rule<'arena>(
 /// Compiles one head coordinate and records variable declarations.
 fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     store: &mut CanonicalStore<'arena>,
-    rule: RuleIndex,
     pattern: &ComponentPattern<ComponentType>,
-    variables: &mut VariableEnvironment,
+    variables: &mut VariableEnvironment<'arena>,
 ) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
     Ok(CompiledPattern::new(match pattern {
         ComponentPattern::Constant(value) => {
             ComponentPattern::Constant(ComponentType::compile(store.arena(), value))
         }
         ComponentPattern::Variable(name) => {
-            let symbol = store.variables.get_or_intern(name);
+            let variable = store.intern_variable(name);
             variables
-                .bind(symbol, ComponentType::COMPONENT)
+                .bind(variable, ComponentType::COMPONENT)
                 .map_err(|_| CompileError::VariableComponentConflict {
-                    rule,
                     name: name.to_owned(),
                 })?;
-            ComponentPattern::Variable(symbol)
+            ComponentPattern::Variable(variable)
         }
     }))
 }
@@ -64,14 +61,12 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
 /// Compiles the fixed capability-product head and its variable type environment.
 fn compile_head<'arena>(
     store: &mut CanonicalStore<'arena>,
-    rule: RuleIndex,
     head: &Head,
-) -> Result<(CompiledHead<'arena>, VariableEnvironment), CompileError> {
+) -> Result<(CompiledHead<'arena>, VariableEnvironment<'arena>), CompileError> {
     let mut variables = VariableEnvironment::default();
-    let principal =
-        compile_head_pattern::<Principal>(store, rule, &head.principal, &mut variables)?;
-    let action = compile_head_pattern::<Action>(store, rule, &head.action, &mut variables)?;
-    let resource = compile_head_pattern::<Resource>(store, rule, &head.resource, &mut variables)?;
+    let principal = compile_head_pattern::<Principal>(store, &head.principal, &mut variables)?;
+    let action = compile_head_pattern::<Action>(store, &head.action, &mut variables)?;
+    let resource = compile_head_pattern::<Resource>(store, &head.resource, &mut variables)?;
     Ok((
         CompiledHead {
             principal,
@@ -84,55 +79,46 @@ fn compile_head<'arena>(
 
 /// Compiles one tail component pattern after resolving its source variable.
 fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
-    store: &CanonicalStore<'arena>,
-    rule: RuleIndex,
+    store: &mut CanonicalStore<'arena>,
     pattern: &ComponentPattern<ComponentType>,
-    variables: &VariableEnvironment,
+    variables: &VariableEnvironment<'arena>,
 ) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
     Ok(CompiledPattern::new(match pattern {
         ComponentPattern::Constant(value) => {
             ComponentPattern::Constant(ComponentType::compile(store.arena(), value))
         }
         ComponentPattern::Variable(name) => {
-            let Some(symbol) = store.variables.get(name) else {
-                return Err(CompileError::UnboundVariable {
-                    rule,
-                    name: name.to_owned(),
-                });
-            };
+            let variable = store.intern_variable(name);
             variables
-                .resolve(symbol, ComponentType::COMPONENT)
+                .resolve(variable, ComponentType::COMPONENT)
                 .map_err(|error| match error {
                     ResolveError::Unbound => CompileError::UnboundVariable {
-                        rule,
                         name: name.to_owned(),
                     },
                     ResolveError::ComponentConflict => CompileError::VariableComponentConflict {
-                        rule,
                         name: name.to_owned(),
                     },
                 })?;
-            ComponentPattern::Variable(symbol)
+            ComponentPattern::Variable(variable)
         }
     }))
 }
 
 /// Compiles the concrete atom enum retained by hashconsed test nodes.
 fn compile_atom_pattern<'arena>(
-    store: &CanonicalStore<'arena>,
-    rule: RuleIndex,
+    store: &mut CanonicalStore<'arena>,
     pattern: &AtomPattern,
-    variables: &VariableEnvironment,
+    variables: &VariableEnvironment<'arena>,
 ) -> Result<CompiledAtomPattern<'arena>, CompileError> {
     Ok(match pattern {
         AtomPattern::Principal(pattern) => AtomPattern::Principal(
-            compile_pattern::<Principal>(store, rule, pattern, variables)?.into_inner(),
+            compile_pattern::<Principal>(store, pattern, variables)?.into_inner(),
         ),
-        AtomPattern::Action(pattern) => AtomPattern::Action(
-            compile_pattern::<Action>(store, rule, pattern, variables)?.into_inner(),
-        ),
+        AtomPattern::Action(pattern) => {
+            AtomPattern::Action(compile_pattern::<Action>(store, pattern, variables)?.into_inner())
+        }
         AtomPattern::Resource(pattern) => AtomPattern::Resource(
-            compile_pattern::<Resource>(store, rule, pattern, variables)?.into_inner(),
+            compile_pattern::<Resource>(store, pattern, variables)?.into_inner(),
         ),
     })
 }
@@ -140,8 +126,7 @@ fn compile_atom_pattern<'arena>(
 /// Recursively compiles one owned boolean expression.
 fn compile_test<'arena>(
     store: &mut CanonicalStore<'arena>,
-    rule: RuleIndex,
-    variables: &VariableEnvironment,
+    variables: &VariableEnvironment<'arena>,
     source: &TestExpr,
 ) -> Result<TestId<'arena>, CompileError> {
     match source {
@@ -151,7 +136,7 @@ fn compile_test<'arena>(
             comparison,
             pattern,
         } => {
-            let pattern = compile_atom_pattern(store, rule, pattern, variables)?;
+            let pattern = compile_atom_pattern(store, pattern, variables)?;
             Ok(store.tests.mk(TestNode::Atom {
                 comparison: *comparison,
                 pattern,
@@ -160,14 +145,14 @@ fn compile_test<'arena>(
         TestExpr::And(children) => {
             let mut compiled = Vec::with_capacity(children.len());
             for child in children {
-                compiled.push(compile_test(store, rule, variables, child)?);
+                compiled.push(compile_test(store, variables, child)?);
             }
             Ok(store.test_and(compiled))
         }
         TestExpr::Or(children) => {
             let mut compiled = Vec::with_capacity(children.len());
             for child in children {
-                compiled.push(compile_test(store, rule, variables, child)?);
+                compiled.push(compile_test(store, variables, child)?);
             }
             Ok(store.test_or(compiled))
         }
@@ -177,8 +162,7 @@ fn compile_test<'arena>(
 /// Recursively compiles one owned regex expression through canonical smart constructors.
 fn compile_regex<'arena>(
     store: &mut CanonicalStore<'arena>,
-    rule: RuleIndex,
-    variables: &VariableEnvironment,
+    variables: &VariableEnvironment<'arena>,
     source: &RegexExpr,
 ) -> Result<RegexId<'arena>, CompileError> {
     match source {
@@ -186,36 +170,36 @@ fn compile_regex<'arena>(
         RegexExpr::All => Ok(store.all),
         RegexExpr::Epsilon => Ok(store.epsilon),
         RegexExpr::Test(test) => {
-            let test = compile_test(store, rule, variables, test)?;
+            let test = compile_test(store, variables, test)?;
             Ok(store.regex_test(test))
         }
         RegexExpr::Union(children) => {
             let mut compiled = Vec::with_capacity(children.len());
             for child in children {
-                compiled.push(compile_regex(store, rule, variables, child)?);
+                compiled.push(compile_regex(store, variables, child)?);
             }
             Ok(store.regex_union(compiled))
         }
         RegexExpr::Concat(children) => {
             let mut compiled = Vec::with_capacity(children.len());
             for child in children {
-                compiled.push(compile_regex(store, rule, variables, child)?);
+                compiled.push(compile_regex(store, variables, child)?);
             }
             Ok(store.regex_concat(compiled))
         }
         RegexExpr::Star(inner) => {
-            let inner = compile_regex(store, rule, variables, inner)?;
+            let inner = compile_regex(store, variables, inner)?;
             Ok(store.regex_star(inner))
         }
         RegexExpr::Intersect(children) => {
             let mut compiled = Vec::with_capacity(children.len());
             for child in children {
-                compiled.push(compile_regex(store, rule, variables, child)?);
+                compiled.push(compile_regex(store, variables, child)?);
             }
             Ok(store.regex_intersect(compiled))
         }
         RegexExpr::Not(inner) => {
-            let inner = compile_regex(store, rule, variables, inner)?;
+            let inner = compile_regex(store, variables, inner)?;
             Ok(store.regex_not(inner))
         }
     }
