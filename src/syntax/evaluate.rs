@@ -20,9 +20,9 @@ fn eval_component_pattern<'arena, 'event, ComponentType: Match<'arena>>(
 ) -> bool {
     match pattern {
         ComponentPattern::Constant(expected) => ComponentType::constant_matches(expected, actual),
-        ComponentPattern::Variable(symbol) => substitution
-            .get(symbol)
-            .equals(ComponentType::bound(actual)),
+        ComponentPattern::Variable(symbol) => {
+            substitution.get(symbol) == ComponentType::bound(actual)
+        }
     }
 }
 

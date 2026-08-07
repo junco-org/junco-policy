@@ -35,23 +35,11 @@ pub(super) enum CompiledAction<'arena> {
 ///
 /// The variants keep the three component domains disjoint. Reusing one variable name in different
 /// component positions is therefore a mismatch rather than a comparison of rendered values.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BoundValue<'event> {
     Principal(&'event Principal),
     Action(&'event Action),
     Resource(&'event Resource),
-}
-
-impl BoundValue<'_> {
-    /// Compares values only when both bindings belong to the same component domain.
-    pub(super) fn equals(self, other: Self) -> bool {
-        match (self, other) {
-            (Self::Principal(left), Self::Principal(right)) => left == right,
-            (Self::Action(left), Self::Action(right)) => left == right,
-            (Self::Resource(left), Self::Resource(right)) => left == right,
-            _ => false,
-        }
-    }
 }
 
 /// Compiles and matches one capability-product component.

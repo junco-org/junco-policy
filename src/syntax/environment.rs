@@ -24,7 +24,7 @@ impl<'event> CandidateSubstitution<'event> {
     /// Binds an unbound name, or checks that a repeated occurrence denotes the same typed value.
     fn bind(&mut self, symbol: DefaultSymbol, value: BoundValue<'event>) -> bool {
         match self.values.get(&symbol).copied() {
-            Some(existing) => existing.equals(value),
+            Some(existing) => existing == value,
             None => {
                 self.values.insert(symbol, value);
                 true
