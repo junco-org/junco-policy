@@ -100,7 +100,7 @@ fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
     let checkpoint = validator.checkpoint();
 
     let denied = validator.check(request("alice", Action::commit("ship"), &["a"], ()));
-    assert!(matches!(denied, Decision::Denied(denial) if denial.rule_index == 1));
+    assert!(matches!(denied, Decision::Denied(denial) if denial.rule_index.get() == 1));
     assert_eq!(validator.checkpoint(), checkpoint);
 
     assert!(
@@ -174,7 +174,7 @@ fn construction_rejects_unbound_and_cross_component_variables() {
     );
     assert!(matches!(
         missing,
-        Err(CompileError::UnboundVariable { rule: 1, .. })
+        Err(CompileError::UnboundVariable { rule, .. }) if rule.get() == 1
     ));
 
     let mut builder = Validator::builder(&arena);
@@ -189,7 +189,7 @@ fn construction_rejects_unbound_and_cross_component_variables() {
     );
     assert!(matches!(
         conflict,
-        Err(CompileError::VariableComponentConflict { rule: 1, .. })
+        Err(CompileError::VariableComponentConflict { rule, .. }) if rule.get() == 1
     ));
 }
 
@@ -229,7 +229,7 @@ fn hashconsed_handles_cannot_cross_rule_scopes() {
     );
     assert!(matches!(
         result,
-        Err(CompileError::ForeignRuleHandle { rule: 2 })
+        Err(CompileError::ForeignRuleHandle { rule }) if rule.get() == 2
     ));
 }
 
@@ -250,4 +250,20 @@ fn checkpoint_restores_append_only_history() {
     );
     validator.rollback(checkpoint);
     assert_eq!(validator.history(), &[event("alice", Action::Read, &["a"])]);
+}
+
+#[test]
+fn rule_indexes_are_nonzero_and_one_based() {
+    assert!(rust_validator::RuleIndex::new(0).is_none());
+    assert_eq!(rust_validator::RuleIndex::new(1).unwrap().get(), 1);
+}
+
+#[test]
+#[should_panic(expected = "checkpoint belongs to another validator")]
+fn checkpoints_cannot_cross_validator_contexts() {
+    let arena = Bump::new();
+    let first = Validator::builder(&arena).finish();
+    let checkpoint = first.checkpoint();
+    let mut second = Validator::builder(&arena).finish();
+    second.rollback(checkpoint);
 }

@@ -1,38 +1,29 @@
+//! Rule-local variable scope, candidate bindings, and compiled-head evaluation.
+//!
+//! Names are interned globally by `SyntaxContext`, but a `Scope` records the component domain in
+//! which each name is valid for one rule. At runtime a successful head match produces `Bindings`
+//! that borrow the candidate event. Tail evaluation can read those references without allocating
+//! or copying event components.
+
 use std::collections::HashMap;
 
 use string_interner::DefaultSymbol;
 
 use crate::model::{Action, Event, Principal, Resource};
-use crate::validator::CompileError;
+use crate::validator::{CompileError, RuleIndex};
 
-use super::node::CompiledAction;
+use super::component::{BoundValue, CompiledPattern, Match};
 use super::pattern::{Component, ComponentPattern};
 
-#[derive(Clone, Copy, Debug)]
-pub(super) enum BoundValue<'event> {
-    Principal(&'event Principal),
-    Action(&'event Action),
-    Resource(&'event Resource),
-}
-
-impl BoundValue<'_> {
-    pub(super) fn equals(self, other: Self) -> bool {
-        match (self, other) {
-            (Self::Principal(left), Self::Principal(right)) => left == right,
-            (Self::Action(left), Self::Action(right)) => left == right,
-            (Self::Resource(left), Self::Resource(right)) => left == right,
-            _ => false,
-        }
-    }
-}
-
+/// Candidate values bound to the variables of one matching rule head.
 #[derive(Debug, Default)]
 pub(crate) struct Bindings<'event> {
     values: HashMap<DefaultSymbol, BoundValue<'event>>,
 }
 
 impl<'event> Bindings<'event> {
-    pub(super) fn bind(&mut self, symbol: DefaultSymbol, value: BoundValue<'event>) -> bool {
+    /// Binds an unbound name, or checks that a repeated occurrence denotes the same typed value.
+    fn bind(&mut self, symbol: DefaultSymbol, value: BoundValue<'event>) -> bool {
         match self.values.get(&symbol).copied() {
             Some(existing) => existing.equals(value),
             None => {
@@ -42,6 +33,7 @@ impl<'event> Bindings<'event> {
         }
     }
 
+    /// Resolves a name proven by compilation to be bound by the head.
     pub(super) fn get(&self, symbol: DefaultSymbol) -> BoundValue<'event> {
         self.values
             .get(&symbol)
@@ -50,71 +42,56 @@ impl<'event> Bindings<'event> {
     }
 }
 
-pub(super) fn resource_matches(expected: &[&str], actual: &Resource) -> bool {
-    expected.len() == actual.segments().len()
-        && expected
-            .iter()
-            .zip(actual.segments())
-            .all(|(left, right)| *left == right)
-}
-
-fn match_head_pattern<'event, Constant: Copy, Actual>(
-    pattern: ComponentPattern<Constant, DefaultSymbol>,
-    actual: &Actual,
-    bound: BoundValue<'event>,
+/// Matches one typed head coordinate and updates the candidate substitution.
+///
+/// The associated `Compiled` type, constant comparison, and binding conversion all come from
+/// `Match`; the helper no longer needs separate constant/actual generic parameters, an erased value
+/// argument, or a comparison closure.
+fn match_head_pattern<'arena, 'event, ComponentType: Match<'arena>>(
+    pattern: CompiledPattern<'arena, ComponentType>,
+    actual: &'event ComponentType,
     bindings: &mut Bindings<'event>,
-    constant_matches: impl FnOnce(Constant, &Actual) -> bool,
 ) -> bool {
     match pattern {
-        ComponentPattern::Constant(expected) => constant_matches(expected, actual),
-        ComponentPattern::Variable(symbol) => bindings.bind(symbol, bound),
+        ComponentPattern::Constant(expected) => ComponentType::constant_matches(expected, actual),
+        ComponentPattern::Variable(symbol) => bindings.bind(symbol, ComponentType::bound(actual)),
     }
 }
 
+/// Arena-backed head patterns for the fixed `(principal, action, resource)` product.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct CompiledHead<'a> {
-    pub(super) principal: ComponentPattern<&'a str, DefaultSymbol>,
-    pub(super) action: ComponentPattern<CompiledAction<'a>, DefaultSymbol>,
-    pub(super) resource: ComponentPattern<&'a [&'a str], DefaultSymbol>,
+pub(crate) struct CompiledHead<'arena> {
+    pub(super) principal: CompiledPattern<'arena, Principal>,
+    pub(super) action: CompiledPattern<'arena, Action>,
+    pub(super) resource: CompiledPattern<'arena, Resource>,
 }
 
-impl<'a> CompiledHead<'a> {
+impl<'arena> CompiledHead<'arena> {
+    /// Matches the candidate only; the returned substitution is then used over pre-candidate
+    /// committed history. Failure does not allocate or mutate policy state.
     pub(crate) fn matches<'event>(&self, event: &'event Event) -> Option<Bindings<'event>> {
         let mut bindings = Bindings::default();
-        if !match_head_pattern(
-            self.principal,
-            &event.principal,
-            BoundValue::Principal(&event.principal),
-            &mut bindings,
-            |expected, actual| actual.as_str() == expected,
-        ) || !match_head_pattern(
-            self.action,
-            &event.action,
-            BoundValue::Action(&event.action),
-            &mut bindings,
-            |expected, actual| expected.matches(actual),
-        ) || !match_head_pattern(
-            self.resource,
-            &event.resource,
-            BoundValue::Resource(&event.resource),
-            &mut bindings,
-            resource_matches,
-        ) {
+        if !match_head_pattern(self.principal, &event.principal, &mut bindings)
+            || !match_head_pattern(self.action, &event.action, &mut bindings)
+            || !match_head_pattern(self.resource, &event.resource, &mut bindings)
+        {
             return None;
         }
         Some(bindings)
     }
 }
 
+/// Component-domain declarations for variables bound by one source head.
 #[derive(Default)]
 pub(super) struct Scope {
     variables: HashMap<DefaultSymbol, Component>,
 }
 
 impl Scope {
+    /// Records one head occurrence and rejects reuse in another component domain.
     pub(super) fn bind(
         &mut self,
-        rule: usize,
+        rule: RuleIndex,
         name: &str,
         symbol: DefaultSymbol,
         component: Component,
@@ -132,9 +109,10 @@ impl Scope {
         Ok(())
     }
 
+    /// Verifies that a tail occurrence is bound by the head in the same component domain.
     pub(super) fn resolve(
         &self,
-        rule: usize,
+        rule: RuleIndex,
         name: &str,
         symbol: DefaultSymbol,
         component: Component,

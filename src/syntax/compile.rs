@@ -1,74 +1,51 @@
-use std::hash::Hash;
+//! Source-to-arena compilation for heads and atom patterns.
+//!
+//! Compilation performs two related jobs. Constants are copied into immutable arena-backed forms
+//! selected by [`Match`], and variable names are interned and checked against the rule's typed head
+//! scope. Head compilation binds variables; tail compilation may only resolve those bindings.
 
 use string_interner::DefaultSymbol;
 
 use crate::model::{Action, Principal, Resource};
-use crate::validator::CompileError;
+use crate::validator::{CompileError, RuleIndex};
 
-use super::node::CompiledAction;
-use super::pattern::{AtomPattern, Component, ComponentPattern, Head};
+use super::component::{CompiledAtomPattern, Match};
+use super::pattern::{AtomPattern, ComponentPattern, Head};
 use super::scope::{CompiledHead, Scope};
 use super::storage::SyntaxContext;
 
-trait ArenaComponent<'a>: Sized {
-    const COMPONENT: Component;
-    type Compiled: Clone + Copy + std::fmt::Debug + PartialEq + Eq + Hash;
-
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> Self::Compiled;
-}
-
-impl<'a> ArenaComponent<'a> for Principal {
-    const COMPONENT: Component = Component::Principal;
-    type Compiled = &'a str;
-
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> Self::Compiled {
-        context.alloc_principal(value)
-    }
-}
-
-impl<'a> ArenaComponent<'a> for Action {
-    const COMPONENT: Component = Component::Action;
-    type Compiled = CompiledAction<'a>;
-
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> Self::Compiled {
-        CompiledAction::from_action(context.arena(), value)
-    }
-}
-
-impl<'a> ArenaComponent<'a> for Resource {
-    const COMPONENT: Component = Component::Resource;
-    type Compiled = &'a [&'a str];
-
-    fn intern(context: &SyntaxContext<'a>, value: &Self) -> Self::Compiled {
-        context.alloc_resource(value)
-    }
-}
-
-impl<'a> SyntaxContext<'a> {
-    fn compile_head_pattern<T: ArenaComponent<'a>>(
+impl<'arena> SyntaxContext<'arena> {
+    /// Compiles one head coordinate, adding variable occurrences to `scope`.
+    fn compile_head_pattern<ComponentType: Match<'arena>>(
         &mut self,
-        rule: usize,
-        pattern: &ComponentPattern<T>,
+        rule: RuleIndex,
+        pattern: &ComponentPattern<ComponentType>,
         scope: &mut Scope,
-    ) -> Result<ComponentPattern<T::Compiled, DefaultSymbol>, CompileError> {
+    ) -> Result<ComponentPattern<ComponentType::Compiled, DefaultSymbol>, CompileError> {
         Ok(match pattern {
-            ComponentPattern::Constant(value) => ComponentPattern::Constant(T::intern(self, value)),
+            ComponentPattern::Constant(value) => {
+                ComponentPattern::Constant(ComponentType::compile(self.arena(), value))
+            }
             ComponentPattern::Variable(name) => {
                 let symbol = self.variables.get_or_intern(name);
-                scope.bind(rule, name, symbol, T::COMPONENT)?;
+                scope.bind(rule, name, symbol, ComponentType::COMPONENT)?;
                 ComponentPattern::Variable(symbol)
             }
         })
     }
 
-    fn compile_pattern<T: ArenaComponent<'a>>(
+    /// Compiles one tail coordinate, requiring every variable to be present in `scope` with the
+    /// same component type used by the head.
+    fn compile_pattern<ComponentType: Match<'arena>>(
         &self,
-        rule: usize,
-        pattern: &ComponentPattern<T>,
+        rule: RuleIndex,
+        pattern: &ComponentPattern<ComponentType>,
         scope: &Scope,
-    ) -> Result<ComponentPattern<T::Compiled, DefaultSymbol>, CompileError> {
+    ) -> Result<ComponentPattern<ComponentType::Compiled, DefaultSymbol>, CompileError> {
         Ok(match pattern {
-            ComponentPattern::Constant(value) => ComponentPattern::Constant(T::intern(self, value)),
+            ComponentPattern::Constant(value) => {
+                ComponentPattern::Constant(ComponentType::compile(self.arena(), value))
+            }
             ComponentPattern::Variable(name) => {
                 let Some(symbol) = self.variables.get(name) else {
                     return Err(CompileError::UnboundVariable {
@@ -76,41 +53,43 @@ impl<'a> SyntaxContext<'a> {
                         name: name.to_owned(),
                     });
                 };
-                scope.resolve(rule, name, symbol, T::COMPONENT)?;
+                scope.resolve(rule, name, symbol, ComponentType::COMPONENT)?;
                 ComponentPattern::Variable(symbol)
             }
         })
     }
 
+    /// Compiles one typed source atom into the concrete hashable atom enum stored by `TestNode`.
     pub(super) fn compile_atom_pattern(
         &self,
-        rule: usize,
+        rule: RuleIndex,
         pattern: &AtomPattern,
         scope: &Scope,
-    ) -> Result<AtomPattern<&'a str, CompiledAction<'a>, &'a [&'a str], DefaultSymbol>, CompileError>
-    {
+    ) -> Result<CompiledAtomPattern<'arena>, CompileError> {
         Ok(match pattern {
             AtomPattern::Principal(pattern) => {
-                AtomPattern::Principal(self.compile_pattern(rule, pattern, scope)?)
+                AtomPattern::Principal(self.compile_pattern::<Principal>(rule, pattern, scope)?)
             }
             AtomPattern::Action(pattern) => {
-                AtomPattern::Action(self.compile_pattern(rule, pattern, scope)?)
+                AtomPattern::Action(self.compile_pattern::<Action>(rule, pattern, scope)?)
             }
             AtomPattern::Resource(pattern) => {
-                AtomPattern::Resource(self.compile_pattern(rule, pattern, scope)?)
+                AtomPattern::Resource(self.compile_pattern::<Resource>(rule, pattern, scope)?)
             }
         })
     }
 
+    /// Compiles the fixed capability-product head and returns its validated variable scope.
     pub(super) fn compile_head(
         &mut self,
-        rule: usize,
+        rule: RuleIndex,
         head: &Head,
-    ) -> Result<(CompiledHead<'a>, Scope), CompileError> {
+    ) -> Result<(CompiledHead<'arena>, Scope), CompileError> {
         let mut scope = Scope::default();
-        let principal = self.compile_head_pattern(rule, &head.principal, &mut scope)?;
-        let action = self.compile_head_pattern(rule, &head.action, &mut scope)?;
-        let resource = self.compile_head_pattern(rule, &head.resource, &mut scope)?;
+        let principal =
+            self.compile_head_pattern::<Principal>(rule, &head.principal, &mut scope)?;
+        let action = self.compile_head_pattern::<Action>(rule, &head.action, &mut scope)?;
+        let resource = self.compile_head_pattern::<Resource>(rule, &head.resource, &mut scope)?;
         Ok((
             CompiledHead {
                 principal,
