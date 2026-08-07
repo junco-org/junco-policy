@@ -9,7 +9,7 @@ use hashconsing::BHConsign;
 
 use super::component::ComponentValues;
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
-use super::variable::VariableName;
+use super::variable::VariableSymbol;
 
 /// Shared canonical value and node store used by all compiled rules in one validator.
 pub(crate) struct CanonicalStore<'arena> {
@@ -57,9 +57,9 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
-    /// Interns a variable spelling in the same string pool used by component values.
-    pub(super) fn intern_variable(&mut self, name: &str) -> VariableName<'arena> {
-        VariableName::new(self.values.intern_string(name))
+    /// Interns a variable spelling and wraps its black-box string symbol in a domain newtype.
+    pub(super) fn intern_variable(&mut self, name: &str) -> VariableSymbol {
+        VariableSymbol::new(self.values.intern_string(name))
     }
 
     /// Number of canonical regex nodes, used to assert that derivative cycles stabilize.

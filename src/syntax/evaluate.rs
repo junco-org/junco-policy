@@ -6,7 +6,7 @@
 
 use crate::model::Event;
 
-use super::component::{CandidateSubstitution, CompiledAtomPattern, Subst};
+use super::component::{CandidateSubstitution, CompiledAtomPattern, ComponentValues, Subst};
 use super::node::{RegexId, RegexKind, TestId, TestNode};
 use super::source::Comparison;
 use super::store::CanonicalStore;
@@ -17,10 +17,11 @@ fn eval_atom<'arena>(
     pattern: CompiledAtomPattern<'arena>,
     event: &Event,
     substitution: &CandidateSubstitution<'arena>,
+    values: &ComponentValues<'arena>,
 ) -> bool {
     pattern
         .subst(substitution)
-        .is_some_and(|concrete| concrete.eq(event))
+        .is_some_and(|concrete| concrete.matches(values, event))
 }
 
 /// Returns whether the complete history belongs to `root` under `substitution`.
@@ -48,7 +49,7 @@ pub(super) fn derive<'arena>(
         RegexKind::Empty | RegexKind::Epsilon => store.empty,
         RegexKind::All => store.all,
         RegexKind::Test(test) => {
-            if eval_test(test, event, substitution) {
+            if eval_test(test, event, substitution, &store.values) {
                 store.epsilon
             } else {
                 store.empty
@@ -100,6 +101,7 @@ fn eval_test<'arena>(
     test: TestId<'arena>,
     event: &Event,
     substitution: &CandidateSubstitution<'arena>,
+    values: &ComponentValues<'arena>,
 ) -> bool {
     match *test.get() {
         TestNode::True => true,
@@ -108,7 +110,7 @@ fn eval_test<'arena>(
             comparison,
             pattern,
         } => {
-            let equal = eval_atom(pattern, event, substitution);
+            let equal = eval_atom(pattern, event, substitution, values);
             match comparison {
                 Comparison::Eq => equal,
                 Comparison::Neq => !equal,
@@ -116,9 +118,9 @@ fn eval_test<'arena>(
         }
         TestNode::And(children) => children
             .iter()
-            .all(|child| eval_test(*child, event, substitution)),
+            .all(|child| eval_test(*child, event, substitution, values)),
         TestNode::Or(children) => children
             .iter()
-            .any(|child| eval_test(*child, event, substitution)),
+            .any(|child| eval_test(*child, event, substitution, values)),
     }
 }

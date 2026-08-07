@@ -40,7 +40,7 @@ pub(crate) fn compile_rule<'arena>(
 fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     store: &mut CanonicalStore<'arena>,
     pattern: &ComponentPattern<ComponentType>,
-    variables: &mut VariableEnvironment<'arena>,
+    variables: &mut VariableEnvironment,
 ) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
     Ok(CompiledPattern::new(match pattern {
         ComponentPattern::Constant(value) => {
@@ -62,7 +62,7 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
 fn compile_head<'arena>(
     store: &mut CanonicalStore<'arena>,
     head: &Head,
-) -> Result<(CompiledHead<'arena>, VariableEnvironment<'arena>), CompileError> {
+) -> Result<(CompiledHead<'arena>, VariableEnvironment), CompileError> {
     let mut variables = VariableEnvironment::default();
     let principal = compile_head_pattern::<Principal>(store, &head.principal, &mut variables)?;
     let action = compile_head_pattern::<Action>(store, &head.action, &mut variables)?;
@@ -81,7 +81,7 @@ fn compile_head<'arena>(
 fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     store: &mut CanonicalStore<'arena>,
     pattern: &ComponentPattern<ComponentType>,
-    variables: &VariableEnvironment<'arena>,
+    variables: &VariableEnvironment,
 ) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
     Ok(CompiledPattern::new(match pattern {
         ComponentPattern::Constant(value) => {
@@ -108,7 +108,7 @@ fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
 fn compile_atom_pattern<'arena>(
     store: &mut CanonicalStore<'arena>,
     pattern: &AtomPattern,
-    variables: &VariableEnvironment<'arena>,
+    variables: &VariableEnvironment,
 ) -> Result<CompiledAtomPattern<'arena>, CompileError> {
     Ok(match pattern {
         AtomPattern::Principal(pattern) => AtomPattern::Principal(
@@ -126,7 +126,7 @@ fn compile_atom_pattern<'arena>(
 /// Recursively compiles one owned boolean expression.
 fn compile_test<'arena>(
     store: &mut CanonicalStore<'arena>,
-    variables: &VariableEnvironment<'arena>,
+    variables: &VariableEnvironment,
     source: &TestExpr,
 ) -> Result<TestId<'arena>, CompileError> {
     match source {
@@ -162,7 +162,7 @@ fn compile_test<'arena>(
 /// Recursively compiles one owned regex expression through canonical smart constructors.
 fn compile_regex<'arena>(
     store: &mut CanonicalStore<'arena>,
-    variables: &VariableEnvironment<'arena>,
+    variables: &VariableEnvironment,
     source: &RegexExpr,
 ) -> Result<RegexId<'arena>, CompileError> {
     match source {

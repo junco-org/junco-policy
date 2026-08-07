@@ -61,15 +61,11 @@ impl<M> Decision<M> {
     }
 }
 
-/// Owned snapshot of committed event history.
+/// Opaque committed-history cursor.
 ///
-/// A checkpoint contains the state to restore rather than a position requiring validation against a
-/// particular vector. Snapshot creation is linear in history length; rollback moves the snapshot
-/// into the validator without an index, range invariant, or owner backreference.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Checkpoint {
-    history: Vec<Event>,
-}
+/// The position is produced and range-checked only by `Validator`; callers cannot manufacture it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Checkpoint(usize);
 
 /// Compiler for complete owned source rules sharing one canonical store.
 pub struct ValidatorBuilder<'arena> {
@@ -166,15 +162,17 @@ impl<'arena> Validator<'arena> {
         &self.history
     }
 
-    /// Clones committed history into an owned rollback snapshot.
+    /// Captures the current committed-history position in constant time.
     pub fn checkpoint(&self) -> Checkpoint {
-        Checkpoint {
-            history: self.history.clone(),
-        }
+        Checkpoint(self.history.len())
     }
 
-    /// Restores the exact history captured by `checkpoint`.
+    /// Restores history to a previously captured position.
     pub fn rollback(&mut self, checkpoint: Checkpoint) {
-        self.history = checkpoint.history;
+        assert!(
+            checkpoint.0 <= self.history.len(),
+            "invalid validator checkpoint"
+        );
+        self.history.truncate(checkpoint.0);
     }
 }

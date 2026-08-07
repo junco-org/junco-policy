@@ -11,7 +11,7 @@ use crate::model::{Action, Event, Principal, Resource};
 use super::component::{CandidateSubstitution, CompiledPattern, ComponentDomain};
 use super::source::{Component, ComponentPattern};
 use super::store::CanonicalStore;
-use super::variable::VariableName;
+use super::variable::VariableSymbol;
 
 /// Matches one typed head coordinate and returns its partial substitution.
 fn match_head_pattern<'arena, ComponentType>(
@@ -24,7 +24,8 @@ where
 {
     match pattern.into_inner() {
         ComponentPattern::Constant(expected) => {
-            ComponentType::compiled_matches(expected, actual).then(CandidateSubstitution::default)
+            ComponentType::compiled_matches(&store.values, expected, actual)
+                .then(CandidateSubstitution::default)
         }
         ComponentPattern::Variable(variable) => {
             let mut substitution = CandidateSubstitution::default();
@@ -53,11 +54,11 @@ impl<'arena> CompiledHead<'arena> {
         match_head_pattern(store, self.principal, &event.principal)
             .and_then(|principal| {
                 match_head_pattern(store, self.action, &event.action)
-                    .and_then(|action| principal.merge(action))
+                    .map(|action| principal.merge(action))
             })
             .and_then(|principal_action| {
                 match_head_pattern(store, self.resource, &event.resource)
-                    .and_then(|resource| principal_action.merge(resource))
+                    .map(|resource| principal_action.merge(resource))
             })
     }
 }
@@ -76,18 +77,18 @@ pub(super) enum ResolveError {
 /// The map records which arena-backed names exist and the product component occupied by each name. It
 /// is a transient compiler input and is dropped after the tail has been compiled.
 #[derive(Default)]
-pub(crate) struct VariableEnvironment<'arena> {
-    variables: HashMap<VariableName<'arena>, Component>,
+pub(crate) struct VariableEnvironment {
+    variables: HashMap<VariableSymbol, Component>,
 }
 
-impl<'arena> VariableEnvironment<'arena> {
+impl VariableEnvironment {
     /// Records one head occurrence.
     ///
     /// Returns the existing component when the variable was previously bound in a different domain;
     /// the compiler caller owns source names and diagnostic construction.
     pub(super) fn bind(
         &mut self,
-        variable: VariableName<'arena>,
+        variable: VariableSymbol,
         component: Component,
     ) -> Result<(), Component> {
         match self.variables.get(&variable) {
@@ -103,7 +104,7 @@ impl<'arena> VariableEnvironment<'arena> {
     /// Verifies that a tail occurrence is declared by the head in the same component domain.
     pub(super) fn resolve(
         &self,
-        variable: VariableName<'arena>,
+        variable: VariableSymbol,
         component: Component,
     ) -> Result<(), ResolveError> {
         match self.variables.get(&variable) {

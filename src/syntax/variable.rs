@@ -1,27 +1,14 @@
-//! Arena-backed variable names used directly as map keys and compiled pattern payloads.
+//! Typed variable symbols produced by the black-box string interner.
 
-use std::borrow::Borrow;
-use std::fmt;
+use string_interner::DefaultSymbol;
 
-/// Interned variable spelling represented by a stable arena reference rather than a table index.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) struct VariableName<'arena>(&'arena str);
+/// Interned variable spelling, distinct from symbols used as component values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(super) struct VariableSymbol(DefaultSymbol);
 
-impl<'arena> VariableName<'arena> {
-    /// Wraps a spelling already owned by the validator arena.
-    pub(super) const fn new(name: &'arena str) -> Self {
-        Self(name)
-    }
-}
-
-impl Borrow<str> for VariableName<'_> {
-    fn borrow(&self) -> &str {
-        self.0
-    }
-}
-
-impl fmt::Debug for VariableName<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
+impl VariableSymbol {
+    /// Wraps a symbol returned by the canonical store's string interner.
+    pub(super) const fn new(symbol: DefaultSymbol) -> Self {
+        Self(symbol)
     }
 }

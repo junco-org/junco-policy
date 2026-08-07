@@ -64,7 +64,7 @@ fn aci_and_identity_normalization_reuse_handles() {
 }
 
 #[test]
-fn variable_names_share_arena_references_across_rules() {
+fn variable_names_share_string_symbols_across_rules() {
     let arena = Bump::new();
     let mut store = CanonicalStore::new(&arena);
     let first = compile_rule(&mut store, &rule(RegexExpr::all())).unwrap();
@@ -77,10 +77,6 @@ fn variable_names_share_arena_references_across_rules() {
         panic!("principal head pattern was not compiled as a variable")
     };
     assert_eq!(first_variable, second_variable);
-    assert_eq!(
-        first_variable,
-        super::variable::VariableName::new("principal")
-    );
     assert_eq!(store.values.string_count(), 3);
 }
 

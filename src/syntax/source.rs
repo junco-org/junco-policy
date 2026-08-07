@@ -79,8 +79,8 @@ pub enum Comparison {
 /// Type-level family of values used by an [`AtomPattern`].
 ///
 /// The public source representation uses owned model values and string variable names. The
-/// compiler supplies a private arena-backed representation with canonical variable references.
-/// This packages the four related types into one generic parameter with no runtime representation.
+/// compiler supplies a private representation using black-box interned string symbols. This
+/// packages the four related types into one generic parameter with no runtime representation.
 pub trait PatternRepresentation {
     /// Principal value stored by a principal atom.
     type PrincipalValue;
