@@ -1,10 +1,11 @@
-//! Component-specific compilation and matching behind one associated-type trait.
+//! Component-specific compilation, matching, and typed substitution storage.
 //!
-//! [`Match`] associates each model component with its arena-backed representation. Generic head
-//! and atom evaluators therefore do not need separate constant/actual type parameters, an erased
-//! value argument, and a comparison closure. The trait is statically dispatched: principal,
-//! action, and resource matching remain inlineable and introduce no trait-object indirection.
+//! [`Match`] associates each model component with both its arena-backed constant representation and
+//! its borrowed candidate-binding representation. Each implementation also selects the matching
+//! typed map in [`CandidateSubstitution`]. Principal matching therefore cannot accidentally produce
+//! or retrieve a resource binding.
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -16,8 +17,6 @@ use crate::model::{Action, Principal, Resource};
 use super::source::{AtomPattern, Component, ComponentPattern};
 
 /// Arena-backed action value used by compiled patterns.
-///
-/// Only commit messages need arena storage; all other variants are fieldless and copied directly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum CompiledAction<'arena> {
     Read,
@@ -31,22 +30,22 @@ pub(super) enum CompiledAction<'arena> {
     History,
 }
 
-/// Type-tagged reference bound by a head variable.
+/// Candidate values assigned to head variables during one rule evaluation.
 ///
-/// The variants keep the three component domains disjoint. Reusing one variable name in different
-/// component positions is therefore a mismatch rather than a comparison of rendered values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum BoundValue<'event> {
-    Principal(&'event Principal),
-    Action(&'event Action),
-    Resource(&'event Resource),
+/// Separate maps preserve the component type through storage and lookup. The map choice is an
+/// associated operation of [`Match`], rather than an erased enum returned by component code.
+#[derive(Debug, Default)]
+pub(crate) struct CandidateSubstitution<'event> {
+    principals: HashMap<DefaultSymbol, &'event Principal>,
+    actions: HashMap<DefaultSymbol, &'event Action>,
+    resources: HashMap<DefaultSymbol, &'event Resource>,
 }
 
 /// Compiles and matches one capability-product component.
 ///
-/// `Compiled` must support structural hashing because compiled atom patterns are payloads of
-/// hashconsed test nodes. Implementations are static; this trait is intentionally not used as a
-/// trait object inside the canonical syntax DAG.
+/// Both associated types are structural: `Compiled` is stored in hashconsed atom nodes, while
+/// `Bound` is stored in the corresponding typed substitution map. Implementations are statically
+/// dispatched and intentionally unavailable as trait objects inside the canonical DAG.
 pub(super) trait Match<'arena>: Sized {
     /// Product coordinate occupied by this component.
     const COMPONENT: Component;
@@ -54,19 +53,35 @@ pub(super) trait Match<'arena>: Sized {
     /// Immutable arena-backed representation embedded in compiled patterns.
     type Compiled: Clone + Copy + Debug + PartialEq + Eq + Hash;
 
+    /// Borrowed candidate value stored for a variable of this component.
+    type Bound<'event>: Clone + Copy + Debug + PartialEq + Eq
+    where
+        Self: 'event;
+
     /// Copies `value` into the validator arena when ownership or stable borrowing requires it.
     fn compile(arena: &'arena Bump, value: &Self) -> Self::Compiled;
 
     /// Compares one compiled constant with an event component.
     fn constant_matches(expected: Self::Compiled, actual: &Self) -> bool;
 
-    /// Erases an event component into a tagged variable binding.
-    fn bound<'event>(actual: &'event Self) -> BoundValue<'event>;
+    /// Converts an event component to its typed borrowed binding.
+    fn bound<'event>(actual: &'event Self) -> Self::Bound<'event>;
+
+    /// Returns the immutable substitution map belonging to this component.
+    fn bindings<'substitution, 'event>(
+        substitution: &'substitution CandidateSubstitution<'event>,
+    ) -> &'substitution HashMap<DefaultSymbol, Self::Bound<'event>>;
+
+    /// Returns the mutable substitution map belonging to this component.
+    fn bindings_mut<'substitution, 'event>(
+        substitution: &'substitution mut CandidateSubstitution<'event>,
+    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Bound<'event>>;
 }
 
 impl<'arena> Match<'arena> for Principal {
     const COMPONENT: Component = Component::Principal;
     type Compiled = &'arena str;
+    type Bound<'event> = &'event Principal;
 
     fn compile(arena: &'arena Bump, value: &Self) -> Self::Compiled {
         arena.alloc_str(value.as_str())
@@ -76,14 +91,27 @@ impl<'arena> Match<'arena> for Principal {
         actual.as_str() == expected
     }
 
-    fn bound<'event>(actual: &'event Self) -> BoundValue<'event> {
-        BoundValue::Principal(actual)
+    fn bound<'event>(actual: &'event Self) -> Self::Bound<'event> {
+        actual
+    }
+
+    fn bindings<'substitution, 'event>(
+        substitution: &'substitution CandidateSubstitution<'event>,
+    ) -> &'substitution HashMap<DefaultSymbol, Self::Bound<'event>> {
+        &substitution.principals
+    }
+
+    fn bindings_mut<'substitution, 'event>(
+        substitution: &'substitution mut CandidateSubstitution<'event>,
+    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Bound<'event>> {
+        &mut substitution.principals
     }
 }
 
 impl<'arena> Match<'arena> for Action {
     const COMPONENT: Component = Component::Action;
     type Compiled = CompiledAction<'arena>;
+    type Bound<'event> = &'event Action;
 
     fn compile(arena: &'arena Bump, value: &Self) -> Self::Compiled {
         match value {
@@ -120,14 +148,27 @@ impl<'arena> Match<'arena> for Action {
         }
     }
 
-    fn bound<'event>(actual: &'event Self) -> BoundValue<'event> {
-        BoundValue::Action(actual)
+    fn bound<'event>(actual: &'event Self) -> Self::Bound<'event> {
+        actual
+    }
+
+    fn bindings<'substitution, 'event>(
+        substitution: &'substitution CandidateSubstitution<'event>,
+    ) -> &'substitution HashMap<DefaultSymbol, Self::Bound<'event>> {
+        &substitution.actions
+    }
+
+    fn bindings_mut<'substitution, 'event>(
+        substitution: &'substitution mut CandidateSubstitution<'event>,
+    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Bound<'event>> {
+        &mut substitution.actions
     }
 }
 
 impl<'arena> Match<'arena> for Resource {
     const COMPONENT: Component = Component::Resource;
     type Compiled = &'arena [&'arena str];
+    type Bound<'event> = &'event Resource;
 
     fn compile(arena: &'arena Bump, value: &Self) -> Self::Compiled {
         let segments: Vec<&'arena str> = value
@@ -146,8 +187,20 @@ impl<'arena> Match<'arena> for Resource {
                 .all(|(left, right)| *left == right)
     }
 
-    fn bound<'event>(actual: &'event Self) -> BoundValue<'event> {
-        BoundValue::Resource(actual)
+    fn bound<'event>(actual: &'event Self) -> Self::Bound<'event> {
+        actual
+    }
+
+    fn bindings<'substitution, 'event>(
+        substitution: &'substitution CandidateSubstitution<'event>,
+    ) -> &'substitution HashMap<DefaultSymbol, Self::Bound<'event>> {
+        &substitution.resources
+    }
+
+    fn bindings_mut<'substitution, 'event>(
+        substitution: &'substitution mut CandidateSubstitution<'event>,
+    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Bound<'event>> {
+        &mut substitution.resources
     }
 }
 
@@ -156,9 +209,6 @@ pub(super) type CompiledPattern<'arena, ComponentType> =
     ComponentPattern<<ComponentType as Match<'arena>>::Compiled, DefaultSymbol>;
 
 /// Concrete, structurally hashable atom representation stored in [`TestNode`](super::node::TestNode).
-///
-/// Keeping this as an enum rather than `dyn Pattern` is what lets hashconsing use derived equality
-/// and hashing without pointer-identity or virtual structural-comparison machinery.
 pub(super) type CompiledAtomPattern<'arena> = AtomPattern<
     <Principal as Match<'arena>>::Compiled,
     <Action as Match<'arena>>::Compiled,

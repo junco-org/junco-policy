@@ -11,46 +11,32 @@ use string_interner::DefaultSymbol;
 use crate::model::{Action, Event, Principal, Resource};
 use crate::validator::{CompileError, RuleIndex};
 
-use super::component::{BoundValue, CompiledPattern, Match};
+use super::component::{CandidateSubstitution, CompiledPattern, Match};
 use super::source::{Component, ComponentPattern};
 
-/// Concrete candidate values assigned to head variables during one rule evaluation.
-#[derive(Debug, Default)]
-pub(crate) struct CandidateSubstitution<'event> {
-    values: HashMap<DefaultSymbol, BoundValue<'event>>,
-}
-
-impl<'event> CandidateSubstitution<'event> {
-    /// Binds an unbound name, or checks that a repeated occurrence denotes the same typed value.
-    fn bind(&mut self, symbol: DefaultSymbol, value: BoundValue<'event>) -> bool {
-        match self.values.get(&symbol).copied() {
-            Some(existing) => existing == value,
-            None => {
-                self.values.insert(symbol, value);
-                true
-            }
-        }
-    }
-
-    /// Resolves a name proven by compilation to be bound by the head.
-    pub(super) fn get(&self, symbol: DefaultSymbol) -> BoundValue<'event> {
-        self.values
-            .get(&symbol)
-            .copied()
-            .expect("compiled head binds every tail variable")
-    }
-}
-
 /// Matches one typed head coordinate and updates the candidate substitution.
-fn match_head_pattern<'arena, 'event, ComponentType: Match<'arena>>(
+fn match_head_pattern<'arena, 'event, ComponentType>(
     pattern: CompiledPattern<'arena, ComponentType>,
     actual: &'event ComponentType,
     substitution: &mut CandidateSubstitution<'event>,
-) -> bool {
+) -> bool
+where
+    ComponentType: Match<'arena> + 'event,
+{
     match pattern {
         ComponentPattern::Constant(expected) => ComponentType::constant_matches(expected, actual),
         ComponentPattern::Variable(symbol) => {
-            substitution.bind(symbol, ComponentType::bound(actual))
+            let value = ComponentType::bound(actual);
+            match ComponentType::bindings_mut(substitution)
+                .get(&symbol)
+                .copied()
+            {
+                Some(existing) => existing == value,
+                None => {
+                    ComponentType::bindings_mut(substitution).insert(symbol, value);
+                    true
+                }
+            }
         }
     }
 }

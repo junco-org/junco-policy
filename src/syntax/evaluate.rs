@@ -6,22 +6,28 @@
 
 use crate::model::{Action, Event, Principal, Resource};
 
-use super::component::{CompiledAtomPattern, CompiledPattern, Match};
-use super::environment::CandidateSubstitution;
+use super::component::{CandidateSubstitution, CompiledAtomPattern, CompiledPattern, Match};
 use super::node::{RegexId, RegexKind, TestId, TestNode};
 use super::source::{AtomPattern, Comparison, ComponentPattern};
 use super::store::CanonicalStore;
 
 /// Evaluates one typed constant-or-variable component pattern.
-fn eval_component_pattern<'arena, 'event, ComponentType: Match<'arena>>(
+fn eval_component_pattern<'arena, 'event, ComponentType>(
     pattern: CompiledPattern<'arena, ComponentType>,
     actual: &'event ComponentType,
     substitution: &CandidateSubstitution<'event>,
-) -> bool {
+) -> bool
+where
+    ComponentType: Match<'arena> + 'event,
+{
     match pattern {
         ComponentPattern::Constant(expected) => ComponentType::constant_matches(expected, actual),
         ComponentPattern::Variable(symbol) => {
-            substitution.get(symbol) == ComponentType::bound(actual)
+            let bound = ComponentType::bindings(substitution)
+                .get(&symbol)
+                .copied()
+                .expect("compiled head binds every tail variable");
+            bound == ComponentType::bound(actual)
         }
     }
 }
