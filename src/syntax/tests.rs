@@ -70,11 +70,11 @@ fn variable_names_share_string_symbols_across_rules() {
     let first = compile_rule(&mut store, &rule(RegexExpr::all())).unwrap();
     let second = compile_rule(&mut store, &rule(RegexExpr::all())).unwrap();
 
-    let ComponentPattern::Variable(first_variable) = first.head.principal.into_inner() else {
-        panic!("principal head pattern was not compiled as a variable")
+    let ComponentPattern::Variable(first_variable) = first.head.principal else {
+        panic!("principal head pattern was not interned as a variable")
     };
-    let ComponentPattern::Variable(second_variable) = second.head.principal.into_inner() else {
-        panic!("principal head pattern was not compiled as a variable")
+    let ComponentPattern::Variable(second_variable) = second.head.principal else {
+        panic!("principal head pattern was not interned as a variable")
     };
     assert_eq!(first_variable, second_variable);
     assert_eq!(store.resolver.string_count(), 3);

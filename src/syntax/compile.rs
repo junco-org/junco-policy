@@ -42,7 +42,7 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     pattern: &ComponentPattern<ComponentType>,
     variables: &mut VariableEnvironment,
 ) -> Result<InternedPattern<'arena, ComponentType>, CompileError> {
-    Ok(InternedPattern::new(match pattern {
+    Ok(match pattern {
         ComponentPattern::Constant(value) => {
             ComponentPattern::Constant(ComponentType::resolve(&mut store.resolver, value))
         }
@@ -55,7 +55,7 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
                 })?;
             ComponentPattern::Variable(variable)
         }
-    }))
+    })
 }
 
 /// Resolves and interns the fixed capability-product head and its variable environment.
@@ -83,7 +83,7 @@ fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     pattern: &ComponentPattern<ComponentType>,
     variables: &VariableEnvironment,
 ) -> Result<InternedPattern<'arena, ComponentType>, CompileError> {
-    Ok(InternedPattern::new(match pattern {
+    Ok(match pattern {
         ComponentPattern::Constant(value) => {
             ComponentPattern::Constant(ComponentType::resolve(&mut store.resolver, value))
         }
@@ -101,7 +101,7 @@ fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
                 })?;
             ComponentPattern::Variable(variable)
         }
-    }))
+    })
 }
 
 /// Resolves the atom representation retained by hashconsed test nodes.
@@ -111,15 +111,15 @@ fn compile_atom_pattern<'arena>(
     variables: &VariableEnvironment,
 ) -> Result<InternedAtomPattern<'arena>, CompileError> {
     Ok(match pattern {
-        AtomPattern::Principal(pattern) => AtomPattern::Principal(
-            compile_pattern::<Principal>(store, pattern, variables)?.into_inner(),
-        ),
-        AtomPattern::Action(pattern) => {
-            AtomPattern::Action(compile_pattern::<Action>(store, pattern, variables)?.into_inner())
+        AtomPattern::Principal(pattern) => {
+            AtomPattern::Principal(compile_pattern::<Principal>(store, pattern, variables)?)
         }
-        AtomPattern::Resource(pattern) => AtomPattern::Resource(
-            compile_pattern::<Resource>(store, pattern, variables)?.into_inner(),
-        ),
+        AtomPattern::Action(pattern) => {
+            AtomPattern::Action(compile_pattern::<Action>(store, pattern, variables)?)
+        }
+        AtomPattern::Resource(pattern) => {
+            AtomPattern::Resource(compile_pattern::<Resource>(store, pattern, variables)?)
+        }
     })
 }
 

@@ -22,7 +22,7 @@ fn match_head_pattern<'arena, ComponentType>(
 where
     ComponentType: ComponentDomain<'arena>,
 {
-    match pattern.into_inner() {
+    match pattern {
         ComponentPattern::Constant(expected) => {
             ComponentType::resolved_matches(&store.resolver, expected, actual)
                 .then(CandidateSubstitution::default)

@@ -5,8 +5,8 @@
 //! selects its typed map in [`CandidateSubstitution`], so domains cannot be mixed.
 
 use std::collections::HashMap;
-use std::fmt::{self, Debug};
-use std::hash::{Hash, Hasher};
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::marker::PhantomData;
 
 use bumpalo::Bump;
@@ -89,85 +89,12 @@ pub(crate) struct CandidateSubstitution<'arena> {
 }
 
 /// Structural application of a substitution to a pattern-like value.
-pub(super) trait Subst<Substitution> {
+pub(super) trait Subst<Substitution, Domain = ()> {
     /// Variable-free value produced by successful substitution.
     type Concrete;
 
     /// Applies `substitution`, returning `None` when a referenced variable is unbound.
     fn subst(&self, substitution: &Substitution) -> Option<Self::Concrete>;
-}
-
-/// Interned component pattern carrying its component domain in the type.
-pub(super) struct InternedComponentPattern<'arena, ComponentType>
-where
-    ComponentType: ComponentDomain<'arena>,
-{
-    inner: ComponentPattern<ComponentType::Resolved, DefaultSymbol>,
-    component: PhantomData<fn() -> ComponentType>,
-}
-
-impl<'arena, ComponentType> InternedComponentPattern<'arena, ComponentType>
-where
-    ComponentType: ComponentDomain<'arena>,
-{
-    /// Wraps the structurally stored interned pattern with its component-domain marker.
-    pub(super) fn new(inner: ComponentPattern<ComponentType::Resolved, DefaultSymbol>) -> Self {
-        Self {
-            inner,
-            component: PhantomData,
-        }
-    }
-
-    /// Returns the structural representation stored by interned atom nodes.
-    pub(super) fn into_inner(self) -> ComponentPattern<ComponentType::Resolved, DefaultSymbol> {
-        self.inner
-    }
-}
-
-impl<'arena, ComponentType> Clone for InternedComponentPattern<'arena, ComponentType>
-where
-    ComponentType: ComponentDomain<'arena>,
-{
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<'arena, ComponentType> Copy for InternedComponentPattern<'arena, ComponentType> where
-    ComponentType: ComponentDomain<'arena>
-{
-}
-
-impl<'arena, ComponentType> fmt::Debug for InternedComponentPattern<'arena, ComponentType>
-where
-    ComponentType: ComponentDomain<'arena>,
-{
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.inner.fmt(formatter)
-    }
-}
-
-impl<'arena, ComponentType> PartialEq for InternedComponentPattern<'arena, ComponentType>
-where
-    ComponentType: ComponentDomain<'arena>,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner
-    }
-}
-
-impl<'arena, ComponentType> Eq for InternedComponentPattern<'arena, ComponentType> where
-    ComponentType: ComponentDomain<'arena>
-{
-}
-
-impl<'arena, ComponentType> Hash for InternedComponentPattern<'arena, ComponentType>
-where
-    ComponentType: ComponentDomain<'arena>,
-{
-    fn hash<HasherType: Hasher>(&self, state: &mut HasherType) {
-        self.inner.hash(state);
-    }
 }
 
 impl<'arena> CandidateSubstitution<'arena> {
@@ -344,7 +271,7 @@ impl<'arena> PatternRepresentation for InternedRepresentation<'arena> {
 
 /// Interned pattern for one statically selected component domain.
 pub(super) type InternedPattern<'arena, ComponentType> =
-    InternedComponentPattern<'arena, ComponentType>;
+    ComponentPattern<<ComponentType as ComponentDomain<'arena>>::Resolved, DefaultSymbol>;
 
 /// Interned, structurally hashable atom pattern stored in [`TestNode`](super::node::TestNode).
 pub(super) type InternedAtomPattern<'arena> = AtomPattern<InternedRepresentation<'arena>>;
@@ -371,21 +298,34 @@ impl<'arena> ResolvedAtom<'arena> {
     }
 }
 
-impl<'arena, ComponentType> Subst<CandidateSubstitution<'arena>>
-    for InternedComponentPattern<'arena, ComponentType>
+impl<'arena, ComponentType> Subst<CandidateSubstitution<'arena>, ComponentType>
+    for InternedPattern<'arena, ComponentType>
 where
     ComponentType: ComponentDomain<'arena>,
 {
     type Concrete = ComponentType::Resolved;
 
     fn subst(&self, substitution: &CandidateSubstitution<'arena>) -> Option<Self::Concrete> {
-        match self.inner {
-            ComponentPattern::Constant(expected) => Some(expected),
-            ComponentPattern::Variable(variable) => ComponentType::bindings(substitution)
-                .get(&variable)
-                .copied(),
+        match self {
+            ComponentPattern::Constant(expected) => Some(*expected),
+            ComponentPattern::Variable(variable) => {
+                ComponentType::bindings(substitution).get(variable).copied()
+            }
         }
     }
+}
+
+fn subst_component<'arena, ComponentType>(
+    pattern: &InternedPattern<'arena, ComponentType>,
+    substitution: &CandidateSubstitution<'arena>,
+) -> Option<ComponentType::Resolved>
+where
+    ComponentType: ComponentDomain<'arena>,
+{
+    <InternedPattern<'arena, ComponentType> as Subst<
+        CandidateSubstitution<'arena>,
+        ComponentType,
+    >>::subst(pattern, substitution)
 }
 
 impl<'arena> Subst<CandidateSubstitution<'arena>> for InternedAtomPattern<'arena> {
@@ -393,15 +333,15 @@ impl<'arena> Subst<CandidateSubstitution<'arena>> for InternedAtomPattern<'arena
 
     fn subst(&self, substitution: &CandidateSubstitution<'arena>) -> Option<Self::Concrete> {
         match self {
-            AtomPattern::Principal(pattern) => InternedComponentPattern::<Principal>::new(*pattern)
-                .subst(substitution)
-                .map(ResolvedAtom::Principal),
-            AtomPattern::Action(pattern) => InternedComponentPattern::<Action>::new(*pattern)
-                .subst(substitution)
-                .map(ResolvedAtom::Action),
-            AtomPattern::Resource(pattern) => InternedComponentPattern::<Resource>::new(*pattern)
-                .subst(substitution)
-                .map(ResolvedAtom::Resource),
+            AtomPattern::Principal(pattern) => {
+                subst_component::<Principal>(pattern, substitution).map(ResolvedAtom::Principal)
+            }
+            AtomPattern::Action(pattern) => {
+                subst_component::<Action>(pattern, substitution).map(ResolvedAtom::Action)
+            }
+            AtomPattern::Resource(pattern) => {
+                subst_component::<Resource>(pattern, substitution).map(ResolvedAtom::Resource)
+            }
         }
     }
 }
@@ -465,17 +405,15 @@ mod tests {
         let mut substitution = CandidateSubstitution::default();
         substitution.principals.insert(actor, alice_symbol);
 
-        let constant =
-            InternedComponentPattern::<Principal>::new(ComponentPattern::Constant(alice_symbol))
-                .subst(&substitution)
-                .expect("constants always substitute");
+        let constant: InternedPattern<'_, Principal> = ComponentPattern::Constant(alice_symbol);
+        let constant = subst_component::<Principal>(&constant, &substitution)
+            .expect("constants always substitute");
         assert!(Principal::resolved_matches(&resolver, constant, &alice));
         assert!(!Principal::resolved_matches(&resolver, constant, &bob));
 
-        let variable =
-            InternedComponentPattern::<Principal>::new(ComponentPattern::Variable(actor))
-                .subst(&substitution)
-                .expect("the candidate bound actor");
+        let variable: InternedPattern<'_, Principal> = ComponentPattern::Variable(actor);
+        let variable = subst_component::<Principal>(&variable, &substitution)
+            .expect("the candidate bound actor");
         assert!(Principal::resolved_matches(&resolver, variable, &alice));
         assert!(!Principal::resolved_matches(&resolver, variable, &bob));
 
