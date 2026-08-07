@@ -43,20 +43,15 @@ pub(crate) struct CandidateSubstitution<'event> {
 
 /// Compiles and matches one capability-product component.
 ///
-/// Both associated types are structural: `Compiled` is stored in hashconsed atom nodes, while
-/// `Bound` is stored in the corresponding typed substitution map. Implementations are statically
-/// dispatched and intentionally unavailable as trait objects inside the canonical DAG.
-pub(super) trait Match<'arena>: Sized {
+/// `Compiled` is stored in hashconsed atom nodes. Runtime bindings are always `&Self` and live in
+/// the typed substitution map selected by the implementation, so no separate binding conversion
+/// or associated binding type is needed.
+pub(super) trait Match<'arena>: Sized + Eq {
     /// Product coordinate occupied by this component.
     const COMPONENT: Component;
 
     /// Immutable arena-backed representation embedded in compiled patterns.
     type Compiled: Clone + Copy + Debug + PartialEq + Eq + Hash;
-
-    /// Borrowed candidate value stored for a variable of this component.
-    type Bound<'event>: Clone + Copy + Debug + PartialEq + Eq
-    where
-        Self: 'event;
 
     /// Copies `value` into the validator arena when ownership or stable borrowing requires it.
     fn compile(arena: &'arena Bump, value: &Self) -> Self::Compiled;
@@ -64,24 +59,20 @@ pub(super) trait Match<'arena>: Sized {
     /// Compares one compiled constant with an event component.
     fn constant_matches(expected: Self::Compiled, actual: &Self) -> bool;
 
-    /// Converts an event component to its typed borrowed binding.
-    fn bound<'event>(actual: &'event Self) -> Self::Bound<'event>;
-
     /// Returns the immutable substitution map belonging to this component.
     fn bindings<'substitution, 'event>(
         substitution: &'substitution CandidateSubstitution<'event>,
-    ) -> &'substitution HashMap<DefaultSymbol, Self::Bound<'event>>;
+    ) -> &'substitution HashMap<DefaultSymbol, &'event Self>;
 
     /// Returns the mutable substitution map belonging to this component.
     fn bindings_mut<'substitution, 'event>(
         substitution: &'substitution mut CandidateSubstitution<'event>,
-    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Bound<'event>>;
+    ) -> &'substitution mut HashMap<DefaultSymbol, &'event Self>;
 }
 
 impl<'arena> Match<'arena> for Principal {
     const COMPONENT: Component = Component::Principal;
     type Compiled = &'arena str;
-    type Bound<'event> = &'event Principal;
 
     fn compile(arena: &'arena Bump, value: &Self) -> Self::Compiled {
         arena.alloc_str(value.as_str())
@@ -91,19 +82,15 @@ impl<'arena> Match<'arena> for Principal {
         actual.as_str() == expected
     }
 
-    fn bound<'event>(actual: &'event Self) -> Self::Bound<'event> {
-        actual
-    }
-
     fn bindings<'substitution, 'event>(
         substitution: &'substitution CandidateSubstitution<'event>,
-    ) -> &'substitution HashMap<DefaultSymbol, Self::Bound<'event>> {
+    ) -> &'substitution HashMap<DefaultSymbol, &'event Self> {
         &substitution.principals
     }
 
     fn bindings_mut<'substitution, 'event>(
         substitution: &'substitution mut CandidateSubstitution<'event>,
-    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Bound<'event>> {
+    ) -> &'substitution mut HashMap<DefaultSymbol, &'event Self> {
         &mut substitution.principals
     }
 }
@@ -111,7 +98,6 @@ impl<'arena> Match<'arena> for Principal {
 impl<'arena> Match<'arena> for Action {
     const COMPONENT: Component = Component::Action;
     type Compiled = CompiledAction<'arena>;
-    type Bound<'event> = &'event Action;
 
     fn compile(arena: &'arena Bump, value: &Self) -> Self::Compiled {
         match value {
@@ -148,19 +134,15 @@ impl<'arena> Match<'arena> for Action {
         }
     }
 
-    fn bound<'event>(actual: &'event Self) -> Self::Bound<'event> {
-        actual
-    }
-
     fn bindings<'substitution, 'event>(
         substitution: &'substitution CandidateSubstitution<'event>,
-    ) -> &'substitution HashMap<DefaultSymbol, Self::Bound<'event>> {
+    ) -> &'substitution HashMap<DefaultSymbol, &'event Self> {
         &substitution.actions
     }
 
     fn bindings_mut<'substitution, 'event>(
         substitution: &'substitution mut CandidateSubstitution<'event>,
-    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Bound<'event>> {
+    ) -> &'substitution mut HashMap<DefaultSymbol, &'event Self> {
         &mut substitution.actions
     }
 }
@@ -168,7 +150,6 @@ impl<'arena> Match<'arena> for Action {
 impl<'arena> Match<'arena> for Resource {
     const COMPONENT: Component = Component::Resource;
     type Compiled = &'arena [&'arena str];
-    type Bound<'event> = &'event Resource;
 
     fn compile(arena: &'arena Bump, value: &Self) -> Self::Compiled {
         let segments: Vec<&'arena str> = value
@@ -187,19 +168,15 @@ impl<'arena> Match<'arena> for Resource {
                 .all(|(left, right)| *left == right)
     }
 
-    fn bound<'event>(actual: &'event Self) -> Self::Bound<'event> {
-        actual
-    }
-
     fn bindings<'substitution, 'event>(
         substitution: &'substitution CandidateSubstitution<'event>,
-    ) -> &'substitution HashMap<DefaultSymbol, Self::Bound<'event>> {
+    ) -> &'substitution HashMap<DefaultSymbol, &'event Self> {
         &substitution.resources
     }
 
     fn bindings_mut<'substitution, 'event>(
         substitution: &'substitution mut CandidateSubstitution<'event>,
-    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Bound<'event>> {
+    ) -> &'substitution mut HashMap<DefaultSymbol, &'event Self> {
         &mut substitution.resources
     }
 }

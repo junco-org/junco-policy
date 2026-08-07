@@ -26,14 +26,13 @@ where
     match pattern {
         ComponentPattern::Constant(expected) => ComponentType::constant_matches(expected, actual),
         ComponentPattern::Variable(symbol) => {
-            let value = ComponentType::bound(actual);
             match ComponentType::bindings_mut(substitution)
                 .get(&symbol)
                 .copied()
             {
-                Some(existing) => existing == value,
+                Some(existing) => existing == actual,
                 None => {
-                    ComponentType::bindings_mut(substitution).insert(symbol, value);
+                    ComponentType::bindings_mut(substitution).insert(symbol, actual);
                     true
                 }
             }

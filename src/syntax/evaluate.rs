@@ -27,7 +27,7 @@ where
                 .get(&symbol)
                 .copied()
                 .expect("compiled head binds every tail variable");
-            bound == ComponentType::bound(actual)
+            bound == actual
         }
     }
 }
