@@ -4,8 +4,7 @@
 //! representation used by both policy constants and candidate bindings. Each implementation also
 //! selects its typed map in [`CandidateSubstitution`], so domains cannot be mixed.
 
-use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -36,30 +35,22 @@ pub(super) enum CompiledAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct CompiledResource<'arena>(&'arena [DefaultSymbol]);
 
-impl Borrow<[DefaultSymbol]> for CompiledResource<'_> {
-    fn borrow(&self) -> &[DefaultSymbol] {
-        self.0
-    }
-}
-
-/// Black-box string interner plus canonical storage for compound resource sequences.
+/// Black-box string interner and arena allocation for compiled compound values.
 ///
-/// The `string-interner` crate owns string deduplication and symbol validity. Resource sequences
-/// still need a separate set because interning their individual segment strings does not intern the
-/// ordered sequence itself.
+/// The `string-interner` crate owns all string deduplication and symbol validity. Resource
+/// sequences are copied directly into the arena; they are structurally comparable but not interned
+/// as complete sequences.
 pub(super) struct ComponentValues<'arena> {
     arena: &'arena Bump,
     strings: DefaultStringInterner,
-    resources: HashSet<CompiledResource<'arena>>,
 }
 
 impl<'arena> ComponentValues<'arena> {
-    /// Creates empty value pools backed by `arena`.
+    /// Creates a string interner and compound-value allocator backed by `arena`.
     pub(super) fn new(arena: &'arena Bump) -> Self {
         Self {
             arena,
             strings: DefaultStringInterner::with_capacity(128),
-            resources: HashSet::with_capacity(64),
         }
     }
 
@@ -75,19 +66,14 @@ impl<'arena> ComponentValues<'arena> {
             .expect("component symbols originate from this interner")
     }
 
-    /// Interns one ordered resource sequence after interning every segment string.
-    pub(super) fn intern_resource(&mut self, value: &Resource) -> CompiledResource<'arena> {
+    /// Compiles one ordered resource sequence after interning every segment string.
+    pub(super) fn compile_resource(&mut self, value: &Resource) -> CompiledResource<'arena> {
         let segments: Vec<DefaultSymbol> = value
             .segments()
             .iter()
             .map(|segment| self.intern_string(segment))
             .collect();
-        if let Some(&interned) = self.resources.get(segments.as_slice()) {
-            return interned;
-        }
-        let interned = CompiledResource(self.arena.alloc_slice_copy(&segments));
-        self.resources.insert(interned);
-        interned
+        CompiledResource(self.arena.alloc_slice_copy(&segments))
     }
 
     /// Number of distinct interned strings, used to verify value reuse.
@@ -210,8 +196,8 @@ pub(super) trait ComponentDomain<'arena>: Sized + Eq {
     /// Canonical arena-backed representation used by constants and substitutions.
     type Compiled: Clone + Copy + Debug + PartialEq + Eq + Hash;
 
-    /// Interns `value` into the validator's monotonic component-value store.
-    fn intern(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled;
+    /// Compiles `value` into the representation shared by constants and substitutions.
+    fn compile(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled;
 
     /// Compares one canonical compiled value with a model value through the value store.
     fn compiled_matches(
@@ -235,7 +221,7 @@ impl<'arena> ComponentDomain<'arena> for Principal {
     const COMPONENT: Component = Component::Principal;
     type Compiled = DefaultSymbol;
 
-    fn intern(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled {
+    fn compile(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled {
         values.intern_string(value.as_str())
     }
 
@@ -264,7 +250,7 @@ impl<'arena> ComponentDomain<'arena> for Action {
     const COMPONENT: Component = Component::Action;
     type Compiled = CompiledAction;
 
-    fn intern(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled {
+    fn compile(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled {
         match value {
             Action::Read => CompiledAction::Read,
             Action::Edit => CompiledAction::Edit,
@@ -320,8 +306,8 @@ impl<'arena> ComponentDomain<'arena> for Resource {
     const COMPONENT: Component = Component::Resource;
     type Compiled = CompiledResource<'arena>;
 
-    fn intern(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled {
-        values.intern_resource(value)
+    fn compile(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled {
+        values.compile_resource(value)
     }
 
     fn compiled_matches(
@@ -434,22 +420,21 @@ mod tests {
     }
 
     #[test]
-    fn component_values_intern_constants_and_candidates_uniformly() {
+    fn component_values_compile_constants_and_candidates_uniformly() {
         let arena = Bump::new();
         let mut values = ComponentValues::new(&arena);
 
-        let constant_principal = Principal::intern(&mut values, &Principal::new("alice"));
-        let candidate_principal = Principal::intern(&mut values, &Principal::new("alice"));
+        let constant_principal = Principal::compile(&mut values, &Principal::new("alice"));
+        let candidate_principal = Principal::compile(&mut values, &Principal::new("alice"));
         assert_eq!(constant_principal, candidate_principal);
         assert_eq!(values.resolve_string(constant_principal), "alice");
 
-        let constant_resource = Resource::intern(&mut values, &Resource::new(["src", "a.rs"]));
-        let candidate_resource = Resource::intern(&mut values, &Resource::new(["src", "a.rs"]));
+        let constant_resource = Resource::compile(&mut values, &Resource::new(["src", "a.rs"]));
+        let candidate_resource = Resource::compile(&mut values, &Resource::new(["src", "a.rs"]));
         assert_eq!(constant_resource, candidate_resource);
-        assert!(std::ptr::eq(constant_resource.0, candidate_resource.0));
 
-        let constant_action = Action::intern(&mut values, &Action::commit("ship"));
-        let candidate_action = Action::intern(&mut values, &Action::commit("ship"));
+        let constant_action = Action::compile(&mut values, &Action::commit("ship"));
+        let candidate_action = Action::compile(&mut values, &Action::commit("ship"));
         assert_eq!(constant_action, candidate_action);
     }
 

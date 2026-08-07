@@ -1,8 +1,9 @@
 //! Canonical storage for compiled values, tests, and regular expressions.
 //!
-//! The store owns monotonic value and node interning tables and borrows only the caller-provided
-//! allocation arena. It has no active-rule, variable-environment, candidate, history, or validator
-//! backreferences. Compiler and evaluator functions receive the store explicitly.
+//! The store owns string/node interners and arena allocation for compound values, and borrows only
+//! the caller-provided allocation arena. It has no active-rule, variable-environment, candidate,
+//! history, or validator backreferences. Compiler and evaluator functions receive the store
+//! explicitly.
 
 use bumpalo::Bump;
 use hashconsing::BHConsign;
@@ -11,9 +12,9 @@ use super::component::ComponentValues;
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
 use super::variable::VariableSymbol;
 
-/// Shared canonical value and node store used by all compiled rules in one validator.
+/// Shared compiled-value and canonical-node store used by all rules in one validator.
 pub(crate) struct CanonicalStore<'arena> {
-    /// Component strings/resources shared by constants and candidate substitutions.
+    /// Black-box string interner plus allocation for compound component values.
     pub(super) values: ComponentValues<'arena>,
     /// Canonical table for boolean event tests.
     pub(super) tests: BHConsign<'arena, TestNode<'arena>>,

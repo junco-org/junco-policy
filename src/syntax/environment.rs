@@ -29,7 +29,7 @@ where
         }
         ComponentPattern::Variable(variable) => {
             let mut substitution = CandidateSubstitution::default();
-            let value = ComponentType::intern(&mut store.values, actual);
+            let value = ComponentType::compile(&mut store.values, actual);
             ComponentType::bindings_mut(&mut substitution).insert(variable, value);
             Some(substitution)
         }
