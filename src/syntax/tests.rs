@@ -81,8 +81,7 @@ fn variable_names_share_arena_references_across_rules() {
         first_variable,
         super::variable::VariableName::new("principal")
     );
-    assert!(store.variables.contains("principal"));
-    assert_eq!(store.variables.len(), 3);
+    assert_eq!(store.values.string_count(), 3);
 }
 
 #[test]
@@ -96,7 +95,7 @@ fn derivative_cycle_returns_the_same_hashconsed_state() {
     let compiled = compile_rule(&mut store, &rule(cycle)).unwrap();
 
     let event = Event::new("alice", Action::Read, ["a"]);
-    let substitution = compiled.head.match_candidate(&event).unwrap();
+    let substitution = compiled.head.match_candidate(&mut store, &event).unwrap();
     let before = store.regex_node_count();
     let mut state = compiled.tail;
     for _ in 0..100 {

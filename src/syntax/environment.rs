@@ -1,8 +1,8 @@
 //! Compile-time variable typing and per-candidate runtime substitution.
 //!
 //! A [`VariableEnvironment`] is created from one source head and exists only while that rule is
-//! compiled. A [`CandidateSubstitution`] is created when the resulting compiled head matches one
-//! candidate. Neither object is stored in source expressions or canonical syntax nodes.
+//! compiled. A [`CandidateSubstitution`] interns values from one matching candidate into the
+//! canonical value store. Neither object is stored in source expressions or canonical syntax nodes.
 
 use std::collections::HashMap;
 
@@ -10,23 +10,26 @@ use crate::model::{Action, Event, Principal, Resource};
 
 use super::component::{CandidateSubstitution, CompiledPattern, ComponentDomain};
 use super::source::{Component, ComponentPattern};
+use super::store::CanonicalStore;
 use super::variable::VariableName;
 
 /// Matches one typed head coordinate and returns its partial substitution.
-fn match_head_pattern<'arena, 'event, ComponentType>(
+fn match_head_pattern<'arena, ComponentType>(
+    store: &mut CanonicalStore<'arena>,
     pattern: CompiledPattern<'arena, ComponentType>,
-    actual: &'event ComponentType,
-) -> Option<CandidateSubstitution<'arena, 'event>>
+    actual: &ComponentType,
+) -> Option<CandidateSubstitution<'arena>>
 where
-    ComponentType: ComponentDomain<'arena> + 'event,
+    ComponentType: ComponentDomain<'arena>,
 {
     match pattern.into_inner() {
         ComponentPattern::Constant(expected) => {
-            ComponentType::constant_matches(expected, actual).then(CandidateSubstitution::default)
+            ComponentType::compiled_matches(expected, actual).then(CandidateSubstitution::default)
         }
         ComponentPattern::Variable(variable) => {
             let mut substitution = CandidateSubstitution::default();
-            ComponentType::bindings_mut(&mut substitution).insert(variable, actual);
+            let value = ComponentType::intern(&mut store.values, actual);
+            ComponentType::bindings_mut(&mut substitution).insert(variable, value);
             Some(substitution)
         }
     }
@@ -41,18 +44,19 @@ pub(crate) struct CompiledHead<'arena> {
 }
 
 impl<'arena> CompiledHead<'arena> {
-    /// Matches the candidate and merges the three compatible partial substitutions.
-    pub(crate) fn match_candidate<'event>(
+    /// Matches the candidate, interns variable bindings, and merges partial substitutions.
+    pub(crate) fn match_candidate(
         &self,
-        event: &'event Event,
-    ) -> Option<CandidateSubstitution<'arena, 'event>> {
-        match_head_pattern(self.principal, &event.principal)
+        store: &mut CanonicalStore<'arena>,
+        event: &Event,
+    ) -> Option<CandidateSubstitution<'arena>> {
+        match_head_pattern(store, self.principal, &event.principal)
             .and_then(|principal| {
-                match_head_pattern(self.action, &event.action)
+                match_head_pattern(store, self.action, &event.action)
                     .and_then(|action| principal.merge(action))
             })
             .and_then(|principal_action| {
-                match_head_pattern(self.resource, &event.resource)
+                match_head_pattern(store, self.resource, &event.resource)
                     .and_then(|resource| principal_action.merge(resource))
             })
     }

@@ -44,7 +44,7 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
 ) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
     Ok(CompiledPattern::new(match pattern {
         ComponentPattern::Constant(value) => {
-            ComponentPattern::Constant(ComponentType::compile(store.arena(), value))
+            ComponentPattern::Constant(ComponentType::intern(&mut store.values, value))
         }
         ComponentPattern::Variable(name) => {
             let variable = store.intern_variable(name);
@@ -85,7 +85,7 @@ fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
 ) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
     Ok(CompiledPattern::new(match pattern {
         ComponentPattern::Constant(value) => {
-            ComponentPattern::Constant(ComponentType::compile(store.arena(), value))
+            ComponentPattern::Constant(ComponentType::intern(&mut store.values, value))
         }
         ComponentPattern::Variable(name) => {
             let variable = store.intern_variable(name);

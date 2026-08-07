@@ -13,10 +13,10 @@ use super::store::CanonicalStore;
 
 /// Applies the candidate substitution and compares the resulting concrete atom to the historical
 /// event.
-fn eval_atom<'arena, 'event>(
+fn eval_atom<'arena>(
     pattern: CompiledAtomPattern<'arena>,
-    event: &'event Event,
-    substitution: &CandidateSubstitution<'arena, 'event>,
+    event: &Event,
+    substitution: &CandidateSubstitution<'arena>,
 ) -> bool {
     pattern
         .subst(substitution)
@@ -28,7 +28,7 @@ pub(crate) fn accepts<'arena, 'event>(
     store: &mut CanonicalStore<'arena>,
     root: RegexId<'arena>,
     history: impl IntoIterator<Item = &'event Event>,
-    substitution: &CandidateSubstitution<'arena, 'event>,
+    substitution: &CandidateSubstitution<'arena>,
 ) -> bool {
     let mut state = root;
     for event in history {
@@ -38,11 +38,11 @@ pub(crate) fn accepts<'arena, 'event>(
 }
 
 /// Computes one exact derivative and normalizes every constructed residual through `store`.
-pub(super) fn derive<'arena, 'event>(
+pub(super) fn derive<'arena>(
     store: &mut CanonicalStore<'arena>,
     regex: RegexId<'arena>,
-    event: &'event Event,
-    substitution: &CandidateSubstitution<'arena, 'event>,
+    event: &Event,
+    substitution: &CandidateSubstitution<'arena>,
 ) -> RegexId<'arena> {
     match regex.get().kind {
         RegexKind::Empty | RegexKind::Epsilon => store.empty,
@@ -96,10 +96,10 @@ pub(super) fn derive<'arena, 'event>(
 }
 
 /// Evaluates one canonical boolean test against an event and candidate substitution.
-fn eval_test<'arena, 'event>(
+fn eval_test<'arena>(
     test: TestId<'arena>,
-    event: &'event Event,
-    substitution: &CandidateSubstitution<'arena, 'event>,
+    event: &Event,
+    substitution: &CandidateSubstitution<'arena>,
 ) -> bool {
     match *test.get() {
         TestNode::True => true,

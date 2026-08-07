@@ -127,7 +127,8 @@ impl<'arena> Validator<'arena> {
     /// preserved in the returned grant.
     pub fn check<M>(&mut self, request: Request<M>) -> Decision<M> {
         for rule in self.rules.iter().copied() {
-            let Some(substitution) = rule.head.match_candidate(&request.event) else {
+            let Some(substitution) = rule.head.match_candidate(&mut self.store, &request.event)
+            else {
                 continue;
             };
             let accepted = accepts(
