@@ -1,6 +1,6 @@
 //! Component-specific compilation, matching, and typed substitution storage.
 //!
-//! [`Match`] associates each model component with both its arena-backed constant representation and
+//! [`ComponentDomain`] associates each model component with both its arena-backed constant representation and
 //! its borrowed candidate-binding representation. Each implementation also selects the matching
 //! typed map in [`CandidateSubstitution`]. Principal matching therefore cannot accidentally produce
 //! or retrieve a resource binding.
@@ -33,7 +33,7 @@ pub(super) enum CompiledAction<'arena> {
 /// Candidate values assigned to head variables during one rule evaluation.
 ///
 /// Separate maps preserve the component type through storage and lookup. The map choice is an
-/// associated operation of [`Match`], rather than an erased enum returned by component code.
+/// associated operation of [`ComponentDomain`], rather than an erased enum returned by component code.
 #[derive(Debug, Default)]
 pub(crate) struct CandidateSubstitution<'event> {
     principals: HashMap<DefaultSymbol, &'event Principal>,
@@ -46,7 +46,7 @@ pub(crate) struct CandidateSubstitution<'event> {
 /// `Compiled` is stored in hashconsed atom nodes. Runtime bindings are always `&Self` and live in
 /// the typed substitution map selected by the implementation, so no separate binding conversion
 /// or associated binding type is needed.
-pub(super) trait Match<'arena>: Sized + Eq {
+pub(super) trait ComponentDomain<'arena>: Sized + Eq {
     /// Product coordinate occupied by this component.
     const COMPONENT: Component;
 
@@ -70,7 +70,7 @@ pub(super) trait Match<'arena>: Sized + Eq {
     ) -> &'substitution mut HashMap<DefaultSymbol, &'event Self>;
 }
 
-impl<'arena> Match<'arena> for Principal {
+impl<'arena> ComponentDomain<'arena> for Principal {
     const COMPONENT: Component = Component::Principal;
     type Compiled = &'arena str;
 
@@ -95,7 +95,7 @@ impl<'arena> Match<'arena> for Principal {
     }
 }
 
-impl<'arena> Match<'arena> for Action {
+impl<'arena> ComponentDomain<'arena> for Action {
     const COMPONENT: Component = Component::Action;
     type Compiled = CompiledAction<'arena>;
 
@@ -147,7 +147,7 @@ impl<'arena> Match<'arena> for Action {
     }
 }
 
-impl<'arena> Match<'arena> for Resource {
+impl<'arena> ComponentDomain<'arena> for Resource {
     const COMPONENT: Component = Component::Resource;
     type Compiled = &'arena [&'arena str];
 
@@ -183,12 +183,12 @@ impl<'arena> Match<'arena> for Resource {
 
 /// Compiled pattern for one statically selected component type.
 pub(super) type CompiledPattern<'arena, ComponentType> =
-    ComponentPattern<<ComponentType as Match<'arena>>::Compiled, DefaultSymbol>;
+    ComponentPattern<<ComponentType as ComponentDomain<'arena>>::Compiled, DefaultSymbol>;
 
 /// Concrete, structurally hashable atom representation stored in [`TestNode`](super::node::TestNode).
 pub(super) type CompiledAtomPattern<'arena> = AtomPattern<
-    <Principal as Match<'arena>>::Compiled,
-    <Action as Match<'arena>>::Compiled,
-    <Resource as Match<'arena>>::Compiled,
+    <Principal as ComponentDomain<'arena>>::Compiled,
+    <Action as ComponentDomain<'arena>>::Compiled,
+    <Resource as ComponentDomain<'arena>>::Compiled,
     DefaultSymbol,
 >;

@@ -6,7 +6,9 @@
 
 use crate::model::{Action, Event, Principal, Resource};
 
-use super::component::{CandidateSubstitution, CompiledAtomPattern, CompiledPattern, Match};
+use super::component::{
+    CandidateSubstitution, CompiledAtomPattern, CompiledPattern, ComponentDomain,
+};
 use super::node::{RegexId, RegexKind, TestId, TestNode};
 use super::source::{AtomPattern, Comparison, ComponentPattern};
 use super::store::CanonicalStore;
@@ -18,7 +20,7 @@ fn eval_component_pattern<'arena, 'event, ComponentType>(
     substitution: &CandidateSubstitution<'event>,
 ) -> bool
 where
-    ComponentType: Match<'arena> + 'event,
+    ComponentType: ComponentDomain<'arena> + 'event,
 {
     match pattern {
         ComponentPattern::Constant(expected) => ComponentType::constant_matches(expected, actual),

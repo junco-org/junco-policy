@@ -10,7 +10,7 @@ use string_interner::DefaultSymbol;
 use crate::model::{Action, Principal, Resource};
 use crate::validator::{CompileError, RuleIndex};
 
-use super::component::{CompiledAtomPattern, Match};
+use super::component::{CompiledAtomPattern, ComponentDomain};
 use super::environment::{CompiledHead, VariableEnvironment};
 use super::node::{RegexId, TestId, TestNode};
 use super::source::{AtomPattern, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr};
@@ -40,7 +40,7 @@ pub(crate) fn compile_rule<'arena>(
 }
 
 /// Compiles one head coordinate and records variable declarations.
-fn compile_head_pattern<'arena, ComponentType: Match<'arena>>(
+fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     store: &mut CanonicalStore<'arena>,
     rule: RuleIndex,
     pattern: &ComponentPattern<ComponentType>,
@@ -80,7 +80,7 @@ fn compile_head<'arena>(
 }
 
 /// Compiles one tail component pattern after resolving its source variable.
-fn compile_pattern<'arena, ComponentType: Match<'arena>>(
+fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     store: &CanonicalStore<'arena>,
     rule: RuleIndex,
     pattern: &ComponentPattern<ComponentType>,

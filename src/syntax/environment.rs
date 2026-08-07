@@ -11,7 +11,7 @@ use string_interner::DefaultSymbol;
 use crate::model::{Action, Event, Principal, Resource};
 use crate::validator::{CompileError, RuleIndex};
 
-use super::component::{CandidateSubstitution, CompiledPattern, Match};
+use super::component::{CandidateSubstitution, CompiledPattern, ComponentDomain};
 use super::source::{Component, ComponentPattern};
 
 /// Matches one typed head coordinate and updates the candidate substitution.
@@ -21,7 +21,7 @@ fn match_head_pattern<'arena, 'event, ComponentType>(
     substitution: &mut CandidateSubstitution<'event>,
 ) -> bool
 where
-    ComponentType: Match<'arena> + 'event,
+    ComponentType: ComponentDomain<'arena> + 'event,
 {
     match pattern {
         ComponentPattern::Constant(expected) => ComponentType::constant_matches(expected, actual),
