@@ -5,13 +5,13 @@
 //! object is stored in source expressions or canonical syntax nodes.
 
 use std::collections::HashMap;
+use string_interner::DefaultSymbol;
 
 use crate::model::{Action, Event, Principal, Resource};
 
 use super::component::{CandidateSubstitution, ComponentDomain, InternedPattern};
 use super::source::{Component, ComponentPattern};
 use super::store::CanonicalStore;
-use super::variable::VariableSymbol;
 
 /// Matches one typed head coordinate and returns its partial substitution.
 fn match_head_pattern<'arena, ComponentType>(
@@ -78,7 +78,7 @@ pub(super) enum ResolveError {
 /// is a transient compiler input and is dropped after the tail has been compiled.
 #[derive(Default)]
 pub(crate) struct VariableEnvironment {
-    variables: HashMap<VariableSymbol, Component>,
+    variables: HashMap<DefaultSymbol, Component>,
 }
 
 impl VariableEnvironment {
@@ -88,7 +88,7 @@ impl VariableEnvironment {
     /// the compiler caller owns source names and diagnostic construction.
     pub(super) fn bind(
         &mut self,
-        variable: VariableSymbol,
+        variable: DefaultSymbol,
         component: Component,
     ) -> Result<(), Component> {
         match self.variables.get(&variable) {
@@ -104,7 +104,7 @@ impl VariableEnvironment {
     /// Verifies that a tail occurrence is declared by the head in the same component domain.
     pub(super) fn resolve(
         &self,
-        variable: VariableSymbol,
+        variable: DefaultSymbol,
         component: Component,
     ) -> Result<(), ResolveError> {
         match self.variables.get(&variable) {

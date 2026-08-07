@@ -15,7 +15,6 @@ use string_interner::{DefaultStringInterner, DefaultSymbol};
 use crate::model::{Action, Event, Principal, Resource};
 
 use super::source::{AtomPattern, Component, ComponentPattern, PatternRepresentation};
-use super::variable::VariableSymbol;
 
 /// Resolved action value using string-interner symbols for commit messages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -84,9 +83,9 @@ impl<'arena> ComponentResolver<'arena> {
 /// Every map stores the same resolved representation used by constant patterns.
 #[derive(Debug, Default)]
 pub(crate) struct CandidateSubstitution<'arena> {
-    principals: HashMap<VariableSymbol, <Principal as ComponentDomain<'arena>>::Resolved>,
-    actions: HashMap<VariableSymbol, <Action as ComponentDomain<'arena>>::Resolved>,
-    resources: HashMap<VariableSymbol, <Resource as ComponentDomain<'arena>>::Resolved>,
+    principals: HashMap<DefaultSymbol, <Principal as ComponentDomain<'arena>>::Resolved>,
+    actions: HashMap<DefaultSymbol, <Action as ComponentDomain<'arena>>::Resolved>,
+    resources: HashMap<DefaultSymbol, <Resource as ComponentDomain<'arena>>::Resolved>,
 }
 
 /// Structural application of a substitution to a pattern-like value.
@@ -103,7 +102,7 @@ pub(super) struct InternedComponentPattern<'arena, ComponentType>
 where
     ComponentType: ComponentDomain<'arena>,
 {
-    inner: ComponentPattern<ComponentType::Resolved, VariableSymbol>,
+    inner: ComponentPattern<ComponentType::Resolved, DefaultSymbol>,
     component: PhantomData<fn() -> ComponentType>,
 }
 
@@ -112,7 +111,7 @@ where
     ComponentType: ComponentDomain<'arena>,
 {
     /// Wraps the structurally stored interned pattern with its component-domain marker.
-    pub(super) fn new(inner: ComponentPattern<ComponentType::Resolved, VariableSymbol>) -> Self {
+    pub(super) fn new(inner: ComponentPattern<ComponentType::Resolved, DefaultSymbol>) -> Self {
         Self {
             inner,
             component: PhantomData,
@@ -120,7 +119,7 @@ where
     }
 
     /// Returns the structural representation stored by interned atom nodes.
-    pub(super) fn into_inner(self) -> ComponentPattern<ComponentType::Resolved, VariableSymbol> {
+    pub(super) fn into_inner(self) -> ComponentPattern<ComponentType::Resolved, DefaultSymbol> {
         self.inner
     }
 }
@@ -205,12 +204,12 @@ pub(super) trait ComponentDomain<'arena>: Sized + Eq {
     /// Returns the immutable substitution map belonging to this component.
     fn bindings<'substitution>(
         substitution: &'substitution CandidateSubstitution<'arena>,
-    ) -> &'substitution HashMap<VariableSymbol, Self::Resolved>;
+    ) -> &'substitution HashMap<DefaultSymbol, Self::Resolved>;
 
     /// Returns the mutable substitution map belonging to this component.
     fn bindings_mut<'substitution>(
         substitution: &'substitution mut CandidateSubstitution<'arena>,
-    ) -> &'substitution mut HashMap<VariableSymbol, Self::Resolved>;
+    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Resolved>;
 }
 
 impl<'arena> ComponentDomain<'arena> for Principal {
@@ -231,13 +230,13 @@ impl<'arena> ComponentDomain<'arena> for Principal {
 
     fn bindings<'substitution>(
         substitution: &'substitution CandidateSubstitution<'arena>,
-    ) -> &'substitution HashMap<VariableSymbol, Self::Resolved> {
+    ) -> &'substitution HashMap<DefaultSymbol, Self::Resolved> {
         &substitution.principals
     }
 
     fn bindings_mut<'substitution>(
         substitution: &'substitution mut CandidateSubstitution<'arena>,
-    ) -> &'substitution mut HashMap<VariableSymbol, Self::Resolved> {
+    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Resolved> {
         &mut substitution.principals
     }
 }
@@ -287,13 +286,13 @@ impl<'arena> ComponentDomain<'arena> for Action {
 
     fn bindings<'substitution>(
         substitution: &'substitution CandidateSubstitution<'arena>,
-    ) -> &'substitution HashMap<VariableSymbol, Self::Resolved> {
+    ) -> &'substitution HashMap<DefaultSymbol, Self::Resolved> {
         &substitution.actions
     }
 
     fn bindings_mut<'substitution>(
         substitution: &'substitution mut CandidateSubstitution<'arena>,
-    ) -> &'substitution mut HashMap<VariableSymbol, Self::Resolved> {
+    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Resolved> {
         &mut substitution.actions
     }
 }
@@ -321,13 +320,13 @@ impl<'arena> ComponentDomain<'arena> for Resource {
 
     fn bindings<'substitution>(
         substitution: &'substitution CandidateSubstitution<'arena>,
-    ) -> &'substitution HashMap<VariableSymbol, Self::Resolved> {
+    ) -> &'substitution HashMap<DefaultSymbol, Self::Resolved> {
         &substitution.resources
     }
 
     fn bindings_mut<'substitution>(
         substitution: &'substitution mut CandidateSubstitution<'arena>,
-    ) -> &'substitution mut HashMap<VariableSymbol, Self::Resolved> {
+    ) -> &'substitution mut HashMap<DefaultSymbol, Self::Resolved> {
         &mut substitution.resources
     }
 }
@@ -340,7 +339,7 @@ impl<'arena> PatternRepresentation for InternedRepresentation<'arena> {
     type PrincipalValue = <Principal as ComponentDomain<'arena>>::Resolved;
     type ActionValue = <Action as ComponentDomain<'arena>>::Resolved;
     type ResourceValue = <Resource as ComponentDomain<'arena>>::Resolved;
-    type Variable = VariableSymbol;
+    type Variable = DefaultSymbol;
 }
 
 /// Interned pattern for one statically selected component domain.
@@ -411,8 +410,8 @@ impl<'arena> Subst<CandidateSubstitution<'arena>> for InternedAtomPattern<'arena
 mod tests {
     use super::*;
 
-    fn variable(resolver: &mut ComponentResolver<'_>, name: &str) -> VariableSymbol {
-        VariableSymbol::new(resolver.intern_string(name))
+    fn variable(resolver: &mut ComponentResolver<'_>, name: &str) -> DefaultSymbol {
+        resolver.intern_string(name)
     }
 
     #[test]

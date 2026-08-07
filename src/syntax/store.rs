@@ -7,10 +7,10 @@
 
 use bumpalo::Bump;
 use hashconsing::BHConsign;
+use string_interner::DefaultSymbol;
 
 use super::component::ComponentResolver;
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
-use super::variable::VariableSymbol;
 
 /// Shared resolver and canonical-node store used by all rules in one validator.
 pub(crate) struct CanonicalStore<'arena> {
@@ -58,9 +58,9 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
-    /// Interns a variable spelling and wraps its black-box string symbol in a domain newtype.
-    pub(super) fn intern_variable(&mut self, name: &str) -> VariableSymbol {
-        VariableSymbol::new(self.resolver.intern_string(name))
+    /// Interns a variable spelling through the black-box string interner.
+    pub(super) fn intern_variable(&mut self, name: &str) -> DefaultSymbol {
+        self.resolver.intern_string(name)
     }
 
     /// Number of canonical regex nodes, used to assert that derivative cycles stabilize.

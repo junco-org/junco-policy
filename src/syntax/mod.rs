@@ -13,7 +13,6 @@ mod node;
 mod normalize;
 mod source;
 mod store;
-mod variable;
 
 pub use source::{
     AtomPattern, Comparison, Component, ComponentPattern, Head, PatternRepresentation, RegexExpr,
