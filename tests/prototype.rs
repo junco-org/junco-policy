@@ -1,6 +1,6 @@
 use rust_validator::{
     Action, AtomPattern, Bump, Comparison, CompileError, ComponentPattern, Decision, Event, Head,
-    Request, RuleMode, Validator,
+    RegexExpr, Request, Rule, RuleMode, TestExpr, Validator,
 };
 
 fn event(principal: &str, action: Action, path: &[&str]) -> Event {
@@ -11,42 +11,37 @@ fn request<M>(principal: &str, action: Action, path: &[&str], metadata: M) -> Re
     Request::new(event(principal, action, path), metadata)
 }
 
-fn add_same_actor_edit_before_stage(validator: &mut rust_validator::ValidatorBuilder<'_>) {
-    validator
-        .add_rule(
-            RuleMode::Require,
-            Head::new(
-                ComponentPattern::variable("actor"),
-                ComponentPattern::constant(Action::Stage),
-                ComponentPattern::variable("target"),
-            ),
-            |syntax| {
-                let principal = syntax.atom(
-                    Comparison::Eq,
-                    AtomPattern::Principal(ComponentPattern::variable("actor")),
-                )?;
-                let action = syntax.atom(
-                    Comparison::Eq,
-                    AtomPattern::Action(ComponentPattern::constant(Action::Edit)),
-                )?;
-                let resource = syntax.atom(
-                    Comparison::Eq,
-                    AtomPattern::Resource(ComponentPattern::variable("target")),
-                )?;
-                let predicate = syntax.and([principal, action, resource]);
-                let event = syntax.test(predicate);
-                let all = syntax.all();
-                Ok(syntax.concat([all, event]))
-            },
-        )
-        .unwrap();
+fn same_actor_edit_before_stage() -> Rule {
+    let principal = TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Principal(ComponentPattern::variable("actor")),
+    );
+    let action = TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Action(ComponentPattern::constant(Action::Edit)),
+    );
+    let resource = TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Resource(ComponentPattern::variable("target")),
+    );
+    let event = RegexExpr::test(TestExpr::and([principal, action, resource]));
+    let tail = RegexExpr::concat([RegexExpr::all(), event]);
+    Rule::new(
+        RuleMode::Require,
+        Head::new(
+            ComponentPattern::variable("actor"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::variable("target"),
+        ),
+        tail,
+    )
 }
 
 #[test]
 fn require_rule_uses_only_committed_pre_candidate_history() {
     let arena = Bump::new();
     let mut builder = Validator::builder(&arena);
-    add_same_actor_edit_before_stage(&mut builder);
+    builder.add_rule(same_actor_edit_before_stage()).unwrap();
     let mut validator = builder.finish();
 
     let denied = validator.check(request("alice", Action::Stage, &["src", "a.rs"], 1));
@@ -63,33 +58,29 @@ fn require_rule_uses_only_committed_pre_candidate_history() {
 
 #[test]
 fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
+    let action = TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Action(ComponentPattern::constant(Action::commit("ship"))),
+    );
+    let resource = TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Resource(ComponentPattern::variable("target")),
+    );
+    let matching_commit = RegexExpr::test(TestExpr::and([action, resource]));
+    let tail = RegexExpr::concat([RegexExpr::all(), matching_commit, RegexExpr::all()]);
+    let rule = Rule::new(
+        RuleMode::Forbid,
+        Head::new(
+            ComponentPattern::variable("actor"),
+            ComponentPattern::constant(Action::commit("ship")),
+            ComponentPattern::variable("target"),
+        ),
+        tail,
+    );
+
     let arena = Bump::new();
     let mut builder = Validator::builder(&arena);
-    builder
-        .add_rule(
-            RuleMode::Forbid,
-            Head::new(
-                ComponentPattern::variable("actor"),
-                ComponentPattern::constant(Action::commit("ship")),
-                ComponentPattern::variable("target"),
-            ),
-            |syntax| {
-                let action = syntax.atom(
-                    Comparison::Eq,
-                    AtomPattern::Action(ComponentPattern::constant(Action::commit("ship"))),
-                )?;
-                let resource = syntax.atom(
-                    Comparison::Eq,
-                    AtomPattern::Resource(ComponentPattern::variable("target")),
-                )?;
-                let matching_commit = syntax.and([action, resource]);
-                let matching_commit = syntax.test(matching_commit);
-                let prefix = syntax.all();
-                let suffix = syntax.all();
-                Ok(syntax.concat([prefix, matching_commit, suffix]))
-            },
-        )
-        .unwrap();
+    builder.add_rule(rule).unwrap();
     let mut validator = builder.finish();
 
     assert!(
@@ -112,29 +103,24 @@ fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
 
 #[test]
 fn complement_is_exact_over_complete_history() {
+    let edit = RegexExpr::test(TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Action(ComponentPattern::constant(Action::Edit)),
+    ));
+    let contains_edit = RegexExpr::concat([RegexExpr::all(), edit, RegexExpr::all()]);
+    let rule = Rule::new(
+        RuleMode::Require,
+        Head::new(
+            ComponentPattern::variable("actor"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::variable("target"),
+        ),
+        RegexExpr::complement(contains_edit),
+    );
+
     let arena = Bump::new();
     let mut builder = Validator::builder(&arena);
-    builder
-        .add_rule(
-            RuleMode::Require,
-            Head::new(
-                ComponentPattern::variable("actor"),
-                ComponentPattern::constant(Action::Stage),
-                ComponentPattern::variable("target"),
-            ),
-            |syntax| {
-                let edit = syntax.atom(
-                    Comparison::Eq,
-                    AtomPattern::Action(ComponentPattern::constant(Action::Edit)),
-                )?;
-                let edit = syntax.test(edit);
-                let prefix = syntax.all();
-                let suffix = syntax.all();
-                let contains_edit = syntax.concat([prefix, edit, suffix]);
-                Ok(syntax.not(contains_edit))
-            },
-        )
-        .unwrap();
+    builder.add_rule(rule).unwrap();
     let mut validator = builder.finish();
 
     assert!(
@@ -157,36 +143,33 @@ fn complement_is_exact_over_complete_history() {
 fn construction_rejects_unbound_and_cross_component_variables() {
     let arena = Bump::new();
     let mut builder = Validator::builder(&arena);
-    let missing = builder.add_rule(
+    let missing = builder.add_rule(Rule::new(
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("actor"),
             ComponentPattern::constant(Action::Stage),
             ComponentPattern::variable("target"),
         ),
-        |syntax| {
-            let test = syntax.atom(
-                Comparison::Eq,
-                AtomPattern::Principal(ComponentPattern::variable("missing")),
-            )?;
-            Ok(syntax.test(test))
-        },
-    );
+        RegexExpr::test(TestExpr::atom(
+            Comparison::Eq,
+            AtomPattern::Principal(ComponentPattern::variable("missing")),
+        )),
+    ));
     assert!(matches!(
         missing,
         Err(CompileError::UnboundVariable { rule, .. }) if rule.get() == 1
     ));
 
     let mut builder = Validator::builder(&arena);
-    let conflict = builder.add_rule(
+    let conflict = builder.add_rule(Rule::new(
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("same"),
             ComponentPattern::variable("same"),
             ComponentPattern::constant(["a"]),
         ),
-        |syntax| Ok(syntax.all()),
-    );
+        RegexExpr::all(),
+    ));
     assert!(matches!(
         conflict,
         Err(CompileError::VariableComponentConflict { rule, .. }) if rule.get() == 1
@@ -194,43 +177,36 @@ fn construction_rejects_unbound_and_cross_component_variables() {
 }
 
 #[test]
-fn hashconsed_handles_cannot_cross_rule_scopes() {
+fn source_expressions_are_revalidated_and_reusable_across_rules() {
+    let shared_tail = RegexExpr::test(TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Principal(ComponentPattern::variable("actor")),
+    ));
+
     let arena = Bump::new();
     let mut builder = Validator::builder(&arena);
-    let mut leaked = None;
     builder
-        .add_rule(
+        .add_rule(Rule::new(
             RuleMode::Require,
             Head::new(
                 ComponentPattern::variable("actor"),
-                ComponentPattern::constant(Action::Stage),
+                ComponentPattern::constant(Action::Read),
                 ComponentPattern::constant(["a"]),
             ),
-            |syntax| {
-                let actor = syntax.atom(
-                    Comparison::Eq,
-                    AtomPattern::Principal(ComponentPattern::variable("actor")),
-                )?;
-                let actor = syntax.test(actor);
-                leaked = Some(actor);
-                Ok(actor)
-            },
-        )
+            shared_tail.clone(),
+        ))
         .unwrap();
-
-    let result = builder.add_rule(
-        RuleMode::Require,
-        Head::new(
-            ComponentPattern::constant("bob"),
-            ComponentPattern::constant(Action::Stage),
-            ComponentPattern::constant(["b"]),
-        ),
-        |_| Ok(leaked.unwrap()),
-    );
-    assert!(matches!(
-        result,
-        Err(CompileError::ForeignRuleHandle { rule }) if rule.get() == 2
-    ));
+    builder
+        .add_rule(Rule::new(
+            RuleMode::Require,
+            Head::new(
+                ComponentPattern::variable("actor"),
+                ComponentPattern::constant(Action::Diff),
+                ComponentPattern::constant(["b"]),
+            ),
+            shared_tail,
+        ))
+        .unwrap();
 }
 
 #[test]
@@ -243,6 +219,7 @@ fn checkpoint_restores_append_only_history() {
             .is_grant()
     );
     let checkpoint = validator.checkpoint();
+    assert_eq!(checkpoint.history_len(), 1);
     assert!(
         validator
             .check(request("bob", Action::Diff, &["b"], ()))
@@ -256,14 +233,4 @@ fn checkpoint_restores_append_only_history() {
 fn rule_indexes_are_nonzero_and_one_based() {
     assert!(rust_validator::RuleIndex::new(0).is_none());
     assert_eq!(rust_validator::RuleIndex::new(1).unwrap().get(), 1);
-}
-
-#[test]
-#[should_panic(expected = "checkpoint belongs to another validator")]
-fn checkpoints_cannot_cross_validator_contexts() {
-    let arena = Bump::new();
-    let first = Validator::builder(&arena).finish();
-    let checkpoint = first.checkpoint();
-    let mut second = Validator::builder(&arena).finish();
-    second.rollback(checkpoint);
 }

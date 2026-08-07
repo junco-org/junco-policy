@@ -1,9 +1,8 @@
-//! Rule-local variable scope, candidate bindings, and compiled-head evaluation.
+//! Compile-time variable typing and per-candidate runtime substitution.
 //!
-//! Names are interned globally by `SyntaxContext`, but a `Scope` records the component domain in
-//! which each name is valid for one rule. At runtime a successful head match produces `Bindings`
-//! that borrow the candidate event. Tail evaluation can read those references without allocating
-//! or copying event components.
+//! A [`VariableEnvironment`] is created from one source head and exists only while that rule is
+//! compiled. A [`CandidateSubstitution`] is created when the resulting compiled head matches one
+//! candidate. Neither object is stored in source expressions or canonical syntax nodes.
 
 use std::collections::HashMap;
 
@@ -13,15 +12,15 @@ use crate::model::{Action, Event, Principal, Resource};
 use crate::validator::{CompileError, RuleIndex};
 
 use super::component::{BoundValue, CompiledPattern, Match};
-use super::pattern::{Component, ComponentPattern};
+use super::source::{Component, ComponentPattern};
 
-/// Candidate values bound to the variables of one matching rule head.
+/// Concrete candidate values assigned to head variables during one rule evaluation.
 #[derive(Debug, Default)]
-pub(crate) struct Bindings<'event> {
+pub(crate) struct CandidateSubstitution<'event> {
     values: HashMap<DefaultSymbol, BoundValue<'event>>,
 }
 
-impl<'event> Bindings<'event> {
+impl<'event> CandidateSubstitution<'event> {
     /// Binds an unbound name, or checks that a repeated occurrence denotes the same typed value.
     fn bind(&mut self, symbol: DefaultSymbol, value: BoundValue<'event>) -> bool {
         match self.values.get(&symbol).copied() {
@@ -43,22 +42,20 @@ impl<'event> Bindings<'event> {
 }
 
 /// Matches one typed head coordinate and updates the candidate substitution.
-///
-/// The associated `Compiled` type, constant comparison, and binding conversion all come from
-/// `Match`; the helper no longer needs separate constant/actual generic parameters, an erased value
-/// argument, or a comparison closure.
 fn match_head_pattern<'arena, 'event, ComponentType: Match<'arena>>(
     pattern: CompiledPattern<'arena, ComponentType>,
     actual: &'event ComponentType,
-    bindings: &mut Bindings<'event>,
+    substitution: &mut CandidateSubstitution<'event>,
 ) -> bool {
     match pattern {
         ComponentPattern::Constant(expected) => ComponentType::constant_matches(expected, actual),
-        ComponentPattern::Variable(symbol) => bindings.bind(symbol, ComponentType::bound(actual)),
+        ComponentPattern::Variable(symbol) => {
+            substitution.bind(symbol, ComponentType::bound(actual))
+        }
     }
 }
 
-/// Arena-backed head patterns for the fixed `(principal, action, resource)` product.
+/// Arena-backed head patterns stored in one compiled rule.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CompiledHead<'arena> {
     pub(super) principal: CompiledPattern<'arena, Principal>,
@@ -67,27 +64,32 @@ pub(crate) struct CompiledHead<'arena> {
 }
 
 impl<'arena> CompiledHead<'arena> {
-    /// Matches the candidate only; the returned substitution is then used over pre-candidate
-    /// committed history. Failure does not allocate or mutate policy state.
-    pub(crate) fn matches<'event>(&self, event: &'event Event) -> Option<Bindings<'event>> {
-        let mut bindings = Bindings::default();
-        if !match_head_pattern(self.principal, &event.principal, &mut bindings)
-            || !match_head_pattern(self.action, &event.action, &mut bindings)
-            || !match_head_pattern(self.resource, &event.resource, &mut bindings)
+    /// Matches the candidate and returns its rule-local substitution.
+    pub(crate) fn match_candidate<'event>(
+        &self,
+        event: &'event Event,
+    ) -> Option<CandidateSubstitution<'event>> {
+        let mut substitution = CandidateSubstitution::default();
+        if !match_head_pattern(self.principal, &event.principal, &mut substitution)
+            || !match_head_pattern(self.action, &event.action, &mut substitution)
+            || !match_head_pattern(self.resource, &event.resource, &mut substitution)
         {
             return None;
         }
-        Some(bindings)
+        Some(substitution)
     }
 }
 
-/// Component-domain declarations for variables bound by one source head.
+/// Rule-local type environment declared by a source head.
+///
+/// The map records which interned names exist and the product component occupied by each name. It
+/// is a transient compiler input and is dropped after the tail has been compiled.
 #[derive(Default)]
-pub(super) struct Scope {
+pub(crate) struct VariableEnvironment {
     variables: HashMap<DefaultSymbol, Component>,
 }
 
-impl Scope {
+impl VariableEnvironment {
     /// Records one head occurrence and rejects reuse in another component domain.
     pub(super) fn bind(
         &mut self,
@@ -109,7 +111,7 @@ impl Scope {
         Ok(())
     }
 
-    /// Verifies that a tail occurrence is bound by the head in the same component domain.
+    /// Verifies that a tail occurrence is declared by the head in the same component domain.
     pub(super) fn resolve(
         &self,
         rule: RuleIndex,

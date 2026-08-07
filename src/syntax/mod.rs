@@ -1,29 +1,26 @@
-//! Compilation and execution of the capability-product past-regex language.
+//! Source language, rule compilation, canonical storage, and runtime evaluation.
 //!
-//! Source patterns are typed by product component. Rule construction compiles owned constants
-//! into arena-backed values, interns variable names, checks variable scope, and normalizes tests
-//! and regexes into hashconsed DAGs. Runtime evaluation binds a candidate head and folds exact
-//! Brzozowski derivatives over the committed pre-candidate history.
+//! Owned source expressions are independent of arenas and validators. Compiler functions receive a
+//! canonical store and transient variable environment explicitly, producing immutable canonical
+//! rule nodes. Runtime evaluation receives the store and candidate substitution explicitly. No
+//! expression or node points back to its compiler, rule, store, or validator.
 
-mod builder;
 mod compile;
 mod component;
-mod derive;
-mod identity;
+mod environment;
+mod evaluate;
 mod node;
 mod normalize;
-mod pattern;
-mod scope;
-mod storage;
+mod source;
+mod store;
 
-pub use builder::RuleSyntax;
-pub use node::{Regex, Test};
-pub use pattern::{AtomPattern, Comparison, Component, ComponentPattern, Head, RuleMode};
+pub use source::{
+    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
+};
 
-pub(crate) use identity::ContextId;
-pub(crate) use node::RegexId;
-pub(crate) use scope::CompiledHead;
-pub(crate) use storage::SyntaxContext;
+pub(crate) use compile::{CompiledRule, compile_rule};
+pub(crate) use evaluate::accepts;
+pub(crate) use store::CanonicalStore;
 
 #[cfg(test)]
 mod tests;

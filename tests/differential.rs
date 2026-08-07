@@ -1,6 +1,6 @@
 use rust_validator::{
-    Action, AtomPattern, Bump, Comparison, ComponentPattern, Event, Head, Regex, Request, RuleMode,
-    RuleSyntax, Test, Validator,
+    Action, AtomPattern, Bump, Comparison, ComponentPattern, Event, Head, RegexExpr, Request, Rule,
+    RuleMode, TestExpr, Validator,
 };
 
 #[derive(Clone, Debug)]
@@ -69,76 +69,31 @@ fn accepts_concat(factors: &[RefRegex], history: &[Event]) -> bool {
     }
 }
 
-fn compile_test<'a>(
-    source: &RefTest,
-    syntax: &mut RuleSyntax<'_, 'a>,
-) -> Result<Test<'a>, rust_validator::CompileError> {
-    Ok(match source {
-        RefTest::True => syntax.true_test(),
-        RefTest::False => syntax.false_test(),
-        RefTest::Action(comparison, action) => syntax.atom(
+fn source_test(source: &RefTest) -> TestExpr {
+    match source {
+        RefTest::True => TestExpr::true_test(),
+        RefTest::False => TestExpr::false_test(),
+        RefTest::Action(comparison, action) => TestExpr::atom(
             *comparison,
             AtomPattern::Action(ComponentPattern::constant(action.clone())),
-        )?,
-        RefTest::And(children) => {
-            let children = children
-                .iter()
-                .map(|child| compile_test(child, syntax))
-                .collect::<Result<Vec<_>, _>>()?;
-            syntax.and(children)
-        }
-        RefTest::Or(children) => {
-            let children = children
-                .iter()
-                .map(|child| compile_test(child, syntax))
-                .collect::<Result<Vec<_>, _>>()?;
-            syntax.or(children)
-        }
-    })
+        ),
+        RefTest::And(children) => TestExpr::and(children.iter().map(source_test)),
+        RefTest::Or(children) => TestExpr::or(children.iter().map(source_test)),
+    }
 }
 
-fn compile_regex<'a>(
-    source: &RefRegex,
-    syntax: &mut RuleSyntax<'_, 'a>,
-) -> Result<Regex<'a>, rust_validator::CompileError> {
-    Ok(match source {
-        RefRegex::Empty => syntax.empty(),
-        RefRegex::All => syntax.all(),
-        RefRegex::Epsilon => syntax.epsilon(),
-        RefRegex::Test(test) => {
-            let test = compile_test(test, syntax)?;
-            syntax.test(test)
-        }
-        RefRegex::Union(children) => {
-            let children = children
-                .iter()
-                .map(|child| compile_regex(child, syntax))
-                .collect::<Result<Vec<_>, _>>()?;
-            syntax.union(children)
-        }
-        RefRegex::Concat(children) => {
-            let children = children
-                .iter()
-                .map(|child| compile_regex(child, syntax))
-                .collect::<Result<Vec<_>, _>>()?;
-            syntax.concat(children)
-        }
-        RefRegex::Star(inner) => {
-            let inner = compile_regex(inner, syntax)?;
-            syntax.star(inner)
-        }
-        RefRegex::Intersect(children) => {
-            let children = children
-                .iter()
-                .map(|child| compile_regex(child, syntax))
-                .collect::<Result<Vec<_>, _>>()?;
-            syntax.intersect(children)
-        }
-        RefRegex::Not(inner) => {
-            let inner = compile_regex(inner, syntax)?;
-            syntax.not(inner)
-        }
-    })
+fn source_regex(source: &RefRegex) -> RegexExpr {
+    match source {
+        RefRegex::Empty => RegexExpr::empty(),
+        RefRegex::All => RegexExpr::all(),
+        RefRegex::Epsilon => RegexExpr::epsilon(),
+        RefRegex::Test(test) => RegexExpr::test(source_test(test)),
+        RefRegex::Union(children) => RegexExpr::union(children.iter().map(source_regex)),
+        RefRegex::Concat(children) => RegexExpr::concat(children.iter().map(source_regex)),
+        RefRegex::Star(inner) => RegexExpr::star(source_regex(inner)),
+        RefRegex::Intersect(children) => RegexExpr::intersect(children.iter().map(source_regex)),
+        RefRegex::Not(inner) => RegexExpr::complement(source_regex(inner)),
+    }
 }
 
 struct Generator(u64);
@@ -208,15 +163,15 @@ fn implementation_accepts(regex: &RefRegex, history: &[Event]) -> bool {
     let probe = Event::new("probe", Action::History, ["probe"]);
     let mut builder = Validator::builder(&arena);
     builder
-        .add_rule(
+        .add_rule(Rule::new(
             RuleMode::Require,
             Head::new(
                 ComponentPattern::constant("probe"),
                 ComponentPattern::constant(Action::History),
                 ComponentPattern::constant(["probe"]),
             ),
-            |syntax| compile_regex(regex, syntax),
-        )
+            source_regex(regex),
+        ))
         .unwrap();
     let mut validator = builder.finish();
     for event in history {

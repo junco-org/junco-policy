@@ -6,7 +6,7 @@
 //! the set of derivative states finite for the supported similarity quotient.
 
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
-use super::storage::SyntaxContext;
+use super::store::CanonicalStore;
 
 /// Returns whether a test set contains both an atom and its disequality complement.
 fn has_complementary_tests(tests: &[TestId<'_>]) -> bool {
@@ -49,7 +49,7 @@ fn complementary_regex<'arena>(left: RegexId<'arena>, right: RegexId<'arena>) ->
         || matches!(right.get().kind, RegexKind::Not(inner) if inner == left)
 }
 
-impl<'arena> SyntaxContext<'arena> {
+impl<'arena> CanonicalStore<'arena> {
     /// Constructs canonical conjunction over one-event tests.
     pub(super) fn test_and(&mut self, children: Vec<TestId<'arena>>) -> TestId<'arena> {
         let mut flat = Vec::with_capacity(children.len());
@@ -73,8 +73,8 @@ impl<'arena> SyntaxContext<'arena> {
             [] => self.test_true,
             [only] => *only,
             _ => {
-                let values = self.test_consign.arena().alloc_slice_copy(&flat);
-                self.test_consign.mk(TestNode::And(values))
+                let values = self.tests.arena().alloc_slice_copy(&flat);
+                self.tests.mk(TestNode::And(values))
             }
         }
     }
@@ -100,15 +100,15 @@ impl<'arena> SyntaxContext<'arena> {
             [] => self.test_false,
             [only] => *only,
             _ => {
-                let values = self.test_consign.arena().alloc_slice_copy(&flat);
-                self.test_consign.mk(TestNode::Or(values))
+                let values = self.tests.arena().alloc_slice_copy(&flat);
+                self.tests.mk(TestNode::Or(values))
             }
         }
     }
 
     /// Interns one normalized regex kind with its deterministic nullability cache.
     fn intern_regex(&mut self, kind: RegexKind<'arena>, nullable: bool) -> RegexId<'arena> {
-        let (id, is_new) = self.regex_consign.mk_is_new(RegexNode::new(kind, nullable));
+        let (id, is_new) = self.regexes.mk_is_new(RegexNode::new(kind, nullable));
         if !is_new {
             assert_eq!(
                 id.get().nullable(),
@@ -150,7 +150,7 @@ impl<'arena> SyntaxContext<'arena> {
             [only] => *only,
             _ => {
                 let nullable = flat.iter().any(|child| self.nullable(*child));
-                let values = self.regex_consign.arena().alloc_slice_copy(&flat);
+                let values = self.regexes.arena().alloc_slice_copy(&flat);
                 self.intern_regex(RegexKind::Union(values), nullable)
             }
         }
@@ -178,7 +178,7 @@ impl<'arena> SyntaxContext<'arena> {
             [only] => *only,
             _ => {
                 let nullable = flat.iter().all(|child| self.nullable(*child));
-                let values = self.regex_consign.arena().alloc_slice_copy(&flat);
+                let values = self.regexes.arena().alloc_slice_copy(&flat);
                 self.intern_regex(RegexKind::Intersect(values), nullable)
             }
         }
@@ -201,7 +201,7 @@ impl<'arena> SyntaxContext<'arena> {
             [only] => *only,
             _ => {
                 let nullable = flat.iter().all(|child| self.nullable(*child));
-                let values = self.regex_consign.arena().alloc_slice_copy(&flat);
+                let values = self.regexes.arena().alloc_slice_copy(&flat);
                 self.intern_regex(RegexKind::Concat(values), nullable)
             }
         }

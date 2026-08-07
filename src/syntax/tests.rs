@@ -1,12 +1,13 @@
-//! White-box tests for canonicalization, name interning, and derivative-state reuse.
+//! White-box tests for source compilation, canonical reuse, and residual-state stability.
 
 use bumpalo::Bump;
 
-use super::builder::RuleSyntax;
-use super::node::Regex;
-use super::pattern::{AtomPattern, Comparison, ComponentPattern, Head};
-use super::scope::CompiledHead;
-use super::storage::SyntaxContext;
+use super::compile::compile_rule;
+use super::evaluate::derive;
+use super::source::{
+    AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
+};
+use super::store::CanonicalStore;
 use crate::model::{Action, Event};
 use crate::validator::RuleIndex;
 
@@ -18,106 +19,98 @@ fn variable_head() -> Head {
     )
 }
 
-fn new_rule<'context, 'arena>(
-    syntax: &'context mut SyntaxContext<'arena>,
-    one_based: usize,
-) -> (CompiledHead<'arena>, RuleSyntax<'context, 'arena>) {
-    let rule = RuleIndex::new(one_based).expect("test rule indexes are non-zero");
-    let scope = syntax.new_rule_scope();
-    RuleSyntax::new(syntax, rule, scope, &variable_head()).unwrap()
+fn rule(tail: RegexExpr) -> Rule {
+    Rule::new(RuleMode::Require, variable_head(), tail)
 }
 
-fn action_regex<'arena>(syntax: &mut RuleSyntax<'_, 'arena>, action: Action) -> Regex<'arena> {
-    let test = syntax
-        .atom(
-            Comparison::Eq,
-            AtomPattern::Action(ComponentPattern::constant(action)),
-        )
-        .unwrap();
-    syntax.test(test)
+fn action_regex(action: Action) -> RegexExpr {
+    RegexExpr::test(TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Action(ComponentPattern::constant(action)),
+    ))
+}
+
+fn index(one_based: usize) -> RuleIndex {
+    RuleIndex::new(one_based).expect("test rule indexes are non-zero")
 }
 
 #[test]
 fn aci_and_identity_normalization_reuse_handles() {
     let arena = Bump::new();
-    let mut syntax = SyntaxContext::new(&arena);
+    let mut store = CanonicalStore::new(&arena);
 
-    let (_, mut first) = new_rule(&mut syntax, 1);
-    let read = action_regex(&mut first, Action::Read);
-    let edit = action_regex(&mut first, Action::Edit);
-    let empty = first.empty();
-    let left = first.union([read, empty, edit, read]);
-    let left = first.regex_id(left);
-    drop(first);
+    let left = RegexExpr::union([
+        action_regex(Action::Read),
+        RegexExpr::empty(),
+        action_regex(Action::Edit),
+        action_regex(Action::Read),
+    ]);
+    let left = compile_rule(&mut store, index(1), &rule(left))
+        .unwrap()
+        .tail;
 
-    let (_, mut second) = new_rule(&mut syntax, 2);
-    let edit = action_regex(&mut second, Action::Edit);
-    let read = action_regex(&mut second, Action::Read);
-    let right = second.union([edit, read]);
-    let right = second.regex_id(right);
+    let right = RegexExpr::union([action_regex(Action::Edit), action_regex(Action::Read)]);
+    let right = compile_rule(&mut store, index(2), &rule(right))
+        .unwrap()
+        .tail;
     assert_eq!(left, right);
-    drop(second);
 
-    let (_, mut third) = new_rule(&mut syntax, 3);
-    let epsilon = third.epsilon();
-    let read = action_regex(&mut third, Action::Read);
-    let concat = third.concat([epsilon, read, epsilon]);
-    let concat = third.regex_id(concat);
-    drop(third);
-
-    let (_, mut fourth) = new_rule(&mut syntax, 4);
-    let single = action_regex(&mut fourth, Action::Read);
-    let single = fourth.regex_id(single);
+    let concat = RegexExpr::concat([
+        RegexExpr::epsilon(),
+        action_regex(Action::Read),
+        RegexExpr::epsilon(),
+    ]);
+    let concat = compile_rule(&mut store, index(3), &rule(concat))
+        .unwrap()
+        .tail;
+    let single = compile_rule(&mut store, index(4), &rule(action_regex(Action::Read)))
+        .unwrap()
+        .tail;
     assert_eq!(concat, single);
-    drop(fourth);
 
-    let (_, mut fifth) = new_rule(&mut syntax, 5);
-    let edit = action_regex(&mut fifth, Action::Edit);
-    let not_edit = fifth.not(edit);
-    let contradiction = fifth.intersect([edit, not_edit]);
-    let contradiction = fifth.regex_id(contradiction);
-    assert_eq!(contradiction, syntax.empty);
+    let edit = action_regex(Action::Edit);
+    let contradiction = RegexExpr::intersect([edit.clone(), RegexExpr::complement(edit)]);
+    let contradiction = compile_rule(&mut store, index(5), &rule(contradiction))
+        .unwrap()
+        .tail;
+    assert_eq!(contradiction, store.empty);
 }
 
 #[test]
 fn variable_names_share_interned_symbols_across_rules() {
     let arena = Bump::new();
-    let mut syntax = SyntaxContext::new(&arena);
-    let (first, first_syntax) = new_rule(&mut syntax, 1);
-    drop(first_syntax);
-    let (second, second_syntax) = new_rule(&mut syntax, 2);
-    drop(second_syntax);
+    let mut store = CanonicalStore::new(&arena);
+    let first = compile_rule(&mut store, index(1), &rule(RegexExpr::all())).unwrap();
+    let second = compile_rule(&mut store, index(2), &rule(RegexExpr::all())).unwrap();
 
-    let ComponentPattern::Variable(first_symbol) = first.principal else {
+    let ComponentPattern::Variable(first_symbol) = first.head.principal else {
         panic!("principal head pattern was not compiled as a variable")
     };
-    let ComponentPattern::Variable(second_symbol) = second.principal else {
+    let ComponentPattern::Variable(second_symbol) = second.head.principal else {
         panic!("principal head pattern was not compiled as a variable")
     };
     assert_eq!(first_symbol, second_symbol);
-    assert_eq!(syntax.variables.resolve(first_symbol), Some("principal"));
-    assert_eq!(syntax.variables.len(), 3);
+    assert_eq!(store.variables.resolve(first_symbol), Some("principal"));
+    assert_eq!(store.variables.len(), 3);
 }
 
 #[test]
 fn derivative_cycle_returns_the_same_hashconsed_state() {
     let arena = Bump::new();
-    let mut syntax = SyntaxContext::new(&arena);
-    let (head, mut rule) = new_rule(&mut syntax, 1);
-    let read = action_regex(&mut rule, Action::Read);
-    let edit = action_regex(&mut rule, Action::Edit);
-    let alternatives = rule.union([read, edit]);
-    let initial = rule.star(alternatives);
-    let initial = rule.regex_id(initial);
-    drop(rule);
+    let mut store = CanonicalStore::new(&arena);
+    let cycle = RegexExpr::star(RegexExpr::union([
+        action_regex(Action::Read),
+        action_regex(Action::Edit),
+    ]));
+    let compiled = compile_rule(&mut store, index(1), &rule(cycle)).unwrap();
 
     let event = Event::new("alice", Action::Read, ["a"]);
-    let bindings = head.matches(&event).unwrap();
-    let before = syntax.regex_node_count();
-    let mut state = initial;
+    let substitution = compiled.head.match_candidate(&event).unwrap();
+    let before = store.regex_node_count();
+    let mut state = compiled.tail;
     for _ in 0..100 {
-        state = syntax.derive(state, &event, &bindings);
-        assert_eq!(state, initial);
+        state = derive(&mut store, state, &event, &substitution);
+        assert_eq!(state, compiled.tail);
     }
-    assert_eq!(syntax.regex_node_count(), before);
+    assert_eq!(store.regex_node_count(), before);
 }

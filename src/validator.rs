@@ -1,9 +1,8 @@
 //! Policy compilation, stateful authorization, and rollback.
 //!
-//! A `ValidatorBuilder` compiles rules into one shared syntax context. A finished [`Validator`]
-//! owns a single append-only committed history. Each check binds a candidate against rule heads,
-//! evaluates matching tails over the pre-candidate history, and appends exactly once only when no
-//! rule is violated.
+//! Source rules are complete owned values. `ValidatorBuilder` compiles each rule by explicitly
+//! passing the canonical store and a temporary variable environment to compiler functions. The
+//! executable validator retains only canonical compiled rules and committed history.
 
 use std::fmt;
 
@@ -11,14 +10,9 @@ use bumpalo::Bump;
 use thiserror::Error;
 
 use crate::model::{Event, Grant, Request};
-use crate::syntax::{
-    CompiledHead, ContextId, Head, Regex, RegexId, RuleMode, RuleSyntax, SyntaxContext,
-};
+use crate::syntax::{CanonicalStore, CompiledRule, Rule, RuleMode, accepts, compile_rule};
 
 /// One-based source position of a policy rule.
-///
-/// This newtype prevents a rule ordinal from being confused with a history position or another
-/// table index. Internally it is `usize`, matching the `Vec` that stores compiled rules.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleIndex(usize);
 
@@ -37,7 +31,7 @@ impl RuleIndex {
         self.0
     }
 
-    /// Converts a zero-based `Vec` position to a checked one-based diagnostic index.
+    /// Converts a zero-based rule-vector position to a checked one-based diagnostic index.
     fn from_zero_based(zero_based: usize) -> Self {
         Self(
             zero_based
@@ -53,7 +47,7 @@ impl fmt::Display for RuleIndex {
     }
 }
 
-/// Rule-construction failure detected before a validator can execute.
+/// Rule-compilation failure detected before a validator can execute.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CompileError {
     /// One variable name occurs in different product components in the same rule.
@@ -71,12 +65,6 @@ pub enum CompileError {
         rule: RuleIndex,
         /// Missing variable name.
         name: String,
-    },
-    /// A rule callback returned a syntax handle created by another rule or validator.
-    #[error("rule {rule}: returned syntax was built for another rule scope")]
-    ForeignRuleHandle {
-        /// One-based source rule position.
-        rule: RuleIndex,
     },
 }
 
@@ -109,35 +97,23 @@ impl<M> Decision<M> {
     }
 }
 
-/// Opaque rollback position in one validator's committed history.
+/// Opaque position in a validator's committed history.
 ///
-/// The history length must remain an index because rollback truncates a mutable `Vec`; returning a
-/// borrowed history element would prevent later mutable checks. The accompanying reference-backed
-/// context identity prevents checkpoints from crossing validators.
+/// A checkpoint deliberately contains no validator or store backreference. It is a role-specific
+/// history length and must be used with the validator that produced it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Checkpoint<'arena> {
-    context: ContextId<'arena>,
-    history_len: usize,
-}
+pub struct Checkpoint(usize);
 
-impl Checkpoint<'_> {
+impl Checkpoint {
     /// Number of committed events represented by this checkpoint.
     pub const fn history_len(self) -> usize {
-        self.history_len
+        self.0
     }
 }
 
-/// Fully compiled rule; all fields are arena-backed and cheap to copy.
-#[derive(Clone, Copy)]
-struct CompiledRule<'arena> {
-    mode: RuleMode,
-    head: CompiledHead<'arena>,
-    tail: RegexId<'arena>,
-}
-
-/// Incremental compiler for validator rules sharing one arena and canonical syntax context.
+/// Compiler for complete owned source rules sharing one canonical store.
 pub struct ValidatorBuilder<'arena> {
-    syntax: SyntaxContext<'arena>,
+    store: CanonicalStore<'arena>,
     rules: Vec<CompiledRule<'arena>>,
 }
 
@@ -145,41 +121,26 @@ impl<'arena> ValidatorBuilder<'arena> {
     /// Creates an empty builder whose compiled values live in `arena`.
     pub fn new(arena: &'arena Bump) -> Self {
         Self {
-            syntax: SyntaxContext::new(arena),
+            store: CanonicalStore::new(arena),
             rules: Vec::new(),
         }
     }
 
-    /// Compiles and appends one rule.
+    /// Compiles and appends one complete source rule.
     ///
-    /// `build` receives a rule-local syntax builder after `head` has established the variable
-    /// scope. Returning a handle from another callback produces [`CompileError::ForeignRuleHandle`].
-    pub fn add_rule<F>(
-        &mut self,
-        mode: RuleMode,
-        head: Head,
-        build: F,
-    ) -> Result<&mut Self, CompileError>
-    where
-        F: FnOnce(&mut RuleSyntax<'_, 'arena>) -> Result<Regex<'arena>, CompileError>,
-    {
+    /// The source expression is context-free. Its head creates a temporary variable environment,
+    /// its tail is compiled under that environment, and only the resulting canonical rule is kept.
+    pub fn add_rule(&mut self, source: Rule) -> Result<&mut Self, CompileError> {
         let rule_index = RuleIndex::from_zero_based(self.rules.len());
-        let scope_id = self.syntax.new_rule_scope();
-        let (head, tail) = {
-            let (head, mut rule_syntax) =
-                RuleSyntax::new(&mut self.syntax, rule_index, scope_id, &head)?;
-            let tail = build(&mut rule_syntax)?;
-            let tail = rule_syntax.finish_regex(tail)?;
-            (head, tail)
-        };
-        self.rules.push(CompiledRule { mode, head, tail });
+        let compiled = compile_rule(&mut self.store, rule_index, &source)?;
+        self.rules.push(compiled);
         Ok(self)
     }
 
     /// Finishes compilation with an empty committed history.
     pub fn finish(self) -> Validator<'arena> {
         Validator {
-            syntax: self.syntax,
+            store: self.store,
             rules: self.rules,
             history: Vec::new(),
         }
@@ -187,11 +148,8 @@ impl<'arena> ValidatorBuilder<'arena> {
 }
 
 /// Stateful validator for a fixed ordered rule set.
-///
-/// The validator is intentionally single-owner and mutable: derivatives may extend the shared
-/// canonical DAG, and accepted events extend committed history. Denials are atomic.
 pub struct Validator<'arena> {
-    syntax: SyntaxContext<'arena>,
+    store: CanonicalStore<'arena>,
     rules: Vec<CompiledRule<'arena>>,
     history: Vec<Event>,
 }
@@ -210,15 +168,18 @@ impl<'arena> Validator<'arena> {
     /// preserved in the returned grant.
     pub fn check<M>(&mut self, request: Request<M>) -> Decision<M> {
         for (zero_based, rule) in self.rules.iter().copied().enumerate() {
-            let Some(bindings) = rule.head.matches(&request.event) else {
+            let Some(substitution) = rule.head.match_candidate(&request.event) else {
                 continue;
             };
-            let accepts = self
-                .syntax
-                .accepts(rule.tail, self.history.iter(), &bindings);
+            let accepted = accepts(
+                &mut self.store,
+                rule.tail,
+                self.history.iter(),
+                &substitution,
+            );
             let violated = match rule.mode {
-                RuleMode::Require => !accepts,
-                RuleMode::Forbid => accepts,
+                RuleMode::Require => !accepted,
+                RuleMode::Forbid => accepted,
             };
             if violated {
                 let rule_index = RuleIndex::from_zero_based(zero_based);
@@ -247,29 +208,22 @@ impl<'arena> Validator<'arena> {
         &self.history
     }
 
-    /// Captures an opaque rollback position for this validator.
-    pub fn checkpoint(&self) -> Checkpoint<'arena> {
-        Checkpoint {
-            context: self.syntax.identity(),
-            history_len: self.history.len(),
-        }
+    /// Captures this validator's current history position.
+    pub fn checkpoint(&self) -> Checkpoint {
+        Checkpoint(self.history.len())
     }
 
     /// Truncates committed history to `checkpoint`.
     ///
     /// # Panics
     ///
-    /// Panics if the checkpoint belongs to another validator or names a future history position.
-    pub fn rollback(&mut self, checkpoint: Checkpoint<'arena>) {
-        assert_eq!(
-            checkpoint.context,
-            self.syntax.identity(),
-            "checkpoint belongs to another validator"
-        );
+    /// Panics if the checkpoint names a future history position. Checkpoints are validator-local;
+    /// the API intentionally carries no owner backreference.
+    pub fn rollback(&mut self, checkpoint: Checkpoint) {
         assert!(
-            checkpoint.history_len <= self.history.len(),
+            checkpoint.0 <= self.history.len(),
             "invalid validator checkpoint"
         );
-        self.history.truncate(checkpoint.history_len);
+        self.history.truncate(checkpoint.0);
     }
 }

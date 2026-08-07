@@ -1,17 +1,15 @@
-//! Hashconsed test and regular-expression nodes plus public rule-local handles.
+//! Immutable hashconsed test and regular-expression nodes.
 //!
-//! `TestId` and `RegexId` are arena-backed [`BHConsed`] references. The hashconsing library gives
-//! structurally equal nodes one canonical handle, so equality and ordering of child handles are
-//! constant-time. Public [`Test`] and [`Regex`] wrappers add context and rule-scope provenance; a
-//! rule builder rejects wrappers created by another context or scope.
+//! `TestId` and `RegexId` are arena-backed [`BHConsed`] references. Structurally equal nodes share
+//! one canonical allocation, so parent nodes need only child references. Nodes contain no compiler,
+//! variable-environment, canonical-store, rule, or validator backreferences.
 
 use std::hash::{Hash, Hasher};
 
 use hashconsing::BHConsed;
 
 use super::component::CompiledAtomPattern;
-use super::identity::{ContextId, RuleScopeId};
-use super::pattern::Comparison;
+use super::source::Comparison;
 
 /// Boolean test over one history event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -60,9 +58,8 @@ pub(crate) enum RegexKind<'arena> {
 /// Hashconsed regex payload with its cached nullability.
 ///
 /// Structural identity deliberately excludes `nullable`: nullability is a deterministic function
-/// of `kind`, not syntax. Interning asserts that every reconstruction of an existing kind computes
-/// the same cache value. Keeping the cache beside the node removes the former uid-to-`usize`
-/// conversion and parallel nullable table.
+/// of `kind`. Interning asserts that every reconstruction of an existing kind computes the same
+/// cache value.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RegexNode<'arena> {
     pub(super) kind: RegexKind<'arena>,
@@ -97,25 +94,3 @@ impl Hash for RegexNode<'_> {
 
 /// Canonical arena reference to a [`RegexNode`].
 pub(crate) type RegexId<'arena> = BHConsed<'arena, RegexNode<'arena>>;
-
-/// Rule-local handle to a compiled boolean event test.
-///
-/// Handles are cheap to copy. They may be combined only through the [`RuleSyntax`](super::RuleSyntax)
-/// that created them; provenance checks prevent variables from escaping their binding scope.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Test<'arena> {
-    pub(super) context: ContextId<'arena>,
-    pub(super) scope: RuleScopeId<'arena>,
-    pub(super) id: TestId<'arena>,
-}
-
-/// Rule-local handle to a canonical past regular expression.
-///
-/// The arena lifetime ensures the underlying DAG outlives this handle. Context and scope identities
-/// are reference-backed provenance tokens, not numeric table indexes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Regex<'arena> {
-    pub(super) context: ContextId<'arena>,
-    pub(super) scope: RuleScopeId<'arena>,
-    pub(super) id: RegexId<'arena>,
-}

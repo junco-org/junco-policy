@@ -13,7 +13,7 @@ use string_interner::DefaultSymbol;
 
 use crate::model::{Action, Principal, Resource};
 
-use super::pattern::{AtomPattern, Component, ComponentPattern};
+use super::source::{AtomPattern, Component, ComponentPattern};
 
 /// Arena-backed action value used by compiled patterns.
 ///
