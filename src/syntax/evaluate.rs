@@ -4,52 +4,30 @@
 //! and candidate substitution. No evaluator or node retains a rule, scope, store, or validator
 //! backreference.
 
-use crate::model::{Action, Event, Principal, Resource};
+use crate::model::Event;
 
-use super::component::{
-    CandidateSubstitution, CompiledAtomPattern, CompiledPattern, ComponentDomain,
-};
+use super::component::{CandidateSubstitution, CompiledAtomPattern};
 use super::node::{RegexId, RegexKind, TestId, TestNode};
-use super::source::{AtomPattern, Comparison, ComponentPattern};
+use super::source::{AtomPattern, Comparison};
 use super::store::CanonicalStore;
 
-/// Evaluates one typed constant-or-variable component pattern.
-fn eval_component_pattern<'arena, 'event, ComponentType>(
-    pattern: CompiledPattern<'arena, ComponentType>,
-    actual: &'event ComponentType,
-    substitution: &CandidateSubstitution<'event>,
-) -> bool
-where
-    ComponentType: ComponentDomain<'arena> + 'event,
-{
-    match pattern {
-        ComponentPattern::Constant(expected) => ComponentType::constant_matches(expected, actual),
-        ComponentPattern::Variable(symbol) => {
-            let bound = ComponentType::bindings(substitution)
-                .get(&symbol)
-                .copied()
-                .expect("compiled head binds every tail variable");
-            bound == actual
-        }
-    }
-}
-
-/// Evaluates the statically typed atom enum without trait-object dispatch.
+/// Resolves each atom pattern through the candidate substitution and compares it to the
+/// corresponding historical event component.
 fn eval_atom<'arena, 'event>(
     pattern: CompiledAtomPattern<'arena>,
     event: &'event Event,
     substitution: &CandidateSubstitution<'event>,
 ) -> bool {
     match pattern {
-        AtomPattern::Principal(pattern) => {
-            eval_component_pattern::<Principal>(pattern, &event.principal, substitution)
-        }
-        AtomPattern::Action(pattern) => {
-            eval_component_pattern::<Action>(pattern, &event.action, substitution)
-        }
-        AtomPattern::Resource(pattern) => {
-            eval_component_pattern::<Resource>(pattern, &event.resource, substitution)
-        }
+        AtomPattern::Principal(pattern) => substitution
+            .apply(pattern)
+            .is_some_and(|expected| expected.eq(&event.principal)),
+        AtomPattern::Action(pattern) => substitution
+            .apply(pattern)
+            .is_some_and(|expected| expected.eq(&event.action)),
+        AtomPattern::Resource(pattern) => substitution
+            .apply(pattern)
+            .is_some_and(|expected| expected.eq(&event.resource)),
     }
 }
 

@@ -42,6 +42,50 @@ pub(crate) struct CandidateSubstitution<'event> {
     resources: HashMap<DefaultSymbol, &'event Resource>,
 }
 
+/// Result of applying a candidate substitution to one compiled component pattern.
+///
+/// Constants retain their arena-backed representation; variables resolve to a borrowed candidate
+/// component. `PartialEq<ComponentType>` hides that representation distinction from evaluation.
+pub(super) enum AppliedPattern<'arena, 'event, ComponentType>
+where
+    ComponentType: ComponentDomain<'arena>,
+{
+    Constant(ComponentType::Compiled),
+    Bound(&'event ComponentType),
+}
+
+impl<'arena, 'event, ComponentType> PartialEq<ComponentType>
+    for AppliedPattern<'arena, 'event, ComponentType>
+where
+    ComponentType: ComponentDomain<'arena> + 'event,
+{
+    fn eq(&self, actual: &ComponentType) -> bool {
+        match self {
+            Self::Constant(expected) => ComponentType::constant_matches(*expected, actual),
+            Self::Bound(expected) => *expected == actual,
+        }
+    }
+}
+
+impl<'event> CandidateSubstitution<'event> {
+    /// Applies this substitution to a constant-or-variable compiled component pattern.
+    pub(super) fn apply<'arena, ComponentType>(
+        &self,
+        pattern: CompiledPattern<'arena, ComponentType>,
+    ) -> Option<AppliedPattern<'arena, 'event, ComponentType>>
+    where
+        ComponentType: ComponentDomain<'arena> + 'event,
+    {
+        match pattern {
+            ComponentPattern::Constant(expected) => Some(AppliedPattern::Constant(expected)),
+            ComponentPattern::Variable(symbol) => ComponentType::bindings(self)
+                .get(&symbol)
+                .copied()
+                .map(AppliedPattern::Bound),
+        }
+    }
+}
+
 /// Returns whether two maps assign any common variable symbol, regardless of value type.
 fn symbols_overlap<Left, Right>(
     left: &HashMap<DefaultSymbol, Left>,
@@ -321,5 +365,27 @@ mod tests {
         right.actions.insert(value, &read);
 
         assert!(left.merge(right).is_none());
+    }
+
+    #[test]
+    fn apply_resolves_constants_and_variables() {
+        let mut symbols = DefaultStringInterner::default();
+        let actor = symbols.get_or_intern("actor");
+        let alice = Principal::new("alice");
+        let bob = Principal::new("bob");
+        let mut substitution = CandidateSubstitution::default();
+        substitution.principals.insert(actor, &alice);
+
+        let constant = substitution
+            .apply::<Principal>(ComponentPattern::Constant("alice"))
+            .expect("constants always apply");
+        assert!(constant.eq(&alice));
+        assert!(!constant.eq(&bob));
+
+        let variable = substitution
+            .apply::<Principal>(ComponentPattern::Variable(actor))
+            .expect("the candidate bound actor");
+        assert!(variable.eq(&alice));
+        assert!(!variable.eq(&bob));
     }
 }
