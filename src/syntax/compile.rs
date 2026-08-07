@@ -52,7 +52,12 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
         }
         ComponentPattern::Variable(name) => {
             let symbol = store.variables.get_or_intern(name);
-            variables.bind(rule, name, symbol, ComponentType::COMPONENT)?;
+            variables
+                .bind(symbol, ComponentType::COMPONENT)
+                .map_err(|_| CompileError::VariableComponentConflict {
+                    rule,
+                    name: name.to_owned(),
+                })?;
             ComponentPattern::Variable(symbol)
         }
     })

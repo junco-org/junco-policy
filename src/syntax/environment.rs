@@ -70,25 +70,23 @@ pub(crate) struct VariableEnvironment {
 }
 
 impl VariableEnvironment {
-    /// Records one head occurrence and rejects reuse in another component domain.
+    /// Records one head occurrence.
+    ///
+    /// Returns the existing component when the symbol was previously bound in a different domain;
+    /// the compiler caller owns source names, rule indexes, and diagnostic construction.
     pub(super) fn bind(
         &mut self,
-        rule: RuleIndex,
-        name: &str,
         symbol: DefaultSymbol,
         component: Component,
-    ) -> Result<(), CompileError> {
-        if let Some(&bound_component) = self.variables.get(&symbol) {
-            if bound_component != component {
-                return Err(CompileError::VariableComponentConflict {
-                    rule,
-                    name: name.to_owned(),
-                });
+    ) -> Result<(), Component> {
+        match self.variables.get(&symbol).copied() {
+            Some(bound_component) if bound_component != component => Err(bound_component),
+            Some(_) => Ok(()),
+            None => {
+                self.variables.insert(symbol, component);
+                Ok(())
             }
-            return Ok(());
         }
-        self.variables.insert(symbol, component);
-        Ok(())
     }
 
     /// Verifies that a tail occurrence is declared by the head in the same component domain.
