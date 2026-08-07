@@ -11,7 +11,7 @@ use crate::model::{Action, Principal, Resource};
 use crate::validator::{CompileError, RuleIndex};
 
 use super::component::{CompiledAtomPattern, ComponentDomain};
-use super::environment::{CompiledHead, VariableEnvironment};
+use super::environment::{CompiledHead, ResolveError, VariableEnvironment};
 use super::node::{RegexId, TestId, TestNode};
 use super::source::{AtomPattern, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr};
 use super::store::CanonicalStore;
@@ -102,7 +102,18 @@ fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
                     name: name.to_owned(),
                 });
             };
-            variables.resolve(rule, name, symbol, ComponentType::COMPONENT)?;
+            variables
+                .resolve(symbol, ComponentType::COMPONENT)
+                .map_err(|error| match error {
+                    ResolveError::Unbound => CompileError::UnboundVariable {
+                        rule,
+                        name: name.to_owned(),
+                    },
+                    ResolveError::ComponentConflict => CompileError::VariableComponentConflict {
+                        rule,
+                        name: name.to_owned(),
+                    },
+                })?;
             ComponentPattern::Variable(symbol)
         }
     })

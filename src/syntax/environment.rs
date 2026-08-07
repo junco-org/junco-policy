@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use string_interner::DefaultSymbol;
 
 use crate::model::{Action, Event, Principal, Resource};
-use crate::validator::{CompileError, RuleIndex};
 
 use super::component::{CandidateSubstitution, CompiledPattern, ComponentDomain};
 use super::source::{Component, ComponentPattern};
@@ -60,6 +59,15 @@ impl<'arena> CompiledHead<'arena> {
     }
 }
 
+/// Structural failure while resolving a compiled variable symbol.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ResolveError {
+    /// The rule head did not declare the symbol.
+    Unbound,
+    /// The head declared the symbol in another component domain.
+    ComponentConflict,
+}
+
 /// Rule-local type environment declared by a source head.
 ///
 /// The map records which interned names exist and the product component occupied by each name. It
@@ -92,23 +100,15 @@ impl VariableEnvironment {
     /// Verifies that a tail occurrence is declared by the head in the same component domain.
     pub(super) fn resolve(
         &self,
-        rule: RuleIndex,
-        name: &str,
         symbol: DefaultSymbol,
         component: Component,
-    ) -> Result<(), CompileError> {
-        let Some(&bound_component) = self.variables.get(&symbol) else {
-            return Err(CompileError::UnboundVariable {
-                rule,
-                name: name.to_owned(),
-            });
-        };
-        if bound_component != component {
-            return Err(CompileError::VariableComponentConflict {
-                rule,
-                name: name.to_owned(),
-            });
+    ) -> Result<(), ResolveError> {
+        match self.variables.get(&symbol).copied() {
+            Some(bound_component) if bound_component != component => {
+                Err(ResolveError::ComponentConflict)
+            }
+            Some(_) => Ok(()),
+            None => Err(ResolveError::Unbound),
         }
-        Ok(())
     }
 }
