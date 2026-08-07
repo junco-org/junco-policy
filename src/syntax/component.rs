@@ -4,7 +4,7 @@
 //! representation used by both policy constants and candidate bindings. Each implementation also
 //! selects its typed map in [`CandidateSubstitution`], so domains cannot be mixed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -97,16 +97,34 @@ pub(super) trait Subst<Substitution, Domain = ()> {
     fn subst(&self, substitution: &Substitution) -> Option<Self::Concrete>;
 }
 
+/// Extends `target` when every repeated variable has the same resolved value.
+fn merge_map<Key, Value>(target: &mut HashMap<Key, Value>, source: HashMap<Key, Value>) -> bool
+where
+    Key: Eq + Hash,
+    Value: Eq,
+{
+    for (key, value) in source {
+        match target.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(value);
+            }
+            Entry::Occupied(entry) if entry.get() == &value => {}
+            Entry::Occupied(_) => return false,
+        }
+    }
+    true
+}
+
 impl<'arena> CandidateSubstitution<'arena> {
-    /// Combines partial substitutions produced by distinct, statically typed head coordinates.
-    ///
-    /// `VariableEnvironment` has already rejected cross-domain variable reuse, and a head has only
-    /// one coordinate per domain, so compatibility is guaranteed for every interned head.
-    pub(super) fn merge(mut self, other: Self) -> Self {
-        self.principals.extend(other.principals);
-        self.actions.extend(other.actions);
-        self.resources.extend(other.resources);
-        self
+    /// Merges partial substitutions when repeated variables have equal same-domain values.
+    pub(super) fn merge(mut self, other: Self) -> Option<Self> {
+        if !merge_map(&mut self.principals, other.principals)
+            || !merge_map(&mut self.actions, other.actions)
+            || !merge_map(&mut self.resources, other.resources)
+        {
+            return None;
+        }
+        Some(self)
     }
 }
 
@@ -389,9 +407,25 @@ mod tests {
         right.principals.insert(actor, same_alice);
         right.actions.insert(operation, read);
 
-        let merged = left.merge(right);
+        let merged = left.merge(right).expect("bindings agree");
         assert_eq!(merged.principals.get(&actor), Some(&alice));
         assert_eq!(merged.actions.get(&operation), Some(&read));
+    }
+
+    #[test]
+    fn merge_rejects_conflicting_same_domain_bindings() {
+        let arena = Bump::new();
+        let mut resolver = ComponentResolver::new(&arena);
+        let actor = variable(&mut resolver, "actor");
+        let alice = resolver.intern_string("alice");
+        let bob = resolver.intern_string("bob");
+
+        let mut left = CandidateSubstitution::default();
+        left.principals.insert(actor, alice);
+        let mut right = CandidateSubstitution::default();
+        right.principals.insert(actor, bob);
+
+        assert!(left.merge(right).is_none());
     }
 
     #[test]

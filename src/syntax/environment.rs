@@ -54,11 +54,11 @@ impl<'arena> InternedHead<'arena> {
         match_head_pattern(store, self.principal, &event.principal)
             .and_then(|principal| {
                 match_head_pattern(store, self.action, &event.action)
-                    .map(|action| principal.merge(action))
+                    .and_then(|action| principal.merge(action))
             })
             .and_then(|principal_action| {
                 match_head_pattern(store, self.resource, &event.resource)
-                    .map(|resource| principal_action.merge(resource))
+                    .and_then(|resource| principal_action.merge(resource))
             })
     }
 }
