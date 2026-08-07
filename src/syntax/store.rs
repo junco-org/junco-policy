@@ -1,6 +1,6 @@
-//! Canonical storage for compiled values, tests, and regular expressions.
+//! Canonical storage for resolved values, tests, and regular expressions.
 //!
-//! The store owns string/node interners and arena allocation for compound values, and borrows only
+//! The store owns a component resolver, node interners, and arena allocation, and borrows only
 //! the caller-provided allocation arena. It has no active-rule, variable-environment, candidate,
 //! history, or validator backreferences. Compiler and evaluator functions receive the store
 //! explicitly.
@@ -8,14 +8,14 @@
 use bumpalo::Bump;
 use hashconsing::BHConsign;
 
-use super::component::ComponentValues;
+use super::component::ComponentResolver;
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
 use super::variable::VariableSymbol;
 
-/// Shared compiled-value and canonical-node store used by all rules in one validator.
+/// Shared resolver and canonical-node store used by all rules in one validator.
 pub(crate) struct CanonicalStore<'arena> {
-    /// Black-box string interner plus allocation for compound component values.
-    pub(super) values: ComponentValues<'arena>,
+    /// String interner plus arena allocation used to resolve component values.
+    pub(super) resolver: ComponentResolver<'arena>,
     /// Canonical table for boolean event tests.
     pub(super) tests: BHConsign<'arena, TestNode<'arena>>,
     /// Canonical table for normalized regular-expression nodes.
@@ -33,9 +33,9 @@ pub(crate) struct CanonicalStore<'arena> {
 }
 
 impl<'arena> CanonicalStore<'arena> {
-    /// Creates empty value/node tables and seeds algebraic constants.
+    /// Creates a resolver, empty node tables, and algebraic constants.
     pub(crate) fn new(arena: &'arena Bump) -> Self {
-        let values = ComponentValues::new(arena);
+        let resolver = ComponentResolver::new(arena);
 
         let mut tests = BHConsign::with_capacity(arena, 128);
         let test_true = tests.mk(TestNode::True);
@@ -47,7 +47,7 @@ impl<'arena> CanonicalStore<'arena> {
         let epsilon = regexes.mk(RegexNode::new(RegexKind::Epsilon, true));
 
         Self {
-            values,
+            resolver,
             tests,
             regexes,
             test_true,
@@ -60,7 +60,7 @@ impl<'arena> CanonicalStore<'arena> {
 
     /// Interns a variable spelling and wraps its black-box string symbol in a domain newtype.
     pub(super) fn intern_variable(&mut self, name: &str) -> VariableSymbol {
-        VariableSymbol::new(self.values.intern_string(name))
+        VariableSymbol::new(self.resolver.intern_string(name))
     }
 
     /// Number of canonical regex nodes, used to assert that derivative cycles stabilize.

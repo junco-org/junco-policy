@@ -77,7 +77,7 @@ fn variable_names_share_string_symbols_across_rules() {
         panic!("principal head pattern was not compiled as a variable")
     };
     assert_eq!(first_variable, second_variable);
-    assert_eq!(store.values.string_count(), 3);
+    assert_eq!(store.resolver.string_count(), 3);
 }
 
 #[test]

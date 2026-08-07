@@ -1,14 +1,14 @@
 //! Policy compilation, stateful authorization, and rollback.
 //!
-//! Source rules are complete owned values. `ValidatorBuilder` compiles each complete rule by
-//! explicitly passing the canonical store and a temporary variable environment to compiler
-//! functions. The executable validator retains only canonical compiled rules and committed history.
+//! Source rules are complete owned values. `ValidatorBuilder` resolves each rule through the
+//! canonical store and a temporary variable environment. The executable validator retains only
+//! canonical runtime rules and committed history.
 
 use bumpalo::Bump;
 use thiserror::Error;
 
 use crate::model::{Event, Grant, Request};
-use crate::syntax::{CanonicalStore, CompiledRule, Rule, RuleMode, accepts, compile_rule};
+use crate::syntax::{CanonicalStore, Rule, RuleMode, RuntimeRule, accepts, compile_rule};
 
 /// Rule-compilation failure detected before a validator can execute.
 ///
@@ -67,14 +67,14 @@ impl<M> Decision<M> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Checkpoint(usize);
 
-/// Compiler for complete owned source rules sharing one canonical store.
+/// Resolves complete source rules into runtime rules sharing one canonical store.
 pub struct ValidatorBuilder<'arena> {
     store: CanonicalStore<'arena>,
-    rules: Vec<CompiledRule<'arena>>,
+    rules: Vec<RuntimeRule<'arena>>,
 }
 
 impl<'arena> ValidatorBuilder<'arena> {
-    /// Creates an empty builder whose compiled values live in `arena`.
+    /// Creates an empty builder whose resolved values live in `arena`.
     pub fn new(arena: &'arena Bump) -> Self {
         Self {
             store: CanonicalStore::new(arena),
@@ -82,10 +82,10 @@ impl<'arena> ValidatorBuilder<'arena> {
         }
     }
 
-    /// Compiles and appends one complete source rule.
+    /// Resolves and appends one complete source rule.
     ///
     /// The source expression is context-free. Its head creates a temporary variable environment,
-    /// its tail is compiled under that environment, and only the resulting canonical rule is kept.
+    /// and only the resulting runtime rule is kept.
     pub fn add_rule(&mut self, source: Rule) -> Result<&mut Self, CompileError> {
         let compiled = compile_rule(&mut self.store, &source)?;
         self.rules.push(compiled);
@@ -105,7 +105,7 @@ impl<'arena> ValidatorBuilder<'arena> {
 /// Stateful validator for a fixed ordered rule set.
 pub struct Validator<'arena> {
     store: CanonicalStore<'arena>,
-    rules: Vec<CompiledRule<'arena>>,
+    rules: Vec<RuntimeRule<'arena>>,
     history: Vec<Event>,
 }
 

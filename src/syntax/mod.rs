@@ -20,7 +20,7 @@ pub use source::{
     Rule, RuleMode, SourceRepresentation, TestExpr,
 };
 
-pub(crate) use compile::{CompiledRule, compile_rule};
+pub(crate) use compile::{RuntimeRule, compile_rule};
 pub(crate) use evaluate::accepts;
 pub(crate) use store::CanonicalStore;
 

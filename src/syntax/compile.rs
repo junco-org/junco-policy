@@ -1,24 +1,24 @@
-//! Source-rule compilation into canonical arena-backed nodes.
+//! Source-rule compilation into interned and canonical runtime representations.
 //!
 //! Every function receives the canonical store and rule-local variable environment explicitly.
-//! Source expressions remain context-free; compiled nodes contain only immutable values and child
-//! references. The variable environment is created from the head and dropped after the tail is
-//! compiled. Errors are relative to the one source rule passed to [`compile_rule`].
+//! Source expressions remain context-free; runtime nodes contain only resolved values, interned
+//! variable symbols, and child references. Errors are relative to the one source rule passed to
+//! [`compile_rule`].
 
 use crate::model::{Action, Principal, Resource};
 use crate::validator::CompileError;
 
-use super::component::{CompiledAtomPattern, CompiledPattern, ComponentDomain};
-use super::environment::{CompiledHead, ResolveError, VariableEnvironment};
+use super::component::{ComponentDomain, InternedAtomPattern, InternedPattern};
+use super::environment::{InternedHead, ResolveError, VariableEnvironment};
 use super::node::{RegexId, TestId, TestNode};
 use super::source::{AtomPattern, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr};
 use super::store::CanonicalStore;
 
-/// Minimal executable representation retained after a source rule is compiled.
+/// Minimal runtime representation retained after a source rule is compiled.
 #[derive(Clone, Copy)]
-pub(crate) struct CompiledRule<'arena> {
+pub(crate) struct RuntimeRule<'arena> {
     pub(crate) mode: RuleMode,
-    pub(crate) head: CompiledHead<'arena>,
+    pub(crate) head: InternedHead<'arena>,
     pub(crate) tail: RegexId<'arena>,
 }
 
@@ -26,10 +26,10 @@ pub(crate) struct CompiledRule<'arena> {
 pub(crate) fn compile_rule<'arena>(
     store: &mut CanonicalStore<'arena>,
     source: &Rule,
-) -> Result<CompiledRule<'arena>, CompileError> {
+) -> Result<RuntimeRule<'arena>, CompileError> {
     let (head, variables) = compile_head(store, &source.head)?;
     let tail = compile_regex(store, &variables, &source.tail)?;
-    Ok(CompiledRule {
+    Ok(RuntimeRule {
         mode: source.mode,
         head,
         tail,
@@ -41,10 +41,10 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     store: &mut CanonicalStore<'arena>,
     pattern: &ComponentPattern<ComponentType>,
     variables: &mut VariableEnvironment,
-) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
-    Ok(CompiledPattern::new(match pattern {
+) -> Result<InternedPattern<'arena, ComponentType>, CompileError> {
+    Ok(InternedPattern::new(match pattern {
         ComponentPattern::Constant(value) => {
-            ComponentPattern::Constant(ComponentType::compile(&mut store.values, value))
+            ComponentPattern::Constant(ComponentType::resolve(&mut store.resolver, value))
         }
         ComponentPattern::Variable(name) => {
             let variable = store.intern_variable(name);
@@ -58,17 +58,17 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     }))
 }
 
-/// Compiles the fixed capability-product head and its variable type environment.
+/// Resolves and interns the fixed capability-product head and its variable environment.
 fn compile_head<'arena>(
     store: &mut CanonicalStore<'arena>,
     head: &Head,
-) -> Result<(CompiledHead<'arena>, VariableEnvironment), CompileError> {
+) -> Result<(InternedHead<'arena>, VariableEnvironment), CompileError> {
     let mut variables = VariableEnvironment::default();
     let principal = compile_head_pattern::<Principal>(store, &head.principal, &mut variables)?;
     let action = compile_head_pattern::<Action>(store, &head.action, &mut variables)?;
     let resource = compile_head_pattern::<Resource>(store, &head.resource, &mut variables)?;
     Ok((
-        CompiledHead {
+        InternedHead {
             principal,
             action,
             resource,
@@ -82,10 +82,10 @@ fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     store: &mut CanonicalStore<'arena>,
     pattern: &ComponentPattern<ComponentType>,
     variables: &VariableEnvironment,
-) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
-    Ok(CompiledPattern::new(match pattern {
+) -> Result<InternedPattern<'arena, ComponentType>, CompileError> {
+    Ok(InternedPattern::new(match pattern {
         ComponentPattern::Constant(value) => {
-            ComponentPattern::Constant(ComponentType::compile(&mut store.values, value))
+            ComponentPattern::Constant(ComponentType::resolve(&mut store.resolver, value))
         }
         ComponentPattern::Variable(name) => {
             let variable = store.intern_variable(name);
@@ -104,12 +104,12 @@ fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     }))
 }
 
-/// Compiles the concrete atom enum retained by hashconsed test nodes.
+/// Resolves the atom representation retained by hashconsed test nodes.
 fn compile_atom_pattern<'arena>(
     store: &mut CanonicalStore<'arena>,
     pattern: &AtomPattern,
     variables: &VariableEnvironment,
-) -> Result<CompiledAtomPattern<'arena>, CompileError> {
+) -> Result<InternedAtomPattern<'arena>, CompileError> {
     Ok(match pattern {
         AtomPattern::Principal(pattern) => AtomPattern::Principal(
             compile_pattern::<Principal>(store, pattern, variables)?.into_inner(),

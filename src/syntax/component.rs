@@ -17,9 +17,9 @@ use crate::model::{Action, Event, Principal, Resource};
 use super::source::{AtomPattern, Component, ComponentPattern, PatternRepresentation};
 use super::variable::VariableSymbol;
 
-/// Canonical action representation using string-interner symbols for commit messages.
+/// Resolved action value using string-interner symbols for commit messages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) enum CompiledAction {
+pub(super) enum ResolvedAction {
     Read,
     Edit,
     Stage,
@@ -31,22 +31,18 @@ pub(super) enum CompiledAction {
     History,
 }
 
-/// Arena-backed sequence of interned resource-segment symbols.
+/// Resolved resource value represented as an arena-backed sequence of segment symbols.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) struct CompiledResource<'arena>(&'arena [DefaultSymbol]);
+pub(super) struct ResolvedResource<'arena>(&'arena [DefaultSymbol]);
 
-/// Black-box string interner and arena allocation for compiled compound values.
-///
-/// The `string-interner` crate owns all string deduplication and symbol validity. Resource
-/// sequences are copied directly into the arena; they are structurally comparable but not interned
-/// as complete sequences.
-pub(super) struct ComponentValues<'arena> {
+/// Resolves model values using a black-box string interner and arena allocation.
+pub(super) struct ComponentResolver<'arena> {
     arena: &'arena Bump,
     strings: DefaultStringInterner,
 }
 
-impl<'arena> ComponentValues<'arena> {
-    /// Creates a string interner and compound-value allocator backed by `arena`.
+impl<'arena> ComponentResolver<'arena> {
+    /// Creates a resolver backed by `arena`.
     pub(super) fn new(arena: &'arena Bump) -> Self {
         Self {
             arena,
@@ -66,14 +62,14 @@ impl<'arena> ComponentValues<'arena> {
             .expect("component symbols originate from this interner")
     }
 
-    /// Compiles one ordered resource sequence after interning every segment string.
-    pub(super) fn compile_resource(&mut self, value: &Resource) -> CompiledResource<'arena> {
+    /// Resolves one ordered resource sequence after interning every segment string.
+    pub(super) fn resolve_resource(&mut self, value: &Resource) -> ResolvedResource<'arena> {
         let segments: Vec<DefaultSymbol> = value
             .segments()
             .iter()
             .map(|segment| self.intern_string(segment))
             .collect();
-        CompiledResource(self.arena.alloc_slice_copy(&segments))
+        ResolvedResource(self.arena.alloc_slice_copy(&segments))
     }
 
     /// Number of distinct interned strings, used to verify value reuse.
@@ -83,14 +79,14 @@ impl<'arena> ComponentValues<'arena> {
     }
 }
 
-/// Interned candidate values assigned to head variables during one rule evaluation.
+/// Resolved candidate values assigned to head variables during one rule evaluation.
 ///
-/// Every map stores the same compiled representation used by constant patterns.
+/// Every map stores the same resolved representation used by constant patterns.
 #[derive(Debug, Default)]
 pub(crate) struct CandidateSubstitution<'arena> {
-    principals: HashMap<VariableSymbol, <Principal as ComponentDomain<'arena>>::Compiled>,
-    actions: HashMap<VariableSymbol, <Action as ComponentDomain<'arena>>::Compiled>,
-    resources: HashMap<VariableSymbol, <Resource as ComponentDomain<'arena>>::Compiled>,
+    principals: HashMap<VariableSymbol, <Principal as ComponentDomain<'arena>>::Resolved>,
+    actions: HashMap<VariableSymbol, <Action as ComponentDomain<'arena>>::Resolved>,
+    resources: HashMap<VariableSymbol, <Resource as ComponentDomain<'arena>>::Resolved>,
 }
 
 /// Structural application of a substitution to a pattern-like value.
@@ -102,34 +98,34 @@ pub(super) trait Subst<Substitution> {
     fn subst(&self, substitution: &Substitution) -> Option<Self::Concrete>;
 }
 
-/// Compiled component pattern carrying its component domain in the type.
-pub(super) struct CompiledComponentPattern<'arena, ComponentType>
+/// Interned component pattern carrying its component domain in the type.
+pub(super) struct InternedComponentPattern<'arena, ComponentType>
 where
     ComponentType: ComponentDomain<'arena>,
 {
-    inner: ComponentPattern<ComponentType::Compiled, VariableSymbol>,
+    inner: ComponentPattern<ComponentType::Resolved, VariableSymbol>,
     component: PhantomData<fn() -> ComponentType>,
 }
 
-impl<'arena, ComponentType> CompiledComponentPattern<'arena, ComponentType>
+impl<'arena, ComponentType> InternedComponentPattern<'arena, ComponentType>
 where
     ComponentType: ComponentDomain<'arena>,
 {
-    /// Wraps the structurally stored compiled pattern with its component-domain marker.
-    pub(super) fn new(inner: ComponentPattern<ComponentType::Compiled, VariableSymbol>) -> Self {
+    /// Wraps the structurally stored interned pattern with its component-domain marker.
+    pub(super) fn new(inner: ComponentPattern<ComponentType::Resolved, VariableSymbol>) -> Self {
         Self {
             inner,
             component: PhantomData,
         }
     }
 
-    /// Returns the structural representation stored by compiled atom nodes.
-    pub(super) fn into_inner(self) -> ComponentPattern<ComponentType::Compiled, VariableSymbol> {
+    /// Returns the structural representation stored by interned atom nodes.
+    pub(super) fn into_inner(self) -> ComponentPattern<ComponentType::Resolved, VariableSymbol> {
         self.inner
     }
 }
 
-impl<'arena, ComponentType> Clone for CompiledComponentPattern<'arena, ComponentType>
+impl<'arena, ComponentType> Clone for InternedComponentPattern<'arena, ComponentType>
 where
     ComponentType: ComponentDomain<'arena>,
 {
@@ -138,12 +134,12 @@ where
     }
 }
 
-impl<'arena, ComponentType> Copy for CompiledComponentPattern<'arena, ComponentType> where
+impl<'arena, ComponentType> Copy for InternedComponentPattern<'arena, ComponentType> where
     ComponentType: ComponentDomain<'arena>
 {
 }
 
-impl<'arena, ComponentType> fmt::Debug for CompiledComponentPattern<'arena, ComponentType>
+impl<'arena, ComponentType> fmt::Debug for InternedComponentPattern<'arena, ComponentType>
 where
     ComponentType: ComponentDomain<'arena>,
 {
@@ -152,7 +148,7 @@ where
     }
 }
 
-impl<'arena, ComponentType> PartialEq for CompiledComponentPattern<'arena, ComponentType>
+impl<'arena, ComponentType> PartialEq for InternedComponentPattern<'arena, ComponentType>
 where
     ComponentType: ComponentDomain<'arena>,
 {
@@ -161,12 +157,12 @@ where
     }
 }
 
-impl<'arena, ComponentType> Eq for CompiledComponentPattern<'arena, ComponentType> where
+impl<'arena, ComponentType> Eq for InternedComponentPattern<'arena, ComponentType> where
     ComponentType: ComponentDomain<'arena>
 {
 }
 
-impl<'arena, ComponentType> Hash for CompiledComponentPattern<'arena, ComponentType>
+impl<'arena, ComponentType> Hash for InternedComponentPattern<'arena, ComponentType>
 where
     ComponentType: ComponentDomain<'arena>,
 {
@@ -179,7 +175,7 @@ impl<'arena> CandidateSubstitution<'arena> {
     /// Combines partial substitutions produced by distinct, statically typed head coordinates.
     ///
     /// `VariableEnvironment` has already rejected cross-domain variable reuse, and a head has only
-    /// one coordinate per domain, so compatibility is guaranteed for every compiled head.
+    /// one coordinate per domain, so compatibility is guaranteed for every interned head.
     pub(super) fn merge(mut self, other: Self) -> Self {
         self.principals.extend(other.principals);
         self.actions.extend(other.actions);
@@ -188,102 +184,102 @@ impl<'arena> CandidateSubstitution<'arena> {
     }
 }
 
-/// Compiles, interns, and compares one capability-product component domain.
+/// Resolves and compares one capability-product component domain.
 pub(super) trait ComponentDomain<'arena>: Sized + Eq {
     /// Product coordinate occupied by this component.
     const COMPONENT: Component;
 
-    /// Canonical arena-backed representation used by constants and substitutions.
-    type Compiled: Clone + Copy + Debug + PartialEq + Eq + Hash;
+    /// Variable-free representation produced by resolution.
+    type Resolved: Clone + Copy + Debug + PartialEq + Eq + Hash;
 
-    /// Compiles `value` into the representation shared by constants and substitutions.
-    fn compile(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled;
+    /// Resolves a model value into the representation shared by constants and substitutions.
+    fn resolve(resolver: &mut ComponentResolver<'arena>, value: &Self) -> Self::Resolved;
 
-    /// Compares one canonical compiled value with a model value through the value store.
-    fn compiled_matches(
-        values: &ComponentValues<'arena>,
-        expected: Self::Compiled,
+    /// Compares one resolved value with a model value through the resolver.
+    fn resolved_matches(
+        resolver: &ComponentResolver<'arena>,
+        expected: Self::Resolved,
         actual: &Self,
     ) -> bool;
 
     /// Returns the immutable substitution map belonging to this component.
     fn bindings<'substitution>(
         substitution: &'substitution CandidateSubstitution<'arena>,
-    ) -> &'substitution HashMap<VariableSymbol, Self::Compiled>;
+    ) -> &'substitution HashMap<VariableSymbol, Self::Resolved>;
 
     /// Returns the mutable substitution map belonging to this component.
     fn bindings_mut<'substitution>(
         substitution: &'substitution mut CandidateSubstitution<'arena>,
-    ) -> &'substitution mut HashMap<VariableSymbol, Self::Compiled>;
+    ) -> &'substitution mut HashMap<VariableSymbol, Self::Resolved>;
 }
 
 impl<'arena> ComponentDomain<'arena> for Principal {
     const COMPONENT: Component = Component::Principal;
-    type Compiled = DefaultSymbol;
+    type Resolved = DefaultSymbol;
 
-    fn compile(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled {
-        values.intern_string(value.as_str())
+    fn resolve(resolver: &mut ComponentResolver<'arena>, value: &Self) -> Self::Resolved {
+        resolver.intern_string(value.as_str())
     }
 
-    fn compiled_matches(
-        values: &ComponentValues<'arena>,
-        expected: Self::Compiled,
+    fn resolved_matches(
+        resolver: &ComponentResolver<'arena>,
+        expected: Self::Resolved,
         actual: &Self,
     ) -> bool {
-        values.resolve_string(expected) == actual.as_str()
+        resolver.resolve_string(expected) == actual.as_str()
     }
 
     fn bindings<'substitution>(
         substitution: &'substitution CandidateSubstitution<'arena>,
-    ) -> &'substitution HashMap<VariableSymbol, Self::Compiled> {
+    ) -> &'substitution HashMap<VariableSymbol, Self::Resolved> {
         &substitution.principals
     }
 
     fn bindings_mut<'substitution>(
         substitution: &'substitution mut CandidateSubstitution<'arena>,
-    ) -> &'substitution mut HashMap<VariableSymbol, Self::Compiled> {
+    ) -> &'substitution mut HashMap<VariableSymbol, Self::Resolved> {
         &mut substitution.principals
     }
 }
 
 impl<'arena> ComponentDomain<'arena> for Action {
     const COMPONENT: Component = Component::Action;
-    type Compiled = CompiledAction;
+    type Resolved = ResolvedAction;
 
-    fn compile(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled {
+    fn resolve(resolver: &mut ComponentResolver<'arena>, value: &Self) -> Self::Resolved {
         match value {
-            Action::Read => CompiledAction::Read,
-            Action::Edit => CompiledAction::Edit,
-            Action::Stage => CompiledAction::Stage,
-            Action::Unstage => CompiledAction::Unstage,
-            Action::Commit { message } => CompiledAction::Commit(
+            Action::Read => ResolvedAction::Read,
+            Action::Edit => ResolvedAction::Edit,
+            Action::Stage => ResolvedAction::Stage,
+            Action::Unstage => ResolvedAction::Unstage,
+            Action::Commit { message } => ResolvedAction::Commit(
                 message
                     .as_deref()
-                    .map(|message| values.intern_string(message)),
+                    .map(|message| resolver.intern_string(message)),
             ),
-            Action::Checkout => CompiledAction::Checkout,
-            Action::Stash => CompiledAction::Stash,
-            Action::Diff => CompiledAction::Diff,
-            Action::History => CompiledAction::History,
+            Action::Checkout => ResolvedAction::Checkout,
+            Action::Stash => ResolvedAction::Stash,
+            Action::Diff => ResolvedAction::Diff,
+            Action::History => ResolvedAction::History,
         }
     }
 
-    fn compiled_matches(
-        values: &ComponentValues<'arena>,
-        expected: Self::Compiled,
+    fn resolved_matches(
+        resolver: &ComponentResolver<'arena>,
+        expected: Self::Resolved,
         actual: &Self,
     ) -> bool {
         match (expected, actual) {
-            (CompiledAction::Read, Action::Read)
-            | (CompiledAction::Edit, Action::Edit)
-            | (CompiledAction::Stage, Action::Stage)
-            | (CompiledAction::Unstage, Action::Unstage)
-            | (CompiledAction::Checkout, Action::Checkout)
-            | (CompiledAction::Stash, Action::Stash)
-            | (CompiledAction::Diff, Action::Diff)
-            | (CompiledAction::History, Action::History) => true,
-            (CompiledAction::Commit(expected), Action::Commit { message }) => {
-                expected.map(|symbol| values.resolve_string(symbol)) == message.as_deref()
+            (ResolvedAction::Read, Action::Read)
+            | (ResolvedAction::Edit, Action::Edit)
+            | (ResolvedAction::Stage, Action::Stage)
+            | (ResolvedAction::Unstage, Action::Unstage)
+            | (ResolvedAction::Checkout, Action::Checkout)
+            | (ResolvedAction::Stash, Action::Stash)
+            | (ResolvedAction::Diff, Action::Diff)
+            | (ResolvedAction::History, Action::History) => true,
+            (ResolvedAction::Commit(expected), Action::Commit { message }) => {
+                expected.map(|symbol| resolver.resolve_string(symbol)) == message.as_deref()
             }
             _ => false,
         }
@@ -291,28 +287,28 @@ impl<'arena> ComponentDomain<'arena> for Action {
 
     fn bindings<'substitution>(
         substitution: &'substitution CandidateSubstitution<'arena>,
-    ) -> &'substitution HashMap<VariableSymbol, Self::Compiled> {
+    ) -> &'substitution HashMap<VariableSymbol, Self::Resolved> {
         &substitution.actions
     }
 
     fn bindings_mut<'substitution>(
         substitution: &'substitution mut CandidateSubstitution<'arena>,
-    ) -> &'substitution mut HashMap<VariableSymbol, Self::Compiled> {
+    ) -> &'substitution mut HashMap<VariableSymbol, Self::Resolved> {
         &mut substitution.actions
     }
 }
 
 impl<'arena> ComponentDomain<'arena> for Resource {
     const COMPONENT: Component = Component::Resource;
-    type Compiled = CompiledResource<'arena>;
+    type Resolved = ResolvedResource<'arena>;
 
-    fn compile(values: &mut ComponentValues<'arena>, value: &Self) -> Self::Compiled {
-        values.compile_resource(value)
+    fn resolve(resolver: &mut ComponentResolver<'arena>, value: &Self) -> Self::Resolved {
+        resolver.resolve_resource(value)
     }
 
-    fn compiled_matches(
-        values: &ComponentValues<'arena>,
-        expected: Self::Compiled,
+    fn resolved_matches(
+        resolver: &ComponentResolver<'arena>,
+        expected: Self::Resolved,
         actual: &Self,
     ) -> bool {
         expected.0.len() == actual.segments().len()
@@ -320,68 +316,68 @@ impl<'arena> ComponentDomain<'arena> for Resource {
                 .0
                 .iter()
                 .zip(actual.segments())
-                .all(|(left, right)| values.resolve_string(*left) == right)
+                .all(|(left, right)| resolver.resolve_string(*left) == right)
     }
 
     fn bindings<'substitution>(
         substitution: &'substitution CandidateSubstitution<'arena>,
-    ) -> &'substitution HashMap<VariableSymbol, Self::Compiled> {
+    ) -> &'substitution HashMap<VariableSymbol, Self::Resolved> {
         &substitution.resources
     }
 
     fn bindings_mut<'substitution>(
         substitution: &'substitution mut CandidateSubstitution<'arena>,
-    ) -> &'substitution mut HashMap<VariableSymbol, Self::Compiled> {
+    ) -> &'substitution mut HashMap<VariableSymbol, Self::Resolved> {
         &mut substitution.resources
     }
 }
 
-/// Arena-backed representation used by compiled atom patterns.
+/// Interned representation used by runtime atom patterns before substitution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) struct CompiledRepresentation<'arena>(PhantomData<&'arena ()>);
+pub(super) struct InternedRepresentation<'arena>(PhantomData<&'arena ()>);
 
-impl<'arena> PatternRepresentation for CompiledRepresentation<'arena> {
-    type PrincipalValue = <Principal as ComponentDomain<'arena>>::Compiled;
-    type ActionValue = <Action as ComponentDomain<'arena>>::Compiled;
-    type ResourceValue = <Resource as ComponentDomain<'arena>>::Compiled;
+impl<'arena> PatternRepresentation for InternedRepresentation<'arena> {
+    type PrincipalValue = <Principal as ComponentDomain<'arena>>::Resolved;
+    type ActionValue = <Action as ComponentDomain<'arena>>::Resolved;
+    type ResourceValue = <Resource as ComponentDomain<'arena>>::Resolved;
     type Variable = VariableSymbol;
 }
 
-/// Compiled pattern for one statically selected component type.
-pub(super) type CompiledPattern<'arena, ComponentType> =
-    CompiledComponentPattern<'arena, ComponentType>;
+/// Interned pattern for one statically selected component domain.
+pub(super) type InternedPattern<'arena, ComponentType> =
+    InternedComponentPattern<'arena, ComponentType>;
 
-/// Concrete, structurally hashable atom representation stored in [`TestNode`](super::node::TestNode).
-pub(super) type CompiledAtomPattern<'arena> = AtomPattern<CompiledRepresentation<'arena>>;
+/// Interned, structurally hashable atom pattern stored in [`TestNode`](super::node::TestNode).
+pub(super) type InternedAtomPattern<'arena> = AtomPattern<InternedRepresentation<'arena>>;
 
-/// Variable-free atom whose values use the same canonical representation as compiled constants.
-pub(super) enum ConcreteAtom<'arena> {
-    Principal(<Principal as ComponentDomain<'arena>>::Compiled),
-    Action(<Action as ComponentDomain<'arena>>::Compiled),
-    Resource(<Resource as ComponentDomain<'arena>>::Compiled),
+/// Variable-free atom produced by applying a substitution to an interned atom pattern.
+pub(super) enum ResolvedAtom<'arena> {
+    Principal(<Principal as ComponentDomain<'arena>>::Resolved),
+    Action(<Action as ComponentDomain<'arena>>::Resolved),
+    Resource(<Resource as ComponentDomain<'arena>>::Resolved),
 }
 
-impl<'arena> ConcreteAtom<'arena> {
-    /// Compares this canonical atom with a model event through the string interner.
-    pub(super) fn matches(&self, values: &ComponentValues<'arena>, event: &Event) -> bool {
+impl<'arena> ResolvedAtom<'arena> {
+    /// Compares this resolved atom with a model event through the component resolver.
+    pub(super) fn matches(&self, resolver: &ComponentResolver<'arena>, event: &Event) -> bool {
         match self {
             Self::Principal(expected) => {
-                Principal::compiled_matches(values, *expected, &event.principal)
+                Principal::resolved_matches(resolver, *expected, &event.principal)
             }
-            Self::Action(expected) => Action::compiled_matches(values, *expected, &event.action),
+            Self::Action(expected) => Action::resolved_matches(resolver, *expected, &event.action),
             Self::Resource(expected) => {
-                Resource::compiled_matches(values, *expected, &event.resource)
+                Resource::resolved_matches(resolver, *expected, &event.resource)
             }
         }
     }
 }
 
 impl<'arena, ComponentType> Subst<CandidateSubstitution<'arena>>
-    for CompiledComponentPattern<'arena, ComponentType>
+    for InternedComponentPattern<'arena, ComponentType>
 where
     ComponentType: ComponentDomain<'arena>,
 {
-    type Concrete = ComponentType::Compiled;
+    type Concrete = ComponentType::Resolved;
 
     fn subst(&self, substitution: &CandidateSubstitution<'arena>) -> Option<Self::Concrete> {
         match self.inner {
@@ -393,20 +389,20 @@ where
     }
 }
 
-impl<'arena> Subst<CandidateSubstitution<'arena>> for CompiledAtomPattern<'arena> {
-    type Concrete = ConcreteAtom<'arena>;
+impl<'arena> Subst<CandidateSubstitution<'arena>> for InternedAtomPattern<'arena> {
+    type Concrete = ResolvedAtom<'arena>;
 
     fn subst(&self, substitution: &CandidateSubstitution<'arena>) -> Option<Self::Concrete> {
         match self {
-            AtomPattern::Principal(pattern) => CompiledComponentPattern::<Principal>::new(*pattern)
+            AtomPattern::Principal(pattern) => InternedComponentPattern::<Principal>::new(*pattern)
                 .subst(substitution)
-                .map(ConcreteAtom::Principal),
-            AtomPattern::Action(pattern) => CompiledComponentPattern::<Action>::new(*pattern)
+                .map(ResolvedAtom::Principal),
+            AtomPattern::Action(pattern) => InternedComponentPattern::<Action>::new(*pattern)
                 .subst(substitution)
-                .map(ConcreteAtom::Action),
-            AtomPattern::Resource(pattern) => CompiledComponentPattern::<Resource>::new(*pattern)
+                .map(ResolvedAtom::Action),
+            AtomPattern::Resource(pattern) => InternedComponentPattern::<Resource>::new(*pattern)
                 .subst(substitution)
-                .map(ConcreteAtom::Resource),
+                .map(ResolvedAtom::Resource),
         }
     }
 }
@@ -415,38 +411,38 @@ impl<'arena> Subst<CandidateSubstitution<'arena>> for CompiledAtomPattern<'arena
 mod tests {
     use super::*;
 
-    fn variable(values: &mut ComponentValues<'_>, name: &str) -> VariableSymbol {
-        VariableSymbol::new(values.intern_string(name))
+    fn variable(resolver: &mut ComponentResolver<'_>, name: &str) -> VariableSymbol {
+        VariableSymbol::new(resolver.intern_string(name))
     }
 
     #[test]
-    fn component_values_compile_constants_and_candidates_uniformly() {
+    fn component_resolver_unifies_constants_and_candidates() {
         let arena = Bump::new();
-        let mut values = ComponentValues::new(&arena);
+        let mut resolver = ComponentResolver::new(&arena);
 
-        let constant_principal = Principal::compile(&mut values, &Principal::new("alice"));
-        let candidate_principal = Principal::compile(&mut values, &Principal::new("alice"));
+        let constant_principal = Principal::resolve(&mut resolver, &Principal::new("alice"));
+        let candidate_principal = Principal::resolve(&mut resolver, &Principal::new("alice"));
         assert_eq!(constant_principal, candidate_principal);
-        assert_eq!(values.resolve_string(constant_principal), "alice");
+        assert_eq!(resolver.resolve_string(constant_principal), "alice");
 
-        let constant_resource = Resource::compile(&mut values, &Resource::new(["src", "a.rs"]));
-        let candidate_resource = Resource::compile(&mut values, &Resource::new(["src", "a.rs"]));
+        let constant_resource = Resource::resolve(&mut resolver, &Resource::new(["src", "a.rs"]));
+        let candidate_resource = Resource::resolve(&mut resolver, &Resource::new(["src", "a.rs"]));
         assert_eq!(constant_resource, candidate_resource);
 
-        let constant_action = Action::compile(&mut values, &Action::commit("ship"));
-        let candidate_action = Action::compile(&mut values, &Action::commit("ship"));
+        let constant_action = Action::resolve(&mut resolver, &Action::commit("ship"));
+        let candidate_action = Action::resolve(&mut resolver, &Action::commit("ship"));
         assert_eq!(constant_action, candidate_action);
     }
 
     #[test]
     fn merge_combines_partial_head_substitutions() {
         let arena = Bump::new();
-        let mut values = ComponentValues::new(&arena);
-        let actor = variable(&mut values, "actor");
-        let operation = variable(&mut values, "operation");
-        let alice = values.intern_string("alice");
-        let same_alice = values.intern_string("alice");
-        let read = CompiledAction::Read;
+        let mut resolver = ComponentResolver::new(&arena);
+        let actor = variable(&mut resolver, "actor");
+        let operation = variable(&mut resolver, "operation");
+        let alice = resolver.intern_string("alice");
+        let same_alice = resolver.intern_string("alice");
+        let read = ResolvedAction::Read;
 
         let mut left = CandidateSubstitution::default();
         left.principals.insert(actor, alice);
@@ -462,34 +458,34 @@ mod tests {
     #[test]
     fn subst_resolves_components_and_atoms() {
         let arena = Bump::new();
-        let mut values = ComponentValues::new(&arena);
-        let actor = variable(&mut values, "actor");
+        let mut resolver = ComponentResolver::new(&arena);
+        let actor = variable(&mut resolver, "actor");
         let alice = Principal::new("alice");
         let bob = Principal::new("bob");
-        let alice_symbol = values.intern_string("alice");
+        let alice_symbol = resolver.intern_string("alice");
         let mut substitution = CandidateSubstitution::default();
         substitution.principals.insert(actor, alice_symbol);
 
         let constant =
-            CompiledComponentPattern::<Principal>::new(ComponentPattern::Constant(alice_symbol))
+            InternedComponentPattern::<Principal>::new(ComponentPattern::Constant(alice_symbol))
                 .subst(&substitution)
                 .expect("constants always substitute");
-        assert!(Principal::compiled_matches(&values, constant, &alice));
-        assert!(!Principal::compiled_matches(&values, constant, &bob));
+        assert!(Principal::resolved_matches(&resolver, constant, &alice));
+        assert!(!Principal::resolved_matches(&resolver, constant, &bob));
 
         let variable =
-            CompiledComponentPattern::<Principal>::new(ComponentPattern::Variable(actor))
+            InternedComponentPattern::<Principal>::new(ComponentPattern::Variable(actor))
                 .subst(&substitution)
                 .expect("the candidate bound actor");
-        assert!(Principal::compiled_matches(&values, variable, &alice));
-        assert!(!Principal::compiled_matches(&values, variable, &bob));
+        assert!(Principal::resolved_matches(&resolver, variable, &alice));
+        assert!(!Principal::resolved_matches(&resolver, variable, &bob));
 
-        let atom: CompiledAtomPattern<'_> =
+        let atom: InternedAtomPattern<'_> =
             AtomPattern::Principal(ComponentPattern::Variable(actor));
         let event = Event::new("alice", Action::Read, ["a"]);
         assert!(
             atom.subst(&substitution)
-                .is_some_and(|concrete| concrete.matches(&values, &event))
+                .is_some_and(|resolved| resolved.matches(&resolver, &event))
         );
     }
 }

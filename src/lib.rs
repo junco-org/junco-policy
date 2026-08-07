@@ -6,10 +6,10 @@
 //! temporary variable environment explicitly. The resulting canonical nodes contain only immutable
 //! payloads and child references—never compiler, rule, store, scope, or validator backreferences.
 //!
-//! Compiled constants and nodes live in a caller-owned [`Bump`] arena. Boolean tests and normalized
-//! regex nodes are hashconsed, giving structurally equal expressions one reference-like canonical
-//! handle. The executable [`Validator`] retains only the canonical store, compiled rules, and
-//! committed event history.
+//! Resolved values and canonical nodes live in a caller-owned [`Bump`] arena. Boolean tests and
+//! normalized regex nodes are hashconsed, giving structurally equal expressions one reference-like
+//! canonical handle. The executable [`Validator`] retains only the canonical store, runtime rules,
+//! and committed event history.
 //!
 //! # Example
 //!

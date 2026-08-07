@@ -1,14 +1,14 @@
-//! Compile-time variable typing and per-candidate runtime substitution.
+//! Variable typing and per-candidate substitution.
 //!
-//! A [`VariableEnvironment`] is created from one source head and exists only while that rule is
-//! compiled. A [`CandidateSubstitution`] interns values from one matching candidate into the
-//! canonical value store. Neither object is stored in source expressions or canonical syntax nodes.
+//! A [`VariableEnvironment`] validates one source head while its patterns are interned. A matching
+//! [`InternedHead`] resolves candidate values into a temporary [`CandidateSubstitution`]. Neither
+//! object is stored in source expressions or canonical syntax nodes.
 
 use std::collections::HashMap;
 
 use crate::model::{Action, Event, Principal, Resource};
 
-use super::component::{CandidateSubstitution, CompiledPattern, ComponentDomain};
+use super::component::{CandidateSubstitution, ComponentDomain, InternedPattern};
 use super::source::{Component, ComponentPattern};
 use super::store::CanonicalStore;
 use super::variable::VariableSymbol;
@@ -16,7 +16,7 @@ use super::variable::VariableSymbol;
 /// Matches one typed head coordinate and returns its partial substitution.
 fn match_head_pattern<'arena, ComponentType>(
     store: &mut CanonicalStore<'arena>,
-    pattern: CompiledPattern<'arena, ComponentType>,
+    pattern: InternedPattern<'arena, ComponentType>,
     actual: &ComponentType,
 ) -> Option<CandidateSubstitution<'arena>>
 where
@@ -24,28 +24,28 @@ where
 {
     match pattern.into_inner() {
         ComponentPattern::Constant(expected) => {
-            ComponentType::compiled_matches(&store.values, expected, actual)
+            ComponentType::resolved_matches(&store.resolver, expected, actual)
                 .then(CandidateSubstitution::default)
         }
         ComponentPattern::Variable(variable) => {
             let mut substitution = CandidateSubstitution::default();
-            let value = ComponentType::compile(&mut store.values, actual);
+            let value = ComponentType::resolve(&mut store.resolver, actual);
             ComponentType::bindings_mut(&mut substitution).insert(variable, value);
             Some(substitution)
         }
     }
 }
 
-/// Arena-backed head patterns stored in one compiled rule.
+/// Interned head patterns stored in one runtime rule.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct CompiledHead<'arena> {
-    pub(super) principal: CompiledPattern<'arena, Principal>,
-    pub(super) action: CompiledPattern<'arena, Action>,
-    pub(super) resource: CompiledPattern<'arena, Resource>,
+pub(crate) struct InternedHead<'arena> {
+    pub(super) principal: InternedPattern<'arena, Principal>,
+    pub(super) action: InternedPattern<'arena, Action>,
+    pub(super) resource: InternedPattern<'arena, Resource>,
 }
 
-impl<'arena> CompiledHead<'arena> {
-    /// Matches the candidate, interns variable bindings, and merges partial substitutions.
+impl<'arena> InternedHead<'arena> {
+    /// Matches the candidate, resolves variable bindings, and merges partial substitutions.
     pub(crate) fn match_candidate(
         &self,
         store: &mut CanonicalStore<'arena>,
@@ -63,7 +63,7 @@ impl<'arena> CompiledHead<'arena> {
     }
 }
 
-/// Structural failure while resolving a compiled variable reference.
+/// Structural failure while resolving an interned variable symbol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ResolveError {
     /// The rule head did not declare the variable.
