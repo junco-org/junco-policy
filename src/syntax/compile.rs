@@ -5,12 +5,10 @@
 //! references. The variable environment is created from the head and dropped after the tail is
 //! compiled.
 
-use string_interner::DefaultSymbol;
-
 use crate::model::{Action, Principal, Resource};
 use crate::validator::{CompileError, RuleIndex};
 
-use super::component::{CompiledAtomPattern, ComponentDomain};
+use super::component::{CompiledAtomPattern, CompiledPattern, ComponentDomain};
 use super::environment::{CompiledHead, ResolveError, VariableEnvironment};
 use super::node::{RegexId, TestId, TestNode};
 use super::source::{AtomPattern, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr};
@@ -45,8 +43,8 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     rule: RuleIndex,
     pattern: &ComponentPattern<ComponentType>,
     variables: &mut VariableEnvironment,
-) -> Result<ComponentPattern<ComponentType::Compiled, DefaultSymbol>, CompileError> {
-    Ok(match pattern {
+) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
+    Ok(CompiledPattern::new(match pattern {
         ComponentPattern::Constant(value) => {
             ComponentPattern::Constant(ComponentType::compile(store.arena(), value))
         }
@@ -60,7 +58,7 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
                 })?;
             ComponentPattern::Variable(symbol)
         }
-    })
+    }))
 }
 
 /// Compiles the fixed capability-product head and its variable type environment.
@@ -90,8 +88,8 @@ fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     rule: RuleIndex,
     pattern: &ComponentPattern<ComponentType>,
     variables: &VariableEnvironment,
-) -> Result<ComponentPattern<ComponentType::Compiled, DefaultSymbol>, CompileError> {
-    Ok(match pattern {
+) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
+    Ok(CompiledPattern::new(match pattern {
         ComponentPattern::Constant(value) => {
             ComponentPattern::Constant(ComponentType::compile(store.arena(), value))
         }
@@ -116,7 +114,7 @@ fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
                 })?;
             ComponentPattern::Variable(symbol)
         }
-    })
+    }))
 }
 
 /// Compiles the concrete atom enum retained by hashconsed test nodes.
@@ -127,15 +125,15 @@ fn compile_atom_pattern<'arena>(
     variables: &VariableEnvironment,
 ) -> Result<CompiledAtomPattern<'arena>, CompileError> {
     Ok(match pattern {
-        AtomPattern::Principal(pattern) => AtomPattern::Principal(compile_pattern::<Principal>(
-            store, rule, pattern, variables,
-        )?),
-        AtomPattern::Action(pattern) => {
-            AtomPattern::Action(compile_pattern::<Action>(store, rule, pattern, variables)?)
-        }
-        AtomPattern::Resource(pattern) => AtomPattern::Resource(compile_pattern::<Resource>(
-            store, rule, pattern, variables,
-        )?),
+        AtomPattern::Principal(pattern) => AtomPattern::Principal(
+            compile_pattern::<Principal>(store, rule, pattern, variables)?.into_inner(),
+        ),
+        AtomPattern::Action(pattern) => AtomPattern::Action(
+            compile_pattern::<Action>(store, rule, pattern, variables)?.into_inner(),
+        ),
+        AtomPattern::Resource(pattern) => AtomPattern::Resource(
+            compile_pattern::<Resource>(store, rule, pattern, variables)?.into_inner(),
+        ),
     })
 }
 

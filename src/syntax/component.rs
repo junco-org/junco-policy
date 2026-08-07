@@ -6,14 +6,14 @@
 //! or retrieve a resource binding.
 
 use std::collections::{HashMap, hash_map::Entry};
-use std::fmt::Debug;
-use std::hash::Hash;
+use std::fmt::{self, Debug};
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
 use bumpalo::Bump;
 use string_interner::DefaultSymbol;
 
-use crate::model::{Action, Principal, Resource};
+use crate::model::{Action, Event, Principal, Resource};
 
 use super::source::{AtomPattern, Component, ComponentPattern, PatternRepresentation};
 
@@ -42,6 +42,15 @@ pub(crate) struct CandidateSubstitution<'event> {
     resources: HashMap<DefaultSymbol, &'event Resource>,
 }
 
+/// Structural application of a substitution to a pattern-like value.
+pub(super) trait Subst<Substitution> {
+    /// Variable-free value produced by successful substitution.
+    type Concrete;
+
+    /// Applies `substitution`, returning `None` when a referenced variable is unbound.
+    fn subst(&self, substitution: &Substitution) -> Option<Self::Concrete>;
+}
+
 /// Result of applying a candidate substitution to one compiled component pattern.
 ///
 /// Constants retain their arena-backed representation; variables resolve to a borrowed candidate
@@ -67,22 +76,76 @@ where
     }
 }
 
-impl<'event> CandidateSubstitution<'event> {
-    /// Applies this substitution to a constant-or-variable compiled component pattern.
-    pub(super) fn apply<'arena, ComponentType>(
-        &self,
-        pattern: CompiledPattern<'arena, ComponentType>,
-    ) -> Option<AppliedPattern<'arena, 'event, ComponentType>>
-    where
-        ComponentType: ComponentDomain<'arena> + 'event,
-    {
-        match pattern {
-            ComponentPattern::Constant(expected) => Some(AppliedPattern::Constant(expected)),
-            ComponentPattern::Variable(symbol) => ComponentType::bindings(self)
-                .get(&symbol)
-                .copied()
-                .map(AppliedPattern::Bound),
+/// Compiled component pattern carrying its component domain in the type.
+pub(super) struct CompiledComponentPattern<'arena, ComponentType>
+where
+    ComponentType: ComponentDomain<'arena>,
+{
+    inner: ComponentPattern<ComponentType::Compiled, DefaultSymbol>,
+    component: PhantomData<fn() -> ComponentType>,
+}
+
+impl<'arena, ComponentType> CompiledComponentPattern<'arena, ComponentType>
+where
+    ComponentType: ComponentDomain<'arena>,
+{
+    /// Wraps the structurally stored compiled pattern with its component-domain marker.
+    pub(super) fn new(inner: ComponentPattern<ComponentType::Compiled, DefaultSymbol>) -> Self {
+        Self {
+            inner,
+            component: PhantomData,
         }
+    }
+
+    /// Returns the structural representation stored by compiled atom nodes.
+    pub(super) fn into_inner(self) -> ComponentPattern<ComponentType::Compiled, DefaultSymbol> {
+        self.inner
+    }
+}
+
+impl<'arena, ComponentType> Clone for CompiledComponentPattern<'arena, ComponentType>
+where
+    ComponentType: ComponentDomain<'arena>,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'arena, ComponentType> Copy for CompiledComponentPattern<'arena, ComponentType> where
+    ComponentType: ComponentDomain<'arena>
+{
+}
+
+impl<'arena, ComponentType> fmt::Debug for CompiledComponentPattern<'arena, ComponentType>
+where
+    ComponentType: ComponentDomain<'arena>,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(formatter)
+    }
+}
+
+impl<'arena, ComponentType> PartialEq for CompiledComponentPattern<'arena, ComponentType>
+where
+    ComponentType: ComponentDomain<'arena>,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+impl<'arena, ComponentType> Eq for CompiledComponentPattern<'arena, ComponentType> where
+    ComponentType: ComponentDomain<'arena>
+{
+}
+
+impl<'arena, ComponentType> Hash for CompiledComponentPattern<'arena, ComponentType>
+where
+    ComponentType: ComponentDomain<'arena>,
+{
+    fn hash<HasherType: Hasher>(&self, state: &mut HasherType) {
+        self.inner.hash(state);
     }
 }
 
@@ -306,10 +369,63 @@ impl<'arena> PatternRepresentation for CompiledRepresentation<'arena> {
 
 /// Compiled pattern for one statically selected component type.
 pub(super) type CompiledPattern<'arena, ComponentType> =
-    ComponentPattern<<ComponentType as ComponentDomain<'arena>>::Compiled, DefaultSymbol>;
+    CompiledComponentPattern<'arena, ComponentType>;
 
 /// Concrete, structurally hashable atom representation stored in [`TestNode`](super::node::TestNode).
 pub(super) type CompiledAtomPattern<'arena> = AtomPattern<CompiledRepresentation<'arena>>;
+
+/// Variable-free atom produced by applying a candidate substitution.
+pub(super) enum ConcreteAtom<'arena, 'event> {
+    Principal(AppliedPattern<'arena, 'event, Principal>),
+    Action(AppliedPattern<'arena, 'event, Action>),
+    Resource(AppliedPattern<'arena, 'event, Resource>),
+}
+
+impl PartialEq<Event> for ConcreteAtom<'_, '_> {
+    fn eq(&self, event: &Event) -> bool {
+        match self {
+            Self::Principal(expected) => expected.eq(&event.principal),
+            Self::Action(expected) => expected.eq(&event.action),
+            Self::Resource(expected) => expected.eq(&event.resource),
+        }
+    }
+}
+
+impl<'arena, 'event, ComponentType> Subst<CandidateSubstitution<'event>>
+    for CompiledComponentPattern<'arena, ComponentType>
+where
+    ComponentType: ComponentDomain<'arena> + 'event,
+{
+    type Concrete = AppliedPattern<'arena, 'event, ComponentType>;
+
+    fn subst(&self, substitution: &CandidateSubstitution<'event>) -> Option<Self::Concrete> {
+        match self.inner {
+            ComponentPattern::Constant(expected) => Some(AppliedPattern::Constant(expected)),
+            ComponentPattern::Variable(symbol) => ComponentType::bindings(substitution)
+                .get(&symbol)
+                .copied()
+                .map(AppliedPattern::Bound),
+        }
+    }
+}
+
+impl<'arena, 'event> Subst<CandidateSubstitution<'event>> for CompiledAtomPattern<'arena> {
+    type Concrete = ConcreteAtom<'arena, 'event>;
+
+    fn subst(&self, substitution: &CandidateSubstitution<'event>) -> Option<Self::Concrete> {
+        match self {
+            AtomPattern::Principal(pattern) => CompiledComponentPattern::<Principal>::new(*pattern)
+                .subst(substitution)
+                .map(ConcreteAtom::Principal),
+            AtomPattern::Action(pattern) => CompiledComponentPattern::<Action>::new(*pattern)
+                .subst(substitution)
+                .map(ConcreteAtom::Action),
+            AtomPattern::Resource(pattern) => CompiledComponentPattern::<Resource>::new(*pattern)
+                .subst(substitution)
+                .map(ConcreteAtom::Resource),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -368,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_resolves_constants_and_variables() {
+    fn subst_resolves_components_and_atoms() {
         let mut symbols = DefaultStringInterner::default();
         let actor = symbols.get_or_intern("actor");
         let alice = Principal::new("alice");
@@ -376,16 +492,26 @@ mod tests {
         let mut substitution = CandidateSubstitution::default();
         substitution.principals.insert(actor, &alice);
 
-        let constant = substitution
-            .apply::<Principal>(ComponentPattern::Constant("alice"))
-            .expect("constants always apply");
+        let constant =
+            CompiledComponentPattern::<Principal>::new(ComponentPattern::Constant("alice"))
+                .subst(&substitution)
+                .expect("constants always substitute");
         assert!(constant.eq(&alice));
         assert!(!constant.eq(&bob));
 
-        let variable = substitution
-            .apply::<Principal>(ComponentPattern::Variable(actor))
-            .expect("the candidate bound actor");
+        let variable =
+            CompiledComponentPattern::<Principal>::new(ComponentPattern::Variable(actor))
+                .subst(&substitution)
+                .expect("the candidate bound actor");
         assert!(variable.eq(&alice));
         assert!(!variable.eq(&bob));
+
+        let atom: CompiledAtomPattern<'_> =
+            AtomPattern::Principal(ComponentPattern::Variable(actor));
+        let event = Event::new("alice", Action::Read, ["a"]);
+        assert!(
+            atom.subst(&substitution)
+                .is_some_and(|concrete| concrete.eq(&event))
+        );
     }
 }

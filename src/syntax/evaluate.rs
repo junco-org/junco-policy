@@ -6,29 +6,21 @@
 
 use crate::model::Event;
 
-use super::component::{CandidateSubstitution, CompiledAtomPattern};
+use super::component::{CandidateSubstitution, CompiledAtomPattern, Subst};
 use super::node::{RegexId, RegexKind, TestId, TestNode};
-use super::source::{AtomPattern, Comparison};
+use super::source::Comparison;
 use super::store::CanonicalStore;
 
-/// Resolves each atom pattern through the candidate substitution and compares it to the
-/// corresponding historical event component.
+/// Applies the candidate substitution and compares the resulting concrete atom to the historical
+/// event.
 fn eval_atom<'arena, 'event>(
     pattern: CompiledAtomPattern<'arena>,
     event: &'event Event,
     substitution: &CandidateSubstitution<'event>,
 ) -> bool {
-    match pattern {
-        AtomPattern::Principal(pattern) => substitution
-            .apply(pattern)
-            .is_some_and(|expected| expected.eq(&event.principal)),
-        AtomPattern::Action(pattern) => substitution
-            .apply(pattern)
-            .is_some_and(|expected| expected.eq(&event.action)),
-        AtomPattern::Resource(pattern) => substitution
-            .apply(pattern)
-            .is_some_and(|expected| expected.eq(&event.resource)),
-    }
+    pattern
+        .subst(substitution)
+        .is_some_and(|concrete| concrete.eq(event))
 }
 
 /// Returns whether the complete history belongs to `root` under `substitution`.

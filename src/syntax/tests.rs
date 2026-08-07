@@ -83,10 +83,10 @@ fn variable_names_share_interned_symbols_across_rules() {
     let first = compile_rule(&mut store, index(1), &rule(RegexExpr::all())).unwrap();
     let second = compile_rule(&mut store, index(2), &rule(RegexExpr::all())).unwrap();
 
-    let ComponentPattern::Variable(first_symbol) = first.head.principal else {
+    let ComponentPattern::Variable(first_symbol) = first.head.principal.into_inner() else {
         panic!("principal head pattern was not compiled as a variable")
     };
-    let ComponentPattern::Variable(second_symbol) = second.head.principal else {
+    let ComponentPattern::Variable(second_symbol) = second.head.principal.into_inner() else {
         panic!("principal head pattern was not compiled as a variable")
     };
     assert_eq!(first_symbol, second_symbol);

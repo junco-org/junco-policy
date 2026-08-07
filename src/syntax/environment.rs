@@ -21,7 +21,7 @@ fn match_head_pattern<'arena, 'event, ComponentType>(
 where
     ComponentType: ComponentDomain<'arena> + 'event,
 {
-    match pattern {
+    match pattern.into_inner() {
         ComponentPattern::Constant(expected) => {
             ComponentType::constant_matches(expected, actual).then(CandidateSubstitution::default)
         }
