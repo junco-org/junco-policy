@@ -89,7 +89,7 @@ pub(crate) struct CandidateSubstitution<'arena> {
 }
 
 /// Structural application of a substitution to a pattern-like value.
-pub(super) trait Subst<Substitution, Domain = ()> {
+pub(super) trait Subst<Substitution> {
     /// Variable-free value produced by successful substitution.
     type Concrete;
 
@@ -316,23 +316,6 @@ impl<'arena> ResolvedAtom<'arena> {
     }
 }
 
-impl<'arena, ComponentType> Subst<CandidateSubstitution<'arena>, ComponentType>
-    for InternedPattern<'arena, ComponentType>
-where
-    ComponentType: ComponentDomain<'arena>,
-{
-    type Concrete = ComponentType::Resolved;
-
-    fn subst(&self, substitution: &CandidateSubstitution<'arena>) -> Option<Self::Concrete> {
-        match self {
-            ComponentPattern::Constant(expected) => Some(*expected),
-            ComponentPattern::Variable(variable) => {
-                ComponentType::bindings(substitution).get(variable).copied()
-            }
-        }
-    }
-}
-
 fn subst_component<'arena, ComponentType>(
     pattern: &InternedPattern<'arena, ComponentType>,
     substitution: &CandidateSubstitution<'arena>,
@@ -340,10 +323,12 @@ fn subst_component<'arena, ComponentType>(
 where
     ComponentType: ComponentDomain<'arena>,
 {
-    <InternedPattern<'arena, ComponentType> as Subst<
-        CandidateSubstitution<'arena>,
-        ComponentType,
-    >>::subst(pattern, substitution)
+    match pattern {
+        ComponentPattern::Constant(expected) => Some(*expected),
+        ComponentPattern::Variable(variable) => {
+            ComponentType::bindings(substitution).get(variable).copied()
+        }
+    }
 }
 
 impl<'arena> Subst<CandidateSubstitution<'arena>> for InternedAtomPattern<'arena> {
