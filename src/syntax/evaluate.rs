@@ -6,7 +6,7 @@
 
 use crate::model::Event;
 
-use super::component::{CandidateSubstitution, ComponentResolver, Subst};
+use super::component::{CandidateSubstitution, ComponentResolver};
 use super::node::{RegexId, RegexKind, TestId, TestNode};
 use super::source::Comparison;
 use super::store::CanonicalStore;

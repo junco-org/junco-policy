@@ -112,13 +112,13 @@ fn compile_atom_pattern<'arena>(
 ) -> Result<CompiledAtomPattern<'arena>, CompileError> {
     Ok(match pattern {
         AtomPattern::Principal(pattern) => {
-            AtomPattern::Principal(compile_pattern::<Principal>(store, pattern, variables)?)
+            CompiledAtomPattern::Principal(compile_pattern::<Principal>(store, pattern, variables)?)
         }
         AtomPattern::Action(pattern) => {
-            AtomPattern::Action(compile_pattern::<Action>(store, pattern, variables)?)
+            CompiledAtomPattern::Action(compile_pattern::<Action>(store, pattern, variables)?)
         }
         AtomPattern::Resource(pattern) => {
-            AtomPattern::Resource(compile_pattern::<Resource>(store, pattern, variables)?)
+            CompiledAtomPattern::Resource(compile_pattern::<Resource>(store, pattern, variables)?)
         }
     })
 }

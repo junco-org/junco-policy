@@ -76,48 +76,18 @@ pub enum Comparison {
     Neq,
 }
 
-/// Type-level family of values used by an [`AtomPattern`].
-///
-/// The public source representation uses owned model values and string variable names. The
-/// compiler supplies a private representation using black-box interned string symbols. This
-/// packages the four related types into one generic parameter with no runtime representation.
-pub trait PatternRepresentation {
-    /// Principal value stored by a principal atom.
-    type PrincipalValue;
-    /// Action value stored by an action atom.
-    type ActionValue;
-    /// Resource value stored by a resource atom.
-    type ResourceValue;
-    /// Variable identifier stored by any variable atom.
-    type Variable;
-}
-
-/// Owned representation used by public source expressions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SourceRepresentation;
-
-impl PatternRepresentation for SourceRepresentation {
-    type PrincipalValue = Principal;
-    type ActionValue = Action;
-    type ResourceValue = Resource;
-    type Variable = String;
-}
-
-/// Typed one-event component pattern.
-///
-/// The generic parameter lets the compiler reuse this enum shape for source and compiled patterns.
-/// Source callers normally use the default representation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum AtomPattern<Representation: PatternRepresentation = SourceRepresentation> {
+/// Owned one-event component pattern.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AtomPattern {
     /// Test the event principal.
-    Principal(ComponentPattern<Representation::PrincipalValue, Representation::Variable>),
+    Principal(ComponentPattern<Principal>),
     /// Test the event action.
-    Action(ComponentPattern<Representation::ActionValue, Representation::Variable>),
+    Action(ComponentPattern<Action>),
     /// Test the event resource.
-    Resource(ComponentPattern<Representation::ResourceValue, Representation::Variable>),
+    Resource(ComponentPattern<Resource>),
 }
 
-impl<Representation: PatternRepresentation> AtomPattern<Representation> {
+impl AtomPattern {
     /// Returns the product coordinate selected by this atom.
     pub fn component(&self) -> Component {
         match self {

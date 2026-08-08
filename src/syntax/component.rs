@@ -1,20 +1,18 @@
 //! Component-specific compilation, matching, and typed substitution storage.
 //!
-//! [`ComponentDomain`] associates each model component with one canonical arena-backed
-//! representation used by both policy constants and candidate bindings. Each implementation also
-//! selects its typed map in [`CandidateSubstitution`], so domains cannot be mixed.
+//! [`ComponentDomain`] associates each model component with one resolved representation and defines
+//! how that value enters and leaves the heterogeneous [`CandidateSubstitution`] range.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::marker::PhantomData;
 
 use bumpalo::Bump;
 use string_interner::{DefaultStringInterner, DefaultSymbol};
 
 use crate::model::{Action, Event, Principal, Resource};
 
-use super::source::{AtomPattern, Component, ComponentPattern, PatternRepresentation};
+use super::source::{Component, ComponentPattern};
 
 /// Resolved action value using string-interner symbols for commit messages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -83,15 +81,6 @@ pub(super) enum ResolvedValue<'arena> {
 #[derive(Debug, Default)]
 pub(crate) struct CandidateSubstitution<'arena> {
     values: HashMap<DefaultSymbol, ResolvedValue<'arena>>,
-}
-
-/// Structural application of a substitution to a pattern-like value.
-pub(super) trait Subst<Substitution> {
-    /// Variable-free value produced by successful substitution.
-    type Concrete;
-
-    /// Applies `substitution`, returning `None` when a referenced variable is unbound.
-    fn subst(&self, substitution: &Substitution) -> Option<Self::Concrete>;
 }
 
 impl<'arena> CandidateSubstitution<'arena> {
@@ -209,23 +198,17 @@ impl<'arena> ComponentDomain<'arena> for Resource {
     }
 }
 
-/// Compiled representation used by runtime atom patterns before substitution.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) struct CompiledRepresentation<'arena>(PhantomData<&'arena ()>);
-
-impl<'arena> PatternRepresentation for CompiledRepresentation<'arena> {
-    type PrincipalValue = <Principal as ComponentDomain<'arena>>::Resolved;
-    type ActionValue = <Action as ComponentDomain<'arena>>::Resolved;
-    type ResourceValue = <Resource as ComponentDomain<'arena>>::Resolved;
-    type Variable = DefaultSymbol;
-}
-
 /// Compiled pattern for one statically selected component domain.
 pub(super) type CompiledPattern<'arena, ComponentType> =
     ComponentPattern<<ComponentType as ComponentDomain<'arena>>::Resolved, DefaultSymbol>;
 
 /// Compiled, structurally hashable atom pattern stored in [`TestNode`](super::node::TestNode).
-pub(super) type CompiledAtomPattern<'arena> = AtomPattern<CompiledRepresentation<'arena>>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum CompiledAtomPattern<'arena> {
+    Principal(CompiledPattern<'arena, Principal>),
+    Action(CompiledPattern<'arena, Action>),
+    Resource(CompiledPattern<'arena, Resource>),
+}
 
 /// Variable-free atom produced by applying a substitution to a compiled atom pattern.
 pub(super) enum ResolvedAtom<'arena> {
@@ -247,37 +230,45 @@ impl<'arena> ResolvedAtom<'arena> {
     }
 }
 
-fn subst_component<'arena, ComponentType>(
-    pattern: &CompiledPattern<'arena, ComponentType>,
-    substitution: &CandidateSubstitution<'arena>,
-) -> Option<ComponentType::Resolved>
+impl<Resolved> ComponentPattern<Resolved, DefaultSymbol>
 where
-    ComponentType: ComponentDomain<'arena>,
+    Resolved: Copy,
 {
-    match pattern {
-        ComponentPattern::Constant(expected) => Some(*expected),
-        ComponentPattern::Variable(variable) => substitution
-            .values
-            .get(variable)
-            .copied()
-            .and_then(ComponentType::project),
+    /// Applies a candidate substitution in the selected component domain.
+    pub(super) fn subst<'arena, ComponentType>(
+        &self,
+        substitution: &CandidateSubstitution<'arena>,
+    ) -> Option<Resolved>
+    where
+        ComponentType: ComponentDomain<'arena, Resolved = Resolved>,
+    {
+        match self {
+            Self::Constant(expected) => Some(*expected),
+            Self::Variable(variable) => substitution
+                .values
+                .get(variable)
+                .copied()
+                .and_then(ComponentType::project),
+        }
     }
 }
 
-impl<'arena> Subst<CandidateSubstitution<'arena>> for CompiledAtomPattern<'arena> {
-    type Concrete = ResolvedAtom<'arena>;
-
-    fn subst(&self, substitution: &CandidateSubstitution<'arena>) -> Option<Self::Concrete> {
+impl<'arena> CompiledAtomPattern<'arena> {
+    /// Applies candidate bindings and returns a variable-free atom.
+    pub(super) fn subst(
+        &self,
+        substitution: &CandidateSubstitution<'arena>,
+    ) -> Option<ResolvedAtom<'arena>> {
         match self {
-            AtomPattern::Principal(pattern) => {
-                subst_component::<Principal>(pattern, substitution).map(ResolvedAtom::Principal)
-            }
-            AtomPattern::Action(pattern) => {
-                subst_component::<Action>(pattern, substitution).map(ResolvedAtom::Action)
-            }
-            AtomPattern::Resource(pattern) => {
-                subst_component::<Resource>(pattern, substitution).map(ResolvedAtom::Resource)
-            }
+            Self::Principal(pattern) => pattern
+                .subst::<Principal>(substitution)
+                .map(ResolvedAtom::Principal),
+            Self::Action(pattern) => pattern
+                .subst::<Action>(substitution)
+                .map(ResolvedAtom::Action),
+            Self::Resource(pattern) => pattern
+                .subst::<Resource>(substitution)
+                .map(ResolvedAtom::Resource),
         }
     }
 }
@@ -392,19 +383,21 @@ mod tests {
             .insert(actor, ResolvedValue::Principal(alice_symbol));
 
         let constant: CompiledPattern<'_, Principal> = ComponentPattern::Constant(alice_symbol);
-        let constant = subst_component::<Principal>(&constant, &substitution)
+        let constant = constant
+            .subst::<Principal>(&substitution)
             .expect("constants always substitute");
         assert_eq!(constant, alice_resolved);
         assert_ne!(constant, bob_resolved);
 
         let variable: CompiledPattern<'_, Principal> = ComponentPattern::Variable(actor);
-        let variable = subst_component::<Principal>(&variable, &substitution)
+        let variable = variable
+            .subst::<Principal>(&substitution)
             .expect("the candidate bound actor");
         assert_eq!(variable, alice_resolved);
         assert_ne!(variable, bob_resolved);
 
         let atom: CompiledAtomPattern<'_> =
-            AtomPattern::Principal(ComponentPattern::Variable(actor));
+            CompiledAtomPattern::Principal(ComponentPattern::Variable(actor));
         let event = Event::new("alice", Action::Read, ["a"]);
         assert!(
             atom.subst(&substitution)
