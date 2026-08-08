@@ -1,8 +1,10 @@
 //! Runtime evaluation over canonical syntax.
 //!
-//! Evaluation receives every dependency explicitly: canonical store, tail root, committed history,
-//! and candidate substitution. No evaluator or node retains a rule, scope, store, or validator
-//! backreference.
+//! Evaluation receives every dependency explicitly. Concrete derivatives are memoized for one
+//! complete-history evaluation, whose candidate substitution is immutable; no evaluator or node
+//! retains a rule, scope, store, or validator backreference.
+
+use std::collections::HashMap;
 
 use crate::model::Event;
 
@@ -19,12 +21,14 @@ pub(crate) fn accepts<'arena, 'event>(
     substitution: &CandidateSubstitution<'arena>,
 ) -> bool {
     let mut state = root;
+    let mut derivatives = DerivativeCache::new();
     for event in history {
-        state = derive(store, state, event, substitution);
+        state = derive_cached(store, state, event, substitution, &mut derivatives);
     }
     store.nullable(state)
 }
 
+#[cfg(test)]
 /// Computes one exact derivative and normalizes every constructed residual through `store`.
 pub(super) fn derive<'arena>(
     store: &mut CanonicalStore<'arena>,
@@ -32,7 +36,34 @@ pub(super) fn derive<'arena>(
     event: &Event,
     substitution: &CandidateSubstitution<'arena>,
 ) -> RegexId<'arena> {
-    match regex.get().kind {
+    derive_cached(
+        store,
+        regex,
+        event,
+        substitution,
+        &mut DerivativeCache::new(),
+    )
+}
+
+pub(super) type DerivativeCache<'arena, 'event> =
+    HashMap<(RegexId<'arena>, &'event Event), RegexId<'arena>>;
+
+/// Reuses exact concrete derivatives for one fixed candidate substitution.
+///
+/// Scoping this cache to one [`accepts`] call makes `(state, event)` a complete key while avoiding
+/// persistent growth over the unbounded event and substitution domains.
+pub(super) fn derive_cached<'arena, 'event>(
+    store: &mut CanonicalStore<'arena>,
+    regex: RegexId<'arena>,
+    event: &'event Event,
+    substitution: &CandidateSubstitution<'arena>,
+    derivatives: &mut DerivativeCache<'arena, 'event>,
+) -> RegexId<'arena> {
+    if let Some(derivative) = derivatives.get(&(regex, event)) {
+        return *derivative;
+    }
+
+    let derivative = match regex.get().kind {
         RegexKind::Empty | RegexKind::Epsilon => store.empty,
         RegexKind::All => store.all,
         RegexKind::Test(test) => {
@@ -43,28 +74,28 @@ pub(super) fn derive<'arena>(
             }
         }
         RegexKind::Union(children) => {
-            let derivatives = children
+            let children = children
                 .iter()
-                .map(|child| derive(store, *child, event, substitution))
+                .map(|child| derive_cached(store, *child, event, substitution, derivatives))
                 .collect();
-            store.regex_union(derivatives)
+            store.regex_union(children)
         }
         RegexKind::Intersect(children) => {
-            let derivatives = children
+            let children = children
                 .iter()
-                .map(|child| derive(store, *child, event, substitution))
+                .map(|child| derive_cached(store, *child, event, substitution, derivatives))
                 .collect();
-            store.regex_intersect(derivatives)
+            store.regex_intersect(children)
         }
         RegexKind::Not(inner) => {
-            let derivative = derive(store, inner, event, substitution);
-            store.regex_not(derivative)
+            let inner = derive_cached(store, inner, event, substitution, derivatives);
+            store.regex_not(inner)
         }
         RegexKind::Concat(factors) => {
             let mut alternatives = Vec::new();
             let mut remaining = factors;
             while let Some((factor, suffix)) = remaining.split_first() {
-                let derivative = derive(store, *factor, event, substitution);
+                let derivative = derive_cached(store, *factor, event, substitution, derivatives);
                 let mut product = Vec::with_capacity(1 + suffix.len());
                 product.push(derivative);
                 product.extend_from_slice(suffix);
@@ -77,10 +108,14 @@ pub(super) fn derive<'arena>(
             store.regex_union(alternatives)
         }
         RegexKind::Star(inner) => {
-            let derivative = derive(store, inner, event, substitution);
-            store.regex_concat(vec![derivative, regex])
+            let inner = derive_cached(store, inner, event, substitution, derivatives);
+            store.regex_concat(vec![inner, regex])
         }
-    }
+    };
+
+    let previous = derivatives.insert((regex, event), derivative);
+    debug_assert!(previous.is_none());
+    derivative
 }
 
 /// Evaluates one canonical boolean test against an event and candidate substitution.

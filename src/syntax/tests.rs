@@ -3,7 +3,7 @@
 use bumpalo::Bump;
 
 use super::compile::compile_rule;
-use super::evaluate::derive;
+use super::evaluate::{DerivativeCache, derive, derive_cached};
 use super::source::{
     AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
@@ -102,4 +102,42 @@ fn derivative_cycle_returns_the_same_hashconsed_state() {
         assert_eq!(state, runtime_rule.tail);
     }
     assert_eq!(store.regex_node_count(), before);
+}
+
+#[test]
+fn concrete_derivatives_reuse_equal_event_transitions() {
+    let arena = Bump::new();
+    let mut store = CanonicalStore::new(&arena);
+    let cycle = RegexExpr::star(RegexExpr::union([
+        action_regex(Action::Read),
+        action_regex(Action::Edit),
+    ]));
+    let runtime_rule = compile_rule(&mut store, &rule(cycle)).unwrap();
+    let first_event = Event::new("alice", Action::Read, ["a"]);
+    let equal_event = first_event.clone();
+    let substitution = runtime_rule
+        .head
+        .match_candidate(&mut store, &first_event)
+        .unwrap();
+    let mut derivatives = DerivativeCache::new();
+
+    let first = derive_cached(
+        &mut store,
+        runtime_rule.tail,
+        &first_event,
+        &substitution,
+        &mut derivatives,
+    );
+    let entries = derivatives.len();
+    assert!(entries > 1, "recursive derivatives must share the cache");
+
+    let second = derive_cached(
+        &mut store,
+        runtime_rule.tail,
+        &equal_event,
+        &substitution,
+        &mut derivatives,
+    );
+    assert_eq!(second, first);
+    assert_eq!(derivatives.len(), entries);
 }
