@@ -28,10 +28,11 @@ where
                 .then(CandidateSubstitution::default)
         }
         ComponentPattern::Variable(variable) => {
-            let mut substitution = CandidateSubstitution::default();
             let value = ComponentType::resolve(&mut store.resolver, actual);
-            ComponentType::bindings_mut(&mut substitution).insert(variable, value);
-            Some(substitution)
+            Some(CandidateSubstitution::singleton(
+                variable,
+                ComponentType::inject(value),
+            ))
         }
     }
 }
