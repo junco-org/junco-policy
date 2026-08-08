@@ -54,13 +54,6 @@ impl<'arena> ComponentResolver<'arena> {
         self.strings.get_or_intern(value)
     }
 
-    /// Resolves one valid symbol through the black-box string interner.
-    pub(super) fn resolve_string(&self, symbol: DefaultSymbol) -> &str {
-        self.strings
-            .resolve(symbol)
-            .expect("component symbols originate from this interner")
-    }
-
     /// Resolves one ordered resource sequence after interning every segment string.
     pub(super) fn resolve_resource(&mut self, value: &Resource) -> ResolvedResource<'arena> {
         let segments: Vec<DefaultSymbol> = value
@@ -101,20 +94,24 @@ pub(super) trait Subst<Substitution> {
     fn subst(&self, substitution: &Substitution) -> Option<Self::Concrete>;
 }
 
-/// Extends `target` atomically when every repeated variable has the same resolved value.
-fn merge_map<Key, Value>(target: &mut HashMap<Key, Value>, source: HashMap<Key, Value>) -> bool
+/// Returns the compatible union of two maps without modifying either input.
+fn merge_map<Key, Value>(
+    left: &HashMap<Key, Value>,
+    right: &HashMap<Key, Value>,
+) -> Option<HashMap<Key, Value>>
 where
-    Key: Eq + Hash,
-    Value: Eq,
+    Key: Clone + Eq + Hash,
+    Value: Clone + Eq,
 {
-    if source
+    if right
         .iter()
-        .any(|(key, value)| target.get(key).is_some_and(|existing| existing != value))
+        .any(|(key, value)| left.get(key).is_some_and(|existing| existing != value))
     {
-        return false;
+        return None;
     }
-    target.extend(source);
-    true
+    let mut merged = left.clone();
+    merged.extend(right.clone());
+    Some(merged)
 }
 
 impl<'arena> CandidateSubstitution<'arena> {
@@ -125,11 +122,11 @@ impl<'arena> CandidateSubstitution<'arena> {
         }
     }
 
-    /// Mutates this substitution with compatible assignments from `other`.
-    ///
-    /// Returns `false` without changing `self` when a repeated variable has a different value.
-    pub(super) fn merge(&mut self, other: Self) -> bool {
-        merge_map(&mut self.values, other.values)
+    /// Returns a new compatible union without modifying either input substitution.
+    pub(super) fn merge(&self, other: &Self) -> Option<Self> {
+        Some(Self {
+            values: merge_map(&self.values, &other.values)?,
+        })
     }
 }
 
@@ -144,13 +141,6 @@ pub(super) trait ComponentDomain<'arena>: Sized + Eq {
     /// Resolves a model value into the representation shared by constants and substitutions.
     fn resolve(resolver: &mut ComponentResolver<'arena>, value: &Self) -> Self::Resolved;
 
-    /// Compares one resolved value with a model value through the resolver.
-    fn resolved_matches(
-        resolver: &ComponentResolver<'arena>,
-        expected: Self::Resolved,
-        actual: &Self,
-    ) -> bool;
-
     /// Injects one domain value into the heterogeneous substitution range.
     fn inject(value: Self::Resolved) -> ResolvedValue<'arena>;
 
@@ -164,14 +154,6 @@ impl<'arena> ComponentDomain<'arena> for Principal {
 
     fn resolve(resolver: &mut ComponentResolver<'arena>, value: &Self) -> Self::Resolved {
         resolver.intern_string(value.as_str())
-    }
-
-    fn resolved_matches(
-        resolver: &ComponentResolver<'arena>,
-        expected: Self::Resolved,
-        actual: &Self,
-    ) -> bool {
-        resolver.resolve_string(expected) == actual.as_str()
     }
 
     fn inject(value: Self::Resolved) -> ResolvedValue<'arena> {
@@ -208,27 +190,6 @@ impl<'arena> ComponentDomain<'arena> for Action {
         }
     }
 
-    fn resolved_matches(
-        resolver: &ComponentResolver<'arena>,
-        expected: Self::Resolved,
-        actual: &Self,
-    ) -> bool {
-        match (expected, actual) {
-            (ResolvedAction::Read, Action::Read)
-            | (ResolvedAction::Edit, Action::Edit)
-            | (ResolvedAction::Stage, Action::Stage)
-            | (ResolvedAction::Unstage, Action::Unstage)
-            | (ResolvedAction::Checkout, Action::Checkout)
-            | (ResolvedAction::Stash, Action::Stash)
-            | (ResolvedAction::Diff, Action::Diff)
-            | (ResolvedAction::History, Action::History) => true,
-            (ResolvedAction::Commit(expected), Action::Commit { message }) => {
-                expected.map(|symbol| resolver.resolve_string(symbol)) == message.as_deref()
-            }
-            _ => false,
-        }
-    }
-
     fn inject(value: Self::Resolved) -> ResolvedValue<'arena> {
         ResolvedValue::Action(value)
     }
@@ -247,19 +208,6 @@ impl<'arena> ComponentDomain<'arena> for Resource {
 
     fn resolve(resolver: &mut ComponentResolver<'arena>, value: &Self) -> Self::Resolved {
         resolver.resolve_resource(value)
-    }
-
-    fn resolved_matches(
-        resolver: &ComponentResolver<'arena>,
-        expected: Self::Resolved,
-        actual: &Self,
-    ) -> bool {
-        expected.0.len() == actual.segments().len()
-            && expected
-                .0
-                .iter()
-                .zip(actual.segments())
-                .all(|(left, right)| resolver.resolve_string(*left) == right)
     }
 
     fn inject(value: Self::Resolved) -> ResolvedValue<'arena> {
@@ -300,16 +248,14 @@ pub(super) enum ResolvedAtom<'arena> {
 }
 
 impl<'arena> ResolvedAtom<'arena> {
-    /// Compares this resolved atom with a model event through the component resolver.
-    pub(super) fn matches(&self, resolver: &ComponentResolver<'arena>, event: &Event) -> bool {
+    /// Resolves the event component and compares it with this resolved atom value.
+    pub(super) fn matches(&self, resolver: &mut ComponentResolver<'arena>, event: &Event) -> bool {
         match self {
             Self::Principal(expected) => {
-                Principal::resolved_matches(resolver, *expected, &event.principal)
+                *expected == Principal::resolve(resolver, &event.principal)
             }
-            Self::Action(expected) => Action::resolved_matches(resolver, *expected, &event.action),
-            Self::Resource(expected) => {
-                Resource::resolved_matches(resolver, *expected, &event.resource)
-            }
+            Self::Action(expected) => *expected == Action::resolve(resolver, &event.action),
+            Self::Resource(expected) => *expected == Resource::resolve(resolver, &event.resource),
         }
     }
 }
@@ -365,7 +311,6 @@ mod tests {
         let constant_principal = Principal::resolve(&mut resolver, &Principal::new("alice"));
         let candidate_principal = Principal::resolve(&mut resolver, &Principal::new("alice"));
         assert_eq!(constant_principal, candidate_principal);
-        assert_eq!(resolver.resolve_string(constant_principal), "alice");
 
         let constant_resource = Resource::resolve(&mut resolver, &Resource::new(["src", "a.rs"]));
         let candidate_resource = Resource::resolve(&mut resolver, &Resource::new(["src", "a.rs"]));
@@ -394,15 +339,17 @@ mod tests {
             .insert(actor, ResolvedValue::Principal(same_alice));
         right.values.insert(operation, ResolvedValue::Action(read));
 
-        assert!(left.merge(right));
+        let merged = left.merge(&right).expect("bindings agree");
         assert_eq!(
-            left.values.get(&actor),
+            merged.values.get(&actor),
             Some(&ResolvedValue::Principal(alice))
         );
         assert_eq!(
-            left.values.get(&operation),
+            merged.values.get(&operation),
             Some(&ResolvedValue::Action(read))
         );
+        assert!(!left.values.contains_key(&operation));
+        assert!(right.values.contains_key(&operation));
     }
 
     #[test]
@@ -418,7 +365,7 @@ mod tests {
         let mut right = CandidateSubstitution::default();
         right.values.insert(actor, ResolvedValue::Principal(bob));
 
-        assert!(!left.merge(right));
+        assert!(left.merge(&right).is_none());
         assert_eq!(
             left.values.get(&actor),
             Some(&ResolvedValue::Principal(alice))
@@ -439,7 +386,7 @@ mod tests {
             .values
             .insert(value, ResolvedValue::Action(ResolvedAction::Read));
 
-        assert!(!left.merge(right));
+        assert!(left.merge(&right).is_none());
     }
 
     #[test]
@@ -450,6 +397,8 @@ mod tests {
         let alice = Principal::new("alice");
         let bob = Principal::new("bob");
         let alice_symbol = resolver.intern_string("alice");
+        let alice_resolved = Principal::resolve(&mut resolver, &alice);
+        let bob_resolved = Principal::resolve(&mut resolver, &bob);
         let mut substitution = CandidateSubstitution::default();
         substitution
             .values
@@ -458,21 +407,21 @@ mod tests {
         let constant: InternedPattern<'_, Principal> = ComponentPattern::Constant(alice_symbol);
         let constant = subst_component::<Principal>(&constant, &substitution)
             .expect("constants always substitute");
-        assert!(Principal::resolved_matches(&resolver, constant, &alice));
-        assert!(!Principal::resolved_matches(&resolver, constant, &bob));
+        assert_eq!(constant, alice_resolved);
+        assert_ne!(constant, bob_resolved);
 
         let variable: InternedPattern<'_, Principal> = ComponentPattern::Variable(actor);
         let variable = subst_component::<Principal>(&variable, &substitution)
             .expect("the candidate bound actor");
-        assert!(Principal::resolved_matches(&resolver, variable, &alice));
-        assert!(!Principal::resolved_matches(&resolver, variable, &bob));
+        assert_eq!(variable, alice_resolved);
+        assert_ne!(variable, bob_resolved);
 
         let atom: InternedAtomPattern<'_> =
             AtomPattern::Principal(ComponentPattern::Variable(actor));
         let event = Event::new("alice", Action::Read, ["a"]);
         assert!(
             atom.subst(&substitution)
-                .is_some_and(|resolved| resolved.matches(&resolver, &event))
+                .is_some_and(|resolved| resolved.matches(&mut resolver, &event))
         );
     }
 }

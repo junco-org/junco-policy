@@ -36,7 +36,7 @@ pub(super) fn derive<'arena>(
         RegexKind::Empty | RegexKind::Epsilon => store.empty,
         RegexKind::All => store.all,
         RegexKind::Test(test) => {
-            if eval_test(test, event, substitution, &store.resolver) {
+            if eval_test(test, event, substitution, &mut store.resolver) {
                 store.epsilon
             } else {
                 store.empty
@@ -88,7 +88,7 @@ fn eval_test<'arena>(
     test: TestId<'arena>,
     event: &Event,
     substitution: &CandidateSubstitution<'arena>,
-    resolver: &ComponentResolver<'arena>,
+    resolver: &mut ComponentResolver<'arena>,
 ) -> bool {
     match *test.get() {
         TestNode::True => true,

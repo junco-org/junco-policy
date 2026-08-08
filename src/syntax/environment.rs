@@ -24,8 +24,8 @@ where
 {
     match pattern {
         ComponentPattern::Constant(expected) => {
-            ComponentType::resolved_matches(&store.resolver, expected, actual)
-                .then(CandidateSubstitution::default)
+            let actual = ComponentType::resolve(&mut store.resolver, actual);
+            (expected == actual).then(CandidateSubstitution::default)
         }
         ComponentPattern::Variable(variable) => {
             let value = ComponentType::resolve(&mut store.resolver, actual);
@@ -52,16 +52,11 @@ impl<'arena> InternedHead<'arena> {
         store: &mut CanonicalStore<'arena>,
         event: &Event,
     ) -> Option<CandidateSubstitution<'arena>> {
-        let mut substitution = match_head_pattern(store, self.principal, &event.principal)?;
+        let principal = match_head_pattern(store, self.principal, &event.principal)?;
         let action = match_head_pattern(store, self.action, &event.action)?;
-        if !substitution.merge(action) {
-            return None;
-        }
+        let principal_action = principal.merge(&action)?;
         let resource = match_head_pattern(store, self.resource, &event.resource)?;
-        if !substitution.merge(resource) {
-            return None;
-        }
-        Some(substitution)
+        principal_action.merge(&resource)
     }
 }
 
