@@ -1,4 +1,4 @@
-//! Source-rule compilation into interned and canonical runtime representations.
+//! Source-rule compilation into canonical runtime representations.
 //!
 //! Every function receives the canonical store and rule-local variable environment explicitly.
 //! Source expressions remain context-free; runtime nodes contain only resolved values, interned
@@ -8,8 +8,8 @@
 use crate::model::{Action, Principal, Resource};
 use crate::validator::CompileError;
 
-use super::component::{ComponentDomain, InternedAtomPattern, InternedPattern};
-use super::environment::{InternedHead, ResolveError, VariableEnvironment};
+use super::component::{CompiledAtomPattern, CompiledPattern, ComponentDomain};
+use super::environment::{CompiledHead, ResolveError, VariableEnvironment};
 use super::node::{RegexId, TestId, TestNode};
 use super::source::{AtomPattern, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr};
 use super::store::CanonicalStore;
@@ -18,7 +18,7 @@ use super::store::CanonicalStore;
 #[derive(Clone, Copy)]
 pub(crate) struct RuntimeRule<'arena> {
     pub(crate) mode: RuleMode,
-    pub(crate) head: InternedHead<'arena>,
+    pub(crate) head: CompiledHead<'arena>,
     pub(crate) tail: RegexId<'arena>,
 }
 
@@ -41,7 +41,7 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     store: &mut CanonicalStore<'arena>,
     pattern: &ComponentPattern<ComponentType>,
     variables: &mut VariableEnvironment,
-) -> Result<InternedPattern<'arena, ComponentType>, CompileError> {
+) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
     Ok(match pattern {
         ComponentPattern::Constant(value) => {
             ComponentPattern::Constant(ComponentType::resolve(&mut store.resolver, value))
@@ -58,17 +58,17 @@ fn compile_head_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     })
 }
 
-/// Resolves and interns the fixed capability-product head and its variable environment.
+/// Compiles the fixed capability-product head and its variable environment.
 fn compile_head<'arena>(
     store: &mut CanonicalStore<'arena>,
     head: &Head,
-) -> Result<(InternedHead<'arena>, VariableEnvironment), CompileError> {
+) -> Result<(CompiledHead<'arena>, VariableEnvironment), CompileError> {
     let mut variables = VariableEnvironment::default();
     let principal = compile_head_pattern::<Principal>(store, &head.principal, &mut variables)?;
     let action = compile_head_pattern::<Action>(store, &head.action, &mut variables)?;
     let resource = compile_head_pattern::<Resource>(store, &head.resource, &mut variables)?;
     Ok((
-        InternedHead {
+        CompiledHead {
             principal,
             action,
             resource,
@@ -82,7 +82,7 @@ fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     store: &mut CanonicalStore<'arena>,
     pattern: &ComponentPattern<ComponentType>,
     variables: &VariableEnvironment,
-) -> Result<InternedPattern<'arena, ComponentType>, CompileError> {
+) -> Result<CompiledPattern<'arena, ComponentType>, CompileError> {
     Ok(match pattern {
         ComponentPattern::Constant(value) => {
             ComponentPattern::Constant(ComponentType::resolve(&mut store.resolver, value))
@@ -104,12 +104,12 @@ fn compile_pattern<'arena, ComponentType: ComponentDomain<'arena>>(
     })
 }
 
-/// Resolves the atom representation retained by hashconsed test nodes.
+/// Compiles the atom representation retained by hashconsed test nodes.
 fn compile_atom_pattern<'arena>(
     store: &mut CanonicalStore<'arena>,
     pattern: &AtomPattern,
     variables: &VariableEnvironment,
-) -> Result<InternedAtomPattern<'arena>, CompileError> {
+) -> Result<CompiledAtomPattern<'arena>, CompileError> {
     Ok(match pattern {
         AtomPattern::Principal(pattern) => {
             AtomPattern::Principal(compile_pattern::<Principal>(store, pattern, variables)?)

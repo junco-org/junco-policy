@@ -87,8 +87,8 @@ impl<'arena> ValidatorBuilder<'arena> {
     /// The source expression is context-free. Its head creates a temporary variable environment,
     /// and only the resulting runtime rule is kept.
     pub fn add_rule(&mut self, source: Rule) -> Result<&mut Self, CompileError> {
-        let compiled = compile_rule(&mut self.store, &source)?;
-        self.rules.push(compiled);
+        let runtime_rule = compile_rule(&mut self.store, &source)?;
+        self.rules.push(runtime_rule);
         Ok(self)
     }
 

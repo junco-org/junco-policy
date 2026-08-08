@@ -105,7 +105,7 @@ impl PatternRepresentation for SourceRepresentation {
 
 /// Typed one-event component pattern.
 ///
-/// The generic parameter lets the compiler reuse this enum shape for source and interned patterns.
+/// The generic parameter lets the compiler reuse this enum shape for source and compiled patterns.
 /// Source callers normally use the default representation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AtomPattern<Representation: PatternRepresentation = SourceRepresentation> {

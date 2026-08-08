@@ -1,7 +1,7 @@
 //! Variable typing and per-candidate substitution.
 //!
-//! A [`VariableEnvironment`] validates one source head while its patterns are interned. A matching
-//! [`InternedHead`] resolves candidate values into a temporary [`CandidateSubstitution`]. Neither
+//! A [`VariableEnvironment`] validates one source head while its patterns are compiled. A matching
+//! [`CompiledHead`] resolves candidate values into a temporary [`CandidateSubstitution`]. Neither
 //! object is stored in source expressions or canonical syntax nodes.
 
 use std::collections::HashMap;
@@ -9,14 +9,14 @@ use string_interner::DefaultSymbol;
 
 use crate::model::{Action, Event, Principal, Resource};
 
-use super::component::{CandidateSubstitution, ComponentDomain, InternedPattern};
+use super::component::{CandidateSubstitution, CompiledPattern, ComponentDomain};
 use super::source::{Component, ComponentPattern};
 use super::store::CanonicalStore;
 
 /// Matches one typed head coordinate and returns its partial substitution.
 fn match_head_pattern<'arena, ComponentType>(
     store: &mut CanonicalStore<'arena>,
-    pattern: InternedPattern<'arena, ComponentType>,
+    pattern: CompiledPattern<'arena, ComponentType>,
     actual: &ComponentType,
 ) -> Option<CandidateSubstitution<'arena>>
 where
@@ -37,15 +37,15 @@ where
     }
 }
 
-/// Interned head patterns stored in one runtime rule.
+/// Compiled head patterns stored in one runtime rule.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct InternedHead<'arena> {
-    pub(super) principal: InternedPattern<'arena, Principal>,
-    pub(super) action: InternedPattern<'arena, Action>,
-    pub(super) resource: InternedPattern<'arena, Resource>,
+pub(crate) struct CompiledHead<'arena> {
+    pub(super) principal: CompiledPattern<'arena, Principal>,
+    pub(super) action: CompiledPattern<'arena, Action>,
+    pub(super) resource: CompiledPattern<'arena, Resource>,
 }
 
-impl<'arena> InternedHead<'arena> {
+impl<'arena> CompiledHead<'arena> {
     /// Matches the candidate, resolves variable bindings, and merges partial substitutions.
     pub(crate) fn match_candidate(
         &self,

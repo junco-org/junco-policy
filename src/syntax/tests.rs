@@ -71,10 +71,10 @@ fn variable_names_share_string_symbols_across_rules() {
     let second = compile_rule(&mut store, &rule(RegexExpr::all())).unwrap();
 
     let ComponentPattern::Variable(first_variable) = first.head.principal else {
-        panic!("principal head pattern was not interned as a variable")
+        panic!("principal head pattern was not compiled as a variable")
     };
     let ComponentPattern::Variable(second_variable) = second.head.principal else {
-        panic!("principal head pattern was not interned as a variable")
+        panic!("principal head pattern was not compiled as a variable")
     };
     assert_eq!(first_variable, second_variable);
     assert_eq!(store.resolver.string_count(), 3);
@@ -88,15 +88,18 @@ fn derivative_cycle_returns_the_same_hashconsed_state() {
         action_regex(Action::Read),
         action_regex(Action::Edit),
     ]));
-    let compiled = compile_rule(&mut store, &rule(cycle)).unwrap();
+    let runtime_rule = compile_rule(&mut store, &rule(cycle)).unwrap();
 
     let event = Event::new("alice", Action::Read, ["a"]);
-    let substitution = compiled.head.match_candidate(&mut store, &event).unwrap();
+    let substitution = runtime_rule
+        .head
+        .match_candidate(&mut store, &event)
+        .unwrap();
     let before = store.regex_node_count();
-    let mut state = compiled.tail;
+    let mut state = runtime_rule.tail;
     for _ in 0..100 {
         state = derive(&mut store, state, &event, &substitution);
-        assert_eq!(state, compiled.tail);
+        assert_eq!(state, runtime_rule.tail);
     }
     assert_eq!(store.regex_node_count(), before);
 }

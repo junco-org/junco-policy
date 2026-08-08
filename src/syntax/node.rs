@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 
 use hashconsing::BHConsed;
 
-use super::component::InternedAtomPattern;
+use super::component::CompiledAtomPattern;
 use super::source::Comparison;
 
 /// Boolean test over one history event.
@@ -21,7 +21,7 @@ pub(crate) enum TestNode<'arena> {
     /// Component equality or disequality test.
     Atom {
         comparison: Comparison,
-        pattern: InternedAtomPattern<'arena>,
+        pattern: CompiledAtomPattern<'arena>,
     },
     /// Conjunction of canonical child tests.
     And(&'arena [TestId<'arena>]),
