@@ -4,7 +4,7 @@
 //! representation used by both policy constants and candidate bindings. Each implementation also
 //! selects its typed map in [`CandidateSubstitution`], so domains cannot be mixed.
 
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -101,21 +101,19 @@ pub(super) trait Subst<Substitution> {
     fn subst(&self, substitution: &Substitution) -> Option<Self::Concrete>;
 }
 
-/// Extends `target` when every repeated variable has the same resolved value.
+/// Extends `target` atomically when every repeated variable has the same resolved value.
 fn merge_map<Key, Value>(target: &mut HashMap<Key, Value>, source: HashMap<Key, Value>) -> bool
 where
     Key: Eq + Hash,
     Value: Eq,
 {
-    for (key, value) in source {
-        match target.entry(key) {
-            Entry::Vacant(entry) => {
-                entry.insert(value);
-            }
-            Entry::Occupied(entry) if entry.get() == &value => {}
-            Entry::Occupied(_) => return false,
-        }
+    if source
+        .iter()
+        .any(|(key, value)| target.get(key).is_some_and(|existing| existing != value))
+    {
+        return false;
     }
+    target.extend(source);
     true
 }
 
@@ -127,9 +125,11 @@ impl<'arena> CandidateSubstitution<'arena> {
         }
     }
 
-    /// Merges partial substitutions when repeated variables have equal resolved values.
-    pub(super) fn merge(mut self, other: Self) -> Option<Self> {
-        merge_map(&mut self.values, other.values).then_some(self)
+    /// Mutates this substitution with compatible assignments from `other`.
+    ///
+    /// Returns `false` without changing `self` when a repeated variable has a different value.
+    pub(super) fn merge(&mut self, other: Self) -> bool {
+        merge_map(&mut self.values, other.values)
     }
 }
 
@@ -394,13 +394,13 @@ mod tests {
             .insert(actor, ResolvedValue::Principal(same_alice));
         right.values.insert(operation, ResolvedValue::Action(read));
 
-        let merged = left.merge(right).expect("bindings agree");
+        assert!(left.merge(right));
         assert_eq!(
-            merged.values.get(&actor),
+            left.values.get(&actor),
             Some(&ResolvedValue::Principal(alice))
         );
         assert_eq!(
-            merged.values.get(&operation),
+            left.values.get(&operation),
             Some(&ResolvedValue::Action(read))
         );
     }
@@ -418,7 +418,11 @@ mod tests {
         let mut right = CandidateSubstitution::default();
         right.values.insert(actor, ResolvedValue::Principal(bob));
 
-        assert!(left.merge(right).is_none());
+        assert!(!left.merge(right));
+        assert_eq!(
+            left.values.get(&actor),
+            Some(&ResolvedValue::Principal(alice))
+        );
     }
 
     #[test]
@@ -435,7 +439,7 @@ mod tests {
             .values
             .insert(value, ResolvedValue::Action(ResolvedAction::Read));
 
-        assert!(left.merge(right).is_none());
+        assert!(!left.merge(right));
     }
 
     #[test]

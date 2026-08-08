@@ -52,15 +52,16 @@ impl<'arena> InternedHead<'arena> {
         store: &mut CanonicalStore<'arena>,
         event: &Event,
     ) -> Option<CandidateSubstitution<'arena>> {
-        match_head_pattern(store, self.principal, &event.principal)
-            .and_then(|principal| {
-                match_head_pattern(store, self.action, &event.action)
-                    .and_then(|action| principal.merge(action))
-            })
-            .and_then(|principal_action| {
-                match_head_pattern(store, self.resource, &event.resource)
-                    .and_then(|resource| principal_action.merge(resource))
-            })
+        let mut substitution = match_head_pattern(store, self.principal, &event.principal)?;
+        let action = match_head_pattern(store, self.action, &event.action)?;
+        if !substitution.merge(action) {
+            return None;
+        }
+        let resource = match_head_pattern(store, self.resource, &event.resource)?;
+        if !substitution.merge(resource) {
+            return None;
+        }
+        Some(substitution)
     }
 }
 
