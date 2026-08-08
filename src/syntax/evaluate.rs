@@ -1,24 +1,30 @@
-//! Runtime evaluation over canonical syntax.
+//! Concrete derivative oracle and shared event-test evaluation.
 //!
-//! Evaluation receives every dependency explicitly. Concrete derivatives are memoized for one
-//! complete-history evaluation, whose candidate substitution is immutable; no evaluator or node
-//! retains a rule, scope, store, or validator backreference.
+//! Production matching uses cached symbolic transitions. The concrete derivative implementation is
+//! retained only in test builds as a differential oracle.
 
+#[cfg(test)]
 use std::hash::{BuildHasher, Hash};
 
+#[cfg(test)]
 use hashbrown::HashMap;
+#[cfg(test)]
 use hashbrown::hash_map::RawEntryMut;
 use smallvec::SmallVec;
 
 use crate::model::Event;
 
 use super::component::{CandidateSubstitution, ComponentResolver};
-use super::node::{RegexId, RegexKind, TestId, TestNode};
+#[cfg(test)]
+use super::node::{RegexId, RegexKind};
+use super::node::{TestId, TestNode};
 use super::source::Comparison;
+#[cfg(test)]
 use super::store::CanonicalStore;
 
-/// Returns whether the complete history belongs to `root` under `substitution`.
-pub(crate) fn accepts<'arena, 'event>(
+/// Concrete complete-history evaluator retained for symbolic differential tests.
+#[cfg(test)]
+pub(super) fn accepts_direct<'arena, 'event>(
     store: &mut CanonicalStore<'arena>,
     root: RegexId<'arena>,
     history: impl IntoIterator<Item = &'event Event>,
@@ -49,6 +55,7 @@ pub(super) fn derive<'arena>(
     )
 }
 
+#[cfg(test)]
 pub(super) type DerivativeCache<'arena, 'event> =
     HashMap<(RegexId<'arena>, &'event Event), RegexId<'arena>>;
 
@@ -63,6 +70,7 @@ where
 ///
 /// Scoping this cache to one [`accepts`] call makes `(state, event)` a complete key while avoiding
 /// persistent growth over the unbounded event and substitution domains.
+#[cfg(test)]
 pub(super) fn derive_cached<'arena, 'event>(
     store: &mut CanonicalStore<'arena>,
     regex: RegexId<'arena>,
@@ -139,7 +147,7 @@ pub(super) fn derive_cached<'arena, 'event>(
 }
 
 /// Evaluates one canonical boolean test against an event and candidate substitution.
-fn eval_test<'arena>(
+pub(super) fn eval_test<'arena>(
     test: TestId<'arena>,
     event: &Event,
     substitution: &CandidateSubstitution<'arena>,

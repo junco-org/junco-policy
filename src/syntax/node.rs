@@ -1,8 +1,8 @@
-//! Immutable hashconsed test and regular-expression nodes.
+//! Immutable hashconsed test, regular-expression, and transition-regex nodes.
 //!
-//! `TestId` and `RegexId` are arena-backed [`BHConsed`] references. Structurally equal nodes share
-//! one canonical allocation, so parent nodes need only child references. Nodes contain no compiler,
-//! variable-environment, canonical-store, rule, or validator backreferences.
+//! Canonical handles share structurally equal allocations. Parent nodes contain only handles and
+//! arena-owned slices; no node retains compiler, environment, store, rule, event, substitution, or
+//! validator backreferences.
 
 use std::hash::{Hash, Hasher};
 
@@ -13,7 +13,7 @@ use super::source::Comparison;
 
 /// Boolean test over one history event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum TestNode<'arena> {
+pub(super) enum TestNode<'arena> {
     /// Test that accepts every event.
     True,
     /// Test that accepts no event.
@@ -30,11 +30,11 @@ pub(crate) enum TestNode<'arena> {
 }
 
 /// Canonical arena reference to a [`TestNode`].
-pub(crate) type TestId<'arena> = BHConsed<'arena, TestNode<'arena>>;
+pub(super) type TestId<'arena> = BHConsed<'arena, TestNode<'arena>>;
 
 /// Regular-expression syntax stored in one canonical node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum RegexKind<'arena> {
+pub(super) enum RegexKind<'arena> {
     /// Empty language.
     Empty,
     /// Universal language over complete histories.
@@ -94,3 +94,30 @@ impl Hash for RegexNode<'_> {
 
 /// Canonical arena reference to a [`RegexNode`].
 pub(crate) type RegexId<'arena> = BHConsed<'arena, RegexNode<'arena>>;
+
+/// Normalized symbolic transition over one unresolved event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum TransitionNode<'arena> {
+    /// Constant transition to one normalized regex state.
+    Const(RegexId<'arena>),
+    /// Conditional transition selected by one normalized event test.
+    If {
+        test: TestId<'arena>,
+        then_transition: TransitionId<'arena>,
+        else_transition: TransitionId<'arena>,
+    },
+    /// Canonical n-ary transition union.
+    Union(&'arena [TransitionId<'arena>]),
+    /// Canonical n-ary transition intersection.
+    Intersect(&'arena [TransitionId<'arena>]),
+    /// Transition complement before normalization pushes it to leaves.
+    Not(TransitionId<'arena>),
+    /// One-sided concatenation with a fixed normalized regex suffix.
+    Append {
+        transition: TransitionId<'arena>,
+        suffix: &'arena [RegexId<'arena>],
+    },
+}
+
+/// Canonical arena reference to a [`TransitionNode`].
+pub(super) type TransitionId<'arena> = BHConsed<'arena, TransitionNode<'arena>>;

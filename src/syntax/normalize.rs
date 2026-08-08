@@ -1,12 +1,14 @@
 //! Smart constructors for canonical test and regex DAGs.
 //!
-//! Every constructor applies local algebraic identities before hashconsing. Commutative test
-//! conjunction/disjunction and regex union/intersection are flattened, ordered by canonical handle,
-//! and deduplicated. Concatenation is flattened but preserves source order. These normal forms keep
-//! the set of derivative states finite for the supported similarity quotient.
+//! The constructors implement `Norm_B` and `Norm` from `symbolic-matcher.tex`: flattened ACI
+//! Boolean operators, absorption and contradiction reductions, flattened regex set operators,
+//! ordered concatenation, cross-layer test reductions, and cached nullability.
+
 use smallvec::SmallVec;
 
+use super::component::CompiledAtomPattern;
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
+use super::source::{Comparison, ComponentPattern};
 use super::store::CanonicalStore;
 
 /// Returns whether a test set contains both an atom and its disequality complement.
@@ -39,6 +41,61 @@ fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bo
         ) => left_comparison != right_comparison && left_pattern == right_pattern,
         _ => false,
     }
+}
+
+/// Recognizes unequal constants selected at the same component coordinate.
+fn contradictory_equalities(left: TestId<'_>, right: TestId<'_>) -> bool {
+    let (
+        TestNode::Atom {
+            comparison: Comparison::Eq,
+            pattern: left,
+        },
+        TestNode::Atom {
+            comparison: Comparison::Eq,
+            pattern: right,
+        },
+    ) = (*left.get(), *right.get())
+    else {
+        return false;
+    };
+    match (left, right) {
+        (
+            CompiledAtomPattern::Principal(ComponentPattern::Constant(left)),
+            CompiledAtomPattern::Principal(ComponentPattern::Constant(right)),
+        ) => left != right,
+        (
+            CompiledAtomPattern::Action(ComponentPattern::Constant(left)),
+            CompiledAtomPattern::Action(ComponentPattern::Constant(right)),
+        ) => left != right,
+        (
+            CompiledAtomPattern::Resource(ComponentPattern::Constant(left)),
+            CompiledAtomPattern::Resource(ComponentPattern::Constant(right)),
+        ) => left != right,
+        _ => false,
+    }
+}
+
+fn has_contradictory_equalities(tests: &[TestId<'_>]) -> bool {
+    tests.iter().enumerate().any(|(index, left)| {
+        tests[index + 1..]
+            .iter()
+            .any(|right| contradictory_equalities(*left, *right))
+    })
+}
+
+/// Returns true for `Or`/`And` operands absorbed by a direct sibling.
+fn absorbed_by_sibling<'arena>(
+    candidate: TestId<'arena>,
+    siblings: &[TestId<'arena>],
+    conjunction: bool,
+) -> bool {
+    let nested = match (conjunction, *candidate.get()) {
+        (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children,
+        _ => return false,
+    };
+    nested
+        .iter()
+        .any(|child| siblings.iter().any(|sibling| sibling == child))
 }
 
 /// Returns whether a regex set contains a node and its whole-language complement.
@@ -78,13 +135,13 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
-        // BHConsed ordering/equality is canonical uid ordering/equality. The uid remains an
-        // implementation detail of the hashconsing crate; no uid is converted into a table index.
         flat.sort_unstable();
         flat.dedup();
-        if has_complementary_tests(&flat) {
+        if has_complementary_tests(&flat) || has_contradictory_equalities(&flat) {
             return self.test_false;
         }
+        let siblings = flat.clone();
+        flat.retain(|candidate| !absorbed_by_sibling(*candidate, &siblings, true));
         match flat.as_slice() {
             [] => self.test_true,
             [only] => *only,
@@ -115,12 +172,40 @@ impl<'arena> CanonicalStore<'arena> {
         if has_complementary_tests(&flat) {
             return self.test_true;
         }
+        let siblings = flat.clone();
+        flat.retain(|candidate| !absorbed_by_sibling(*candidate, &siblings, false));
         match flat.as_slice() {
             [] => self.test_false,
             [only] => *only,
             _ => {
                 let values = self.tests.arena().alloc_slice_copy(&flat);
                 self.tests.mk(TestNode::Or(values))
+            }
+        }
+    }
+
+    /// Constructs the normalized Boolean complement of one event test.
+    pub(super) fn test_not(&mut self, test: TestId<'arena>) -> TestId<'arena> {
+        match *test.get() {
+            TestNode::True => self.test_false,
+            TestNode::False => self.test_true,
+            TestNode::Atom {
+                comparison,
+                pattern,
+            } => self.tests.mk(TestNode::Atom {
+                comparison: match comparison {
+                    Comparison::Eq => Comparison::Neq,
+                    Comparison::Neq => Comparison::Eq,
+                },
+                pattern,
+            }),
+            TestNode::And(children) => {
+                let complements = children.iter().map(|child| self.test_not(*child)).collect();
+                self.test_or(complements)
+            }
+            TestNode::Or(children) => {
+                let complements = children.iter().map(|child| self.test_not(*child)).collect();
+                self.test_and(complements)
             }
         }
     }
@@ -167,6 +252,21 @@ impl<'arena> CanonicalStore<'arena> {
         if has_complementary_regexes(&flat) {
             return self.all;
         }
+        if !flat.is_empty()
+            && flat
+                .iter()
+                .all(|child| matches!(child.get().kind, RegexKind::Test(_)))
+        {
+            let tests = flat
+                .iter()
+                .map(|child| match child.get().kind {
+                    RegexKind::Test(test) => test,
+                    _ => unreachable!("all operands were checked as tests"),
+                })
+                .collect();
+            let test = self.test_or(tests);
+            return self.regex_test(test);
+        }
         match flat.as_slice() {
             [] => self.empty,
             [only] => *only,
@@ -197,6 +297,30 @@ impl<'arena> CanonicalStore<'arena> {
         flat.dedup();
         if has_complementary_regexes(&flat) {
             return self.empty;
+        }
+        if flat
+            .iter()
+            .any(|child| matches!(child.get().kind, RegexKind::Epsilon))
+            && flat
+                .iter()
+                .any(|child| matches!(child.get().kind, RegexKind::Test(_)))
+        {
+            return self.empty;
+        }
+        if !flat.is_empty()
+            && flat
+                .iter()
+                .all(|child| matches!(child.get().kind, RegexKind::Test(_)))
+        {
+            let tests = flat
+                .iter()
+                .map(|child| match child.get().kind {
+                    RegexKind::Test(test) => test,
+                    _ => unreachable!("all operands were checked as tests"),
+                })
+                .collect();
+            let test = self.test_and(tests);
+            return self.regex_test(test);
         }
         match flat.as_slice() {
             [] => self.all,
@@ -240,6 +364,7 @@ impl<'arena> CanonicalStore<'arena> {
         match inner.get().kind {
             RegexKind::Empty | RegexKind::Epsilon => self.epsilon,
             RegexKind::All => self.all,
+            RegexKind::Test(test) if test == self.test_true => self.all,
             RegexKind::Star(_) => inner,
             _ => self.intern_regex(RegexKind::Star(inner), true),
         }
