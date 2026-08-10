@@ -12,6 +12,10 @@ use super::store::CanonicalStore;
 /// Persistent per-rule cache from normalized regex state to normalized symbolic derivative.
 pub(crate) type SymbolicDerivativeCache<'arena> = HashMap<RegexId<'arena>, TransitionId<'arena>>;
 
+/// Successors selected for concrete symbols under one fixed candidate substitution.
+pub(super) type InstantiationCache<'arena, 'event> =
+    HashMap<(TransitionId<'arena>, &'event Event), RegexId<'arena>>;
+
 /// Returns the normalized symbolic derivative of `regex`, independent of bindings and events.
 pub(super) fn symbolic_derivative<'arena>(
     store: &mut CanonicalStore<'arena>,
@@ -119,6 +123,23 @@ pub(super) fn eval_transition<'arena>(
     }
 }
 
+/// Instantiates one symbolic transition for a concrete symbol, reusing the fixed-substitution cache.
+pub(super) fn instantiate<'arena, 'event>(
+    store: &mut CanonicalStore<'arena>,
+    cache: &mut InstantiationCache<'arena, 'event>,
+    transition: TransitionId<'arena>,
+    substitution: &CandidateSubstitution<'arena>,
+    symbol: &'event Event,
+) -> RegexId<'arena> {
+    if let Some(regex) = cache.get(&(transition, symbol)) {
+        return *regex;
+    }
+    let regex = eval_transition(store, transition, substitution, symbol);
+    let previous = cache.insert((transition, symbol), regex);
+    debug_assert!(previous.is_none());
+    regex
+}
+
 /// Evaluates complete history using event-independent derivatives cached across rule runs.
 pub(super) fn accepts<'arena, 'event>(
     store: &mut CanonicalStore<'arena>,
@@ -128,9 +149,10 @@ pub(super) fn accepts<'arena, 'event>(
     substitution: &CandidateSubstitution<'arena>,
 ) -> bool {
     let mut state = root;
-    for event in history {
+    let mut instances = InstantiationCache::new();
+    for symbol in history {
         let transition = symbolic_derivative(store, derivatives, state);
-        state = eval_transition(store, transition, substitution, event);
+        state = instantiate(store, &mut instances, transition, substitution, symbol);
     }
     store.nullable(state)
 }
