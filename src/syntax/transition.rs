@@ -132,24 +132,27 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
-        flat.sort_unstable();
-        flat.dedup();
-        if !flat.is_empty()
-            && flat
-                .iter()
-                .all(|child| matches!(child.get(), TransitionNode::Const(_)))
-        {
-            let regexes = flat
-                .iter()
-                .map(|child| match *child.get() {
-                    TransitionNode::Const(regex) => regex,
-                    _ => unreachable!("all transition operands were checked as constants"),
-                })
-                .collect();
-            let regex = self.regex_union(regexes);
-            return self.transition_const(regex);
+        let mut constants = Vec::new();
+        flat.retain(|child| match *child.get() {
+            TransitionNode::Const(regex) => {
+                constants.push(regex);
+                false
+            }
+            _ => true,
+        });
+        if !constants.is_empty() {
+            let regex = self.regex_union(constants);
+            if regex == self.all {
+                return self.transition_all;
+            }
+            if regex != self.empty {
+                let transition = self.transition_const(regex);
+                flat.push(transition);
+            }
         }
 
+        flat.sort_unstable();
+        flat.dedup();
         match flat.as_slice() {
             [] => self.transition_empty,
             [only] => *only,
@@ -199,6 +202,40 @@ impl<'arena> CanonicalStore<'arena> {
                 }
                 let then_transition = self.transition_intersect(vec![left_then, right_then]);
                 return self.transition_if(guard, then_transition, self.transition_empty);
+            }
+            (
+                TransitionNode::If {
+                    test: left_test,
+                    then_transition: left_then,
+                    else_transition: left_else,
+                },
+                TransitionNode::If {
+                    test: right_test,
+                    then_transition: right_then,
+                    else_transition: right_else,
+                },
+            ) => {
+                if left_test == right_test {
+                    let then_transition = self.transition_intersect(vec![left_then, right_then]);
+                    let else_transition = self.transition_intersect(vec![left_else, right_else]);
+                    return self.transition_if(left_test, then_transition, else_transition);
+                }
+
+                let expand_left = if left_else == self.transition_empty {
+                    true
+                } else if right_else == self.transition_empty {
+                    false
+                } else {
+                    left_test < right_test
+                };
+                if expand_left {
+                    let then_transition = self.transition_intersect(vec![left_then, right]);
+                    let else_transition = self.transition_intersect(vec![left_else, right]);
+                    return self.transition_if(left_test, then_transition, else_transition);
+                }
+                let then_transition = self.transition_intersect(vec![left, right_then]);
+                let else_transition = self.transition_intersect(vec![left, right_else]);
+                return self.transition_if(right_test, then_transition, else_transition);
             }
             (TransitionNode::Union(children), _) => {
                 let intersections = children
@@ -261,6 +298,25 @@ impl<'arena> CanonicalStore<'arena> {
                 TransitionNode::Const(regex) if regex == self.all => {}
                 TransitionNode::Intersect(nested) => flat.extend_from_slice(nested),
                 _ => flat.push(child),
+            }
+        }
+
+        let mut constants = Vec::new();
+        flat.retain(|child| match *child.get() {
+            TransitionNode::Const(regex) => {
+                constants.push(regex);
+                false
+            }
+            _ => true,
+        });
+        if !constants.is_empty() {
+            let regex = self.regex_intersect(constants);
+            if regex == self.empty {
+                return self.transition_empty;
+            }
+            if regex != self.all {
+                let transition = self.transition_const(regex);
+                flat.push(transition);
             }
         }
 

@@ -24,21 +24,33 @@ fn rule(tail: RegexExpr) -> Rule {
     Rule::new(RuleMode::Require, variable_head(), tail)
 }
 
-fn action_regex(action: Action) -> RegexExpr {
-    RegexExpr::test(TestExpr::atom(
-        Comparison::Eq,
+fn action_test_expr_with(comparison: Comparison, action: Action) -> TestExpr {
+    TestExpr::atom(
+        comparison,
         AtomPattern::Action(ComponentPattern::constant(action)),
-    ))
+    )
 }
 
-fn action_test<'arena>(store: &mut CanonicalStore<'arena>, action: Action) -> TestId<'arena> {
-    let regex = compile_rule(store, &rule(action_regex(action)))
+fn action_test_expr(action: Action) -> TestExpr {
+    action_test_expr_with(Comparison::Eq, action)
+}
+
+fn action_regex(action: Action) -> RegexExpr {
+    RegexExpr::test(action_test_expr(action))
+}
+
+fn compiled_test<'arena>(store: &mut CanonicalStore<'arena>, source: TestExpr) -> TestId<'arena> {
+    let regex = compile_rule(store, &rule(RegexExpr::test(source)))
         .unwrap()
         .tail;
     let RegexKind::Test(test) = regex.get().kind else {
-        panic!("action atom must compile to one test regex")
+        panic!("nonconstant test must compile to one test regex")
     };
     test
+}
+
+fn action_test<'arena>(store: &mut CanonicalStore<'arena>, action: Action) -> TestId<'arena> {
+    compiled_test(store, action_test_expr(action))
 }
 
 fn assert_transition_normalized(transition: TransitionId<'_>) {
@@ -193,45 +205,298 @@ fn concrete_derivatives_reuse_equal_event_transitions() {
 fn boolean_and_regex_normalization_matches_symbolic_specification() {
     let arena = Bump::new();
     let mut store = CanonicalStore::new(&arena);
-    let read = action_regex(Action::Read);
-    let edit = action_regex(Action::Edit);
 
     let absorbed = RegexExpr::test(TestExpr::and([
-        match read.clone() {
-            RegexExpr::Test(test) => test,
-            _ => unreachable!(),
-        },
+        action_test_expr(Action::Read),
         TestExpr::or([
-            match read.clone() {
-                RegexExpr::Test(test) => test,
-                _ => unreachable!(),
-            },
-            match edit.clone() {
-                RegexExpr::Test(test) => test,
-                _ => unreachable!(),
-            },
+            action_test_expr(Action::Read),
+            action_test_expr(Action::Edit),
         ]),
     ]));
     let absorbed = compile_rule(&mut store, &rule(absorbed)).unwrap().tail;
-    let read = compile_rule(&mut store, &rule(read)).unwrap().tail;
+    let read = compile_rule(&mut store, &rule(action_regex(Action::Read)))
+        .unwrap()
+        .tail;
     assert_eq!(absorbed, read);
 
     let contradiction = RegexExpr::test(TestExpr::and([
-        match action_regex(Action::Read) {
-            RegexExpr::Test(test) => test,
-            _ => unreachable!(),
-        },
-        match action_regex(Action::Edit) {
-            RegexExpr::Test(test) => test,
-            _ => unreachable!(),
-        },
+        action_test_expr(Action::Read),
+        action_test_expr(Action::Edit),
     ]));
     let contradiction = compile_rule(&mut store, &rule(contradiction)).unwrap().tail;
     assert_eq!(contradiction, store.empty);
 
+    let equality_implies_distinct_disequality = RegexExpr::test(TestExpr::and([
+        action_test_expr(Action::Read),
+        action_test_expr_with(Comparison::Neq, Action::Edit),
+    ]));
+    let equality_implies_distinct_disequality =
+        compile_rule(&mut store, &rule(equality_implies_distinct_disequality))
+            .unwrap()
+            .tail;
+    assert_eq!(equality_implies_distinct_disequality, read);
+
+    let disequality_absorbs_distinct_equality = RegexExpr::test(TestExpr::or([
+        action_test_expr(Action::Read),
+        action_test_expr_with(Comparison::Neq, Action::Edit),
+    ]));
+    let expected_disequality =
+        RegexExpr::test(action_test_expr_with(Comparison::Neq, Action::Edit));
+    let disequality_absorbs_distinct_equality =
+        compile_rule(&mut store, &rule(disequality_absorbs_distinct_equality))
+            .unwrap()
+            .tail;
+    let expected_disequality = compile_rule(&mut store, &rule(expected_disequality))
+        .unwrap()
+        .tail;
+    assert_eq!(disequality_absorbs_distinct_equality, expected_disequality);
+
+    let distinct_disequalities_are_true = RegexExpr::test(TestExpr::or([
+        action_test_expr_with(Comparison::Neq, Action::Read),
+        action_test_expr_with(Comparison::Neq, Action::Edit),
+    ]));
+    let distinct_disequalities_are_true =
+        compile_rule(&mut store, &rule(distinct_disequalities_are_true))
+            .unwrap()
+            .tail;
+    let true_test = store.regex_test(store.test_true);
+    assert_eq!(distinct_disequalities_are_true, true_test);
+
+    let reversed_action_disequalities = RegexExpr::test(TestExpr::or([
+        action_test_expr_with(Comparison::Neq, Action::Edit),
+        action_test_expr_with(Comparison::Neq, Action::Read),
+    ]));
+    assert_eq!(
+        compile_rule(&mut store, &rule(reversed_action_disequalities))
+            .unwrap()
+            .tail,
+        true_test
+    );
+
+    let principal_disequalities = RegexExpr::test(TestExpr::or([
+        TestExpr::atom(
+            Comparison::Neq,
+            AtomPattern::Principal(ComponentPattern::constant("alice")),
+        ),
+        TestExpr::atom(
+            Comparison::Neq,
+            AtomPattern::Principal(ComponentPattern::constant("bob")),
+        ),
+    ]));
+    assert_eq!(
+        compile_rule(&mut store, &rule(principal_disequalities))
+            .unwrap()
+            .tail,
+        true_test
+    );
+
+    let resource_disequalities = RegexExpr::test(TestExpr::or([
+        TestExpr::atom(
+            Comparison::Neq,
+            AtomPattern::Resource(ComponentPattern::constant(["a"])),
+        ),
+        TestExpr::atom(
+            Comparison::Neq,
+            AtomPattern::Resource(ComponentPattern::constant(["b"])),
+        ),
+    ]));
+    assert_eq!(
+        compile_rule(&mut store, &rule(resource_disequalities))
+            .unwrap()
+            .tail,
+        true_test
+    );
+
     let top_star = RegexExpr::star(RegexExpr::test(TestExpr::true_test()));
     let top_star = compile_rule(&mut store, &rule(top_star)).unwrap().tail;
     assert_eq!(top_star, store.all);
+}
+
+#[test]
+fn compound_boolean_rewrites_are_construction_order_independent() {
+    let arena = Bump::new();
+    let mut store = CanonicalStore::new(&arena);
+    let principal_eq = TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Principal(ComponentPattern::constant("alice")),
+    );
+    let principal_neq = TestExpr::atom(
+        Comparison::Neq,
+        AtomPattern::Principal(ComponentPattern::constant("alice")),
+    );
+    let action_eq = action_test_expr(Action::Read);
+    let action_neq = action_test_expr_with(Comparison::Neq, Action::Read);
+    let resource_eq = TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Resource(ComponentPattern::constant(["a"])),
+    );
+
+    let compound = TestExpr::and([principal_eq.clone(), action_eq.clone()]);
+    let complement = TestExpr::or([principal_neq.clone(), action_neq.clone()]);
+    let contradiction = RegexExpr::test(TestExpr::and([compound.clone(), complement.clone()]));
+    let tautology = RegexExpr::test(TestExpr::or([compound.clone(), complement]));
+    assert_eq!(
+        compile_rule(&mut store, &rule(contradiction)).unwrap().tail,
+        store.empty
+    );
+    let true_test = store.regex_test(store.test_true);
+    assert_eq!(
+        compile_rule(&mut store, &rule(tautology)).unwrap().tail,
+        true_test
+    );
+
+    let larger_conjunction =
+        TestExpr::and([principal_eq.clone(), action_eq.clone(), resource_eq.clone()]);
+    let absorbed_disjunction =
+        RegexExpr::test(TestExpr::or([compound.clone(), larger_conjunction.clone()]));
+    let expected_conjunction = compile_rule(&mut store, &rule(RegexExpr::test(compound.clone())))
+        .unwrap()
+        .tail;
+    assert_eq!(
+        compile_rule(&mut store, &rule(absorbed_disjunction))
+            .unwrap()
+            .tail,
+        expected_conjunction
+    );
+    let reversed = RegexExpr::test(TestExpr::or([larger_conjunction, compound]));
+    assert_eq!(
+        compile_rule(&mut store, &rule(reversed)).unwrap().tail,
+        expected_conjunction
+    );
+
+    let smaller_disjunction = TestExpr::or([principal_eq.clone(), action_eq.clone()]);
+    let larger_disjunction = TestExpr::or([principal_eq, action_eq, resource_eq]);
+    let absorbed_conjunction = RegexExpr::test(TestExpr::and([
+        smaller_disjunction.clone(),
+        larger_disjunction.clone(),
+    ]));
+    let expected_disjunction = compile_rule(
+        &mut store,
+        &rule(RegexExpr::test(smaller_disjunction.clone())),
+    )
+    .unwrap()
+    .tail;
+    assert_eq!(
+        compile_rule(&mut store, &rule(absorbed_conjunction))
+            .unwrap()
+            .tail,
+        expected_disjunction
+    );
+    let reversed = RegexExpr::test(TestExpr::and([larger_disjunction, smaller_disjunction]));
+    assert_eq!(
+        compile_rule(&mut store, &rule(reversed)).unwrap().tail,
+        expected_disjunction
+    );
+}
+
+#[test]
+fn epsilon_set_rewrites_use_cached_nullability() {
+    let arena = Bump::new();
+    let mut store = CanonicalStore::new(&arena);
+    let nullable = RegexExpr::star(action_regex(Action::Read));
+    let nullable_id = compile_rule(&mut store, &rule(nullable.clone()))
+        .unwrap()
+        .tail;
+    let union = RegexExpr::union([RegexExpr::epsilon(), nullable.clone()]);
+    let intersection = RegexExpr::intersect([RegexExpr::epsilon(), nullable]);
+    assert_eq!(
+        compile_rule(&mut store, &rule(union)).unwrap().tail,
+        nullable_id
+    );
+    assert_eq!(
+        compile_rule(&mut store, &rule(intersection)).unwrap().tail,
+        store.epsilon
+    );
+
+    let nonnullable = action_regex(Action::Edit);
+    let nonnullable_id = compile_rule(&mut store, &rule(nonnullable.clone()))
+        .unwrap()
+        .tail;
+    let impossible = RegexExpr::intersect([RegexExpr::epsilon(), nonnullable.clone()]);
+    let excludes_epsilon =
+        RegexExpr::intersect([nonnullable, RegexExpr::complement(RegexExpr::epsilon())]);
+    assert_eq!(
+        compile_rule(&mut store, &rule(impossible)).unwrap().tail,
+        store.empty
+    );
+    assert_eq!(
+        compile_rule(&mut store, &rule(excludes_epsilon))
+            .unwrap()
+            .tail,
+        nonnullable_id
+    );
+}
+
+#[test]
+fn mixed_regex_operators_group_all_test_operands() {
+    let arena = Bump::new();
+    let mut store = CanonicalStore::new(&arena);
+    let non_test = RegexExpr::star(action_regex(Action::Stage));
+
+    let mixed_union = RegexExpr::union([
+        action_regex(Action::Read),
+        non_test.clone(),
+        action_regex(Action::Edit),
+    ]);
+    let grouped_union = RegexExpr::union([
+        RegexExpr::test(TestExpr::or([
+            action_test_expr(Action::Read),
+            action_test_expr(Action::Edit),
+        ])),
+        non_test.clone(),
+    ]);
+    let mixed_union = compile_rule(&mut store, &rule(mixed_union)).unwrap().tail;
+    let grouped_union = compile_rule(&mut store, &rule(grouped_union)).unwrap().tail;
+    assert_eq!(mixed_union, grouped_union);
+
+    let reordered_union = RegexExpr::union([
+        non_test.clone(),
+        action_regex(Action::Edit),
+        action_regex(Action::Read),
+    ]);
+    let reordered_union = compile_rule(&mut store, &rule(reordered_union))
+        .unwrap()
+        .tail;
+    assert_eq!(reordered_union, grouped_union);
+
+    let nested_union = RegexExpr::union([
+        action_regex(Action::Read),
+        RegexExpr::union([action_regex(Action::Edit), non_test.clone()]),
+    ]);
+    let nested_union = compile_rule(&mut store, &rule(nested_union)).unwrap().tail;
+    assert_eq!(nested_union, grouped_union);
+
+    let mixed_intersection = RegexExpr::intersect([
+        action_regex(Action::Read),
+        non_test,
+        action_regex(Action::Edit),
+    ]);
+    let mixed_intersection = compile_rule(&mut store, &rule(mixed_intersection))
+        .unwrap()
+        .tail;
+    assert_eq!(mixed_intersection, store.empty);
+
+    let read = action_regex(Action::Read);
+    let other = RegexExpr::star(action_regex(Action::Stage));
+    let absorbed_union = RegexExpr::union([
+        read.clone(),
+        RegexExpr::intersect([read.clone(), other.clone()]),
+    ]);
+    let absorbed_intersection =
+        RegexExpr::intersect([read.clone(), RegexExpr::union([read.clone(), other])]);
+    let expected = compile_rule(&mut store, &rule(read)).unwrap().tail;
+    assert_eq!(
+        compile_rule(&mut store, &rule(absorbed_union))
+            .unwrap()
+            .tail,
+        expected
+    );
+    assert_eq!(
+        compile_rule(&mut store, &rule(absorbed_intersection))
+            .unwrap()
+            .tail,
+        expected
+    );
 }
 
 #[test]
@@ -281,6 +546,95 @@ fn transition_normalization_applies_dnf_and_path_cleaning() {
         store.transition_if(not_read, store.transition_all, store.transition_empty);
     assert_eq!(complemented, expected_complement);
     assert_transition_normalized(complemented);
+}
+
+#[test]
+fn mixed_transition_operators_group_all_constant_leaves() {
+    let arena = Bump::new();
+    let mut store = CanonicalStore::new(&arena);
+    let read_test = action_test(&mut store, Action::Read);
+    let edit_test = action_test(&mut store, Action::Edit);
+    let stage_test = action_test(&mut store, Action::Stage);
+    let read = store.regex_test(read_test);
+    let edit = store.regex_test(edit_test);
+    let branch = store.transition_if(stage_test, store.transition_epsilon, store.transition_empty);
+    let read_transition = store.transition_const(read);
+    let edit_transition = store.transition_const(edit);
+
+    let mixed = store.transition_union(vec![read_transition, branch, edit_transition]);
+    let grouped_regex = store.regex_union(vec![read, edit]);
+    let grouped_transition = store.transition_const(grouped_regex);
+    let grouped = store.transition_union(vec![grouped_transition, branch]);
+    assert_eq!(mixed, grouped);
+    assert_eq!(
+        store.transition_union(vec![edit_transition, read_transition, branch]),
+        grouped
+    );
+
+    assert_eq!(
+        store.transition_intersect(vec![read_transition, branch, edit_transition]),
+        store.transition_empty
+    );
+}
+
+#[test]
+fn conditional_intersection_is_independent_of_grouping_and_order() {
+    let arena = Bump::new();
+    let mut store = CanonicalStore::new(&arena);
+    let principal = compiled_test(
+        &mut store,
+        TestExpr::atom(
+            Comparison::Eq,
+            AtomPattern::Principal(ComponentPattern::constant("alice")),
+        ),
+    );
+    let action = action_test(&mut store, Action::Read);
+    let resource = compiled_test(
+        &mut store,
+        TestExpr::atom(
+            Comparison::Eq,
+            AtomPattern::Resource(ComponentPattern::constant(["a"])),
+        ),
+    );
+
+    let first = store.transition_if(principal, store.transition_epsilon, store.transition_all);
+    let second = store.transition_if(action, store.transition_all, store.transition_epsilon);
+    let third = store.transition_if(resource, store.transition_epsilon, store.transition_all);
+    let canonical = store.transition_intersect(vec![first, second, third]);
+    let first_second = store.transition_intersect(vec![first, second]);
+    let second_third = store.transition_intersect(vec![second, third]);
+    assert_eq!(
+        store.transition_intersect(vec![first_second, third]),
+        canonical
+    );
+    assert_eq!(
+        store.transition_intersect(vec![first, second_third]),
+        canonical
+    );
+    assert_eq!(
+        store.transition_intersect(vec![third, first, second]),
+        canonical
+    );
+
+    let first_one_sided =
+        store.transition_if(principal, store.transition_epsilon, store.transition_empty);
+    let second_one_sided =
+        store.transition_if(action, store.transition_all, store.transition_empty);
+    let canonical = store.transition_intersect(vec![first_one_sided, second_one_sided, third]);
+    let one_sided = store.transition_intersect(vec![first_one_sided, second_one_sided]);
+    let second_then_third = store.transition_intersect(vec![second_one_sided, third]);
+    assert_eq!(
+        store.transition_intersect(vec![one_sided, third]),
+        canonical
+    );
+    assert_eq!(
+        store.transition_intersect(vec![first_one_sided, second_then_third]),
+        canonical
+    );
+    assert_eq!(
+        store.transition_intersect(vec![third, second_one_sided, first_one_sided]),
+        canonical
+    );
 }
 
 #[test]

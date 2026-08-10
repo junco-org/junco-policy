@@ -44,20 +44,10 @@ fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bo
 }
 
 /// Recognizes unequal constants selected at the same component coordinate.
-fn contradictory_equalities(left: TestId<'_>, right: TestId<'_>) -> bool {
-    let (
-        TestNode::Atom {
-            comparison: Comparison::Eq,
-            pattern: left,
-        },
-        TestNode::Atom {
-            comparison: Comparison::Eq,
-            pattern: right,
-        },
-    ) = (*left.get(), *right.get())
-    else {
-        return false;
-    };
+fn distinct_constant_patterns(
+    left: CompiledAtomPattern<'_>,
+    right: CompiledAtomPattern<'_>,
+) -> bool {
     match (left, right) {
         (
             CompiledAtomPattern::Principal(ComponentPattern::Constant(left)),
@@ -75,6 +65,26 @@ fn contradictory_equalities(left: TestId<'_>, right: TestId<'_>) -> bool {
     }
 }
 
+fn atom(test: TestId<'_>) -> Option<(Comparison, CompiledAtomPattern<'_>)> {
+    match *test.get() {
+        TestNode::Atom {
+            comparison,
+            pattern,
+        } => Some((comparison, pattern)),
+        _ => None,
+    }
+}
+
+fn contradictory_equalities(left: TestId<'_>, right: TestId<'_>) -> bool {
+    matches!(
+        (atom(left), atom(right)),
+        (
+            Some((Comparison::Eq, left)),
+            Some((Comparison::Eq, right))
+        ) if distinct_constant_patterns(left, right)
+    )
+}
+
 fn has_contradictory_equalities(tests: &[TestId<'_>]) -> bool {
     tests.iter().enumerate().any(|(index, left)| {
         tests[index + 1..]
@@ -83,7 +93,50 @@ fn has_contradictory_equalities(tests: &[TestId<'_>]) -> bool {
     })
 }
 
-/// Returns true for `Or`/`And` operands absorbed by a direct sibling.
+/// An equality implies disequality with every distinct constant at the same coordinate.
+fn redundant_conjunct(candidate: TestId<'_>, siblings: &[TestId<'_>]) -> bool {
+    let Some((Comparison::Neq, candidate)) = atom(candidate) else {
+        return false;
+    };
+    siblings.iter().any(|sibling| {
+        matches!(
+            atom(*sibling),
+            Some((Comparison::Eq, sibling))
+                if distinct_constant_patterns(candidate, sibling)
+        )
+    })
+}
+
+/// A disequality subsumes equality with every distinct constant at the same coordinate.
+fn redundant_disjunct(candidate: TestId<'_>, siblings: &[TestId<'_>]) -> bool {
+    let Some((Comparison::Eq, candidate)) = atom(candidate) else {
+        return false;
+    };
+    siblings.iter().any(|sibling| {
+        matches!(
+            atom(*sibling),
+            Some((Comparison::Neq, sibling))
+                if distinct_constant_patterns(candidate, sibling)
+        )
+    })
+}
+
+fn has_distinct_disequalities(tests: &[TestId<'_>]) -> bool {
+    tests.iter().enumerate().any(|(index, left)| {
+        let Some((Comparison::Neq, left)) = atom(*left) else {
+            return false;
+        };
+        tests[index + 1..].iter().any(|right| {
+            matches!(
+                atom(*right),
+                Some((Comparison::Neq, right))
+                    if distinct_constant_patterns(left, right)
+            )
+        })
+    })
+}
+
+/// Returns true when a compound opposite operator contains a sibling's complete operand set.
 fn absorbed_by_sibling<'arena>(
     candidate: TestId<'arena>,
     siblings: &[TestId<'arena>],
@@ -93,9 +146,17 @@ fn absorbed_by_sibling<'arena>(
         (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children,
         _ => return false,
     };
-    nested
-        .iter()
-        .any(|child| siblings.iter().any(|sibling| sibling == child))
+    siblings.iter().copied().any(|sibling| {
+        if sibling == candidate {
+            return false;
+        }
+        match (conjunction, *sibling.get()) {
+            (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children
+                .iter()
+                .all(|child| nested.binary_search(child).is_ok()),
+            _ => nested.binary_search(&sibling).is_ok(),
+        }
+    })
 }
 
 /// Returns whether a regex set contains a node and its whole-language complement.
@@ -119,7 +180,52 @@ fn complementary_regex<'arena>(left: RegexId<'arena>, right: RegexId<'arena>) ->
         || matches!(right.get().kind, RegexKind::Not(inner) if inner == left)
 }
 
+fn is_epsilon_complement(regex: RegexId<'_>) -> bool {
+    matches!(regex.get().kind, RegexKind::Not(inner) if matches!(inner.get().kind, RegexKind::Epsilon))
+}
+
+/// Returns true when a compound opposite set operator contains a sibling's complete operand set.
+fn regex_absorbed_by_sibling<'arena>(
+    candidate: RegexId<'arena>,
+    siblings: &[RegexId<'arena>],
+    union: bool,
+) -> bool {
+    let nested = match (union, candidate.get().kind) {
+        (true, RegexKind::Intersect(children)) | (false, RegexKind::Union(children)) => children,
+        _ => return false,
+    };
+    siblings.iter().copied().any(|sibling| {
+        if sibling == candidate {
+            return false;
+        }
+        match (union, sibling.get().kind) {
+            (true, RegexKind::Intersect(children)) | (false, RegexKind::Union(children)) => {
+                children
+                    .iter()
+                    .all(|child| nested.binary_search(child).is_ok())
+            }
+            _ => nested.binary_search(&sibling).is_ok(),
+        }
+    })
+}
+
 impl<'arena> CanonicalStore<'arena> {
+    fn tests_have_complements(&mut self, tests: &[TestId<'arena>], conjunction: bool) -> bool {
+        if has_complementary_tests(tests) {
+            return true;
+        }
+        tests.iter().copied().any(|candidate| {
+            let dual_children = match (conjunction, *candidate.get()) {
+                (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children,
+                _ => return false,
+            };
+            dual_children.iter().all(|child| {
+                let complement = self.test_not(*child);
+                tests.binary_search(&complement).is_ok()
+            })
+        })
+    }
+
     /// Constructs canonical conjunction over one-event tests.
     pub(super) fn test_and(
         &mut self,
@@ -137,11 +243,14 @@ impl<'arena> CanonicalStore<'arena> {
 
         flat.sort_unstable();
         flat.dedup();
-        if has_complementary_tests(&flat) || has_contradictory_equalities(&flat) {
+        if self.tests_have_complements(&flat, true) || has_contradictory_equalities(&flat) {
             return self.test_false;
         }
         let siblings = flat.clone();
-        flat.retain(|candidate| !absorbed_by_sibling(*candidate, &siblings, true));
+        flat.retain(|candidate| {
+            !absorbed_by_sibling(*candidate, &siblings, true)
+                && !redundant_conjunct(*candidate, &siblings)
+        });
         match flat.as_slice() {
             [] => self.test_true,
             [only] => *only,
@@ -169,11 +278,14 @@ impl<'arena> CanonicalStore<'arena> {
 
         flat.sort_unstable();
         flat.dedup();
-        if has_complementary_tests(&flat) {
+        if self.tests_have_complements(&flat, false) || has_distinct_disequalities(&flat) {
             return self.test_true;
         }
         let siblings = flat.clone();
-        flat.retain(|candidate| !absorbed_by_sibling(*candidate, &siblings, false));
+        flat.retain(|candidate| {
+            !absorbed_by_sibling(*candidate, &siblings, false)
+                && !redundant_disjunct(*candidate, &siblings)
+        });
         match flat.as_slice() {
             [] => self.test_false,
             [only] => *only,
@@ -247,26 +359,36 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
+        let mut tests = Vec::new();
+        flat.retain(|child| match child.get().kind {
+            RegexKind::Test(test) => {
+                tests.push(test);
+                false
+            }
+            _ => true,
+        });
+        if !tests.is_empty() {
+            let test = self.test_or(tests);
+            let regex = self.regex_test(test);
+            if regex != self.empty {
+                flat.push(regex);
+            }
+        }
+
         flat.sort_unstable();
         flat.dedup();
         if has_complementary_regexes(&flat) {
             return self.all;
         }
-        if !flat.is_empty()
+        if flat.contains(&self.epsilon)
             && flat
                 .iter()
-                .all(|child| matches!(child.get().kind, RegexKind::Test(_)))
+                .any(|child| *child != self.epsilon && self.nullable(*child))
         {
-            let tests = flat
-                .iter()
-                .map(|child| match child.get().kind {
-                    RegexKind::Test(test) => test,
-                    _ => unreachable!("all operands were checked as tests"),
-                })
-                .collect();
-            let test = self.test_or(tests);
-            return self.regex_test(test);
+            flat.retain(|child| *child != self.epsilon);
         }
+        let siblings = flat.clone();
+        flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, true));
         match flat.as_slice() {
             [] => self.empty,
             [only] => *only,
@@ -293,35 +415,43 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
+        let mut tests = Vec::new();
+        flat.retain(|child| match child.get().kind {
+            RegexKind::Test(test) => {
+                tests.push(test);
+                false
+            }
+            _ => true,
+        });
+        if !tests.is_empty() {
+            let test = self.test_and(tests);
+            let regex = self.regex_test(test);
+            if regex == self.empty {
+                return self.empty;
+            }
+            flat.push(regex);
+        }
+
         flat.sort_unstable();
         flat.dedup();
         if has_complementary_regexes(&flat) {
             return self.empty;
         }
+        if flat.contains(&self.epsilon) {
+            return if flat.iter().all(|child| self.nullable(*child)) {
+                self.epsilon
+            } else {
+                self.empty
+            };
+        }
         if flat
             .iter()
-            .any(|child| matches!(child.get().kind, RegexKind::Epsilon))
-            && flat
-                .iter()
-                .any(|child| matches!(child.get().kind, RegexKind::Test(_)))
+            .any(|child| !is_epsilon_complement(*child) && !self.nullable(*child))
         {
-            return self.empty;
+            flat.retain(|child| !is_epsilon_complement(*child));
         }
-        if !flat.is_empty()
-            && flat
-                .iter()
-                .all(|child| matches!(child.get().kind, RegexKind::Test(_)))
-        {
-            let tests = flat
-                .iter()
-                .map(|child| match child.get().kind {
-                    RegexKind::Test(test) => test,
-                    _ => unreachable!("all operands were checked as tests"),
-                })
-                .collect();
-            let test = self.test_and(tests);
-            return self.regex_test(test);
-        }
+        let siblings = flat.clone();
+        flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, false));
         match flat.as_slice() {
             [] => self.all,
             [only] => *only,
