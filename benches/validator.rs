@@ -3,6 +3,7 @@
 //! Run the suite from this package with `cargo bench --bench validator`. Pass a Criterion filter,
 //! for example `cargo bench --bench validator -- history_scan`, to run one group.
 
+use std::fmt::Debug;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
@@ -11,6 +12,25 @@ use rust_validator::{
     Action, AtomPattern, Bump, Comparison, ComponentPattern, Decision, Event, Head, Principal,
     RegexExpr, Request, Rule, RuleMode, TestExpr, Validator,
 };
+
+trait CheckedDecision<Metadata> {
+    fn checked(self) -> Decision<Metadata>;
+}
+
+impl<Metadata> CheckedDecision<Metadata> for Decision<Metadata> {
+    fn checked(self) -> Decision<Metadata> {
+        self
+    }
+}
+
+impl<Metadata, Error> CheckedDecision<Metadata> for Result<Decision<Metadata>, Error>
+where
+    Error: Debug,
+{
+    fn checked(self) -> Decision<Metadata> {
+        self.expect("validator evaluation succeeds")
+    }
+}
 
 fn request(principal: &str, action: Action, resource: &[&str]) -> Request<()> {
     Request::new(Event::new(principal, action, resource.to_vec()), ())
@@ -64,6 +84,48 @@ fn duplicate_commit_rule() -> Rule {
             ComponentPattern::variable("target"),
         ),
         RegexExpr::concat([RegexExpr::all(), matching_commit, RegexExpr::all()]),
+    )
+}
+
+fn every_action_leaf(index: usize) -> RegexExpr {
+    RegexExpr::star(RegexExpr::test(TestExpr::atom(
+        Comparison::Neq,
+        AtomPattern::Action(ComponentPattern::constant(Action::commit(format!(
+            "blocked-{index}"
+        )))),
+    )))
+}
+
+fn deeply_nested_action_allow_all_rule(depth: usize) -> Rule {
+    assert!(depth > 0, "regex depth must be positive");
+    let mut leaves = (0..depth).map(every_action_leaf);
+    let mut tail = leaves.next().expect("positive depth has one leaf");
+    for (index, leaf) in leaves.enumerate() {
+        tail = if index % 2 == 0 {
+            RegexExpr::union([tail, leaf])
+        } else {
+            RegexExpr::intersect([tail, leaf])
+        };
+    }
+    Rule::new(
+        RuleMode::Require,
+        Head::new(
+            ComponentPattern::variable("actor"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::variable("target"),
+        ),
+        tail,
+    )
+}
+
+fn unique_read(index: usize) -> Request<()> {
+    Request::new(
+        Event::new(
+            format!("actor-{index}"),
+            Action::Read,
+            vec![format!("resource-{index}")],
+        ),
+        (),
     )
 }
 
@@ -126,7 +188,45 @@ fn benchmark_million_event_nested_scan(criterion: &mut Criterion) {
             for _ in 0..iterations {
                 let candidate = request("alice", Action::Stage, &[]);
                 let start = Instant::now();
-                let decision = validator.check(black_box(candidate));
+                let decision = validator.check(black_box(candidate)).checked();
+                elapsed += start.elapsed();
+                assert!(decision.is_grant());
+                validator.rollback(checkpoint);
+            }
+            elapsed
+        });
+    });
+    group.finish();
+}
+
+// Every history symbol is distinct, defeating symbol-indexed successor caches. The regex only
+// inspects actions, so unique principal/resource strings do not enter component resolution.
+fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
+    const HISTORY_LEN: usize = 100_000;
+    const REGEX_DEPTH: usize = 32;
+
+    let arena = Bump::new();
+    let mut builder = Validator::builder(&arena);
+    builder
+        .add_rule(deeply_nested_action_allow_all_rule(REGEX_DEPTH))
+        .expect("benchmark rule is valid");
+    let mut validator = builder.finish();
+    for index in 0..HISTORY_LEN {
+        let _ = validator.check(unique_read(index)).checked();
+    }
+    assert_eq!(validator.history().len(), HISTORY_LEN);
+    let checkpoint = validator.checkpoint();
+
+    let mut group = criterion.benchmark_group("high_cardinality_scan");
+    group.throughput(Throughput::Elements(HISTORY_LEN as u64));
+    group.sample_size(10);
+    group.bench_function("100000_events/depth_32", |bencher| {
+        bencher.iter_custom(|iterations| {
+            let mut elapsed = Duration::ZERO;
+            for _ in 0..iterations {
+                let candidate = request("candidate", Action::Stage, &[]);
+                let start = Instant::now();
+                let decision = validator.check(black_box(candidate)).checked();
                 elapsed += start.elapsed();
                 assert!(decision.is_grant());
                 validator.rollback(checkpoint);
@@ -271,6 +371,7 @@ criterion_group!(
     benchmark_compilation,
     benchmark_history_scan,
     benchmark_million_event_nested_scan,
+    benchmark_high_cardinality_scan,
     benchmark_denial,
     benchmark_rollback,
 );
