@@ -4,7 +4,10 @@
 //! complete-history evaluation, whose candidate substitution is immutable; no evaluator or node
 //! retains a rule, scope, store, or validator backreference.
 
-use std::collections::HashMap;
+use std::hash::{BuildHasher, Hash, Hasher};
+
+use hashbrown::HashMap;
+use hashbrown::hash_map::RawEntryMut;
 
 use crate::model::Event;
 
@@ -48,6 +51,15 @@ pub(super) fn derive<'arena>(
 pub(super) type DerivativeCache<'arena, 'event> =
     HashMap<(RegexId<'arena>, &'event Event), RegexId<'arena>>;
 
+fn cache_hash<Key>(cache: &DerivativeCache<'_, '_>, key: &Key) -> u64
+where
+    Key: Hash,
+{
+    let mut hasher = cache.hasher().build_hasher();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Reuses exact concrete derivatives for one fixed candidate substitution.
 ///
 /// Scoping this cache to one [`accepts`] call makes `(state, event)` a complete key while avoiding
@@ -59,7 +71,9 @@ pub(super) fn derive_cached<'arena, 'event>(
     substitution: &CandidateSubstitution<'arena>,
     derivatives: &mut DerivativeCache<'arena, 'event>,
 ) -> RegexId<'arena> {
-    if let Some(derivative) = derivatives.get(&(regex, event)) {
+    let key = (regex, event);
+    let hash = cache_hash(derivatives, &key);
+    if let Some((_, derivative)) = derivatives.raw_entry().from_key_hashed_nocheck(hash, &key) {
         return *derivative;
     }
 
@@ -113,9 +127,16 @@ pub(super) fn derive_cached<'arena, 'event>(
         }
     };
 
-    let previous = derivatives.insert((regex, event), derivative);
-    debug_assert!(previous.is_none());
-    derivative
+    match derivatives
+        .raw_entry_mut()
+        .from_key_hashed_nocheck(hash, &key)
+    {
+        RawEntryMut::Occupied(entry) => *entry.get(),
+        RawEntryMut::Vacant(entry) => {
+            entry.insert_hashed_nocheck(hash, key, derivative);
+            derivative
+        }
+    }
 }
 
 /// Evaluates one canonical boolean test against an event and candidate substitution.
