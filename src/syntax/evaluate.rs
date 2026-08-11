@@ -10,6 +10,7 @@ use std::hash::{BuildHasher, Hash};
 use hashbrown::HashMap;
 #[cfg(test)]
 use hashbrown::hash_map::RawEntryMut;
+#[cfg(test)]
 use smallvec::SmallVec;
 
 use crate::model::Event;
@@ -59,6 +60,7 @@ pub(super) fn derive<'arena>(
 pub(super) type DerivativeCache<'arena, 'event> =
     HashMap<(RegexId<'arena>, &'event Event), RegexId<'arena>>;
 
+#[cfg(test)]
 fn cache_hash<Key>(cache: &DerivativeCache<'_, '_>, key: &Key) -> u64
 where
     Key: Hash,

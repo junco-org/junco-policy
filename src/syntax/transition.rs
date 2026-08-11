@@ -1,4 +1,5 @@
 //! Normalized symbolic-transition smart constructors from `symbolic-matcher.tex`.
+use smallvec::SmallVec;
 
 use super::node::{RegexId, RegexKind, TransitionId, TransitionNode};
 use super::store::CanonicalStore;
@@ -54,14 +55,14 @@ impl<'arena> CanonicalStore<'arena> {
                 let children = children
                     .iter()
                     .map(|child| self.clean_transition_path(*child, path))
-                    .collect();
+                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
                 self.transition_union(children)
             }
             TransitionNode::Intersect(children) => {
                 let children = children
                     .iter()
                     .map(|child| self.clean_transition_path(*child, path))
-                    .collect();
+                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
                 self.transition_intersect(children)
             }
             TransitionNode::Not(inner) => {
@@ -92,9 +93,9 @@ impl<'arena> CanonicalStore<'arena> {
             return self.clean_transition_path(then_transition, path);
         }
 
-        let true_path = self.test_and(vec![path, test]);
+        let true_path = self.test_and([path, test]);
         let complement = self.test_not(test);
-        let false_path = self.test_and(vec![path, complement]);
+        let false_path = self.test_and([path, complement]);
         if true_path == self.test_false {
             return self.clean_transition_path(else_transition, false_path);
         }
@@ -120,9 +121,9 @@ impl<'arena> CanonicalStore<'arena> {
     /// Constructs flattened, ordered, deduplicated transition union.
     pub(super) fn transition_union(
         &mut self,
-        children: Vec<TransitionId<'arena>>,
+        children: impl IntoIterator<Item = TransitionId<'arena>>,
     ) -> TransitionId<'arena> {
-        let mut flat = Vec::with_capacity(children.len());
+        let mut flat = SmallVec::<[TransitionId<'arena>; 4]>::new();
         for child in children {
             match *child.get() {
                 TransitionNode::Const(regex) if regex == self.all => return self.transition_all,
@@ -132,7 +133,7 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
-        let mut constants = Vec::new();
+        let mut constants = SmallVec::<[RegexId<'arena>; 4]>::new();
         flat.retain(|child| match *child.get() {
             TransitionNode::Const(regex) => {
                 constants.push(regex);
@@ -181,7 +182,7 @@ impl<'arena> CanonicalStore<'arena> {
             (TransitionNode::Const(regex), _) if regex == self.all => return right,
             (_, TransitionNode::Const(regex)) if regex == self.all => return left,
             (TransitionNode::Const(left), TransitionNode::Const(right)) => {
-                let regex = self.regex_intersect(vec![left, right]);
+                let regex = self.regex_intersect([left, right]);
                 return self.transition_const(regex);
             }
             (
@@ -196,11 +197,11 @@ impl<'arena> CanonicalStore<'arena> {
                     else_transition: right_else,
                 },
             ) if left_else == self.transition_empty && right_else == self.transition_empty => {
-                let guard = self.test_and(vec![left_test, right_test]);
+                let guard = self.test_and([left_test, right_test]);
                 if guard == self.test_false {
                     return self.transition_empty;
                 }
-                let then_transition = self.transition_intersect(vec![left_then, right_then]);
+                let then_transition = self.transition_intersect([left_then, right_then]);
                 return self.transition_if(guard, then_transition, self.transition_empty);
             }
             (
@@ -216,8 +217,8 @@ impl<'arena> CanonicalStore<'arena> {
                 },
             ) => {
                 if left_test == right_test {
-                    let then_transition = self.transition_intersect(vec![left_then, right_then]);
-                    let else_transition = self.transition_intersect(vec![left_else, right_else]);
+                    let then_transition = self.transition_intersect([left_then, right_then]);
+                    let else_transition = self.transition_intersect([left_else, right_else]);
                     return self.transition_if(left_test, then_transition, else_transition);
                 }
 
@@ -229,26 +230,26 @@ impl<'arena> CanonicalStore<'arena> {
                     left_test < right_test
                 };
                 if expand_left {
-                    let then_transition = self.transition_intersect(vec![left_then, right]);
-                    let else_transition = self.transition_intersect(vec![left_else, right]);
+                    let then_transition = self.transition_intersect([left_then, right]);
+                    let else_transition = self.transition_intersect([left_else, right]);
                     return self.transition_if(left_test, then_transition, else_transition);
                 }
-                let then_transition = self.transition_intersect(vec![left, right_then]);
-                let else_transition = self.transition_intersect(vec![left, right_else]);
+                let then_transition = self.transition_intersect([left, right_then]);
+                let else_transition = self.transition_intersect([left, right_else]);
                 return self.transition_if(right_test, then_transition, else_transition);
             }
             (TransitionNode::Union(children), _) => {
                 let intersections = children
                     .iter()
-                    .map(|child| self.transition_intersect(vec![*child, right]))
-                    .collect();
+                    .map(|child| self.transition_intersect([*child, right]))
+                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
                 return self.transition_union(intersections);
             }
             (_, TransitionNode::Union(children)) => {
                 let intersections = children
                     .iter()
-                    .map(|child| self.transition_intersect(vec![left, *child]))
-                    .collect();
+                    .map(|child| self.transition_intersect([left, *child]))
+                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
                 return self.transition_union(intersections);
             }
             (
@@ -259,8 +260,8 @@ impl<'arena> CanonicalStore<'arena> {
                 },
                 _,
             ) => {
-                let then_transition = self.transition_intersect(vec![then_transition, right]);
-                let else_transition = self.transition_intersect(vec![else_transition, right]);
+                let then_transition = self.transition_intersect([then_transition, right]);
+                let else_transition = self.transition_intersect([else_transition, right]);
                 return self.transition_if(test, then_transition, else_transition);
             }
             (
@@ -271,14 +272,14 @@ impl<'arena> CanonicalStore<'arena> {
                     else_transition,
                 },
             ) => {
-                let then_transition = self.transition_intersect(vec![left, then_transition]);
-                let else_transition = self.transition_intersect(vec![left, else_transition]);
+                let then_transition = self.transition_intersect([left, then_transition]);
+                let else_transition = self.transition_intersect([left, else_transition]);
                 return self.transition_if(test, then_transition, else_transition);
             }
             _ => {}
         }
 
-        let mut children = vec![left, right];
+        let mut children = SmallVec::<[TransitionId<'arena>; 4]>::from_slice(&[left, right]);
         children.sort_unstable();
         let values = self.transitions.arena().alloc_slice_copy(&children);
         self.transitions.mk(TransitionNode::Intersect(values))
@@ -287,9 +288,9 @@ impl<'arena> CanonicalStore<'arena> {
     /// Constructs transition intersection in deterministic disjunctive normal form.
     pub(super) fn transition_intersect(
         &mut self,
-        children: Vec<TransitionId<'arena>>,
+        children: impl IntoIterator<Item = TransitionId<'arena>>,
     ) -> TransitionId<'arena> {
-        let mut flat = Vec::with_capacity(children.len());
+        let mut flat = SmallVec::<[TransitionId<'arena>; 4]>::new();
         for child in children {
             match *child.get() {
                 TransitionNode::Const(regex) if regex == self.empty => {
@@ -301,7 +302,7 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
-        let mut constants = Vec::new();
+        let mut constants = SmallVec::<[RegexId<'arena>; 4]>::new();
         flat.retain(|child| match *child.get() {
             TransitionNode::Const(regex) => {
                 constants.push(regex);
@@ -364,14 +365,14 @@ impl<'arena> CanonicalStore<'arena> {
                 let complements = children
                     .iter()
                     .map(|child| self.transition_not(*child))
-                    .collect();
+                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
                 self.transition_intersect(complements)
             }
             TransitionNode::Intersect(children) => {
                 let complements = children
                     .iter()
                     .map(|child| self.transition_not(*child))
-                    .collect();
+                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
                 self.transition_union(complements)
             }
             TransitionNode::Not(inner) => inner,
@@ -395,14 +396,14 @@ impl<'arena> CanonicalStore<'arena> {
         if normalized == self.empty {
             return self.transition_empty;
         }
-        let suffix = match normalized.get().kind {
-            RegexKind::Concat(factors) => factors.to_vec(),
-            _ => vec![normalized],
+        let suffix: SmallVec<[RegexId<'arena>; 4]> = match normalized.get().kind {
+            RegexKind::Concat(factors) => SmallVec::from_slice(factors),
+            _ => SmallVec::from_slice(&[normalized]),
         };
 
         match *transition.get() {
             TransitionNode::Const(regex) => {
-                let mut factors = Vec::with_capacity(1 + suffix.len());
+                let mut factors = SmallVec::<[RegexId<'arena>; 4]>::new();
                 factors.push(regex);
                 factors.extend_from_slice(&suffix);
                 let regex = self.regex_concat(factors);
@@ -412,7 +413,7 @@ impl<'arena> CanonicalStore<'arena> {
                 let appended = children
                     .iter()
                     .map(|child| self.transition_append(*child, &suffix))
-                    .collect();
+                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
                 self.transition_union(appended)
             }
             TransitionNode::If {
@@ -428,7 +429,7 @@ impl<'arena> CanonicalStore<'arena> {
                 transition,
                 suffix: existing,
             } => {
-                let mut combined = Vec::with_capacity(existing.len() + suffix.len());
+                let mut combined = SmallVec::<[RegexId<'arena>; 4]>::new();
                 combined.extend_from_slice(existing);
                 combined.extend_from_slice(&suffix);
                 self.transition_append(transition, &combined)

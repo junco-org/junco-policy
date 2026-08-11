@@ -709,6 +709,7 @@ fn symbolic_instantiations_reuse_equal_symbols() {
     let runtime_rule = compile_rule(&mut store, &rule(cycle)).unwrap();
     let candidate = Event::new("alice", Action::Read, ["a"]);
     let equal_symbol = candidate.clone();
+    let equivalent_symbol = Event::new("bob", Action::Read, ["b"]);
     let distinct_symbol = Event::new("alice", Action::Edit, ["a"]);
     let substitution = runtime_rule
         .head
@@ -720,6 +721,7 @@ fn symbolic_instantiations_reuse_equal_symbols() {
 
     let first = instantiate(
         &mut store,
+        &mut derivatives,
         &mut instances,
         transition,
         &substitution,
@@ -728,6 +730,7 @@ fn symbolic_instantiations_reuse_equal_symbols() {
     let entries = instances.len();
     let second = instantiate(
         &mut store,
+        &mut derivatives,
         &mut instances,
         transition,
         &substitution,
@@ -735,10 +738,21 @@ fn symbolic_instantiations_reuse_equal_symbols() {
     );
     assert_eq!(second, first);
     assert_eq!(instances.len(), entries);
+    let equivalent = instantiate(
+        &mut store,
+        &mut derivatives,
+        &mut instances,
+        transition,
+        &substitution,
+        &equivalent_symbol,
+    );
+    assert_eq!(equivalent, first);
+    assert_eq!(instances.len(), entries);
 
     let expected = eval_transition(&mut store, transition, &substitution, &distinct_symbol);
     let distinct = instantiate(
         &mut store,
+        &mut derivatives,
         &mut instances,
         transition,
         &substitution,

@@ -10,6 +10,7 @@ use super::component::CompiledAtomPattern;
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
 use super::source::{Comparison, ComponentPattern};
 use super::store::CanonicalStore;
+use smallvec::SmallVec;
 
 /// Returns whether a test set contains both an atom and its disequality complement.
 fn has_complementary_tests(tests: &[TestId<'_>]) -> bool {
@@ -246,9 +247,12 @@ impl<'arena> CanonicalStore<'arena> {
         if self.tests_have_complements(&flat, true) || has_contradictory_equalities(&flat) {
             return self.test_false;
         }
+        let may_absorb = flat
+            .iter()
+            .any(|test| matches!(test.get(), TestNode::Or(_)));
         let siblings = flat.clone();
         flat.retain(|candidate| {
-            !absorbed_by_sibling(*candidate, &siblings, true)
+            (!may_absorb || !absorbed_by_sibling(*candidate, &siblings, true))
                 && !redundant_conjunct(*candidate, &siblings)
         });
         match flat.as_slice() {
@@ -281,9 +285,12 @@ impl<'arena> CanonicalStore<'arena> {
         if self.tests_have_complements(&flat, false) || has_distinct_disequalities(&flat) {
             return self.test_true;
         }
+        let may_absorb = flat
+            .iter()
+            .any(|test| matches!(test.get(), TestNode::And(_)));
         let siblings = flat.clone();
         flat.retain(|candidate| {
-            !absorbed_by_sibling(*candidate, &siblings, false)
+            (!may_absorb || !absorbed_by_sibling(*candidate, &siblings, false))
                 && !redundant_disjunct(*candidate, &siblings)
         });
         match flat.as_slice() {
@@ -312,11 +319,17 @@ impl<'arena> CanonicalStore<'arena> {
                 pattern,
             }),
             TestNode::And(children) => {
-                let complements = children.iter().map(|child| self.test_not(*child)).collect();
+                let complements = children
+                    .iter()
+                    .map(|child| self.test_not(*child))
+                    .collect::<SmallVec<[TestId<'arena>; 4]>>();
                 self.test_or(complements)
             }
             TestNode::Or(children) => {
-                let complements = children.iter().map(|child| self.test_not(*child)).collect();
+                let complements = children
+                    .iter()
+                    .map(|child| self.test_not(*child))
+                    .collect::<SmallVec<[TestId<'arena>; 4]>>();
                 self.test_and(complements)
             }
         }
@@ -359,7 +372,7 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
-        let mut tests = Vec::new();
+        let mut tests = SmallVec::<[TestId<'arena>; 4]>::new();
         flat.retain(|child| match child.get().kind {
             RegexKind::Test(test) => {
                 tests.push(test);
@@ -387,8 +400,13 @@ impl<'arena> CanonicalStore<'arena> {
         {
             flat.retain(|child| *child != self.epsilon);
         }
-        let siblings = flat.clone();
-        flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, true));
+        if flat
+            .iter()
+            .any(|regex| matches!(regex.get().kind, RegexKind::Intersect(_)))
+        {
+            let siblings = flat.clone();
+            flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, true));
+        }
         match flat.as_slice() {
             [] => self.empty,
             [only] => *only,
@@ -415,7 +433,7 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
-        let mut tests = Vec::new();
+        let mut tests = SmallVec::<[TestId<'arena>; 4]>::new();
         flat.retain(|child| match child.get().kind {
             RegexKind::Test(test) => {
                 tests.push(test);
@@ -450,8 +468,13 @@ impl<'arena> CanonicalStore<'arena> {
         {
             flat.retain(|child| !is_epsilon_complement(*child));
         }
-        let siblings = flat.clone();
-        flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, false));
+        if flat
+            .iter()
+            .any(|regex| matches!(regex.get().kind, RegexKind::Union(_)))
+        {
+            let siblings = flat.clone();
+            flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, false));
+        }
         match flat.as_slice() {
             [] => self.all,
             [only] => *only,
