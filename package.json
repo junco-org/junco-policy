@@ -2,9 +2,20 @@
   "name": "rust-validator",
   "version": "0.1.0",
   "private": true,
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "rust-validator"
+  },
   "scripts": {
     "build": "cargo build",
     "typecheck": "cargo check",
-    "test": "cargo test"
+    "test": "cargo test",
+    "build:napi": "napi build --platform --release --features napi --cargo-name rust_validator",
+    "build:napi:debug": "napi build --platform --features napi --cargo-name rust_validator",
+    "test:napi": "cargo test --features napi"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2"
   }
 }

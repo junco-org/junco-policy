@@ -9,9 +9,18 @@ publish = false
 [lib]
 name = "rust_validator"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 bumpalo = "3.16"
 hashconsing = { git = "https://github.com/elefthei/hashconsing", rev = "6d79a7e287adbb9a8e43ddf96a956b80a156dfd0", features = ["bumpalo"] }
 string-interner = "0.20.0"
 thiserror = "2.0"
+napi = { version = "2", default-features = false, features = ["napi8"], optional = true }
+napi-derive = { version = "2", optional = true }
+
+[build-dependencies]
+napi-build = "2"
+
+[features]
+napi = ["dep:napi", "dep:napi-derive"]
