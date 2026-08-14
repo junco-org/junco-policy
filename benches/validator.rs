@@ -151,6 +151,7 @@ fn deeply_nested_allow_all_rule(depth: usize) -> Rule {
             RegexExpr::intersect([tail, leaf])
         };
     }
+
     Rule::new(
         RuleMode::Require,
         Head::new(
@@ -159,6 +160,29 @@ fn deeply_nested_allow_all_rule(depth: usize) -> Rule {
             ComponentPattern::variable("target"),
         ),
         tail,
+    )
+}
+
+fn advancing_optional_rule(steps: usize) -> Rule {
+    let factors = (0..steps).map(|index| {
+        RegexExpr::union([
+            RegexExpr::epsilon(),
+            RegexExpr::test(TestExpr::atom(
+                Comparison::Neq,
+                AtomPattern::Action(ComponentPattern::constant(Action::commit(format!(
+                    "blocked-{index}"
+                )))),
+            )),
+        ])
+    });
+    Rule::new(
+        RuleMode::Require,
+        Head::new(
+            ComponentPattern::variable("actor"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::variable("target"),
+        ),
+        RegexExpr::concat(factors),
     )
 }
 
@@ -221,6 +245,44 @@ fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
     group.throughput(Throughput::Elements(HISTORY_LEN as u64));
     group.sample_size(10);
     group.bench_function("100000_events/depth_32", |bencher| {
+        bencher.iter_custom(|iterations| {
+            let mut elapsed = Duration::ZERO;
+            for _ in 0..iterations {
+                let candidate = request("candidate", Action::Stage, &[]);
+                let start = Instant::now();
+                let decision = validator.check(black_box(candidate)).checked();
+                elapsed += start.elapsed();
+                assert!(decision.is_grant());
+                validator.rollback(checkpoint);
+            }
+            elapsed
+        });
+    });
+    group.finish();
+}
+
+// Every derivative advances through a new suffix of a long concatenation of optional predicates.
+// Symbol caches cannot reuse `(transition, symbol)` because the transition changes at every event.
+fn benchmark_advancing_derivatives(criterion: &mut Criterion) {
+    const STEPS: usize = 16;
+
+    let arena = Bump::new();
+    let mut builder = Validator::builder(&arena);
+    builder
+        .add_rule(advancing_optional_rule(STEPS))
+        .expect("benchmark rule is valid");
+    let mut validator = builder.finish();
+    for _ in 0..STEPS {
+        let _ = validator
+            .check(request("history", Action::Read, &[]))
+            .checked();
+    }
+    let checkpoint = validator.checkpoint();
+
+    let mut group = criterion.benchmark_group("advancing_derivatives");
+    group.throughput(Throughput::Elements(STEPS as u64));
+    group.sample_size(10);
+    group.bench_function("16_optional_factors", |bencher| {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
@@ -372,6 +434,7 @@ criterion_group!(
     benchmark_history_scan,
     benchmark_million_event_nested_scan,
     benchmark_high_cardinality_scan,
+    benchmark_advancing_derivatives,
     benchmark_denial,
     benchmark_rollback,
 );
