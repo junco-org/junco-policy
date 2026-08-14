@@ -4,10 +4,11 @@
 //! complete-history evaluation, whose candidate substitution is immutable; no evaluator or node
 //! retains a rule, scope, store, or validator backreference.
 
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::{BuildHasher, Hash};
 
 use hashbrown::HashMap;
 use hashbrown::hash_map::RawEntryMut;
+use smallvec::SmallVec;
 
 use crate::model::Event;
 
@@ -55,9 +56,7 @@ fn cache_hash<Key>(cache: &DerivativeCache<'_, '_>, key: &Key) -> u64
 where
     Key: Hash,
 {
-    let mut hasher = cache.hasher().build_hasher();
-    key.hash(&mut hasher);
-    hasher.finish()
+    cache.hasher().hash_one(key)
 }
 
 /// Reuses exact concrete derivatives for one fixed candidate substitution.
@@ -91,14 +90,14 @@ pub(super) fn derive_cached<'arena, 'event>(
             let children = children
                 .iter()
                 .map(|child| derive_cached(store, *child, event, substitution, derivatives))
-                .collect();
+                .collect::<SmallVec<[RegexId<'arena>; 4]>>();
             store.regex_union(children)
         }
         RegexKind::Intersect(children) => {
             let children = children
                 .iter()
                 .map(|child| derive_cached(store, *child, event, substitution, derivatives))
-                .collect();
+                .collect::<SmallVec<[RegexId<'arena>; 4]>>();
             store.regex_intersect(children)
         }
         RegexKind::Not(inner) => {
@@ -106,11 +105,11 @@ pub(super) fn derive_cached<'arena, 'event>(
             store.regex_not(inner)
         }
         RegexKind::Concat(factors) => {
-            let mut alternatives = Vec::new();
+            let mut alternatives = SmallVec::<[RegexId<'arena>; 4]>::new();
             let mut remaining = factors;
             while let Some((factor, suffix)) = remaining.split_first() {
                 let derivative = derive_cached(store, *factor, event, substitution, derivatives);
-                let mut product = Vec::with_capacity(1 + suffix.len());
+                let mut product = SmallVec::<[RegexId<'arena>; 4]>::new();
                 product.push(derivative);
                 product.extend_from_slice(suffix);
                 alternatives.push(store.regex_concat(product));
@@ -123,7 +122,7 @@ pub(super) fn derive_cached<'arena, 'event>(
         }
         RegexKind::Star(inner) => {
             let inner = derive_cached(store, inner, event, substitution, derivatives);
-            store.regex_concat(vec![inner, regex])
+            store.regex_concat([inner, regex])
         }
     };
 

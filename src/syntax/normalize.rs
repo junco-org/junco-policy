@@ -4,6 +4,7 @@
 //! conjunction/disjunction and regex union/intersection are flattened, ordered by canonical handle,
 //! and deduplicated. Concatenation is flattened but preserves source order. These normal forms keep
 //! the set of derivative states finite for the supported similarity quotient.
+use smallvec::SmallVec;
 
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
 use super::store::CanonicalStore;
@@ -63,8 +64,11 @@ fn complementary_regex<'arena>(left: RegexId<'arena>, right: RegexId<'arena>) ->
 
 impl<'arena> CanonicalStore<'arena> {
     /// Constructs canonical conjunction over one-event tests.
-    pub(super) fn test_and(&mut self, children: Vec<TestId<'arena>>) -> TestId<'arena> {
-        let mut flat = Vec::with_capacity(children.len());
+    pub(super) fn test_and(
+        &mut self,
+        children: impl IntoIterator<Item = TestId<'arena>>,
+    ) -> TestId<'arena> {
+        let mut flat = SmallVec::<[TestId<'arena>; 4]>::new();
         for child in children {
             match *child.get() {
                 TestNode::False => return self.test_false,
@@ -92,8 +96,11 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs canonical disjunction over one-event tests.
-    pub(super) fn test_or(&mut self, children: Vec<TestId<'arena>>) -> TestId<'arena> {
-        let mut flat = Vec::with_capacity(children.len());
+    pub(super) fn test_or(
+        &mut self,
+        children: impl IntoIterator<Item = TestId<'arena>>,
+    ) -> TestId<'arena> {
+        let mut flat = SmallVec::<[TestId<'arena>; 4]>::new();
         for child in children {
             match *child.get() {
                 TestNode::True => return self.test_true,
@@ -141,8 +148,11 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs canonical set union.
-    pub(super) fn regex_union(&mut self, children: Vec<RegexId<'arena>>) -> RegexId<'arena> {
-        let mut flat = Vec::with_capacity(children.len());
+    pub(super) fn regex_union(
+        &mut self,
+        children: impl IntoIterator<Item = RegexId<'arena>>,
+    ) -> RegexId<'arena> {
+        let mut flat = SmallVec::<[RegexId<'arena>; 4]>::new();
         for child in children {
             match child.get().kind {
                 RegexKind::All => return self.all,
@@ -169,8 +179,11 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs canonical set intersection.
-    pub(super) fn regex_intersect(&mut self, children: Vec<RegexId<'arena>>) -> RegexId<'arena> {
-        let mut flat = Vec::with_capacity(children.len());
+    pub(super) fn regex_intersect(
+        &mut self,
+        children: impl IntoIterator<Item = RegexId<'arena>>,
+    ) -> RegexId<'arena> {
+        let mut flat = SmallVec::<[RegexId<'arena>; 4]>::new();
         for child in children {
             match child.get().kind {
                 RegexKind::Empty => return self.empty,
@@ -197,8 +210,11 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs canonical ordered concatenation.
-    pub(super) fn regex_concat(&mut self, children: Vec<RegexId<'arena>>) -> RegexId<'arena> {
-        let mut flat = Vec::with_capacity(children.len());
+    pub(super) fn regex_concat(
+        &mut self,
+        children: impl IntoIterator<Item = RegexId<'arena>>,
+    ) -> RegexId<'arena> {
+        let mut flat = SmallVec::<[RegexId<'arena>; 4]>::new();
         for child in children {
             match child.get().kind {
                 RegexKind::Empty => return self.empty,
