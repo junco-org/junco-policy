@@ -103,6 +103,10 @@ pub enum Action {
     Checkout,
     /// Stash local resource changes.
     Stash,
+    /// Remove a resource from the working tree and stage the removal.
+    Delete,
+    /// Discard untracked working-tree content at a resource.
+    Clean,
     /// Observe resource differences.
     Diff,
     /// Observe resource history.
@@ -136,6 +140,8 @@ impl fmt::Display for Action {
             Self::Commit { message: None } => formatter.write_str("commit(<missing message>)"),
             Self::Checkout => formatter.write_str("checkout"),
             Self::Stash => formatter.write_str("stash"),
+            Self::Delete => formatter.write_str("delete"),
+            Self::Clean => formatter.write_str("clean"),
             Self::Diff => formatter.write_str("diff"),
             Self::History => formatter.write_str("history"),
         }

@@ -1,12 +1,12 @@
 //! Feature-gated napi-rs bindings: a stateful git authorizer backed by a `Vec<Event>` committed
-//! history store. Git legality is decided by the native trace policies in [`crate::git`]. Gated
-//! behind the default-off `napi` cargo feature, so it is absent from every default
+//! history store. Git legality is decided by the native trace policy in [`crate::policy::git`].
+//! Gated behind the default-off `napi` cargo feature, so it is absent from every default
 //! `cargo build`/`check`/`test`.
 
 use napi_derive::napi;
 
+use crate::policy::{PolicyDecision, git::git_decision};
 use crate::{Action, Event};
-use crate::git::{git_decision, GitDecision};
 
 // -- napi surface -----------------------------------------------------------
 
@@ -31,6 +31,8 @@ impl TryFrom<JsAction> for Action {
             },
             "checkout" => Action::Checkout,
             "stash" => Action::Stash,
+            "delete" => Action::Delete,
+            "clean" => Action::Clean,
             "diff" => Action::Diff,
             "history" => Action::History,
             other => {
@@ -52,7 +54,8 @@ pub struct JsGitDecision {
 }
 
 /// Stateful git authorizer: threads the resource's committed grant history and decides each
-/// request by the native trace policies in [`crate::git`]. Append-only-on-grant keeps `check` atomic.
+/// request by the native trace policy in [`crate::policy::git`]. Append-only-on-grant keeps `check`
+/// atomic.
 #[napi]
 pub struct GitValidator {
     history: Vec<Event>,
@@ -80,7 +83,7 @@ impl GitValidator {
         let action: Action = action.try_into()?;
         let event = Event::new(principal, action, resource);
         match git_decision(&self.history, &event) {
-            GitDecision::Grant => {
+            PolicyDecision::Grant => {
                 self.history.push(event);
                 Ok(JsGitDecision {
                     kind: "grant".to_string(),
@@ -88,7 +91,7 @@ impl GitValidator {
                     allowed_fixes: None,
                 })
             }
-            GitDecision::Deny {
+            PolicyDecision::Deny {
                 failed_precondition,
                 allowed_fixes,
             } => Ok(JsGitDecision {
@@ -121,7 +124,9 @@ mod tests {
         assert_eq!(validator.history.len(), 0);
 
         // edit -> grant, appended
-        let d = validator.check("self".to_string(), act("edit"), r()).unwrap();
+        let d = validator
+            .check("self".to_string(), act("edit"), r())
+            .unwrap();
         assert_eq!(d.kind, "grant");
         assert_eq!(validator.history.len(), 1);
 
@@ -138,6 +143,41 @@ mod tests {
             .unwrap();
         assert_eq!(d.kind, "grant");
         assert_eq!(validator.history.len(), before + 1);
+    }
+
+    #[test]
+    fn delete_and_clean_marshal_across_the_boundary() {
+        let mut validator = GitValidator::new();
+        let r = || vec!["src".to_string(), "x".to_string()];
+        let act = |kind: &str| JsAction {
+            kind: kind.to_string(),
+            message: None,
+        };
+
+        // clean row -> delete grants and settles the resource into the staged row.
+        let d = validator
+            .check("self".to_string(), act("delete"), r())
+            .unwrap();
+        assert_eq!(d.kind, "grant");
+        assert_eq!(validator.history.len(), 1);
+
+        // `clean` is transparent to the row, so it grants on the staged row too.
+        let d = validator
+            .check("self".to_string(), act("clean"), r())
+            .unwrap();
+        assert_eq!(d.kind, "grant");
+        assert_eq!(validator.history.len(), 2);
+
+        // A second delete now hits the staged-row cell.
+        let d = validator
+            .check("self".to_string(), act("delete"), r())
+            .unwrap();
+        assert_eq!(d.kind, "soft-error");
+        assert_eq!(
+            d.failed_precondition.as_deref(),
+            Some("delete requires a resource with no staged or unstaged changes"),
+        );
+        assert_eq!(validator.history.len(), 2);
     }
 
     #[test]

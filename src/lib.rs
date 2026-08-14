@@ -60,12 +60,12 @@ mod syntax;
 mod validator;
 
 #[cfg(feature = "napi")]
-mod git;
-#[cfg(feature = "napi")]
 mod napi;
+mod policy;
 
 pub use bumpalo::Bump;
 pub use model::{Action, Event, Grant, Principal, Request, Resource};
+pub use policy::{PolicyDecision, git::git_decision};
 pub use syntax::{
     AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };

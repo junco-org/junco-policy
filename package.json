@@ -10,12 +10,16 @@
   "scripts": {
     "build": "cargo build",
     "typecheck": "cargo check",
-    "test": "cargo test",
+    "test": "cargo test && bun run test:oracle && bun run test:fuzz",
     "build:napi": "napi build --platform --release --features napi --cargo-name rust_validator",
     "build:napi:debug": "napi build --platform --features napi --cargo-name rust_validator",
-    "test:napi": "cargo test --features napi"
+    "test:napi": "cargo test --features napi",
+    "test:fuzz": "bun test ./test/git-policy-fuzz.test.ts",
+    "test:oracle": "cargo test --release --manifest-path fuzz/Cargo.toml --lib",
+    "bench": "cargo bench --manifest-path fuzz/Cargo.toml --bench git_policy"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^2"
+    "@napi-rs/cli": "^2",
+    "simple-git": "3.36.0"
   }
 }

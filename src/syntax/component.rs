@@ -24,6 +24,8 @@ pub(super) enum ResolvedAction {
     Commit(Option<DefaultSymbol>),
     Checkout,
     Stash,
+    Delete,
+    Clean,
     Diff,
     History,
 }
@@ -161,6 +163,8 @@ impl<'arena> ComponentDomain<'arena> for Action {
             ),
             Action::Checkout => ResolvedAction::Checkout,
             Action::Stash => ResolvedAction::Stash,
+            Action::Delete => ResolvedAction::Delete,
+            Action::Clean => ResolvedAction::Clean,
             Action::Diff => ResolvedAction::Diff,
             Action::History => ResolvedAction::History,
         }
