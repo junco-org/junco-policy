@@ -35,6 +35,17 @@ impl<'arena> SymbolicDerivativeCache<'arena> {
     }
 }
 
+/// Concrete alphabet symbol for one transition under a fixed substitution.
+///
+/// Each bit records whether one distinct [`CompiledAtomPattern`] used by the transition matches the
+/// current event after applying the candidate substitution. Atom order is the stable first-seen
+/// order cached by [`SymbolicDerivativeCache::atoms`]; bit `i` is stored in word `i / 64` at offset
+/// `i % 64`. Equality therefore means that two events induce the same truth assignment for every
+/// atom relevant to this transition, even when irrelevant event fields differ.
+///
+/// The surrounding cache key also includes [`TransitionId`], so symbols from transitions with
+/// different atom lists are never compared as the same successor key. One inline `u64` avoids a
+/// heap allocation for transitions containing at most 64 distinct atoms.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Symbol(SmallVec<[u64; 1]>);
 
