@@ -1,4 +1,9 @@
 //! Normalized symbolic-transition smart constructors from `symbolic-matcher.tex`.
+//!
+//! Transition union and intersection intentionally remain separate. Union is an ACI collector;
+//! intersection additionally performs deterministic conditional merging and distributive DNF
+//! expansion, so a shared connective skeleton would obscure the normalization algorithm.
+
 use smallvec::SmallVec;
 
 use super::node::{RegexId, RegexKind, TransitionId, TransitionNode};
@@ -6,6 +11,9 @@ use super::store::CanonicalStore;
 
 impl<'arena> CanonicalStore<'arena> {
     /// Lifts one normalized regex state into a constant transition.
+    ///
+    /// The three distinguished regex constants reuse preallocated transition constants. Every other
+    /// regex is hashconsed as a `Const` leaf, preserving canonical transition identity.
     ///
     /// # Preconditions
     /// `regex` must be a canonical normalized regex from `self`.
@@ -21,7 +29,11 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
-    /// Interns an already-cleaned conditional, applying only local constant/identity reductions.
+    /// Interns an already path-cleaned conditional with local reductions.
+    ///
+    /// Constant guards select their reachable branch, and equal branches erase the conditional.
+    /// Unlike [`CanonicalStore::transition_if`], this helper does not descend into either branch or
+    /// strengthen the current path condition.
     ///
     /// # Preconditions
     /// `test` and both transition IDs must be canonical values from `self`. Both branches must
@@ -47,7 +59,11 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
-    /// Rewrites every conditional reachable from `transition` under one accumulated path condition.
+    /// Rewrites a transition DAG under one accumulated path condition.
+    ///
+    /// Conditional nodes delegate to [`CanonicalStore::clean_conditional_path`]. Every other
+    /// constructor is rebuilt through its smart constructor so path cleaning cannot leave flattened,
+    /// ordering, complement, or append invariants stale after a child changes.
     ///
     /// # Preconditions
     /// `transition` and `path` must be canonical values from `self`; `path` must be normalized.
@@ -90,6 +106,11 @@ impl<'arena> CanonicalStore<'arena> {
 
     /// Cleans one conditional and its descendants under an accumulated path condition.
     ///
+    /// The true branch is analyzed under `path ∧ test`; the false branch under `path ∧ ¬test`.
+    /// Contradictory branch paths are discarded before descent. Reachable descendants are then
+    /// recursively cleaned with their strengthened path, after which local guard/branch identities
+    /// are applied by [`CanonicalStore::intern_transition_if`].
+    ///
     /// # Preconditions
     /// The test, path, and branches must be canonical values from `self`. `path` and `test` must be
     /// normalized; each branch must already satisfy the transition smart-constructor invariants.
@@ -127,6 +148,9 @@ impl<'arena> CanonicalStore<'arena> {
 
     /// Constructs a normalized conditional and removes path-infeasible nested branches.
     ///
+    /// Cleaning starts from the true path, so this is the public smart-constructor boundary for
+    /// conditionals whose descendants may not yet reflect their enclosing guard.
+    ///
     /// # Preconditions
     /// `test` and both branches must be canonical values from `self`. Input branches may contain
     /// path-infeasible descendants; this constructor removes them.
@@ -141,9 +165,14 @@ impl<'arena> CanonicalStore<'arena> {
 
     /// Constructs flattened, ordered, deduplicated transition union.
     ///
+    /// Universal leaves absorb the union, empty leaves are identities, and nested unions flatten.
+    /// All remaining constant-regex leaves are combined once through `regex_union`; this ensures
+    /// regex-level complement, test grouping, epsilon, and absorption laws run before the transition
+    /// operands are sorted and deduplicated. Zero and one operands collapse to their canonical forms.
+    ///
     /// # Preconditions
-    /// Every child must be a canonical normalized transition from `self`. Input order and duplicates
-    /// are unrestricted.
+    /// Every child must be a canonical normalized transition from `self`. Input order,
+    /// same-connective nesting, and duplicates are unrestricted.
     pub(super) fn transition_union(
         &mut self,
         children: impl IntoIterator<Item = TransitionId<'arena>>,
@@ -190,6 +219,12 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Intersects two normalized transitions and performs one deterministic DNF expansion step.
+    ///
+    /// The method first handles idempotence, constant identities/absorbers, and constant-regex
+    /// intersection. It then merges equal conditional guards, combines one-sided guards, or expands
+    /// the lower ordered guard first. Union operands distribute into intersections, and a remaining
+    /// conditional is pushed above the intersection. Only a pair requiring none of those rewrites is
+    /// interned as an ordered `Intersect` node.
     ///
     /// # Preconditions
     /// Both transitions must be canonical normalized values from `self`. Conditional guards and all
@@ -317,9 +352,15 @@ impl<'arena> CanonicalStore<'arena> {
 
     /// Constructs transition intersection in deterministic disjunctive normal form.
     ///
+    /// Empty leaves absorb, universal leaves are identities, and nested intersections flatten.
+    /// Constant-regex leaves are combined through `regex_intersect`. Remaining operands are sorted,
+    /// deduplicated, then folded through [`CanonicalStore::transition_intersect_pair`], whose ordered
+    /// expansion rules produce the canonical DNF. This differs materially from `transition_union`,
+    /// which never needs a pairwise distributive fold.
+    ///
     /// # Preconditions
-    /// Every child must be a canonical normalized transition from `self`. Input order and duplicates
-    /// are unrestricted.
+    /// Every child must be a canonical normalized transition from `self`. Input order,
+    /// same-connective nesting, and duplicates are unrestricted.
     pub(super) fn transition_intersect(
         &mut self,
         children: impl IntoIterator<Item = TransitionId<'arena>>,
@@ -367,6 +408,11 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Pushes transition complement through Boolean structure and conditionals to regex leaves.
+    ///
+    /// Constant leaves delegate to `regex_not`; conditionals complement both branches; union and
+    /// intersection use De Morgan duality. A Boolean-marker conditional is optimized by complementing
+    /// its guard. `Append` remains beneath an explicit `Not` because complement does not distribute
+    /// through regex concatenation.
     ///
     /// # Preconditions
     /// `transition` must be a canonical normalized transition from `self`.
@@ -417,7 +463,12 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
-    /// Appends a fixed normalized regex suffix, distributing to transition leaves.
+    /// Appends a fixed normalized regex suffix to every reachable transition result.
+    ///
+    /// The suffix is normalized once. Empty and epsilon results short-circuit; constants concatenate
+    /// immediately; unions and conditionals distribute the append; nested appends combine suffixes.
+    /// Intersection and complement retain an explicit `Append` node because concatenation does not
+    /// distribute through those operators.
     ///
     /// # Preconditions
     /// `transition` and every regex in `suffix` must be canonical normalized values from `self`.

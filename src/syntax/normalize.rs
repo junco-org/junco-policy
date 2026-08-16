@@ -2,7 +2,9 @@
 //!
 //! The constructors implement `Norm_B` and `Norm` from `symbolic-matcher.tex`: flattened ACI
 //! Boolean operators, absorption and contradiction reductions, flattened regex set operators,
-//! ordered concatenation, cross-layer test reductions, and cached nullability.
+//! ordered concatenation, cross-layer test reductions, and cached nullability. Test conjunction and
+//! disjunction share one typed dual algorithm. Regex union and intersection remain explicit because
+//! their epsilon, nullability, and lifted-test reductions are materially different.
 
 use smallvec::SmallVec;
 
@@ -10,10 +12,15 @@ use super::component::CompiledAtomPattern;
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
 use super::source::{Comparison, ComponentPattern};
 use super::store::CanonicalStore;
+
 /// Returns whether any unordered pair satisfies `predicate`.
 ///
+/// Each distinct pair is tested exactly once, no value is paired with itself, and evaluation stops
+/// on the first match. The worst case is quadratic in `values.len()`; callers use this only for
+/// small normalized sibling sets.
+///
 /// # Preconditions
-/// `predicate` must be symmetric; each pair is presented in only one orientation.
+/// `predicate` must be symmetric because `(left, right)` is presented in only one orientation.
 fn pair_satisfies<T: Copy>(values: &[T], mut predicate: impl FnMut(T, T) -> bool) -> bool {
     values.iter().enumerate().any(|(index, left)| {
         values[index + 1..]
@@ -22,7 +29,11 @@ fn pair_satisfies<T: Copy>(values: &[T], mut predicate: impl FnMut(T, T) -> bool
     })
 }
 
-/// Recognizes an equality atom and its disequality complement.
+/// Recognizes direct complementation between two atomic tests.
+///
+/// The pair is complementary exactly when it tests the same compiled component pattern with
+/// opposite comparisons, for example `action == Read` and `action != Read`. Compound De Morgan
+/// complements are handled separately by [`CanonicalStore::tests_have_complements`].
 ///
 /// # Preconditions
 /// Both IDs must be canonical tests from the same [`CanonicalStore`].
@@ -42,7 +53,11 @@ fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bo
     )
 }
 
-/// Recognizes distinct constants in the same component domain.
+/// Recognizes unequal constants selected from the same product coordinate.
+///
+/// Constants from different coordinates are incomparable: `principal == alice` and
+/// `action == Read` are not a distinct-constant pair. Variables are also excluded because their
+/// values are not known during normalization.
 ///
 /// # Preconditions
 /// Both patterns must have been compiled by the same [`CanonicalStore`].
@@ -67,7 +82,11 @@ fn distinct_constant_patterns(
     }
 }
 
-/// Recognizes two distinct constant atoms with the requested comparison.
+/// Recognizes two atoms that use `comparison` on distinct constants of one coordinate.
+///
+/// With [`Comparison::Eq`], the pair is contradictory in conjunction. With [`Comparison::Neq`],
+/// the pair is exhaustive in disjunction because one finite-product coordinate cannot equal both
+/// distinct constants.
 ///
 /// # Preconditions
 /// Both IDs must be canonical tests from the same [`CanonicalStore`].
@@ -163,7 +182,10 @@ fn absorbed_by_sibling<'arena>(candidate: TestId<'arena>, siblings: &[TestId<'ar
     })
 }
 
-/// Recognizes a regex and its whole-language complement.
+/// Recognizes direct whole-language complementation between two regex nodes.
+///
+/// Exactly one operand must be the canonical `Not` node whose child is the other operand. Test-level
+/// complements are grouped and normalized before this regex-level check.
 ///
 /// # Preconditions
 /// Both IDs must be canonical regexes from the same [`CanonicalStore`].
@@ -172,7 +194,10 @@ fn complementary_regex<'arena>(left: RegexId<'arena>, right: RegexId<'arena>) ->
         || matches!(right.get().kind, RegexKind::Not(inner) if inner == left)
 }
 
-/// Recognizes the canonical complement of epsilon.
+/// Recognizes the canonical language complement of epsilon.
+///
+/// This predicate supports the intersection law that `Not(Epsilon)` is redundant beside any
+/// non-nullable language. It intentionally matches only the direct canonical `Not(Epsilon)` form.
 ///
 /// # Preconditions
 /// `regex` must be a canonical regex from the current [`CanonicalStore`].
@@ -219,10 +244,72 @@ fn regex_absorbed_by_sibling<'arena>(
 }
 
 /// Outer connective whose siblings are being normalized.
+///
+/// The enum carries only the dual choices required by Boolean-test normalization. It deliberately
+/// does not abstract regex or transition normalization, whose identities and rewrite systems differ.
 #[derive(Clone, Copy)]
 enum TestConnective {
     And,
     Or,
+}
+
+impl TestConnective {
+    /// Identity element removed from this connective: `true` for `And`, `false` for `Or`.
+    fn identity<'arena>(self, store: &CanonicalStore<'arena>) -> TestId<'arena> {
+        match self {
+            Self::And => store.test_true,
+            Self::Or => store.test_false,
+        }
+    }
+
+    /// Absorbing element that determines the whole result: `false` for `And`, `true` for `Or`.
+    fn absorber<'arena>(self, store: &CanonicalStore<'arena>) -> TestId<'arena> {
+        match self {
+            Self::And => store.test_false,
+            Self::Or => store.test_true,
+        }
+    }
+
+    /// Returns children of a nested occurrence of this same connective for associative flattening.
+    fn children<'arena>(self, node: TestNode<'arena>) -> Option<&'arena [TestId<'arena>]> {
+        match (self, node) {
+            (Self::And, TestNode::And(children)) | (Self::Or, TestNode::Or(children)) => {
+                Some(children)
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns children of the dual connective used by De Morgan and absorption reductions.
+    fn dual_children<'arena>(self, node: TestNode<'arena>) -> Option<&'arena [TestId<'arena>]> {
+        match (self, node) {
+            (Self::And, TestNode::Or(children)) | (Self::Or, TestNode::And(children)) => {
+                Some(children)
+            }
+            _ => None,
+        }
+    }
+
+    /// Comparison whose distinct constants make the connective constant.
+    fn contradictory_comparison(self) -> Comparison {
+        match self {
+            Self::And => Comparison::Eq,
+            Self::Or => Comparison::Neq,
+        }
+    }
+
+    /// Comparison of a candidate atom removable when a distinct opposite atom implies it.
+    fn redundant_comparison(self) -> Comparison {
+        !self.contradictory_comparison()
+    }
+
+    /// Constructs the canonical node variant for two or more normalized children.
+    fn node<'arena>(self, children: &'arena [TestId<'arena>]) -> TestNode<'arena> {
+        match self {
+            Self::And => TestNode::And(children),
+            Self::Or => TestNode::Or(children),
+        }
+    }
 }
 
 impl<'arena> CanonicalStore<'arena> {
@@ -270,12 +357,8 @@ impl<'arena> CanonicalStore<'arena> {
         }
         // Compound complementation after De Morgan normalization and outer-connective flattening.
         tests.iter().copied().any(|candidate| {
-            let dual_children = match (connective, *candidate.get()) {
-                // A disjunction can contradict an outer conjunction; a conjunction can complete an
-                // outer disjunction to a tautology.
-                (TestConnective::And, TestNode::Or(children))
-                | (TestConnective::Or, TestNode::And(children)) => children,
-                _ => return false,
+            let Some(dual_children) = connective.dual_children(*candidate.get()) else {
+                return false;
             };
             // Every child must have its normalized complement as a separate outer sibling.
             dual_children.iter().all(|child| {
@@ -285,116 +368,120 @@ impl<'arena> CanonicalStore<'arena> {
         })
     }
 
-    /// Constructs canonical conjunction over one-event tests.
+    /// Normalizes one associative, commutative, idempotent Boolean connective.
+    ///
+    /// The algorithm performs the same ordered stages for conjunction and disjunction:
+    ///
+    /// 1. return immediately on the absorbing element, remove identities, and flatten nested uses
+    ///    of the same connective;
+    /// 2. sort and deduplicate children, establishing canonical order and idempotence;
+    /// 3. collapse direct/compound complements and incompatible constant atoms to the absorber;
+    /// 4. remove operands made redundant by absorption or finite-product constant implication;
+    /// 5. return the identity, the sole child, or one hashconsed connective node.
     ///
     /// # Preconditions
-    /// Every child must be a canonical test from `self`. Input order and duplicates are unrestricted.
+    /// Every child must be a canonical test from `self`. Input order, nesting, and duplicates are
+    /// unrestricted. Same-connective child slices already stored in canonical nodes are sorted and
+    /// deduplicated.
+    fn test_connective(
+        &mut self,
+        children: impl IntoIterator<Item = TestId<'arena>>,
+        connective: TestConnective,
+    ) -> TestId<'arena> {
+        let identity = connective.identity(self);
+        let absorber = connective.absorber(self);
+        let mut flat = SmallVec::<[TestId<'arena>; 4]>::new();
+        for child in children {
+            if child == absorber {
+                return absorber;
+            }
+            if child == identity {
+                continue;
+            }
+            if let Some(nested) = connective.children(*child.get()) {
+                flat.extend_from_slice(nested);
+            } else {
+                flat.push(child);
+            }
+        }
+
+        flat.sort_unstable();
+        flat.dedup();
+        let contradictory_comparison = connective.contradictory_comparison();
+        if self.tests_have_complements(&flat, connective)
+            || pair_satisfies(&flat, |left, right| {
+                distinct_constant_atoms(left, right, contradictory_comparison)
+            })
+        {
+            return absorber;
+        }
+
+        let redundant_comparison = connective.redundant_comparison();
+        if flat.iter().any(|candidate| {
+            connective.dual_children(*candidate.get()).is_some()
+                || matches!(
+                    *candidate.get(),
+                    TestNode::Atom { comparison, .. } if comparison == redundant_comparison
+                )
+        }) {
+            let siblings = flat.clone();
+            flat.retain(|candidate| {
+                !absorbed_by_sibling(*candidate, &siblings)
+                    && !redundant_constant_atom(*candidate, &siblings, redundant_comparison)
+            });
+        }
+
+        match flat.as_slice() {
+            [] => identity,
+            [only] => *only,
+            _ => {
+                let values = self.tests.arena().alloc_slice_copy(&flat);
+                self.tests.mk(connective.node(values))
+            }
+        }
+    }
+
+    /// Constructs canonical conjunction over one-event tests.
+    ///
+    /// This is the descriptive entry point for [`CanonicalStore::test_connective`]. It applies
+    /// conjunction identities, contradictions, absorption, and constant implications before
+    /// hashconsing the result.
+    ///
+    /// # Preconditions
+    /// Every child must be a canonical test from `self`. Input order, nesting, and duplicates are
+    /// unrestricted.
     pub(super) fn test_and(
         &mut self,
         children: impl IntoIterator<Item = TestId<'arena>>,
     ) -> TestId<'arena> {
-        let mut flat = SmallVec::<[TestId<'arena>; 4]>::new();
-        for child in children {
-            match *child.get() {
-                TestNode::False => return self.test_false,
-                TestNode::True => {}
-                TestNode::And(nested) => flat.extend_from_slice(nested),
-                _ => flat.push(child),
-            }
-        }
-
-        flat.sort_unstable();
-        flat.dedup();
-        if self.tests_have_complements(&flat, TestConnective::And)
-            || pair_satisfies(&flat, |left, right| {
-                distinct_constant_atoms(left, right, Comparison::Eq)
-            })
-        {
-            return self.test_false;
-        }
-        if flat.iter().any(|candidate| {
-            matches!(
-                *candidate.get(),
-                TestNode::Or(_)
-                    | TestNode::Atom {
-                        comparison: Comparison::Neq,
-                        ..
-                    }
-            )
-        }) {
-            let siblings = flat.clone();
-            flat.retain(|candidate| {
-                !absorbed_by_sibling(*candidate, &siblings)
-                    && !redundant_constant_atom(*candidate, &siblings, Comparison::Neq)
-            });
-        }
-        match flat.as_slice() {
-            [] => self.test_true,
-            [only] => *only,
-            _ => {
-                let values = self.tests.arena().alloc_slice_copy(&flat);
-                self.tests.mk(TestNode::And(values))
-            }
-        }
+        self.test_connective(children, TestConnective::And)
     }
 
     /// Constructs canonical disjunction over one-event tests.
     ///
+    /// This is the descriptive entry point for [`CanonicalStore::test_connective`]. It applies
+    /// disjunction identities, tautologies, absorption, and constant implications before
+    /// hashconsing the result.
+    ///
     /// # Preconditions
-    /// Every child must be a canonical test from `self`. Input order and duplicates are unrestricted.
+    /// Every child must be a canonical test from `self`. Input order, nesting, and duplicates are
+    /// unrestricted.
     pub(super) fn test_or(
         &mut self,
         children: impl IntoIterator<Item = TestId<'arena>>,
     ) -> TestId<'arena> {
-        let mut flat = SmallVec::<[TestId<'arena>; 4]>::new();
-        for child in children {
-            match *child.get() {
-                TestNode::True => return self.test_true,
-                TestNode::False => {}
-                TestNode::Or(nested) => flat.extend_from_slice(nested),
-                _ => flat.push(child),
-            }
-        }
-
-        flat.sort_unstable();
-        flat.dedup();
-        if self.tests_have_complements(&flat, TestConnective::Or)
-            || pair_satisfies(&flat, |left, right| {
-                distinct_constant_atoms(left, right, Comparison::Neq)
-            })
-        {
-            return self.test_true;
-        }
-        if flat.iter().any(|candidate| {
-            matches!(
-                *candidate.get(),
-                TestNode::And(_)
-                    | TestNode::Atom {
-                        comparison: Comparison::Eq,
-                        ..
-                    }
-            )
-        }) {
-            let siblings = flat.clone();
-            flat.retain(|candidate| {
-                !absorbed_by_sibling(*candidate, &siblings)
-                    && !redundant_constant_atom(*candidate, &siblings, Comparison::Eq)
-            });
-        }
-        match flat.as_slice() {
-            [] => self.test_false,
-            [only] => *only,
-            _ => {
-                let values = self.tests.arena().alloc_slice_copy(&flat);
-                self.tests.mk(TestNode::Or(values))
-            }
-        }
+        self.test_connective(children, TestConnective::Or)
     }
 
     /// Constructs the normalized Boolean complement of one event test.
     ///
+    /// Constants swap, atomic equality/disequality comparisons invert, and compound connectives are
+    /// complemented by De Morgan recursion through the corresponding smart constructor. Calling
+    /// `test_and`/`test_or` after recursion preserves flattening, ordering, and all secondary
+    /// reductions; the method never creates an unnormalized compound node directly.
+    ///
     /// # Preconditions
-    /// `test` must be a canonical test from `self`.
+    /// `test` must be a canonical normalized test from `self`.
     pub(super) fn test_not(&mut self, test: TestId<'arena>) -> TestId<'arena> {
         match *test.get() {
             TestNode::True => self.test_false,
@@ -425,6 +512,10 @@ impl<'arena> CanonicalStore<'arena> {
 
     /// Interns one normalized regex kind with its deterministic nullability cache.
     ///
+    /// Hashconsing may return an existing node. In that case, recomputed nullability must match the
+    /// value stored with the canonical node; the assertion detects a constructor violating the
+    /// invariant rather than allowing equal syntax to carry inconsistent semantic metadata.
+    ///
     /// # Preconditions
     /// `kind` must already satisfy the flattened-normal-form invariants, all child IDs must belong
     /// to `self`, and `nullable` must equal the semantic nullability of `kind`.
@@ -440,10 +531,13 @@ impl<'arena> CanonicalStore<'arena> {
         id
     }
 
-    /// Lifts a one-event test into a regex, folding false to the empty language.
+    /// Lifts a one-event test into the regex language.
+    ///
+    /// A false test denotes no one-event words and therefore becomes the empty language. Every
+    /// other test denotes words of length exactly one, so its nullability is always false.
     ///
     /// # Preconditions
-    /// `test` must be a canonical test from `self`.
+    /// `test` must be a canonical normalized test from `self`.
     pub(super) fn regex_test(&mut self, test: TestId<'arena>) -> RegexId<'arena> {
         if test == self.test_false {
             self.empty
@@ -452,10 +546,19 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
-    /// Constructs canonical set union.
+    /// Constructs canonical language union.
+    ///
+    /// The constructor removes `Empty`, short-circuits on `All`, flattens nested unions, combines all
+    /// one-event test operands through `test_or`, sorts and deduplicates operands, collapses explicit
+    /// complements, removes epsilon when another nullable operand subsumes it, and applies direct and
+    /// generalized absorption. The resulting node is nullable iff any retained child is nullable.
+    ///
+    /// This algorithm intentionally remains separate from `regex_intersect`: their treatment of
+    /// epsilon and non-nullable operands is not a simple identity/absorber dual.
     ///
     /// # Preconditions
-    /// Every child must be a canonical regex from `self`. Input order and duplicates are unrestricted.
+    /// Every child must be a canonical normalized regex from `self`. Input order, same-connective
+    /// nesting, and duplicates are unrestricted.
     pub(super) fn regex_union(
         &mut self,
         children: impl IntoIterator<Item = RegexId<'arena>>,
@@ -516,10 +619,21 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
-    /// Constructs canonical set intersection.
+    /// Constructs canonical language intersection.
+    ///
+    /// The constructor removes `All`, short-circuits on `Empty`, flattens nested intersections,
+    /// combines all one-event test operands through `test_and`, sorts and deduplicates operands,
+    /// collapses explicit complements, applies epsilon-specific emptiness, removes `Not(Epsilon)`
+    /// beside any non-nullable operand, and applies direct and generalized absorption. The resulting
+    /// node is nullable iff every retained child is nullable.
+    ///
+    /// This algorithm intentionally remains separate from `regex_union`: intersection can collapse
+    /// to exactly epsilon or empty based on all operands' nullability, a rule with no mirrored union
+    /// implementation.
     ///
     /// # Preconditions
-    /// Every child must be a canonical regex from `self`. Input order and duplicates are unrestricted.
+    /// Every child must be a canonical normalized regex from `self`. Input order, same-connective
+    /// nesting, and duplicates are unrestricted.
     pub(super) fn regex_intersect(
         &mut self,
         children: impl IntoIterator<Item = RegexId<'arena>>,
@@ -589,9 +703,13 @@ impl<'arena> CanonicalStore<'arena> {
 
     /// Constructs canonical ordered concatenation.
     ///
+    /// Empty annihilates the product, epsilon is removed as its identity, and nested concatenations
+    /// are flattened without sorting or deduplication because factor order and multiplicity are
+    /// semantic. A nontrivial result is nullable iff every factor is nullable.
+    ///
     /// # Preconditions
-    /// Every child must be a canonical regex from `self`. Their order is semantic; duplicates are
-    /// permitted.
+    /// Every child must be a canonical normalized regex from `self`. Their order is semantic;
+    /// duplicates are permitted.
     pub(super) fn regex_concat(
         &mut self,
         children: impl IntoIterator<Item = RegexId<'arena>>,
@@ -619,8 +737,12 @@ impl<'arena> CanonicalStore<'arena> {
 
     /// Constructs canonical Kleene star.
     ///
+    /// `Empty*` and `Epsilon*` reduce to epsilon, `All*` and the always-true one-event test star
+    /// reduce to `All`, and nested star is idempotent. Every remaining star is nullable by
+    /// definition.
+    ///
     /// # Preconditions
-    /// `inner` must be a canonical regex from `self`.
+    /// `inner` must be a canonical normalized regex from `self`.
     pub(super) fn regex_star(&mut self, inner: RegexId<'arena>) -> RegexId<'arena> {
         match inner.get().kind {
             RegexKind::Empty | RegexKind::Epsilon => self.epsilon,
@@ -633,8 +755,12 @@ impl<'arena> CanonicalStore<'arena> {
 
     /// Constructs canonical whole-language complement.
     ///
+    /// Empty and universal languages swap, double negation is removed, and all other syntax is kept
+    /// under one `Not` node. Complement flips cached nullability because the empty word belongs to
+    /// exactly one of a language and its complement.
+    ///
     /// # Preconditions
-    /// `inner` must be a canonical regex from `self`.
+    /// `inner` must be a canonical normalized regex from `self`.
     pub(super) fn regex_not(&mut self, inner: RegexId<'arena>) -> RegexId<'arena> {
         match inner.get().kind {
             RegexKind::Empty => self.all,
@@ -644,7 +770,10 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
-    /// Returns cached empty-history acceptance directly from the hashconsed node.
+    /// Returns cached empty-history acceptance directly from a canonical regex node.
+    ///
+    /// Nullability is computed by smart constructors and checked when equal syntax is reused, so
+    /// this query performs no recursive traversal.
     ///
     /// # Preconditions
     /// `regex` must be a canonical regex from `self`.
