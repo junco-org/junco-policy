@@ -19,6 +19,9 @@ use super::store::CanonicalStore;
 /// on the first match. The worst case is quadratic in `values.len()`; callers use this only for
 /// small normalized sibling sets.
 ///
+/// Example traversal: for `[a, b, c]`, the predicate sees `(a, b)`, `(a, c)`, then `(b, c)` until
+/// one pair matches.
+///
 /// # Preconditions
 /// `predicate` must be symmetric because `(left, right)` is presented in only one orientation.
 fn pair_satisfies<T: Copy>(values: &[T], mut predicate: impl FnMut(T, T) -> bool) -> bool {
@@ -34,6 +37,13 @@ fn pair_satisfies<T: Copy>(values: &[T], mut predicate: impl FnMut(T, T) -> bool
 /// The pair is complementary exactly when it tests the same compiled component pattern with
 /// opposite comparisons, for example `action == Read` and `action != Read`. Compound De Morgan
 /// complements are handled separately by [`CanonicalStore::tests_have_complements`].
+///
+/// Example reductions enabled by a match:
+///
+/// ```text
+/// Eq(action, Read) ∧ Neq(action, Read) → false
+/// Eq(action, Read) ∨ Neq(action, Read) → true
+/// ```
 ///
 /// # Preconditions
 /// Both IDs must be canonical tests from the same [`CanonicalStore`].
@@ -58,6 +68,14 @@ fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bo
 /// Constants from different coordinates are incomparable: `principal == alice` and
 /// `action == Read` are not a distinct-constant pair. Variables are also excluded because their
 /// values are not known during normalization.
+///
+/// Examples:
+///
+/// ```text
+/// distinct(Principal("alice"), Principal("bob")) = true
+/// distinct(Principal("alice"), Action(Read)) = false
+/// distinct(Principal($p), Principal("alice")) = false
+/// ```
 ///
 /// # Preconditions
 /// Both patterns must have been compiled by the same [`CanonicalStore`].
@@ -88,6 +106,13 @@ fn distinct_constant_patterns(
 /// the pair is exhaustive in disjunction because one finite-product coordinate cannot equal both
 /// distinct constants.
 ///
+/// Example reductions for distinct constants `alice != bob`:
+///
+/// ```text
+/// Eq(principal, alice) ∧ Eq(principal, bob) → false
+/// Neq(principal, alice) ∨ Neq(principal, bob) → true
+/// ```
+///
 /// # Preconditions
 /// Both IDs must be canonical tests from the same [`CanonicalStore`].
 fn distinct_constant_atoms(left: TestId<'_>, right: TestId<'_>, comparison: Comparison) -> bool {
@@ -116,6 +141,14 @@ fn distinct_constant_atoms(left: TestId<'_>, right: TestId<'_>, comparison: Comp
 ///
 /// - conjunction: `Eq(c) ∧ Neq(d) = Eq(c)` for `c != d`, so the `Neq(d)` candidate is removed;
 /// - disjunction: `Neq(d) ∨ Eq(c) = Neq(d)` for `c != d`, so the `Eq(c)` candidate is removed.
+///
+/// Example reductions for `c != d`:
+///
+/// ```text
+/// Eq(component, c) ∧ Neq(component, d) → Eq(component, c)
+/// Neq(component, d) ∨ Eq(component, c) → Neq(component, d)
+/// ```
+///
 /// # Preconditions
 /// `candidate` and every ID in `siblings` must be canonical tests from the same store. The sibling
 /// slice need not be sorted.
@@ -158,6 +191,15 @@ fn redundant_constant_atom(
 /// their operands before calling this helper, so idempotence (`x ∧ x = x`, `x ∨ x = x`) has
 /// already retained exactly one representative.
 ///
+/// Example reductions:
+///
+/// ```text
+/// x ∧ (x ∨ y) → x
+/// (x ∨ y) ∧ (x ∨ y ∨ z) → x ∨ y
+/// x ∨ (x ∧ y) → x
+/// (x ∧ y) ∨ (x ∧ y ∧ z) → x ∧ y
+/// ```
+///
 /// # Preconditions
 /// `siblings` must be sorted and deduplicated. Every opposite-connective child slice must also be
 /// sorted and deduplicated. All IDs must belong to the same [`CanonicalStore`].
@@ -187,6 +229,13 @@ fn absorbed_by_sibling<'arena>(candidate: TestId<'arena>, siblings: &[TestId<'ar
 /// Exactly one operand must be the canonical `Not` node whose child is the other operand. Test-level
 /// complements are grouped and normalized before this regex-level check.
 ///
+/// Example reductions enabled by a match:
+///
+/// ```text
+/// R ∪ Not(R) → All
+/// R ∩ Not(R) → Empty
+/// ```
+///
 /// # Preconditions
 /// Both IDs must be canonical regexes from the same [`CanonicalStore`].
 fn complementary_regex<'arena>(left: RegexId<'arena>, right: RegexId<'arena>) -> bool {
@@ -198,6 +247,12 @@ fn complementary_regex<'arena>(left: RegexId<'arena>, right: RegexId<'arena>) ->
 ///
 /// This predicate supports the intersection law that `Not(Epsilon)` is redundant beside any
 /// non-nullable language. It intentionally matches only the direct canonical `Not(Epsilon)` form.
+///
+/// Example reduction for a non-nullable language `R`:
+///
+/// ```text
+/// R ∩ Not(Epsilon) → R
+/// ```
 ///
 /// # Preconditions
 /// `regex` must be a canonical regex from the current [`CanonicalStore`].
@@ -215,6 +270,15 @@ fn is_epsilon_complement(regex: RegexId<'_>) -> bool {
 /// An operand is never compared with itself. The outer smart constructors sort and deduplicate
 /// their operands first, so set-union/set-intersection idempotence has already retained exactly one
 /// representative.
+///
+/// Example reductions:
+///
+/// ```text
+/// R ∪ (R ∩ S) → R
+/// (R ∩ S) ∪ (R ∩ S ∩ T) → R ∩ S
+/// R ∩ (R ∪ S) → R
+/// (R ∪ S) ∩ (R ∪ S ∪ T) → R ∪ S
+/// ```
 ///
 /// # Preconditions
 /// `siblings` must be sorted and deduplicated. Every opposite-connective child slice must also be
@@ -255,6 +319,9 @@ enum TestConnective {
 
 impl TestConnective {
     /// Returns the De Morgan dual connective.
+    ///
+    /// Example mapping: `And.dual() = Or`, `Or.dual() = And`; consequently
+    /// `Not(x ∧ y) → Not(x) ∨ Not(y)` and `Not(x ∨ y) → Not(x) ∧ Not(y)`.
     fn dual(self) -> Self {
         match self {
             Self::And => Self::Or,
@@ -263,6 +330,8 @@ impl TestConnective {
     }
 
     /// Identity element removed from this connective: `true` for `And`, `false` for `Or`.
+    ///
+    /// Example reductions: `x ∧ true → x`; `x ∨ false → x`.
     fn identity<'arena>(self, store: &CanonicalStore<'arena>) -> TestId<'arena> {
         match self {
             Self::And => store.test_true,
@@ -271,6 +340,8 @@ impl TestConnective {
     }
 
     /// Absorbing element that determines the whole result: `false` for `And`, `true` for `Or`.
+    ///
+    /// Example reductions: `x ∧ false → false`; `x ∨ true → true`.
     fn absorber<'arena>(self, store: &CanonicalStore<'arena>) -> TestId<'arena> {
         match self {
             Self::And => store.test_false,
@@ -279,6 +350,9 @@ impl TestConnective {
     }
 
     /// Returns children of a nested occurrence of this same connective for associative flattening.
+    ///
+    /// Example reductions: `(x ∧ y) ∧ z → x ∧ y ∧ z`; `(x ∨ y) ∨ z → x ∨ y ∨ z`.
+    /// `And.children(Or([x, y]))` and its dual return `None`.
     fn children<'arena>(self, node: TestNode<'arena>) -> Option<&'arena [TestId<'arena>]> {
         match (self, node) {
             (Self::And, TestNode::And(children)) | (Self::Or, TestNode::Or(children)) => {
@@ -289,6 +363,9 @@ impl TestConnective {
     }
 
     /// Comparison whose distinct constants make the connective constant.
+    ///
+    /// Example reductions for `c != d`: `Eq(c) ∧ Eq(d) → false` and
+    /// `Neq(c) ∨ Neq(d) → true`.
     fn contradictory_comparison(self) -> Comparison {
         match self {
             Self::And => Comparison::Eq,
@@ -297,11 +374,17 @@ impl TestConnective {
     }
 
     /// Comparison of a candidate atom removable when a distinct opposite atom implies it.
+    ///
+    /// Example reductions for `c != d`: `Eq(c) ∧ Neq(d) → Eq(c)` and
+    /// `Neq(c) ∨ Eq(d) → Neq(c)`.
     fn redundant_comparison(self) -> Comparison {
         !self.contradictory_comparison()
     }
 
     /// Constructs the canonical node variant for two or more normalized children.
+    ///
+    /// Example mappings: `And.node([x, y]) = And([x, y])` and
+    /// `Or.node([x, y]) = Or([x, y])`.
     fn node<'arena>(self, children: &'arena [TestId<'arena>]) -> TestNode<'arena> {
         match self {
             Self::And => TestNode::And(children),
@@ -376,6 +459,18 @@ impl<'arena> CanonicalStore<'arena> {
     /// 3. collapse direct/compound complements and incompatible constant atoms to the absorber;
     /// 4. remove operands made redundant by absorption or finite-product constant implication;
     /// 5. return the identity, the sole child, or one hashconsed connective node.
+    ///
+    /// Representative reductions performed by this shared algorithm:
+    ///
+    /// ```text
+    /// x ∧ true → x                    x ∨ false → x
+    /// x ∧ false → false               x ∨ true → true
+    /// x ∧ x → x                       x ∨ x → x
+    /// x ∧ Not(x) → false              x ∨ Not(x) → true
+    /// x ∧ (x ∨ y) → x                 x ∨ (x ∧ y) → x
+    /// Eq(c) ∧ Eq(d) → false           Neq(c) ∨ Neq(d) → true    when c != d
+    /// Eq(c) ∧ Neq(d) → Eq(c)          Neq(c) ∨ Eq(d) → Neq(c)  when c != d
+    /// ```
     ///
     /// # Preconditions
     /// Every child must be a canonical test from `self`. Input order, nesting, and duplicates are
@@ -474,6 +569,15 @@ impl<'arena> CanonicalStore<'arena> {
     /// conjunction identities, contradictions, absorption, and constant implications before
     /// hashconsing the result.
     ///
+    /// Example reductions:
+    ///
+    /// ```text
+    /// And([]) → true
+    /// x ∧ true ∧ x → x
+    /// x ∧ Not(x) → false
+    /// x ∧ (x ∨ y) → x
+    /// ```
+    ///
     /// # Preconditions
     /// Every child must be a canonical test from `self`. Input order, nesting, and duplicates are
     /// unrestricted.
@@ -489,6 +593,15 @@ impl<'arena> CanonicalStore<'arena> {
     /// This is the descriptive entry point for [`CanonicalStore::test_connective`]. It applies
     /// disjunction identities, tautologies, absorption, and constant implications before
     /// hashconsing the result.
+    ///
+    /// Example reductions:
+    ///
+    /// ```text
+    /// Or([]) → false
+    /// x ∨ false ∨ x → x
+    /// x ∨ Not(x) → true
+    /// x ∨ (x ∧ y) → x
+    /// ```
     ///
     /// # Preconditions
     /// Every child must be a canonical test from `self`. Input order, nesting, and duplicates are
@@ -506,6 +619,15 @@ impl<'arena> CanonicalStore<'arena> {
     /// complemented by De Morgan recursion through the corresponding smart constructor. Calling
     /// `test_and`/`test_or` after recursion preserves flattening, ordering, and all secondary
     /// reductions; the method never creates an unnormalized compound node directly.
+    ///
+    /// Example reductions:
+    ///
+    /// ```text
+    /// Not(true) → false
+    /// Not(Eq(p)) → Neq(p)
+    /// Not(x ∧ y) → Not(x) ∨ Not(y)
+    /// Not(x ∨ y) → Not(x) ∧ Not(y)
+    /// ```
     ///
     /// # Preconditions
     /// `test` must be a canonical normalized test from `self`.
@@ -543,6 +665,13 @@ impl<'arena> CanonicalStore<'arena> {
     /// value stored with the canonical node; the assertion detects a constructor violating the
     /// invariant rather than allowing equal syntax to carry inconsistent semantic metadata.
     ///
+    /// Example canonicalization:
+    ///
+    /// ```text
+    /// intern(Union([R, S]), nullable) called twice → the same RegexId
+    /// equal syntax with two different nullable values → invariant failure
+    /// ```
+    ///
     /// # Preconditions
     /// `kind` must already satisfy the flattened-normal-form invariants, all child IDs must belong
     /// to `self`, and `nullable` must equal the semantic nullability of `kind`.
@@ -563,6 +692,13 @@ impl<'arena> CanonicalStore<'arena> {
     /// A false test denotes no one-event words and therefore becomes the empty language. Every
     /// other test denotes words of length exactly one, so its nullability is always false.
     ///
+    /// Example reductions:
+    ///
+    /// ```text
+    /// Test(false) → Empty
+    /// Test(φ) → a non-nullable one-event language, when φ != false
+    /// ```
+    ///
     /// # Preconditions
     /// `test` must be a canonical normalized test from `self`.
     pub(super) fn regex_test(&mut self, test: TestId<'arena>) -> RegexId<'arena> {
@@ -582,6 +718,16 @@ impl<'arena> CanonicalStore<'arena> {
     ///
     /// This algorithm intentionally remains separate from `regex_intersect`: their treatment of
     /// epsilon and non-nullable operands is not a simple identity/absorber dual.
+    ///
+    /// Example reductions:
+    ///
+    /// ```text
+    /// Empty ∪ R → R                    All ∪ R → All
+    /// R ∪ R → R                        R ∪ Not(R) → All
+    /// Test(φ) ∪ Test(ψ) → Test(φ ∨ ψ)
+    /// Epsilon ∪ R → R                  when nullable(R)
+    /// R ∪ (R ∩ S) → R
+    /// ```
     ///
     /// # Preconditions
     /// Every child must be a canonical normalized regex from `self`. Input order, same-connective
@@ -657,6 +803,18 @@ impl<'arena> CanonicalStore<'arena> {
     /// This algorithm intentionally remains separate from `regex_union`: intersection can collapse
     /// to exactly epsilon or empty based on all operands' nullability, a rule with no mirrored union
     /// implementation.
+    ///
+    /// Example reductions:
+    ///
+    /// ```text
+    /// All ∩ R → R                      Empty ∩ R → Empty
+    /// R ∩ R → R                        R ∩ Not(R) → Empty
+    /// Test(φ) ∩ Test(ψ) → Test(φ ∧ ψ)
+    /// Epsilon ∩ R → Epsilon            when nullable(R)
+    /// Epsilon ∩ R → Empty              when not nullable(R)
+    /// R ∩ Not(Epsilon) → R             when not nullable(R)
+    /// R ∩ (R ∪ S) → R
+    /// ```
     ///
     /// # Preconditions
     /// Every child must be a canonical normalized regex from `self`. Input order, same-connective
@@ -734,6 +892,14 @@ impl<'arena> CanonicalStore<'arena> {
     /// are flattened without sorting or deduplication because factor order and multiplicity are
     /// semantic. A nontrivial result is nullable iff every factor is nullable.
     ///
+    /// Example reductions:
+    ///
+    /// ```text
+    /// Empty · R → Empty                Epsilon · R → R
+    /// R · Epsilon → R                  (R · S) · T → R · S · T
+    /// nullable(R · S) = nullable(R) ∧ nullable(S)
+    /// ```
+    ///
     /// # Preconditions
     /// Every child must be a canonical normalized regex from `self`. Their order is semantic;
     /// duplicates are permitted.
@@ -768,6 +934,14 @@ impl<'arena> CanonicalStore<'arena> {
     /// reduce to `All`, and nested star is idempotent. Every remaining star is nullable by
     /// definition.
     ///
+    /// Example reductions:
+    ///
+    /// ```text
+    /// Empty* → Epsilon                 Epsilon* → Epsilon
+    /// All* → All                       Test(true)* → All
+    /// (R*)* → R*                       nullable(R*) = true
+    /// ```
+    ///
     /// # Preconditions
     /// `inner` must be a canonical normalized regex from `self`.
     pub(super) fn regex_star(&mut self, inner: RegexId<'arena>) -> RegexId<'arena> {
@@ -786,6 +960,13 @@ impl<'arena> CanonicalStore<'arena> {
     /// under one `Not` node. Complement flips cached nullability because the empty word belongs to
     /// exactly one of a language and its complement.
     ///
+    /// Example reductions:
+    ///
+    /// ```text
+    /// Not(Empty) → All                 Not(All) → Empty
+    /// Not(Not(R)) → R                  nullable(Not(R)) = ¬nullable(R)
+    /// ```
+    ///
     /// # Preconditions
     /// `inner` must be a canonical normalized regex from `self`.
     pub(super) fn regex_not(&mut self, inner: RegexId<'arena>) -> RegexId<'arena> {
@@ -801,6 +982,15 @@ impl<'arena> CanonicalStore<'arena> {
     ///
     /// Nullability is computed by smart constructors and checked when equal syntax is reused, so
     /// this query performs no recursive traversal.
+    ///
+    /// Example cached equations:
+    ///
+    /// ```text
+    /// nullable(Empty) = false          nullable(Epsilon) = true
+    /// nullable(Test(φ)) = false        nullable(R ∪ S) = nullable(R) ∨ nullable(S)
+    /// nullable(R ∩ S) = nullable(R) ∧ nullable(S)
+    /// nullable(R · S) = nullable(R) ∧ nullable(S)
+    /// ```
     ///
     /// # Preconditions
     /// `regex` must be a canonical regex from `self`.
