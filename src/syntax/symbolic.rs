@@ -51,13 +51,13 @@ impl<'arena> SymbolicDerivativeCache<'arena> {
 struct AtomTruthAssignment(SmallBitVec);
 
 /// Successors selected under one fixed candidate substitution.
-pub(super) struct InstantiationCache<'arena, 'event> {
+struct InstantiationCache<'arena, 'event> {
     values: HashMap<(TransitionId<'arena>, AtomTruthAssignment), RegexId<'arena>>,
     last: Option<(TransitionId<'arena>, &'event Event, RegexId<'arena>)>,
 }
 
 impl<'arena, 'event> InstantiationCache<'arena, 'event> {
-    pub(super) fn new() -> Self {
+    fn new() -> Self {
         Self {
             values: HashMap::new(),
             last: None,
@@ -65,8 +65,93 @@ impl<'arena, 'event> InstantiationCache<'arena, 'event> {
     }
 
     #[cfg(test)]
-    pub(super) fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.values.len()
+    }
+}
+
+/// Per-history symbolic evaluator with all mutable matcher state in one place.
+///
+/// The canonical store and derivative cache are retained by the validator and runtime rule,
+/// respectively. The instantiation cache is owned here because its event references and truth
+/// assignments are valid only for the current fixed-substitution history replay.
+pub(super) struct SymbolicMatcher<'state, 'arena, 'event> {
+    store: &'state mut CanonicalStore<'arena>,
+    derivatives: &'state mut SymbolicDerivativeCache<'arena>,
+    instances: InstantiationCache<'arena, 'event>,
+}
+
+impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
+    /// Packages the shared canonical store and persistent derivative cache with a fresh
+    /// fixed-substitution instantiation cache.
+    pub(super) fn new(
+        store: &'state mut CanonicalStore<'arena>,
+        derivatives: &'state mut SymbolicDerivativeCache<'arena>,
+    ) -> Self {
+        Self {
+            store,
+            derivatives,
+            instances: InstantiationCache::new(),
+        }
+    }
+
+    /// Returns the cached normalized symbolic derivative of `regex`.
+    pub(super) fn derivative(&mut self, regex: RegexId<'arena>) -> TransitionId<'arena> {
+        symbolic_derivative(self.store, self.derivatives, regex)
+    }
+
+    /// Interprets one normalized transition without consulting the instantiation cache.
+    #[cfg(test)]
+    pub(super) fn evaluate(
+        &mut self,
+        transition: TransitionId<'arena>,
+        substitution: &CandidateSubstitution<'arena>,
+        event: &Event,
+    ) -> RegexId<'arena> {
+        eval_transition(self.store, transition, substitution, event)
+    }
+
+    /// Instantiates one transition, reusing equivalent atom truth assignments.
+    pub(super) fn instantiate(
+        &mut self,
+        transition: TransitionId<'arena>,
+        substitution: &CandidateSubstitution<'arena>,
+        event: &'event Event,
+    ) -> RegexId<'arena> {
+        instantiate_transition(
+            self.store,
+            self.derivatives,
+            &mut self.instances,
+            transition,
+            substitution,
+            event,
+        )
+    }
+
+    /// Evaluates complete history using event-independent derivatives cached across rule runs.
+    pub(super) fn accepts(
+        &mut self,
+        root: RegexId<'arena>,
+        history: impl IntoIterator<Item = &'event Event>,
+        substitution: &CandidateSubstitution<'arena>,
+    ) -> bool {
+        let mut state = root;
+        let mut previous_derivative = None;
+        for event in history {
+            let transition = match previous_derivative {
+                Some((previous_state, transition)) if previous_state == state => transition,
+                _ => self.derivative(state),
+            };
+            previous_derivative = Some((state, transition));
+            state = self.instantiate(transition, substitution, event);
+        }
+        self.store.nullable(state)
+    }
+
+    /// Number of distinct transition/truth-assignment successors retained in this replay.
+    #[cfg(test)]
+    pub(super) fn instantiation_count(&self) -> usize {
+        self.instances.len()
     }
 }
 
@@ -153,13 +238,15 @@ fn collect_transition_atoms_into<'arena>(
 }
 
 /// Returns the normalized symbolic derivative of `regex`, independent of bindings and events.
-pub(super) fn symbolic_derivative<'arena>(
+fn symbolic_derivative<'arena>(
     store: &mut CanonicalStore<'arena>,
     derivatives: &mut SymbolicDerivativeCache<'arena>,
     regex: RegexId<'arena>,
 ) -> TransitionId<'arena> {
-    if let Some(transition) = derivatives.derivatives.get(&regex) {
-        return *transition;
+    // A vacant entry cannot remain borrowed while recursively deriving children from the same map.
+    match derivatives.derivatives.entry(regex) {
+        Entry::Occupied(entry) => return *entry.get(),
+        Entry::Vacant(_) => {}
     }
 
     let transition = match regex.get().kind {
@@ -205,13 +292,11 @@ pub(super) fn symbolic_derivative<'arena>(
         }
     };
 
-    let previous = derivatives.derivatives.insert(regex, transition);
-    debug_assert!(previous.is_none());
-    transition
+    *derivatives.derivatives.entry(regex).or_insert(transition)
 }
 
 /// Interprets one normalized transition under fixed candidate bindings and one history event.
-pub(super) fn eval_transition<'arena>(
+fn eval_transition<'arena>(
     store: &mut CanonicalStore<'arena>,
     transition: TransitionId<'arena>,
     substitution: &CandidateSubstitution<'arena>,
@@ -276,8 +361,8 @@ fn atom_truth_assignment<'arena>(
     )
 }
 
-/// Instantiates one symbolic transition for an atom truth assignment, reusing the fixed-substitution cache.
-pub(super) fn instantiate<'arena, 'event>(
+/// Instantiates one symbolic transition for an atom truth assignment.
+fn instantiate_transition<'arena, 'event>(
     store: &mut CanonicalStore<'arena>,
     derivatives: &mut SymbolicDerivativeCache<'arena>,
     cache: &mut InstantiationCache<'arena, 'event>,
@@ -303,33 +388,4 @@ pub(super) fn instantiate<'arena, 'event>(
     };
     cache.last = Some((transition, event, regex));
     regex
-}
-
-/// Evaluates complete history using event-independent derivatives cached across rule runs.
-pub(super) fn accepts<'arena, 'event>(
-    store: &mut CanonicalStore<'arena>,
-    derivatives: &mut SymbolicDerivativeCache<'arena>,
-    root: RegexId<'arena>,
-    history: impl IntoIterator<Item = &'event Event>,
-    substitution: &CandidateSubstitution<'arena>,
-) -> bool {
-    let mut state = root;
-    let mut previous_derivative = None;
-    let mut instances = InstantiationCache::new();
-    for event in history {
-        let transition = match previous_derivative {
-            Some((previous_state, transition)) if previous_state == state => transition,
-            _ => symbolic_derivative(store, derivatives, state),
-        };
-        previous_derivative = Some((state, transition));
-        state = instantiate(
-            store,
-            derivatives,
-            &mut instances,
-            transition,
-            substitution,
-            event,
-        );
-    }
-    store.nullable(state)
 }

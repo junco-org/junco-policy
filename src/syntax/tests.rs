@@ -9,10 +9,7 @@ use super::source::{
     AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
 use super::store::CanonicalStore;
-use super::symbolic::{
-    InstantiationCache, SymbolicDerivativeCache, accepts, eval_transition, instantiate,
-    symbolic_derivative,
-};
+use super::symbolic::{SymbolicDerivativeCache, SymbolicMatcher};
 use crate::model::{Action, Event};
 
 fn variable_head() -> Head {
@@ -673,12 +670,17 @@ fn symbolic_derivatives_equal_concrete_derivatives_for_every_regex_form() {
             .match_candidate(&mut store, &candidate)
             .unwrap();
         let mut derivatives = SymbolicDerivativeCache::new();
-        let transition = symbolic_derivative(&mut store, &mut derivatives, runtime_rule.tail);
+        let transition =
+            SymbolicMatcher::new(&mut store, &mut derivatives).derivative(runtime_rule.tail);
         assert_transition_normalized(transition);
         for action in [Action::Read, Action::Edit, Action::Stage] {
             let event = Event::new("alice", action, ["a"]);
             let concrete = derive(&mut store, runtime_rule.tail, &event, &substitution);
-            let symbolic = eval_transition(&mut store, transition, &substitution, &event);
+            let symbolic = SymbolicMatcher::new(&mut store, &mut derivatives).evaluate(
+                transition,
+                &substitution,
+                &event,
+            );
             assert_eq!(symbolic, concrete);
         }
         let history = [
@@ -687,9 +689,7 @@ fn symbolic_derivatives_equal_concrete_derivatives_for_every_regex_form() {
             Event::new("alice", Action::Stage, ["a"]),
         ];
         let direct = accepts_direct(&mut store, runtime_rule.tail, history.iter(), &substitution);
-        let symbolic = accepts(
-            &mut store,
-            &mut derivatives,
+        let symbolic = SymbolicMatcher::new(&mut store, &mut derivatives).accepts(
             runtime_rule.tail,
             history.iter(),
             &substitution,
@@ -699,7 +699,7 @@ fn symbolic_derivatives_equal_concrete_derivatives_for_every_regex_form() {
 }
 
 #[test]
-fn symbolic_instantiations_reuse_equal_symbols() {
+fn symbolic_instantiations_reuse_equal_truth_assignments() {
     let arena = Bump::new();
     let mut store = CanonicalStore::new(&arena);
     let cycle = RegexExpr::star(RegexExpr::union([
@@ -708,58 +708,30 @@ fn symbolic_instantiations_reuse_equal_symbols() {
     ]));
     let runtime_rule = compile_rule(&mut store, &rule(cycle)).unwrap();
     let candidate = Event::new("alice", Action::Read, ["a"]);
-    let equal_symbol = candidate.clone();
-    let equivalent_symbol = Event::new("bob", Action::Read, ["b"]);
-    let distinct_symbol = Event::new("alice", Action::Edit, ["a"]);
+    let same_event = candidate.clone();
+    let equivalent_assignment_event = Event::new("bob", Action::Read, ["b"]);
+    let distinct_assignment_event = Event::new("alice", Action::Edit, ["a"]);
     let substitution = runtime_rule
         .head
         .match_candidate(&mut store, &candidate)
         .unwrap();
     let mut derivatives = SymbolicDerivativeCache::new();
-    let transition = symbolic_derivative(&mut store, &mut derivatives, runtime_rule.tail);
-    let mut instances = InstantiationCache::new();
+    let mut matcher = SymbolicMatcher::new(&mut store, &mut derivatives);
+    let transition = matcher.derivative(runtime_rule.tail);
 
-    let first = instantiate(
-        &mut store,
-        &mut derivatives,
-        &mut instances,
-        transition,
-        &substitution,
-        &candidate,
-    );
-    let entries = instances.len();
-    let second = instantiate(
-        &mut store,
-        &mut derivatives,
-        &mut instances,
-        transition,
-        &substitution,
-        &equal_symbol,
-    );
+    let first = matcher.instantiate(transition, &substitution, &candidate);
+    let entries = matcher.instantiation_count();
+    let second = matcher.instantiate(transition, &substitution, &same_event);
     assert_eq!(second, first);
-    assert_eq!(instances.len(), entries);
-    let equivalent = instantiate(
-        &mut store,
-        &mut derivatives,
-        &mut instances,
-        transition,
-        &substitution,
-        &equivalent_symbol,
-    );
+    assert_eq!(matcher.instantiation_count(), entries);
+    let equivalent = matcher.instantiate(transition, &substitution, &equivalent_assignment_event);
     assert_eq!(equivalent, first);
-    assert_eq!(instances.len(), entries);
+    assert_eq!(matcher.instantiation_count(), entries);
 
-    let expected = eval_transition(&mut store, transition, &substitution, &distinct_symbol);
-    let distinct = instantiate(
-        &mut store,
-        &mut derivatives,
-        &mut instances,
-        transition,
-        &substitution,
-        &distinct_symbol,
-    );
+    let expected = matcher.evaluate(transition, &substitution, &distinct_assignment_event);
+    let distinct = matcher.instantiate(transition, &substitution, &distinct_assignment_event);
     assert_eq!(distinct, expected);
-    assert_eq!(instances.len(), entries + 1);
+    assert_eq!(matcher.instantiation_count(), entries + 1);
 }
 
 #[test]

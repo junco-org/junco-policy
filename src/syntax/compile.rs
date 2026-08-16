@@ -13,7 +13,7 @@ use super::environment::{CompiledHead, ResolveError, VariableEnvironment};
 use super::node::{RegexId, TestId, TestNode};
 use super::source::{AtomPattern, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr};
 use super::store::CanonicalStore;
-use super::symbolic::SymbolicDerivativeCache;
+use super::symbolic::{SymbolicDerivativeCache, SymbolicMatcher};
 
 /// Runtime rule with an event-independent derivative cache retained across evaluations.
 pub(crate) struct RuntimeRule<'arena> {
@@ -32,13 +32,8 @@ impl<'arena> RuntimeRule<'arena> {
         candidate: &Event,
     ) -> Option<bool> {
         let substitution = self.head.match_candidate(store, candidate)?;
-        Some(super::symbolic::accepts(
-            store,
-            &mut self.derivatives,
-            self.tail,
-            history,
-            &substitution,
-        ))
+        let mut matcher = SymbolicMatcher::new(store, &mut self.derivatives);
+        Some(matcher.accepts(self.tail, history, &substitution))
     }
 
     /// Number of event-independent symbolic derivatives retained by this rule.
