@@ -11,6 +11,7 @@ mod environment;
 mod evaluate;
 mod node;
 mod normalize;
+mod rewrite;
 mod source;
 mod store;
 mod symbolic;

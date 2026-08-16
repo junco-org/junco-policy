@@ -6,227 +6,17 @@
 
 use smallvec::SmallVec;
 
-use super::component::CompiledAtomPattern;
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
-use super::source::{Comparison, ComponentPattern};
+use super::rewrite::{
+    RegexConnective, SiblingResult, TestConnective, rewrite_regex_siblings, rewrite_test_siblings,
+};
+use super::source::Comparison;
 use super::store::CanonicalStore;
-use smallvec::SmallVec;
-
-/// Returns whether a test set contains both an atom and its disequality complement.
-fn has_complementary_tests(tests: &[TestId<'_>]) -> bool {
-    let mut remaining = tests;
-    while let Some((left, right)) = remaining.split_first() {
-        if right
-            .iter()
-            .any(|candidate| complementary_test(*left, *candidate))
-        {
-            return true;
-        }
-        remaining = right;
-    }
-    false
-}
-
-/// Recognizes `Eq(pattern)` paired with `Neq(pattern)`.
-fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bool {
-    match (*left.get(), *right.get()) {
-        (
-            TestNode::Atom {
-                comparison: left_comparison,
-                pattern: left_pattern,
-            },
-            TestNode::Atom {
-                comparison: right_comparison,
-                pattern: right_pattern,
-            },
-        ) => left_comparison != right_comparison && left_pattern == right_pattern,
-        _ => false,
-    }
-}
-
-/// Recognizes unequal constants selected at the same component coordinate.
-fn distinct_constant_patterns(
-    left: CompiledAtomPattern<'_>,
-    right: CompiledAtomPattern<'_>,
-) -> bool {
-    match (left, right) {
-        (
-            CompiledAtomPattern::Principal(ComponentPattern::Constant(left)),
-            CompiledAtomPattern::Principal(ComponentPattern::Constant(right)),
-        ) => left != right,
-        (
-            CompiledAtomPattern::Action(ComponentPattern::Constant(left)),
-            CompiledAtomPattern::Action(ComponentPattern::Constant(right)),
-        ) => left != right,
-        (
-            CompiledAtomPattern::Resource(ComponentPattern::Constant(left)),
-            CompiledAtomPattern::Resource(ComponentPattern::Constant(right)),
-        ) => left != right,
-        _ => false,
-    }
-}
-
-fn atom(test: TestId<'_>) -> Option<(Comparison, CompiledAtomPattern<'_>)> {
-    match *test.get() {
-        TestNode::Atom {
-            comparison,
-            pattern,
-        } => Some((comparison, pattern)),
-        _ => None,
-    }
-}
-
-fn contradictory_equalities(left: TestId<'_>, right: TestId<'_>) -> bool {
-    matches!(
-        (atom(left), atom(right)),
-        (
-            Some((Comparison::Eq, left)),
-            Some((Comparison::Eq, right))
-        ) if distinct_constant_patterns(left, right)
-    )
-}
-
-fn has_contradictory_equalities(tests: &[TestId<'_>]) -> bool {
-    tests.iter().enumerate().any(|(index, left)| {
-        tests[index + 1..]
-            .iter()
-            .any(|right| contradictory_equalities(*left, *right))
-    })
-}
-
-/// An equality implies disequality with every distinct constant at the same coordinate.
-fn redundant_conjunct(candidate: TestId<'_>, siblings: &[TestId<'_>]) -> bool {
-    let Some((Comparison::Neq, candidate)) = atom(candidate) else {
-        return false;
-    };
-    siblings.iter().any(|sibling| {
-        matches!(
-            atom(*sibling),
-            Some((Comparison::Eq, sibling))
-                if distinct_constant_patterns(candidate, sibling)
-        )
-    })
-}
-
-/// A disequality subsumes equality with every distinct constant at the same coordinate.
-fn redundant_disjunct(candidate: TestId<'_>, siblings: &[TestId<'_>]) -> bool {
-    let Some((Comparison::Eq, candidate)) = atom(candidate) else {
-        return false;
-    };
-    siblings.iter().any(|sibling| {
-        matches!(
-            atom(*sibling),
-            Some((Comparison::Neq, sibling))
-                if distinct_constant_patterns(candidate, sibling)
-        )
-    })
-}
-
-fn has_distinct_disequalities(tests: &[TestId<'_>]) -> bool {
-    tests.iter().enumerate().any(|(index, left)| {
-        let Some((Comparison::Neq, left)) = atom(*left) else {
-            return false;
-        };
-        tests[index + 1..].iter().any(|right| {
-            matches!(
-                atom(*right),
-                Some((Comparison::Neq, right))
-                    if distinct_constant_patterns(left, right)
-            )
-        })
-    })
-}
-
-/// Returns true when a compound opposite operator contains a sibling's complete operand set.
-fn absorbed_by_sibling<'arena>(
-    candidate: TestId<'arena>,
-    siblings: &[TestId<'arena>],
-    conjunction: bool,
-) -> bool {
-    let nested = match (conjunction, *candidate.get()) {
-        (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children,
-        _ => return false,
-    };
-    siblings.iter().copied().any(|sibling| {
-        if sibling == candidate {
-            return false;
-        }
-        match (conjunction, *sibling.get()) {
-            (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children
-                .iter()
-                .all(|child| nested.binary_search(child).is_ok()),
-            _ => nested.binary_search(&sibling).is_ok(),
-        }
-    })
-}
-
-/// Returns whether a regex set contains a node and its whole-language complement.
-fn has_complementary_regexes(regexes: &[RegexId<'_>]) -> bool {
-    let mut remaining = regexes;
-    while let Some((left, right)) = remaining.split_first() {
-        if right
-            .iter()
-            .any(|candidate| complementary_regex(*left, *candidate))
-        {
-            return true;
-        }
-        remaining = right;
-    }
-    false
-}
-
-/// Recognizes `r` paired with `Not(r)` using canonical handle equality.
-fn complementary_regex<'arena>(left: RegexId<'arena>, right: RegexId<'arena>) -> bool {
-    matches!(left.get().kind, RegexKind::Not(inner) if inner == right)
-        || matches!(right.get().kind, RegexKind::Not(inner) if inner == left)
-}
 
 fn is_epsilon_complement(regex: RegexId<'_>) -> bool {
     matches!(regex.get().kind, RegexKind::Not(inner) if matches!(inner.get().kind, RegexKind::Epsilon))
 }
-
-/// Returns true when a compound opposite set operator contains a sibling's complete operand set.
-fn regex_absorbed_by_sibling<'arena>(
-    candidate: RegexId<'arena>,
-    siblings: &[RegexId<'arena>],
-    union: bool,
-) -> bool {
-    let nested = match (union, candidate.get().kind) {
-        (true, RegexKind::Intersect(children)) | (false, RegexKind::Union(children)) => children,
-        _ => return false,
-    };
-    siblings.iter().copied().any(|sibling| {
-        if sibling == candidate {
-            return false;
-        }
-        match (union, sibling.get().kind) {
-            (true, RegexKind::Intersect(children)) | (false, RegexKind::Union(children)) => {
-                children
-                    .iter()
-                    .all(|child| nested.binary_search(child).is_ok())
-            }
-            _ => nested.binary_search(&sibling).is_ok(),
-        }
-    })
-}
-
 impl<'arena> CanonicalStore<'arena> {
-    fn tests_have_complements(&mut self, tests: &[TestId<'arena>], conjunction: bool) -> bool {
-        if has_complementary_tests(tests) {
-            return true;
-        }
-        tests.iter().copied().any(|candidate| {
-            let dual_children = match (conjunction, *candidate.get()) {
-                (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children,
-                _ => return false,
-            };
-            dual_children.iter().all(|child| {
-                let complement = self.test_not(*child);
-                tests.binary_search(&complement).is_ok()
-            })
-        })
-    }
-
     /// Constructs canonical conjunction over one-event tests.
     pub(super) fn test_and(
         &mut self,
@@ -244,17 +34,9 @@ impl<'arena> CanonicalStore<'arena> {
 
         flat.sort_unstable();
         flat.dedup();
-        if self.tests_have_complements(&flat, true) || has_contradictory_equalities(&flat) {
+        if rewrite_test_siblings(self, &mut flat, TestConnective::And) == SiblingResult::Collapse {
             return self.test_false;
         }
-        let may_absorb = flat
-            .iter()
-            .any(|test| matches!(test.get(), TestNode::Or(_)));
-        let siblings = flat.clone();
-        flat.retain(|candidate| {
-            (!may_absorb || !absorbed_by_sibling(*candidate, &siblings, true))
-                && !redundant_conjunct(*candidate, &siblings)
-        });
         match flat.as_slice() {
             [] => self.test_true,
             [only] => *only,
@@ -282,17 +64,9 @@ impl<'arena> CanonicalStore<'arena> {
 
         flat.sort_unstable();
         flat.dedup();
-        if self.tests_have_complements(&flat, false) || has_distinct_disequalities(&flat) {
+        if rewrite_test_siblings(self, &mut flat, TestConnective::Or) == SiblingResult::Collapse {
             return self.test_true;
         }
-        let may_absorb = flat
-            .iter()
-            .any(|test| matches!(test.get(), TestNode::And(_)));
-        let siblings = flat.clone();
-        flat.retain(|candidate| {
-            (!may_absorb || !absorbed_by_sibling(*candidate, &siblings, false))
-                && !redundant_disjunct(*candidate, &siblings)
-        });
         match flat.as_slice() {
             [] => self.test_false,
             [only] => *only,
@@ -390,7 +164,7 @@ impl<'arena> CanonicalStore<'arena> {
 
         flat.sort_unstable();
         flat.dedup();
-        if has_complementary_regexes(&flat) {
+        if rewrite_regex_siblings(&mut flat, RegexConnective::Union) == SiblingResult::Collapse {
             return self.all;
         }
         if flat.contains(&self.epsilon)
@@ -399,13 +173,6 @@ impl<'arena> CanonicalStore<'arena> {
                 .any(|child| *child != self.epsilon && self.nullable(*child))
         {
             flat.retain(|child| *child != self.epsilon);
-        }
-        if flat
-            .iter()
-            .any(|regex| matches!(regex.get().kind, RegexKind::Intersect(_)))
-        {
-            let siblings = flat.clone();
-            flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, true));
         }
         match flat.as_slice() {
             [] => self.empty,
@@ -452,7 +219,8 @@ impl<'arena> CanonicalStore<'arena> {
 
         flat.sort_unstable();
         flat.dedup();
-        if has_complementary_regexes(&flat) {
+        if rewrite_regex_siblings(&mut flat, RegexConnective::Intersect) == SiblingResult::Collapse
+        {
             return self.empty;
         }
         if flat.contains(&self.epsilon) {
@@ -467,13 +235,6 @@ impl<'arena> CanonicalStore<'arena> {
             .any(|child| !is_epsilon_complement(*child) && !self.nullable(*child))
         {
             flat.retain(|child| !is_epsilon_complement(*child));
-        }
-        if flat
-            .iter()
-            .any(|regex| matches!(regex.get().kind, RegexKind::Union(_)))
-        {
-            let siblings = flat.clone();
-            flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, false));
         }
         match flat.as_slice() {
             [] => self.all,
