@@ -2,6 +2,7 @@
 
 use hashbrown::hash_map::Entry;
 use hashbrown::{HashMap, HashSet};
+use smallbitvec::SmallBitVec;
 use smallvec::SmallVec;
 
 use crate::model::Event;
@@ -39,15 +40,15 @@ impl<'arena> SymbolicDerivativeCache<'arena> {
 ///
 /// Each bit records whether one distinct [`CompiledAtomPattern`] used by the transition matches the
 /// current event after applying the candidate substitution. Atom order is the stable first-seen
-/// order cached by [`SymbolicDerivativeCache::atoms`]; bit `i` is stored in word `i / 64` at offset
-/// `i % 64`. Equality therefore means that two events induce the same truth assignment for every
-/// atom relevant to this transition, even when irrelevant event fields differ.
+/// order cached by [`SymbolicDerivativeCache::atoms`]. Equality therefore means that two events
+/// induce the same truth assignment for every atom relevant to this transition, even when
+/// irrelevant event fields differ.
 ///
 /// The surrounding cache key also includes [`TransitionId`], so symbols from transitions with
-/// different atom lists are never compared as the same successor key. One inline `u64` avoids a
-/// heap allocation for transitions containing at most 64 distinct atoms.
+/// different atom lists are never compared as the same successor key. [`SmallBitVec`] stores small
+/// symbols inline and falls back to packed heap storage for larger truth assignments.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct Symbol(SmallVec<[u64; 1]>);
+struct Symbol(SmallBitVec);
 
 /// Successors selected under one fixed candidate substitution.
 pub(super) struct InstantiationCache<'arena, 'event> {
@@ -264,16 +265,15 @@ fn concrete_symbol<'arena>(
     substitution: &CandidateSubstitution<'arena>,
     event: &Event,
 ) -> Symbol {
-    let mut words = SmallVec::from_elem(0, atoms.len().div_ceil(64));
-    for (index, atom) in atoms.iter().enumerate() {
-        let matches = atom
-            .subst(substitution)
-            .is_some_and(|resolved| resolved.matches(&mut store.resolver, event));
-        if matches {
-            words[index / 64] |= 1 << (index % 64);
-        }
-    }
-    Symbol(words)
+    Symbol(
+        atoms
+            .iter()
+            .map(|atom| {
+                atom.subst(substitution)
+                    .is_some_and(|resolved| resolved.matches(&mut store.resolver, event))
+            })
+            .collect(),
+    )
 }
 
 /// Instantiates one symbolic transition for a concrete symbol, reusing the fixed-substitution cache.
