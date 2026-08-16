@@ -112,10 +112,7 @@ fn redundant_constant_atom(
     else {
         return false;
     };
-    let sibling_comparison = match candidate_comparison {
-        Comparison::Eq => Comparison::Neq,
-        Comparison::Neq => Comparison::Eq,
-    };
+    let sibling_comparison = !candidate_comparison;
     comparison == candidate_comparison
         && siblings.iter().copied().any(|sibling| {
             let TestNode::Atom {
@@ -343,10 +340,7 @@ impl<'arena> CanonicalStore<'arena> {
                 comparison,
                 pattern,
             } => self.tests.mk(TestNode::Atom {
-                comparison: match comparison {
-                    Comparison::Eq => Comparison::Neq,
-                    Comparison::Neq => Comparison::Eq,
-                },
+                comparison: !comparison,
                 pattern,
             }),
             TestNode::And(children) => {
