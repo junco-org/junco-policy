@@ -15,7 +15,7 @@ use super::store::CanonicalStore;
 #[derive(Default)]
 pub(crate) struct SymbolicDerivativeCache<'arena> {
     derivatives: HashMap<RegexId<'arena>, TransitionId<'arena>>,
-    atoms: HashMap<TransitionId<'arena>, Box<[CompiledAtomPattern<'arena>]>>,
+    atoms: HashMap<TransitionId<'arena>, Vec<CompiledAtomPattern<'arena>>>,
 }
 
 impl<'arena> SymbolicDerivativeCache<'arena> {
@@ -83,7 +83,7 @@ fn collect_test_atoms<'arena>(
 /// `transition` must be a canonical transition from the current syntax store.
 pub(super) fn collect_transition_atoms<'arena>(
     transition: TransitionId<'arena>,
-) -> Box<[CompiledAtomPattern<'arena>]> {
+) -> Vec<CompiledAtomPattern<'arena>> {
     let mut atoms = Vec::new();
     collect_transition_atoms_into(
         transition,
@@ -93,7 +93,7 @@ pub(super) fn collect_transition_atoms<'arena>(
     );
     let mut seen = HashSet::new();
     atoms.retain(|atom| seen.insert(*atom));
-    atoms.into_boxed_slice()
+    atoms
 }
 
 fn collect_transition_atoms_into<'arena>(
