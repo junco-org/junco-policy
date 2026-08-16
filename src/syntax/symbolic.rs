@@ -1,6 +1,5 @@
 //! Event-independent symbolic derivatives and direct transition-DAG interpretation.
 
-use hashbrown::hash_map::Entry;
 use hashbrown::{HashMap, HashSet};
 use smallbitvec::SmallBitVec;
 use smallvec::SmallVec;
@@ -95,20 +94,128 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
         }
     }
 
-    /// Returns the cached normalized symbolic derivative of `regex`.
+    /// Returns the normalized symbolic derivative of `regex`, independent of bindings and events.
     pub(super) fn derivative(&mut self, regex: RegexId<'arena>) -> TransitionId<'arena> {
-        symbolic_derivative(self.store, self.derivatives, regex)
+        if let Some(transition) = self.derivatives.derivatives.get(&regex) {
+            return *transition;
+        }
+
+        let transition = match regex.get().kind {
+            RegexKind::Empty | RegexKind::Epsilon => self.store.transition_empty,
+            RegexKind::All => self.store.transition_all,
+            RegexKind::Test(test) => self.store.transition_if(
+                test,
+                self.store.transition_epsilon,
+                self.store.transition_empty,
+            ),
+            RegexKind::Union(children) => {
+                let transitions = children
+                    .iter()
+                    .map(|child| self.derivative(*child))
+                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
+                self.store.transition_union(transitions)
+            }
+            RegexKind::Intersect(children) => {
+                let transitions = children
+                    .iter()
+                    .map(|child| self.derivative(*child))
+                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
+                self.store.transition_intersect(transitions)
+            }
+            RegexKind::Not(inner) => {
+                let transition = self.derivative(inner);
+                self.store.transition_not(transition)
+            }
+            RegexKind::Concat(factors) => {
+                let mut alternatives = SmallVec::<[TransitionId<'arena>; 4]>::new();
+                let mut remaining = factors;
+                while let Some((factor, suffix)) = remaining.split_first() {
+                    let transition = self.derivative(*factor);
+                    alternatives.push(self.store.transition_append(transition, suffix));
+                    if !self.store.nullable(*factor) {
+                        break;
+                    }
+                    remaining = suffix;
+                }
+                self.store.transition_union(alternatives)
+            }
+            RegexKind::Star(inner) => {
+                let transition = self.derivative(inner);
+                self.store.transition_append(transition, &[regex])
+            }
+        };
+
+        let previous = self.derivatives.derivatives.insert(regex, transition);
+        debug_assert!(previous.is_none());
+        transition
     }
 
-    /// Interprets one normalized transition without consulting the instantiation cache.
-    #[cfg(test)]
+    /// Interprets one normalized transition under fixed candidate bindings and one history event.
     pub(super) fn evaluate(
         &mut self,
         transition: TransitionId<'arena>,
         substitution: &CandidateSubstitution<'arena>,
         event: &Event,
     ) -> RegexId<'arena> {
-        eval_transition(self.store, transition, substitution, event)
+        match *transition.get() {
+            TransitionNode::Const(regex) => regex,
+            TransitionNode::If {
+                test,
+                then_transition,
+                else_transition,
+            } => {
+                let selected = if eval_test(test, event, substitution, &mut self.store.resolver) {
+                    then_transition
+                } else {
+                    else_transition
+                };
+                self.evaluate(selected, substitution, event)
+            }
+            TransitionNode::Union(children) => {
+                let regexes = children
+                    .iter()
+                    .map(|child| self.evaluate(*child, substitution, event))
+                    .collect::<SmallVec<[RegexId<'arena>; 4]>>();
+                self.store.regex_union(regexes)
+            }
+            TransitionNode::Intersect(children) => {
+                let regexes = children
+                    .iter()
+                    .map(|child| self.evaluate(*child, substitution, event))
+                    .collect::<SmallVec<[RegexId<'arena>; 4]>>();
+                self.store.regex_intersect(regexes)
+            }
+            TransitionNode::Not(inner) => {
+                let regex = self.evaluate(inner, substitution, event);
+                self.store.regex_not(regex)
+            }
+            TransitionNode::Append { transition, suffix } => {
+                let regex = self.evaluate(transition, substitution, event);
+                let mut factors = SmallVec::<[RegexId<'arena>; 4]>::new();
+                factors.push(regex);
+                factors.extend_from_slice(suffix);
+                self.store.regex_concat(factors)
+            }
+        }
+    }
+
+    fn atom_truth_assignment(
+        &mut self,
+        transition: TransitionId<'arena>,
+        substitution: &CandidateSubstitution<'arena>,
+        event: &Event,
+    ) -> AtomTruthAssignment {
+        let atoms = self.derivatives.atoms(transition);
+        let resolver = &mut self.store.resolver;
+        AtomTruthAssignment(
+            atoms
+                .iter()
+                .map(|atom| {
+                    atom.subst(substitution)
+                        .is_some_and(|resolved| resolved.matches(resolver, event))
+                })
+                .collect(),
+        )
     }
 
     /// Instantiates one transition, reusing equivalent atom truth assignments.
@@ -118,14 +225,25 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
         substitution: &CandidateSubstitution<'arena>,
         event: &'event Event,
     ) -> RegexId<'arena> {
-        instantiate_transition(
-            self.store,
-            self.derivatives,
-            &mut self.instances,
-            transition,
-            substitution,
-            event,
-        )
+        if let Some((previous_transition, previous_event, regex)) = self.instances.last
+            && previous_transition == transition
+            && previous_event == event
+        {
+            return regex;
+        }
+
+        let assignment = self.atom_truth_assignment(transition, substitution, event);
+        let key = (transition, assignment);
+        let regex = if let Some(regex) = self.instances.values.get(&key) {
+            *regex
+        } else {
+            let regex = self.evaluate(transition, substitution, event);
+            let previous = self.instances.values.insert(key, regex);
+            debug_assert!(previous.is_none());
+            regex
+        };
+        self.instances.last = Some((transition, event, regex));
+        regex
     }
 
     /// Evaluates complete history using event-independent derivatives cached across rule runs.
@@ -235,157 +353,4 @@ fn collect_transition_atoms_into<'arena>(
             collect_transition_atoms_into(transition, visited_transitions, visited_tests, atoms);
         }
     }
-}
-
-/// Returns the normalized symbolic derivative of `regex`, independent of bindings and events.
-fn symbolic_derivative<'arena>(
-    store: &mut CanonicalStore<'arena>,
-    derivatives: &mut SymbolicDerivativeCache<'arena>,
-    regex: RegexId<'arena>,
-) -> TransitionId<'arena> {
-    // A vacant entry cannot remain borrowed while recursively deriving children from the same map.
-    match derivatives.derivatives.entry(regex) {
-        Entry::Occupied(entry) => return *entry.get(),
-        Entry::Vacant(_) => {}
-    }
-
-    let transition = match regex.get().kind {
-        RegexKind::Empty | RegexKind::Epsilon => store.transition_empty,
-        RegexKind::All => store.transition_all,
-        RegexKind::Test(test) => {
-            store.transition_if(test, store.transition_epsilon, store.transition_empty)
-        }
-        RegexKind::Union(children) => {
-            let transitions = children
-                .iter()
-                .map(|child| symbolic_derivative(store, derivatives, *child))
-                .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
-            store.transition_union(transitions)
-        }
-        RegexKind::Intersect(children) => {
-            let transitions = children
-                .iter()
-                .map(|child| symbolic_derivative(store, derivatives, *child))
-                .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
-            store.transition_intersect(transitions)
-        }
-        RegexKind::Not(inner) => {
-            let transition = symbolic_derivative(store, derivatives, inner);
-            store.transition_not(transition)
-        }
-        RegexKind::Concat(factors) => {
-            let mut alternatives = SmallVec::<[TransitionId<'arena>; 4]>::new();
-            let mut remaining = factors;
-            while let Some((factor, suffix)) = remaining.split_first() {
-                let transition = symbolic_derivative(store, derivatives, *factor);
-                alternatives.push(store.transition_append(transition, suffix));
-                if !store.nullable(*factor) {
-                    break;
-                }
-                remaining = suffix;
-            }
-            store.transition_union(alternatives)
-        }
-        RegexKind::Star(inner) => {
-            let transition = symbolic_derivative(store, derivatives, inner);
-            store.transition_append(transition, &[regex])
-        }
-    };
-
-    *derivatives.derivatives.entry(regex).or_insert(transition)
-}
-
-/// Interprets one normalized transition under fixed candidate bindings and one history event.
-fn eval_transition<'arena>(
-    store: &mut CanonicalStore<'arena>,
-    transition: TransitionId<'arena>,
-    substitution: &CandidateSubstitution<'arena>,
-    event: &Event,
-) -> RegexId<'arena> {
-    match *transition.get() {
-        TransitionNode::Const(regex) => regex,
-        TransitionNode::If {
-            test,
-            then_transition,
-            else_transition,
-        } => {
-            let selected = if eval_test(test, event, substitution, &mut store.resolver) {
-                then_transition
-            } else {
-                else_transition
-            };
-            eval_transition(store, selected, substitution, event)
-        }
-        TransitionNode::Union(children) => {
-            let regexes = children
-                .iter()
-                .map(|child| eval_transition(store, *child, substitution, event))
-                .collect::<SmallVec<[RegexId<'arena>; 4]>>();
-            store.regex_union(regexes)
-        }
-        TransitionNode::Intersect(children) => {
-            let regexes = children
-                .iter()
-                .map(|child| eval_transition(store, *child, substitution, event))
-                .collect::<SmallVec<[RegexId<'arena>; 4]>>();
-            store.regex_intersect(regexes)
-        }
-        TransitionNode::Not(inner) => {
-            let regex = eval_transition(store, inner, substitution, event);
-            store.regex_not(regex)
-        }
-        TransitionNode::Append { transition, suffix } => {
-            let regex = eval_transition(store, transition, substitution, event);
-            let mut factors = SmallVec::<[RegexId<'arena>; 4]>::new();
-            factors.push(regex);
-            factors.extend_from_slice(suffix);
-            store.regex_concat(factors)
-        }
-    }
-}
-
-fn atom_truth_assignment<'arena>(
-    store: &mut CanonicalStore<'arena>,
-    atoms: &[CompiledAtomPattern<'arena>],
-    substitution: &CandidateSubstitution<'arena>,
-    event: &Event,
-) -> AtomTruthAssignment {
-    AtomTruthAssignment(
-        atoms
-            .iter()
-            .map(|atom| {
-                atom.subst(substitution)
-                    .is_some_and(|resolved| resolved.matches(&mut store.resolver, event))
-            })
-            .collect(),
-    )
-}
-
-/// Instantiates one symbolic transition for an atom truth assignment.
-fn instantiate_transition<'arena, 'event>(
-    store: &mut CanonicalStore<'arena>,
-    derivatives: &mut SymbolicDerivativeCache<'arena>,
-    cache: &mut InstantiationCache<'arena, 'event>,
-    transition: TransitionId<'arena>,
-    substitution: &CandidateSubstitution<'arena>,
-    event: &'event Event,
-) -> RegexId<'arena> {
-    if let Some((previous_transition, previous_event, regex)) = cache.last
-        && previous_transition == transition
-        && previous_event == event
-    {
-        return regex;
-    }
-
-    let assignment =
-        atom_truth_assignment(store, derivatives.atoms(transition), substitution, event);
-    let regex = match cache.values.entry((transition, assignment)) {
-        Entry::Occupied(entry) => *entry.get(),
-        Entry::Vacant(entry) => {
-            let regex = eval_transition(store, transition, substitution, event);
-            *entry.insert(regex)
-        }
-    };
-    cache.last = Some((transition, event, regex));
-    regex
 }
