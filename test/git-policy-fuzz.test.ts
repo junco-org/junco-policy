@@ -27,7 +27,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { GitError, simpleGit, type SimpleGit, type SimpleGitOptions } from "simple-git";
@@ -340,7 +340,11 @@ async function seedRepository(root: string, fileCount: number): Promise<void> {
 async function executeOperation(root: string, operation: ValidatedOperation): Promise<void> {
   const absolute = join(root, operation.path);
   switch (operation.operation) {
+    // git tracks files, not directories, so removing the last entry under `src/` prunes the
+    // directory itself. A later granted `create` there is legitimate and must recreate it,
+    // exactly as a real agent writing the file would.
     case "create":
+      await mkdir(dirname(absolute), { recursive: true });
       await writeFile(absolute, `created by ${operation.principal} at step ${operation.step}\n`);
       return;
     case "modify":
