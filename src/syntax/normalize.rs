@@ -226,20 +226,51 @@ fn regex_absorbed_by_sibling<'arena>(
 }
 
 impl<'arena> CanonicalStore<'arena> {
-    /// Recognizes atomic and compound complements among sibling tests.
+    /// Returns whether normalized siblings make their outer connective constant by complementation.
+    ///
+    /// `conjunction` identifies that outer connective:
+    ///
+    /// - `true` asks whether the siblings contain a contradiction, so their conjunction is false;
+    /// - `false` asks whether the siblings contain a tautology, so their disjunction is true.
+    ///
+    /// The first check recognizes a direct atomic pair `Eq(p)` and `Neq(p)`. The second recognizes
+    /// the canonical form left after complement pushing and flattening. For an outer conjunction,
+    /// an `Or(c₁, …, cₙ)` candidate is contradictory when every `Not(cᵢ)` is also an outer sibling:
+    ///
+    /// ```text
+    /// (c₁ ∨ c₂) ∧ ¬c₁ ∧ ¬c₂ = false
+    /// ```
+    ///
+    /// For an outer disjunction, the dual condition makes an `And(c₁, …, cₙ)` candidate a
+    /// tautology when every `Not(cᵢ)` is an outer sibling:
+    ///
+    /// ```text
+    /// (c₁ ∧ c₂) ∨ ¬c₁ ∨ ¬c₂ = true
+    /// ```
+    ///
+    /// These are the flattened De Morgan forms of `x ∧ ¬x` and `x ∨ ¬x`; the compound complement
+    /// is not necessarily present as one sibling node. This is a syntactic normalization rule, not
+    /// a general satisfiability check. Calling [`CanonicalStore::test_not`] may intern normalized
+    /// complements, which is why this query mutably borrows the store.
     ///
     /// # Preconditions
-    /// `tests` and every nested Boolean child slice must be sorted and deduplicated. All IDs must
-    /// belong to `self`.
+    /// `tests` must be the flattened outer operands, sorted and deduplicated. Every nested Boolean
+    /// child slice must also be sorted and deduplicated. All IDs must belong to `self`; sortedness is
+    /// required by the binary searches for the child complements.
     fn tests_have_complements(&mut self, tests: &[TestId<'arena>], conjunction: bool) -> bool {
+        // Direct atomic complementation: Eq(p) and Neq(p).
         if pair_satisfies(tests, complementary_test) {
             return true;
         }
+        // Compound complementation after De Morgan normalization and outer-connective flattening.
         tests.iter().copied().any(|candidate| {
             let dual_children = match (conjunction, *candidate.get()) {
+                // A disjunction can contradict an outer conjunction; a conjunction can complete an
+                // outer disjunction to a tautology.
                 (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children,
                 _ => return false,
             };
+            // Every child must have its normalized complement as a separate outer sibling.
             dual_children.iter().all(|child| {
                 let complement = self.test_not(*child);
                 tests.binary_search(&complement).is_ok()
