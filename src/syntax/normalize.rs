@@ -87,21 +87,16 @@ fn distinct_constant_atoms(left: TestId<'_>, right: TestId<'_>, comparison: Comp
 
 /// Returns whether a constant atom can be removed because a sibling implies it.
 ///
-/// `candidate_comparison` is the comparison required on the atom being considered for removal;
-/// `sibling_comparison` is the comparison required on the sibling that makes it redundant. The
-/// patterns must select distinct constants in the same component domain. The two call sites use
-/// the dual implications:
+/// `candidate_comparison` identifies the atom being considered for removal. The sibling must use
+/// its opposite comparison and select a distinct constant in the same component domain. Thus the
+/// two call sites implement the dual implications:
 ///
 /// - conjunction: `Eq(c) ∧ Neq(d) = Eq(c)` for `c != d`, so the `Neq(d)` candidate is removed;
 /// - disjunction: `Neq(d) ∨ Eq(c) = Neq(d)` for `c != d`, so the `Eq(c)` candidate is removed.
-///
-/// Keeping the candidate and sibling comparisons explicit lets this one helper implement both
-/// directions without hiding which sibling survives.
 fn redundant_constant_atom(
     candidate: TestId<'_>,
     siblings: &[TestId<'_>],
     candidate_comparison: Comparison,
-    sibling_comparison: Comparison,
 ) -> bool {
     let TestNode::Atom {
         comparison,
@@ -109,6 +104,10 @@ fn redundant_constant_atom(
     } = *candidate.get()
     else {
         return false;
+    };
+    let sibling_comparison = match candidate_comparison {
+        Comparison::Eq => Comparison::Neq,
+        Comparison::Neq => Comparison::Eq,
     };
     comparison == candidate_comparison
         && siblings.iter().copied().any(|sibling| {
@@ -234,7 +233,7 @@ impl<'arena> CanonicalStore<'arena> {
             },
             |candidate, siblings| {
                 absorbed_by_sibling(candidate, siblings, true)
-                    || redundant_constant_atom(candidate, siblings, Comparison::Neq, Comparison::Eq)
+                    || redundant_constant_atom(candidate, siblings, Comparison::Neq)
             },
         );
         match flat.as_slice() {
@@ -285,7 +284,7 @@ impl<'arena> CanonicalStore<'arena> {
             },
             |candidate, siblings| {
                 absorbed_by_sibling(candidate, siblings, false)
-                    || redundant_constant_atom(candidate, siblings, Comparison::Eq, Comparison::Neq)
+                    || redundant_constant_atom(candidate, siblings, Comparison::Eq)
             },
         );
         match flat.as_slice() {
