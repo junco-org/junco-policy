@@ -142,27 +142,23 @@ fn redundant_constant_atom(
 /// # Preconditions
 /// `siblings` must be sorted and deduplicated. Every opposite-connective child slice must also be
 /// sorted and deduplicated. All IDs must belong to the same [`CanonicalStore`].
-fn absorbed_by_sibling<'arena>(
-    candidate: TestId<'arena>,
-    siblings: &[TestId<'arena>],
-    conjunction: bool,
-) -> bool {
-    let nested = match (conjunction, *candidate.get()) {
-        (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children,
-        _ => return false,
-    };
+fn absorbed_by_sibling<'arena>(candidate: TestId<'arena>, siblings: &[TestId<'arena>]) -> bool {
     siblings.iter().copied().any(|sibling| {
         // Do not remove the sole representative left by the caller's idempotence reduction.
         if sibling == candidate {
             return false;
         }
-        match (conjunction, *sibling.get()) {
+        match (*candidate.get(), *sibling.get()) {
             // Generalized absorption: the sibling's child set is a subset of the candidate's.
-            (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children
+            (TestNode::Or(nested), TestNode::Or(children))
+            | (TestNode::And(nested), TestNode::And(children)) => children
                 .iter()
                 .all(|child| nested.binary_search(child).is_ok()),
             // Direct absorption: the sibling is one of the candidate's nested operands.
-            _ => nested.binary_search(&sibling).is_ok(),
+            (TestNode::Or(nested), _) | (TestNode::And(nested), _) => {
+                nested.binary_search(&sibling).is_ok()
+            }
+            _ => false,
         }
     })
 }
@@ -201,37 +197,43 @@ fn is_epsilon_complement(regex: RegexId<'_>) -> bool {
 fn regex_absorbed_by_sibling<'arena>(
     candidate: RegexId<'arena>,
     siblings: &[RegexId<'arena>],
-    union: bool,
 ) -> bool {
-    let nested = match (union, candidate.get().kind) {
-        (true, RegexKind::Intersect(children)) | (false, RegexKind::Union(children)) => children,
-        _ => return false,
-    };
     siblings.iter().copied().any(|sibling| {
         // Do not remove the sole representative left by the caller's idempotence reduction.
         if sibling == candidate {
             return false;
         }
-        match (union, sibling.get().kind) {
+        match (candidate.get().kind, sibling.get().kind) {
             // Generalized absorption: the sibling's child set is a subset of the candidate's.
-            (true, RegexKind::Intersect(children)) | (false, RegexKind::Union(children)) => {
-                children
-                    .iter()
-                    .all(|child| nested.binary_search(child).is_ok())
-            }
+            (RegexKind::Intersect(nested), RegexKind::Intersect(children))
+            | (RegexKind::Union(nested), RegexKind::Union(children)) => children
+                .iter()
+                .all(|child| nested.binary_search(child).is_ok()),
             // Direct absorption: the sibling is one of the candidate's nested operands.
-            _ => nested.binary_search(&sibling).is_ok(),
+            (RegexKind::Intersect(nested), _) | (RegexKind::Union(nested), _) => {
+                nested.binary_search(&sibling).is_ok()
+            }
+            _ => false,
         }
     })
+}
+
+/// Outer connective whose siblings are being normalized.
+#[derive(Clone, Copy)]
+enum TestConnective {
+    And,
+    Or,
 }
 
 impl<'arena> CanonicalStore<'arena> {
     /// Returns whether normalized siblings make their outer connective constant by complementation.
     ///
-    /// `conjunction` identifies that outer connective:
+    /// `connective` identifies the outer operation:
     ///
-    /// - `true` asks whether the siblings contain a contradiction, so their conjunction is false;
-    /// - `false` asks whether the siblings contain a tautology, so their disjunction is true.
+    /// - [`TestConnective::And`] asks whether the siblings contain a contradiction, so their
+    ///   conjunction is false;
+    /// - [`TestConnective::Or`] asks whether the siblings contain a tautology, so their disjunction
+    ///   is true.
     ///
     /// The first check recognizes a direct atomic pair `Eq(p)` and `Neq(p)`. The second recognizes
     /// the canonical form left after complement pushing and flattening. For an outer conjunction,
@@ -257,17 +259,22 @@ impl<'arena> CanonicalStore<'arena> {
     /// `tests` must be the flattened outer operands, sorted and deduplicated. Every nested Boolean
     /// child slice must also be sorted and deduplicated. All IDs must belong to `self`; sortedness is
     /// required by the binary searches for the child complements.
-    fn tests_have_complements(&mut self, tests: &[TestId<'arena>], conjunction: bool) -> bool {
+    fn tests_have_complements(
+        &mut self,
+        tests: &[TestId<'arena>],
+        connective: TestConnective,
+    ) -> bool {
         // Direct atomic complementation: Eq(p) and Neq(p).
         if pair_satisfies(tests, complementary_test) {
             return true;
         }
         // Compound complementation after De Morgan normalization and outer-connective flattening.
         tests.iter().copied().any(|candidate| {
-            let dual_children = match (conjunction, *candidate.get()) {
+            let dual_children = match (connective, *candidate.get()) {
                 // A disjunction can contradict an outer conjunction; a conjunction can complete an
                 // outer disjunction to a tautology.
-                (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children,
+                (TestConnective::And, TestNode::Or(children))
+                | (TestConnective::Or, TestNode::And(children)) => children,
                 _ => return false,
             };
             // Every child must have its normalized complement as a separate outer sibling.
@@ -298,7 +305,7 @@ impl<'arena> CanonicalStore<'arena> {
 
         flat.sort_unstable();
         flat.dedup();
-        if self.tests_have_complements(&flat, true)
+        if self.tests_have_complements(&flat, TestConnective::And)
             || pair_satisfies(&flat, |left, right| {
                 distinct_constant_atoms(left, right, Comparison::Eq)
             })
@@ -317,7 +324,7 @@ impl<'arena> CanonicalStore<'arena> {
         }) {
             let siblings = flat.clone();
             flat.retain(|candidate| {
-                !absorbed_by_sibling(*candidate, &siblings, true)
+                !absorbed_by_sibling(*candidate, &siblings)
                     && !redundant_constant_atom(*candidate, &siblings, Comparison::Neq)
             });
         }
@@ -351,7 +358,7 @@ impl<'arena> CanonicalStore<'arena> {
 
         flat.sort_unstable();
         flat.dedup();
-        if self.tests_have_complements(&flat, false)
+        if self.tests_have_complements(&flat, TestConnective::Or)
             || pair_satisfies(&flat, |left, right| {
                 distinct_constant_atoms(left, right, Comparison::Neq)
             })
@@ -370,7 +377,7 @@ impl<'arena> CanonicalStore<'arena> {
         }) {
             let siblings = flat.clone();
             flat.retain(|candidate| {
-                !absorbed_by_sibling(*candidate, &siblings, false)
+                !absorbed_by_sibling(*candidate, &siblings)
                     && !redundant_constant_atom(*candidate, &siblings, Comparison::Eq)
             });
         }
@@ -496,7 +503,7 @@ impl<'arena> CanonicalStore<'arena> {
             .any(|candidate| matches!(candidate.get().kind, RegexKind::Intersect(_)))
         {
             let siblings = flat.clone();
-            flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, true));
+            flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings));
         }
         match flat.as_slice() {
             [] => self.empty,
@@ -567,7 +574,7 @@ impl<'arena> CanonicalStore<'arena> {
             .any(|candidate| matches!(candidate.get().kind, RegexKind::Union(_)))
         {
             let siblings = flat.clone();
-            flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, false));
+            flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings));
         }
         match flat.as_slice() {
             [] => self.all,
