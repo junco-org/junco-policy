@@ -386,16 +386,26 @@ impl<'arena> CanonicalStore<'arena> {
         children: impl IntoIterator<Item = TestId<'arena>>,
         connective: TestConnective,
     ) -> TestId<'arena> {
+        // Resolve the two constants once. For conjunction these are identity=true and
+        // absorber=false; for disjunction they are identity=false and absorber=true.
         let identity = connective.identity(self);
         let absorber = connective.absorber(self);
+
+        // Apply the local ACI laws while collecting operands. An absorber determines the complete
+        // result immediately. Identities contribute nothing. Pulling children out of a nested node
+        // with the same connective establishes associativity without rebuilding an intermediate
+        // canonical node.
         let mut flat = SmallVec::<[TestId<'arena>; 4]>::new();
         for child in children {
+            // x ∧ false = false; x ∨ true = true.
             if child == absorber {
                 return absorber;
             }
+            // x ∧ true = x; x ∨ false = x.
             if child == identity {
                 continue;
             }
+            // (x ◦ y) ◦ z = x ◦ y ◦ z for the selected connective ◦.
             if let Some(nested) = connective.children(*child.get()) {
                 flat.extend_from_slice(nested);
             } else {
@@ -403,17 +413,28 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
+        // Canonical order supplies commutativity; deduplication supplies idempotence. The sorted
+        // representation is also required by the binary-search subset and complement checks below.
         flat.sort_unstable();
         flat.dedup();
+
+        // Collapse combinations that make the complete connective constant. Complement detection
+        // covers x ◦ ¬x and its flattened De Morgan forms. The finite-product rule covers two
+        // distinct equalities in conjunction, or two distinct disequalities in disjunction.
         let contradictory_comparison = connective.contradictory_comparison();
         if self.tests_have_complements(&flat, connective)
             || pair_satisfies(&flat, |left, right| {
                 distinct_constant_atoms(left, right, contradictory_comparison)
             })
         {
+            // A contradiction collapses conjunction to false; a tautology collapses disjunction to
+            // true. Both are the selected connective's absorber.
             return absorber;
         }
 
+        // The remaining rewrites delete individual operands rather than collapsing the whole
+        // expression. Only a dual compound or an atom with the removable comparison can qualify,
+        // so avoid cloning and scanning the sibling list when neither shape occurs.
         let redundant_comparison = connective.redundant_comparison();
         if flat.iter().any(|candidate| {
             connective.dual().children(*candidate.get()).is_some()
@@ -422,17 +443,25 @@ impl<'arena> CanonicalStore<'arena> {
                     TestNode::Atom { comparison, .. } if comparison == redundant_comparison
                 )
         }) {
+            // Retention needs the original complete sibling set: removing one candidate must not
+            // change whether a later candidate was redundant in the original normalized expression.
             let siblings = flat.clone();
             flat.retain(|candidate| {
+                // Remove x ◦ (x dual y), generalized subset absorption, and the finite-product
+                // implication Eq(c) ∧ Neq(d) / Neq(d) ∨ Eq(c) for distinct constants c and d.
                 !absorbed_by_sibling(*candidate, &siblings)
                     && !redundant_constant_atom(*candidate, &siblings, redundant_comparison)
             });
         }
 
+        // Close the variadic connective after all rewrites. Zero children denote the identity; one
+        // child needs no wrapper; only a genuine compound expression is arena-allocated and interned.
         match flat.as_slice() {
             [] => identity,
             [only] => *only,
             _ => {
+                // Canonical children are immutable, so copy the finalized slice into the arena before
+                // hashconsing the node.
                 let values = self.tests.arena().alloc_slice_copy(&flat);
                 self.tests.mk(connective.node(values))
             }
