@@ -36,7 +36,7 @@ impl<'arena> SymbolicDerivativeCache<'arena> {
     }
 }
 
-/// Concrete alphabet symbol for one transition under a fixed substitution.
+/// Truth assignment for the atoms of one transition under a fixed substitution.
 ///
 /// Each bit records whether one distinct [`CompiledAtomPattern`] used by the transition matches the
 /// current event after applying the candidate substitution. Atom order is the stable first-seen
@@ -44,15 +44,15 @@ impl<'arena> SymbolicDerivativeCache<'arena> {
 /// induce the same truth assignment for every atom relevant to this transition, even when
 /// irrelevant event fields differ.
 ///
-/// The surrounding cache key also includes [`TransitionId`], so symbols from transitions with
-/// different atom lists are never compared as the same successor key. [`SmallBitVec`] stores small
-/// symbols inline and falls back to packed heap storage for larger truth assignments.
+/// The surrounding cache key also includes [`TransitionId`], so assignments based on different atom
+/// lists are never compared as the same successor key. [`SmallBitVec`] stores small assignments
+/// inline and falls back to packed heap storage for larger truth assignments.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct Symbol(SmallBitVec);
+struct AtomTruthAssignment(SmallBitVec);
 
 /// Successors selected under one fixed candidate substitution.
 pub(super) struct InstantiationCache<'arena, 'event> {
-    values: HashMap<(TransitionId<'arena>, Symbol), RegexId<'arena>>,
+    values: HashMap<(TransitionId<'arena>, AtomTruthAssignment), RegexId<'arena>>,
     last: Option<(TransitionId<'arena>, &'event Event, RegexId<'arena>)>,
 }
 
@@ -259,13 +259,13 @@ pub(super) fn eval_transition<'arena>(
     }
 }
 
-fn concrete_symbol<'arena>(
+fn atom_truth_assignment<'arena>(
     store: &mut CanonicalStore<'arena>,
     atoms: &[CompiledAtomPattern<'arena>],
     substitution: &CandidateSubstitution<'arena>,
     event: &Event,
-) -> Symbol {
-    Symbol(
+) -> AtomTruthAssignment {
+    AtomTruthAssignment(
         atoms
             .iter()
             .map(|atom| {
@@ -276,7 +276,7 @@ fn concrete_symbol<'arena>(
     )
 }
 
-/// Instantiates one symbolic transition for a concrete symbol, reusing the fixed-substitution cache.
+/// Instantiates one symbolic transition for an atom truth assignment, reusing the fixed-substitution cache.
 pub(super) fn instantiate<'arena, 'event>(
     store: &mut CanonicalStore<'arena>,
     derivatives: &mut SymbolicDerivativeCache<'arena>,
@@ -292,8 +292,9 @@ pub(super) fn instantiate<'arena, 'event>(
         return regex;
     }
 
-    let symbol = concrete_symbol(store, derivatives.atoms(transition), substitution, event);
-    let regex = match cache.values.entry((transition, symbol)) {
+    let assignment =
+        atom_truth_assignment(store, derivatives.atoms(transition), substitution, event);
+    let regex = match cache.values.entry((transition, assignment)) {
         Entry::Occupied(entry) => *entry.get(),
         Entry::Vacant(entry) => {
             let regex = eval_transition(store, transition, substitution, event);
