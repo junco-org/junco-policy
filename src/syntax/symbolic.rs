@@ -29,18 +29,9 @@ impl<'arena> SymbolicDerivativeCache<'arena> {
     }
 
     fn atoms(&mut self, transition: TransitionId<'arena>) -> &[CompiledAtomPattern<'arena>] {
-        self.atoms.entry(transition).or_insert_with(|| {
-            let mut atoms = Vec::new();
-            collect_transition_atoms(
-                transition,
-                &mut HashSet::new(),
-                &mut HashSet::new(),
-                &mut atoms,
-            );
-            let mut seen = HashSet::new();
-            atoms.retain(|atom| seen.insert(*atom));
-            atoms.into_boxed_slice()
-        })
+        self.atoms
+            .entry(transition)
+            .or_insert_with(|| collect_transition_atoms(transition))
     }
 }
 
@@ -86,7 +77,26 @@ fn collect_test_atoms<'arena>(
     }
 }
 
-fn collect_transition_atoms<'arena>(
+/// Collects the distinct component patterns tested by a transition DAG.
+///
+/// # Preconditions
+/// `transition` must be a canonical transition from the current syntax store.
+pub(super) fn collect_transition_atoms<'arena>(
+    transition: TransitionId<'arena>,
+) -> Box<[CompiledAtomPattern<'arena>]> {
+    let mut atoms = Vec::new();
+    collect_transition_atoms_into(
+        transition,
+        &mut HashSet::new(),
+        &mut HashSet::new(),
+        &mut atoms,
+    );
+    let mut seen = HashSet::new();
+    atoms.retain(|atom| seen.insert(*atom));
+    atoms.into_boxed_slice()
+}
+
+fn collect_transition_atoms_into<'arena>(
     transition: TransitionId<'arena>,
     visited_transitions: &mut HashSet<TransitionId<'arena>>,
     visited_tests: &mut HashSet<TestId<'arena>>,
@@ -103,19 +113,29 @@ fn collect_transition_atoms<'arena>(
             else_transition,
         } => {
             collect_test_atoms(test, visited_tests, atoms);
-            collect_transition_atoms(then_transition, visited_transitions, visited_tests, atoms);
-            collect_transition_atoms(else_transition, visited_transitions, visited_tests, atoms);
+            collect_transition_atoms_into(
+                then_transition,
+                visited_transitions,
+                visited_tests,
+                atoms,
+            );
+            collect_transition_atoms_into(
+                else_transition,
+                visited_transitions,
+                visited_tests,
+                atoms,
+            );
         }
         TransitionNode::Union(children) | TransitionNode::Intersect(children) => {
             for child in children {
-                collect_transition_atoms(*child, visited_transitions, visited_tests, atoms);
+                collect_transition_atoms_into(*child, visited_transitions, visited_tests, atoms);
             }
         }
         TransitionNode::Not(inner) => {
-            collect_transition_atoms(inner, visited_transitions, visited_tests, atoms);
+            collect_transition_atoms_into(inner, visited_transitions, visited_tests, atoms);
         }
         TransitionNode::Append { transition, .. } => {
-            collect_transition_atoms(transition, visited_transitions, visited_tests, atoms);
+            collect_transition_atoms_into(transition, visited_transitions, visited_tests, atoms);
         }
     }
 }
