@@ -288,11 +288,6 @@ impl TestConnective {
         }
     }
 
-    /// Returns children of the dual connective used by De Morgan and absorption reductions.
-    fn dual_children<'arena>(self, node: TestNode<'arena>) -> Option<&'arena [TestId<'arena>]> {
-        self.dual().children(node)
-    }
-
     /// Comparison whose distinct constants make the connective constant.
     fn contradictory_comparison(self) -> Comparison {
         match self {
@@ -360,7 +355,7 @@ impl<'arena> CanonicalStore<'arena> {
         }
         // Compound complementation after De Morgan normalization and outer-connective flattening.
         tests.iter().copied().any(|candidate| {
-            let Some(dual_children) = connective.dual_children(*candidate.get()) else {
+            let Some(dual_children) = connective.dual().children(*candidate.get()) else {
                 return false;
             };
             // Every child must have its normalized complement as a separate outer sibling.
@@ -421,7 +416,7 @@ impl<'arena> CanonicalStore<'arena> {
 
         let redundant_comparison = connective.redundant_comparison();
         if flat.iter().any(|candidate| {
-            connective.dual_children(*candidate.get()).is_some()
+            connective.dual().children(*candidate.get()).is_some()
                 || matches!(
                     *candidate.get(),
                     TestNode::Atom { comparison, .. } if comparison == redundant_comparison
