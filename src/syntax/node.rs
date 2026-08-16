@@ -1,8 +1,4 @@
 //! Immutable hashconsed test, regular-expression, and transition-regex nodes.
-//!
-//! Canonical handles share structurally equal allocations. Parent nodes contain only handles and
-//! arena-owned slices; no node retains compiler, environment, store, rule, event, substitution, or
-//! validator backreferences.
 
 use std::hash::{Hash, Hasher};
 
