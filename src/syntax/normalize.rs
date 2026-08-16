@@ -85,6 +85,18 @@ fn distinct_constant_atoms(left: TestId<'_>, right: TestId<'_>, comparison: Comp
     )
 }
 
+/// Returns whether a constant atom can be removed because a sibling implies it.
+///
+/// `candidate_comparison` is the comparison required on the atom being considered for removal;
+/// `sibling_comparison` is the comparison required on the sibling that makes it redundant. The
+/// patterns must select distinct constants in the same component domain. The two call sites use
+/// the dual implications:
+///
+/// - conjunction: `Eq(c) ∧ Neq(d) = Eq(c)` for `c != d`, so the `Neq(d)` candidate is removed;
+/// - disjunction: `Neq(d) ∨ Eq(c) = Neq(d)` for `c != d`, so the `Eq(c)` candidate is removed.
+///
+/// Keeping the candidate and sibling comparisons explicit lets this one helper implement both
+/// directions without hiding which sibling survives.
 fn redundant_constant_atom(
     candidate: TestId<'_>,
     siblings: &[TestId<'_>],
