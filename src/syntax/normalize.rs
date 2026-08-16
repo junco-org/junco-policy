@@ -254,6 +254,14 @@ enum TestConnective {
 }
 
 impl TestConnective {
+    /// Returns the De Morgan dual connective.
+    fn dual(self) -> Self {
+        match self {
+            Self::And => Self::Or,
+            Self::Or => Self::And,
+        }
+    }
+
     /// Identity element removed from this connective: `true` for `And`, `false` for `Or`.
     fn identity<'arena>(self, store: &CanonicalStore<'arena>) -> TestId<'arena> {
         match self {
@@ -282,12 +290,7 @@ impl TestConnective {
 
     /// Returns children of the dual connective used by De Morgan and absorption reductions.
     fn dual_children<'arena>(self, node: TestNode<'arena>) -> Option<&'arena [TestId<'arena>]> {
-        match (self, node) {
-            (Self::And, TestNode::Or(children)) | (Self::Or, TestNode::And(children)) => {
-                Some(children)
-            }
-            _ => None,
-        }
+        self.dual().children(node)
     }
 
     /// Comparison whose distinct constants make the connective constant.
