@@ -6,6 +6,9 @@ use super::store::CanonicalStore;
 
 impl<'arena> CanonicalStore<'arena> {
     /// Lifts one normalized regex state into a constant transition.
+    ///
+    /// # Preconditions
+    /// `regex` must be a canonical normalized regex from `self`.
     pub(super) fn transition_const(&mut self, regex: RegexId<'arena>) -> TransitionId<'arena> {
         if regex == self.empty {
             self.transition_empty
@@ -18,6 +21,11 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
+    /// Interns an already-cleaned conditional, applying only local constant/identity reductions.
+    ///
+    /// # Preconditions
+    /// `test` and both transition IDs must be canonical values from `self`. Both branches must
+    /// already be normalized under the caller's current path condition.
     fn intern_transition_if(
         &mut self,
         test: super::node::TestId<'arena>,
@@ -39,6 +47,10 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
+    /// Rewrites every conditional reachable from `transition` under one accumulated path condition.
+    ///
+    /// # Preconditions
+    /// `transition` and `path` must be canonical values from `self`; `path` must be normalized.
     fn clean_transition_path(
         &mut self,
         transition: TransitionId<'arena>,
@@ -76,6 +88,11 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
+    /// Cleans one conditional and its descendants under an accumulated path condition.
+    ///
+    /// # Preconditions
+    /// The test, path, and branches must be canonical values from `self`. `path` and `test` must be
+    /// normalized; each branch must already satisfy the transition smart-constructor invariants.
     fn clean_conditional_path(
         &mut self,
         test: super::node::TestId<'arena>,
@@ -109,6 +126,10 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs a normalized conditional and removes path-infeasible nested branches.
+    ///
+    /// # Preconditions
+    /// `test` and both branches must be canonical values from `self`. Input branches may contain
+    /// path-infeasible descendants; this constructor removes them.
     pub(super) fn transition_if(
         &mut self,
         test: super::node::TestId<'arena>,
@@ -119,6 +140,10 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs flattened, ordered, deduplicated transition union.
+    ///
+    /// # Preconditions
+    /// Every child must be a canonical normalized transition from `self`. Input order and duplicates
+    /// are unrestricted.
     pub(super) fn transition_union(
         &mut self,
         children: impl IntoIterator<Item = TransitionId<'arena>>,
@@ -164,6 +189,11 @@ impl<'arena> CanonicalStore<'arena> {
         }
     }
 
+    /// Intersects two normalized transitions and performs one deterministic DNF expansion step.
+    ///
+    /// # Preconditions
+    /// Both transitions must be canonical normalized values from `self`. Conditional guards and all
+    /// commutative child slices reachable from them must be sorted and deduplicated.
     fn transition_intersect_pair(
         &mut self,
         left: TransitionId<'arena>,
@@ -286,6 +316,10 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs transition intersection in deterministic disjunctive normal form.
+    ///
+    /// # Preconditions
+    /// Every child must be a canonical normalized transition from `self`. Input order and duplicates
+    /// are unrestricted.
     pub(super) fn transition_intersect(
         &mut self,
         children: impl IntoIterator<Item = TransitionId<'arena>>,
@@ -333,6 +367,9 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Pushes transition complement through Boolean structure and conditionals to regex leaves.
+    ///
+    /// # Preconditions
+    /// `transition` must be a canonical normalized transition from `self`.
     pub(super) fn transition_not(
         &mut self,
         transition: TransitionId<'arena>,
@@ -381,6 +418,10 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Appends a fixed normalized regex suffix, distributing to transition leaves.
+    ///
+    /// # Preconditions
+    /// `transition` and every regex in `suffix` must be canonical normalized values from `self`.
+    /// Suffix order is semantic; duplicates are permitted.
     pub(super) fn transition_append(
         &mut self,
         transition: TransitionId<'arena>,

@@ -10,14 +10,22 @@ use super::component::CompiledAtomPattern;
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
 use super::source::{Comparison, ComponentPattern};
 use super::store::CanonicalStore;
-fn has_sibling_pair<T: Copy>(values: &[T], mut matches: impl FnMut(T, T) -> bool) -> bool {
+/// Returns whether any unordered pair satisfies `predicate`.
+///
+/// # Preconditions
+/// `predicate` must be symmetric; each pair is presented in only one orientation.
+fn pair_satisfies<T: Copy>(values: &[T], mut predicate: impl FnMut(T, T) -> bool) -> bool {
     values.iter().enumerate().any(|(index, left)| {
         values[index + 1..]
             .iter()
-            .any(|right| matches(*left, *right))
+            .any(|right| predicate(*left, *right))
     })
 }
 
+/// Recognizes an equality atom and its disequality complement.
+///
+/// # Preconditions
+/// Both IDs must be canonical tests from the same [`CanonicalStore`].
 fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bool {
     matches!(
         (*left.get(), *right.get()),
@@ -34,6 +42,10 @@ fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bo
     )
 }
 
+/// Recognizes distinct constants in the same component domain.
+///
+/// # Preconditions
+/// Both patterns must have been compiled by the same [`CanonicalStore`].
 fn distinct_constant_patterns(
     left: CompiledAtomPattern<'_>,
     right: CompiledAtomPattern<'_>,
@@ -55,6 +67,10 @@ fn distinct_constant_patterns(
     }
 }
 
+/// Recognizes two distinct constant atoms with the requested comparison.
+///
+/// # Preconditions
+/// Both IDs must be canonical tests from the same [`CanonicalStore`].
 fn distinct_constant_atoms(left: TestId<'_>, right: TestId<'_>, comparison: Comparison) -> bool {
     matches!(
         (*left.get(), *right.get()),
@@ -81,6 +97,9 @@ fn distinct_constant_atoms(left: TestId<'_>, right: TestId<'_>, comparison: Comp
 ///
 /// - conjunction: `Eq(c) ∧ Neq(d) = Eq(c)` for `c != d`, so the `Neq(d)` candidate is removed;
 /// - disjunction: `Neq(d) ∨ Eq(c) = Neq(d)` for `c != d`, so the `Eq(c)` candidate is removed.
+/// # Preconditions
+/// `candidate` and every ID in `siblings` must be canonical tests from the same store. The sibling
+/// slice need not be sorted.
 fn redundant_constant_atom(
     candidate: TestId<'_>,
     siblings: &[TestId<'_>],
@@ -111,6 +130,11 @@ fn redundant_constant_atom(
         })
 }
 
+/// Recognizes a compound operand absorbed by another operand of the outer connective.
+///
+/// # Preconditions
+/// `siblings` must be sorted and deduplicated. Every opposite-connective child slice must also be
+/// sorted and deduplicated. All IDs must belong to the same [`CanonicalStore`].
 fn absorbed_by_sibling<'arena>(
     candidate: TestId<'arena>,
     siblings: &[TestId<'arena>],
@@ -133,15 +157,28 @@ fn absorbed_by_sibling<'arena>(
     })
 }
 
+/// Recognizes a regex and its whole-language complement.
+///
+/// # Preconditions
+/// Both IDs must be canonical regexes from the same [`CanonicalStore`].
 fn complementary_regex<'arena>(left: RegexId<'arena>, right: RegexId<'arena>) -> bool {
     matches!(left.get().kind, RegexKind::Not(inner) if inner == right)
         || matches!(right.get().kind, RegexKind::Not(inner) if inner == left)
 }
 
+/// Recognizes the canonical complement of epsilon.
+///
+/// # Preconditions
+/// `regex` must be a canonical regex from the current [`CanonicalStore`].
 fn is_epsilon_complement(regex: RegexId<'_>) -> bool {
     matches!(regex.get().kind, RegexKind::Not(inner) if matches!(inner.get().kind, RegexKind::Epsilon))
 }
 
+/// Recognizes a compound regex operand absorbed by another operand of the outer set connective.
+///
+/// # Preconditions
+/// `siblings` must be sorted and deduplicated. Every opposite-connective child slice must also be
+/// sorted and deduplicated. All IDs must belong to the same [`CanonicalStore`].
 fn regex_absorbed_by_sibling<'arena>(
     candidate: RegexId<'arena>,
     siblings: &[RegexId<'arena>],
@@ -167,8 +204,13 @@ fn regex_absorbed_by_sibling<'arena>(
 }
 
 impl<'arena> CanonicalStore<'arena> {
+    /// Recognizes atomic and compound complements among sibling tests.
+    ///
+    /// # Preconditions
+    /// `tests` and every nested Boolean child slice must be sorted and deduplicated. All IDs must
+    /// belong to `self`.
     fn tests_have_complements(&mut self, tests: &[TestId<'arena>], conjunction: bool) -> bool {
-        if has_sibling_pair(tests, complementary_test) {
+        if pair_satisfies(tests, complementary_test) {
             return true;
         }
         tests.iter().copied().any(|candidate| {
@@ -184,6 +226,9 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs canonical conjunction over one-event tests.
+    ///
+    /// # Preconditions
+    /// Every child must be a canonical test from `self`. Input order and duplicates are unrestricted.
     pub(super) fn test_and(
         &mut self,
         children: impl IntoIterator<Item = TestId<'arena>>,
@@ -201,7 +246,7 @@ impl<'arena> CanonicalStore<'arena> {
         flat.sort_unstable();
         flat.dedup();
         if self.tests_have_complements(&flat, true)
-            || has_sibling_pair(&flat, |left, right| {
+            || pair_satisfies(&flat, |left, right| {
                 distinct_constant_atoms(left, right, Comparison::Eq)
             })
         {
@@ -234,6 +279,9 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs canonical disjunction over one-event tests.
+    ///
+    /// # Preconditions
+    /// Every child must be a canonical test from `self`. Input order and duplicates are unrestricted.
     pub(super) fn test_or(
         &mut self,
         children: impl IntoIterator<Item = TestId<'arena>>,
@@ -251,7 +299,7 @@ impl<'arena> CanonicalStore<'arena> {
         flat.sort_unstable();
         flat.dedup();
         if self.tests_have_complements(&flat, false)
-            || has_sibling_pair(&flat, |left, right| {
+            || pair_satisfies(&flat, |left, right| {
                 distinct_constant_atoms(left, right, Comparison::Neq)
             })
         {
@@ -284,6 +332,9 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs the normalized Boolean complement of one event test.
+    ///
+    /// # Preconditions
+    /// `test` must be a canonical test from `self`.
     pub(super) fn test_not(&mut self, test: TestId<'arena>) -> TestId<'arena> {
         match *test.get() {
             TestNode::True => self.test_false,
@@ -316,6 +367,10 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Interns one normalized regex kind with its deterministic nullability cache.
+    ///
+    /// # Preconditions
+    /// `kind` must already satisfy the flattened-normal-form invariants, all child IDs must belong
+    /// to `self`, and `nullable` must equal the semantic nullability of `kind`.
     fn intern_regex(&mut self, kind: RegexKind<'arena>, nullable: bool) -> RegexId<'arena> {
         let (id, is_new) = self.regexes.mk_is_new(RegexNode::new(kind, nullable));
         if !is_new {
@@ -329,6 +384,9 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Lifts a one-event test into a regex, folding false to the empty language.
+    ///
+    /// # Preconditions
+    /// `test` must be a canonical test from `self`.
     pub(super) fn regex_test(&mut self, test: TestId<'arena>) -> RegexId<'arena> {
         if test == self.test_false {
             self.empty
@@ -338,6 +396,9 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs canonical set union.
+    ///
+    /// # Preconditions
+    /// Every child must be a canonical regex from `self`. Input order and duplicates are unrestricted.
     pub(super) fn regex_union(
         &mut self,
         children: impl IntoIterator<Item = RegexId<'arena>>,
@@ -370,7 +431,7 @@ impl<'arena> CanonicalStore<'arena> {
 
         flat.sort_unstable();
         flat.dedup();
-        if has_sibling_pair(&flat, complementary_regex) {
+        if pair_satisfies(&flat, complementary_regex) {
             return self.all;
         }
         if flat.contains(&self.epsilon)
@@ -399,6 +460,9 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs canonical set intersection.
+    ///
+    /// # Preconditions
+    /// Every child must be a canonical regex from `self`. Input order and duplicates are unrestricted.
     pub(super) fn regex_intersect(
         &mut self,
         children: impl IntoIterator<Item = RegexId<'arena>>,
@@ -432,7 +496,7 @@ impl<'arena> CanonicalStore<'arena> {
 
         flat.sort_unstable();
         flat.dedup();
-        if has_sibling_pair(&flat, complementary_regex) {
+        if pair_satisfies(&flat, complementary_regex) {
             return self.empty;
         }
         if flat.contains(&self.epsilon) {
@@ -467,6 +531,10 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs canonical ordered concatenation.
+    ///
+    /// # Preconditions
+    /// Every child must be a canonical regex from `self`. Their order is semantic; duplicates are
+    /// permitted.
     pub(super) fn regex_concat(
         &mut self,
         children: impl IntoIterator<Item = RegexId<'arena>>,
@@ -493,6 +561,9 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs canonical Kleene star.
+    ///
+    /// # Preconditions
+    /// `inner` must be a canonical regex from `self`.
     pub(super) fn regex_star(&mut self, inner: RegexId<'arena>) -> RegexId<'arena> {
         match inner.get().kind {
             RegexKind::Empty | RegexKind::Epsilon => self.epsilon,
@@ -504,6 +575,9 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Constructs canonical whole-language complement.
+    ///
+    /// # Preconditions
+    /// `inner` must be a canonical regex from `self`.
     pub(super) fn regex_not(&mut self, inner: RegexId<'arena>) -> RegexId<'arena> {
         match inner.get().kind {
             RegexKind::Empty => self.all,
@@ -514,6 +588,9 @@ impl<'arena> CanonicalStore<'arena> {
     }
 
     /// Returns cached empty-history acceptance directly from the hashconsed node.
+    ///
+    /// # Preconditions
+    /// `regex` must be a canonical regex from `self`.
     pub(super) fn nullable(&self, regex: RegexId<'arena>) -> bool {
         regex.get().nullable()
     }
