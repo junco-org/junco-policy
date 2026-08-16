@@ -129,6 +129,16 @@ fn redundant_constant_atom(
 
 /// Recognizes a compound operand absorbed by another operand of the outer connective.
 ///
+/// For an outer conjunction, `candidate` must be a disjunction. A plain sibling implements direct
+/// absorption, `x ∧ (x ∨ y) = x`; a disjunctive sibling whose children are a subset of the
+/// candidate's children implements generalized absorption,
+/// `(x ∨ y) ∧ (x ∨ y ∨ z) = x ∨ y`. Outer disjunction uses the dual laws
+/// `x ∨ (x ∧ y) = x` and `(x ∧ y) ∨ (x ∧ y ∧ z) = x ∧ y`.
+///
+/// An operand is never compared with itself. The outer smart constructors sort and deduplicate
+/// their operands before calling this helper, so idempotence (`x ∧ x = x`, `x ∨ x = x`) has
+/// already retained exactly one representative.
+///
 /// # Preconditions
 /// `siblings` must be sorted and deduplicated. Every opposite-connective child slice must also be
 /// sorted and deduplicated. All IDs must belong to the same [`CanonicalStore`].
@@ -142,13 +152,16 @@ fn absorbed_by_sibling<'arena>(
         _ => return false,
     };
     siblings.iter().copied().any(|sibling| {
+        // Do not remove the sole representative left by the caller's idempotence reduction.
         if sibling == candidate {
             return false;
         }
         match (conjunction, *sibling.get()) {
+            // Generalized absorption: the sibling's child set is a subset of the candidate's.
             (true, TestNode::Or(children)) | (false, TestNode::And(children)) => children
                 .iter()
                 .all(|child| nested.binary_search(child).is_ok()),
+            // Direct absorption: the sibling is one of the candidate's nested operands.
             _ => nested.binary_search(&sibling).is_ok(),
         }
     })
@@ -173,6 +186,15 @@ fn is_epsilon_complement(regex: RegexId<'_>) -> bool {
 
 /// Recognizes a compound regex operand absorbed by another operand of the outer set connective.
 ///
+/// For outer union, `candidate` must be an intersection. A plain sibling implements
+/// `R ∪ (R ∩ S) = R`; an intersecting sibling whose children are a subset of the candidate's
+/// children implements `(R ∩ S) ∪ (R ∩ S ∩ T) = R ∩ S`. Outer intersection uses the dual laws
+/// `R ∩ (R ∪ S) = R` and `(R ∪ S) ∩ (R ∪ S ∪ T) = R ∪ S`.
+///
+/// An operand is never compared with itself. The outer smart constructors sort and deduplicate
+/// their operands first, so set-union/set-intersection idempotence has already retained exactly one
+/// representative.
+///
 /// # Preconditions
 /// `siblings` must be sorted and deduplicated. Every opposite-connective child slice must also be
 /// sorted and deduplicated. All IDs must belong to the same [`CanonicalStore`].
@@ -186,15 +208,18 @@ fn regex_absorbed_by_sibling<'arena>(
         _ => return false,
     };
     siblings.iter().copied().any(|sibling| {
+        // Do not remove the sole representative left by the caller's idempotence reduction.
         if sibling == candidate {
             return false;
         }
         match (union, sibling.get().kind) {
+            // Generalized absorption: the sibling's child set is a subset of the candidate's.
             (true, RegexKind::Intersect(children)) | (false, RegexKind::Union(children)) => {
                 children
                     .iter()
                     .all(|child| nested.binary_search(child).is_ok())
             }
+            // Direct absorption: the sibling is one of the candidate's nested operands.
             _ => nested.binary_search(&sibling).is_ok(),
         }
     })
