@@ -18,18 +18,6 @@ fn has_sibling_pair<T: Copy>(values: &[T], mut matches: impl FnMut(T, T) -> bool
     })
 }
 
-fn remove_by_sibling_relation<T: Copy>(
-    values: &mut SmallVec<[T; 4]>,
-    candidate_may_match: impl Fn(T) -> bool,
-    redundant: impl Fn(T, &[T]) -> bool,
-) {
-    if !values.iter().copied().any(&candidate_may_match) {
-        return;
-    }
-    let siblings = values.clone();
-    values.retain(|candidate| !redundant(*candidate, &siblings));
-}
-
 fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bool {
     matches!(
         (*left.get(), *right.get()),
@@ -219,23 +207,22 @@ impl<'arena> CanonicalStore<'arena> {
         {
             return self.test_false;
         }
-        remove_by_sibling_relation(
-            &mut flat,
-            |candidate| {
-                matches!(
-                    *candidate.get(),
-                    TestNode::Or(_)
-                        | TestNode::Atom {
-                            comparison: Comparison::Neq,
-                            ..
-                        }
-                )
-            },
-            |candidate, siblings| {
-                absorbed_by_sibling(candidate, siblings, true)
-                    || redundant_constant_atom(candidate, siblings, Comparison::Neq)
-            },
-        );
+        if flat.iter().any(|candidate| {
+            matches!(
+                *candidate.get(),
+                TestNode::Or(_)
+                    | TestNode::Atom {
+                        comparison: Comparison::Neq,
+                        ..
+                    }
+            )
+        }) {
+            let siblings = flat.clone();
+            flat.retain(|candidate| {
+                !absorbed_by_sibling(*candidate, &siblings, true)
+                    && !redundant_constant_atom(*candidate, &siblings, Comparison::Neq)
+            });
+        }
         match flat.as_slice() {
             [] => self.test_true,
             [only] => *only,
@@ -270,23 +257,22 @@ impl<'arena> CanonicalStore<'arena> {
         {
             return self.test_true;
         }
-        remove_by_sibling_relation(
-            &mut flat,
-            |candidate| {
-                matches!(
-                    *candidate.get(),
-                    TestNode::And(_)
-                        | TestNode::Atom {
-                            comparison: Comparison::Eq,
-                            ..
-                        }
-                )
-            },
-            |candidate, siblings| {
-                absorbed_by_sibling(candidate, siblings, false)
-                    || redundant_constant_atom(candidate, siblings, Comparison::Eq)
-            },
-        );
+        if flat.iter().any(|candidate| {
+            matches!(
+                *candidate.get(),
+                TestNode::And(_)
+                    | TestNode::Atom {
+                        comparison: Comparison::Eq,
+                        ..
+                    }
+            )
+        }) {
+            let siblings = flat.clone();
+            flat.retain(|candidate| {
+                !absorbed_by_sibling(*candidate, &siblings, false)
+                    && !redundant_constant_atom(*candidate, &siblings, Comparison::Eq)
+            });
+        }
         match flat.as_slice() {
             [] => self.test_false,
             [only] => *only,
@@ -394,11 +380,13 @@ impl<'arena> CanonicalStore<'arena> {
         {
             flat.retain(|child| *child != self.epsilon);
         }
-        remove_by_sibling_relation(
-            &mut flat,
-            |candidate| matches!(candidate.get().kind, RegexKind::Intersect(_)),
-            |candidate, siblings| regex_absorbed_by_sibling(candidate, siblings, true),
-        );
+        if flat
+            .iter()
+            .any(|candidate| matches!(candidate.get().kind, RegexKind::Intersect(_)))
+        {
+            let siblings = flat.clone();
+            flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, true));
+        }
         match flat.as_slice() {
             [] => self.empty,
             [only] => *only,
@@ -460,11 +448,13 @@ impl<'arena> CanonicalStore<'arena> {
         {
             flat.retain(|child| !is_epsilon_complement(*child));
         }
-        remove_by_sibling_relation(
-            &mut flat,
-            |candidate| matches!(candidate.get().kind, RegexKind::Union(_)),
-            |candidate, siblings| regex_absorbed_by_sibling(candidate, siblings, false),
-        );
+        if flat
+            .iter()
+            .any(|candidate| matches!(candidate.get().kind, RegexKind::Union(_)))
+        {
+            let siblings = flat.clone();
+            flat.retain(|candidate| !regex_absorbed_by_sibling(*candidate, &siblings, false));
+        }
         match flat.as_slice() {
             [] => self.all,
             [only] => *only,
