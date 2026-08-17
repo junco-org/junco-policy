@@ -8,7 +8,7 @@ use bumpalo::Bump;
 use thiserror::Error;
 
 use crate::model::{Event, Grant, Request};
-use crate::syntax::{CanonicalStore, Rule, RuleMode, RuntimeRule, accepts, compile_rule};
+use crate::syntax::{CanonicalStore, Rule, RuleMode, RuntimeRule, compile_rule};
 
 /// Rule-compilation failure detected before a validator can execute.
 ///
@@ -122,17 +122,12 @@ impl<'arena> Validator<'arena> {
     /// The first violation wins. On success the candidate is appended once and its metadata is
     /// preserved in the returned grant.
     pub fn check<M>(&mut self, request: Request<M>) -> Decision<M> {
-        for rule in self.rules.iter().copied() {
-            let Some(substitution) = rule.head.match_candidate(&mut self.store, &request.event)
+        for rule in &mut self.rules {
+            let Some(accepted) =
+                rule.accepts_history(&mut self.store, self.history.iter(), &request.event)
             else {
                 continue;
             };
-            let accepted = accepts(
-                &mut self.store,
-                rule.tail,
-                self.history.iter(),
-                &substitution,
-            );
             let violated = match rule.mode {
                 RuleMode::Require => !accepted,
                 RuleMode::Forbid => accepted,

@@ -5,7 +5,7 @@
 //! variable symbols, and child references. Errors are relative to the one source rule passed to
 //! [`compile_rule`].
 
-use crate::model::{Action, Principal, Resource};
+use crate::model::{Action, Event, Principal, Resource};
 use crate::validator::CompileError;
 
 use super::component::{CompiledAtomPattern, CompiledPattern, ComponentDomain};
@@ -13,13 +13,34 @@ use super::environment::{CompiledHead, ResolveError, VariableEnvironment};
 use super::node::{RegexId, TestId, TestNode};
 use super::source::{AtomPattern, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr};
 use super::store::CanonicalStore;
+use super::symbolic::{SymbolicDerivativeCache, SymbolicMatcher};
 
-/// Minimal runtime representation retained after a source rule is compiled.
-#[derive(Clone, Copy)]
+/// Runtime rule with an event-independent derivative cache retained across evaluations.
 pub(crate) struct RuntimeRule<'arena> {
     pub(crate) mode: RuleMode,
     pub(crate) head: CompiledHead<'arena>,
     pub(crate) tail: RegexId<'arena>,
+    derivatives: SymbolicDerivativeCache<'arena>,
+}
+
+impl<'arena> RuntimeRule<'arena> {
+    /// Matches the candidate head and evaluates committed history with the persistent cache.
+    pub(crate) fn accepts_history<'event>(
+        &mut self,
+        store: &mut CanonicalStore<'arena>,
+        history: impl IntoIterator<Item = &'event Event>,
+        candidate: &Event,
+    ) -> Option<bool> {
+        let substitution = self.head.match_candidate(store, candidate)?;
+        let mut matcher = SymbolicMatcher::new(store, &mut self.derivatives);
+        Some(matcher.accepts(self.tail, history, &substitution))
+    }
+
+    /// Number of event-independent symbolic derivatives retained by this rule.
+    #[cfg(test)]
+    pub(crate) fn derivative_count(&self) -> usize {
+        self.derivatives.len()
+    }
 }
 
 /// Compiles and validates one complete source rule.
@@ -33,6 +54,7 @@ pub(crate) fn compile_rule<'arena>(
         mode: source.mode,
         head,
         tail,
+        derivatives: SymbolicDerivativeCache::new(),
     })
 }
 
