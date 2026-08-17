@@ -13,13 +13,14 @@ mod node;
 mod normalize;
 mod source;
 mod store;
+mod symbolic;
+mod transition;
 
 pub use source::{
     AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
 
 pub(crate) use compile::{RuntimeRule, compile_rule};
-pub(crate) use evaluate::accepts;
 pub(crate) use store::CanonicalStore;
 
 #[cfg(test)]

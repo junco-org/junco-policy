@@ -76,6 +76,17 @@ pub enum Comparison {
     Neq,
 }
 
+impl std::ops::Not for Comparison {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        match self {
+            Self::Eq => Self::Neq,
+            Self::Neq => Self::Eq,
+        }
+    }
+}
+
 /// Owned one-event component pattern.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AtomPattern {

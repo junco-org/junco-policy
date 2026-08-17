@@ -1,30 +1,45 @@
-//! Runtime evaluation over canonical syntax.
+//! Concrete derivative oracle and shared event-test evaluation.
 //!
-//! Evaluation receives every dependency explicitly: canonical store, tail root, committed history,
-//! and candidate substitution. No evaluator or node retains a rule, scope, store, or validator
-//! backreference.
+//! Production matching uses cached symbolic transitions. The concrete derivative implementation is
+//! retained only in test builds as a differential oracle.
+
+#[cfg(test)]
+use std::hash::{BuildHasher, Hash};
+
+#[cfg(test)]
+use hashbrown::HashMap;
+#[cfg(test)]
+use hashbrown::hash_map::RawEntryMut;
+#[cfg(test)]
+use smallvec::SmallVec;
 
 use crate::model::Event;
 
 use super::component::{CandidateSubstitution, ComponentResolver};
-use super::node::{RegexId, RegexKind, TestId, TestNode};
+#[cfg(test)]
+use super::node::{RegexId, RegexKind};
+use super::node::{TestId, TestNode};
 use super::source::Comparison;
+#[cfg(test)]
 use super::store::CanonicalStore;
 
-/// Returns whether the complete history belongs to `root` under `substitution`.
-pub(crate) fn accepts<'arena, 'event>(
+/// Concrete complete-history evaluator retained for symbolic differential tests.
+#[cfg(test)]
+pub(super) fn accepts_direct<'arena, 'event>(
     store: &mut CanonicalStore<'arena>,
     root: RegexId<'arena>,
     history: impl IntoIterator<Item = &'event Event>,
     substitution: &CandidateSubstitution<'arena>,
 ) -> bool {
     let mut state = root;
+    let mut derivatives = DerivativeCache::new();
     for event in history {
-        state = derive(store, state, event, substitution);
+        state = derive_cached(store, state, event, substitution, &mut derivatives);
     }
     store.nullable(state)
 }
 
+#[cfg(test)]
 /// Computes one exact derivative and normalizes every constructed residual through `store`.
 pub(super) fn derive<'arena>(
     store: &mut CanonicalStore<'arena>,
@@ -32,7 +47,46 @@ pub(super) fn derive<'arena>(
     event: &Event,
     substitution: &CandidateSubstitution<'arena>,
 ) -> RegexId<'arena> {
-    match regex.get().kind {
+    derive_cached(
+        store,
+        regex,
+        event,
+        substitution,
+        &mut DerivativeCache::new(),
+    )
+}
+
+#[cfg(test)]
+pub(super) type DerivativeCache<'arena, 'event> =
+    HashMap<(RegexId<'arena>, &'event Event), RegexId<'arena>>;
+
+#[cfg(test)]
+fn cache_hash<Key>(cache: &DerivativeCache<'_, '_>, key: &Key) -> u64
+where
+    Key: Hash,
+{
+    cache.hasher().hash_one(key)
+}
+
+/// Reuses exact concrete derivatives for one fixed candidate substitution.
+///
+/// Scoping this cache to one [`accepts`] call makes `(state, event)` a complete key while avoiding
+/// persistent growth over the unbounded event and substitution domains.
+#[cfg(test)]
+pub(super) fn derive_cached<'arena, 'event>(
+    store: &mut CanonicalStore<'arena>,
+    regex: RegexId<'arena>,
+    event: &'event Event,
+    substitution: &CandidateSubstitution<'arena>,
+    derivatives: &mut DerivativeCache<'arena, 'event>,
+) -> RegexId<'arena> {
+    let key = (regex, event);
+    let hash = cache_hash(derivatives, &key);
+    if let Some((_, derivative)) = derivatives.raw_entry().from_key_hashed_nocheck(hash, &key) {
+        return *derivative;
+    }
+
+    let derivative = match regex.get().kind {
         RegexKind::Empty | RegexKind::Epsilon => store.empty,
         RegexKind::All => store.all,
         RegexKind::Test(test) => {
@@ -43,29 +97,29 @@ pub(super) fn derive<'arena>(
             }
         }
         RegexKind::Union(children) => {
-            let derivatives = children
+            let children = children
                 .iter()
-                .map(|child| derive(store, *child, event, substitution))
-                .collect();
-            store.regex_union(derivatives)
+                .map(|child| derive_cached(store, *child, event, substitution, derivatives))
+                .collect::<SmallVec<[RegexId<'arena>; 4]>>();
+            store.regex_union(children)
         }
         RegexKind::Intersect(children) => {
-            let derivatives = children
+            let children = children
                 .iter()
-                .map(|child| derive(store, *child, event, substitution))
-                .collect();
-            store.regex_intersect(derivatives)
+                .map(|child| derive_cached(store, *child, event, substitution, derivatives))
+                .collect::<SmallVec<[RegexId<'arena>; 4]>>();
+            store.regex_intersect(children)
         }
         RegexKind::Not(inner) => {
-            let derivative = derive(store, inner, event, substitution);
-            store.regex_not(derivative)
+            let inner = derive_cached(store, inner, event, substitution, derivatives);
+            store.regex_not(inner)
         }
         RegexKind::Concat(factors) => {
-            let mut alternatives = Vec::new();
+            let mut alternatives = SmallVec::<[RegexId<'arena>; 4]>::new();
             let mut remaining = factors;
             while let Some((factor, suffix)) = remaining.split_first() {
-                let derivative = derive(store, *factor, event, substitution);
-                let mut product = Vec::with_capacity(1 + suffix.len());
+                let derivative = derive_cached(store, *factor, event, substitution, derivatives);
+                let mut product = SmallVec::<[RegexId<'arena>; 4]>::new();
                 product.push(derivative);
                 product.extend_from_slice(suffix);
                 alternatives.push(store.regex_concat(product));
@@ -77,14 +131,25 @@ pub(super) fn derive<'arena>(
             store.regex_union(alternatives)
         }
         RegexKind::Star(inner) => {
-            let derivative = derive(store, inner, event, substitution);
-            store.regex_concat(vec![derivative, regex])
+            let inner = derive_cached(store, inner, event, substitution, derivatives);
+            store.regex_concat([inner, regex])
+        }
+    };
+
+    match derivatives
+        .raw_entry_mut()
+        .from_key_hashed_nocheck(hash, &key)
+    {
+        RawEntryMut::Occupied(entry) => *entry.get(),
+        RawEntryMut::Vacant(entry) => {
+            entry.insert_hashed_nocheck(hash, key, derivative);
+            derivative
         }
     }
 }
 
 /// Evaluates one canonical boolean test against an event and candidate substitution.
-fn eval_test<'arena>(
+pub(super) fn eval_test<'arena>(
     test: TestId<'arena>,
     event: &Event,
     substitution: &CandidateSubstitution<'arena>,

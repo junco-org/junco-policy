@@ -1,13 +1,12 @@
 //! The decision loop: match each table rule's head, then test its tail against history.
 //!
-//! This runs its own `match_candidate` + `accepts` loop (mirroring `validator.rs::check`) rather
-//! than building a [`crate::Validator`], because `Validator::check` returns a single opaque denial
-//! message that cannot carry a policy's per-cell diagnostic, and its arena invariance forbids a
-//! persistent compiled form across napi calls.
+//! This runs its own compiled-rule loop rather than building a [`crate::Validator`], because
+//! `Validator::check` returns a single opaque denial message that cannot carry a policy's per-cell
+//! diagnostic, and its arena invariance forbids a persistent compiled form across napi calls.
 
 use super::decision::PolicyDecision;
 use super::rule::PolicyRule;
-use crate::syntax::{CanonicalStore, accepts, compile_rule};
+use crate::syntax::{CanonicalStore, compile_rule};
 use crate::{Bump, Event, RuleMode};
 
 /// Walks `rules` in order and returns the first violated rule's rendered denial.
@@ -25,11 +24,10 @@ pub(super) fn decide<C>(
     let mut store = CanonicalStore::new(&arena);
 
     for rule in rules {
-        let rt = compile_rule(&mut store, &rule.rule).expect("static policy rules compile");
-        let Some(subst) = rt.head.match_candidate(&mut store, probe) else {
+        let mut rt = compile_rule(&mut store, &rule.rule).expect("static policy rules compile");
+        let Some(inside) = rt.accepts_history(&mut store, history.iter(), probe) else {
             continue;
         };
-        let inside = accepts(&mut store, rt.tail, history.iter(), &subst);
         let violated = match rt.mode {
             RuleMode::Forbid => inside,
             RuleMode::Require => !inside,

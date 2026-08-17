@@ -3,7 +3,7 @@
 use super::git_decision;
 use super::languages::{clean_lang, staged_lang, unstaged_other_lang, unstaged_self_lang};
 use crate::policy::PolicyDecision;
-use crate::syntax::{CanonicalStore, accepts, compile_rule};
+use crate::syntax::{CanonicalStore, compile_rule};
 use crate::{Action, Bump, ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode};
 
 fn resource() -> [&'static str; 2] {
@@ -219,12 +219,10 @@ fn row_languages_match_the_four_canonical_states() {
                 ),
                 lang(),
             );
-            let rt = compile_rule(&mut store, &rule).expect("row language compiles");
-            let subst = rt
-                .head
-                .match_candidate(&mut store, &candidate)
+            let mut rt = compile_rule(&mut store, &rule).expect("row language compiles");
+            let inside = rt
+                .accepts_history(&mut store, history.iter(), &candidate)
                 .expect("bind-all head matches candidate");
-            let inside = accepts(&mut store, rt.tail, history.iter(), &subst);
             assert_eq!(
                 inside,
                 lang_name == *history_name,
