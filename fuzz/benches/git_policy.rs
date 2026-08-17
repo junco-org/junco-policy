@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, PlottingBackend, criterion_group, criterion_main};
 use git_policy_harness::{BYTES_PER_EVENT, check, entropy, granted_history, probe_candidates};
+use rust_validator::{Bump, GitPolicy};
 
 /// Committed history lengths measured; geometric, so the growth rate reads off directly.
 const LENGTHS: [usize; 6] = [0, 4, 16, 64, 256, 1024];
@@ -18,12 +19,14 @@ fn git_decision_scaling(criterion: &mut Criterion) {
     let longest = LENGTHS[LENGTHS.len() - 1];
     let history = granted_history(&entropy(SEED, longest * BYTES_PER_EVENT), longest);
     let probes = probe_candidates();
+    let verdict_arena = Bump::new();
+    let mut verdict_policy = GitPolicy::new(&verdict_arena);
 
-    // The verdict decides how much work a check does — a denial returns from `git_decision` early
-    // — so print it once per measured point; the timings are uninterpretable without it.
+    // The verdict decides how much work a check does — a denial returns from the compiled policy
+    // early — so print it once per measured point; timings are uninterpretable without it.
     for (name, candidate) in &probes {
         for length in LENGTHS {
-            let verdict = if check(&history[..length], candidate) {
+            let verdict = if check(&mut verdict_policy, &history[..length], candidate) {
                 "grant"
             } else {
                 "deny"
@@ -38,10 +41,14 @@ fn git_decision_scaling(criterion: &mut Criterion) {
     group.sample_size(50);
     for (name, candidate) in &probes {
         for length in LENGTHS {
+            let arena = Bump::new();
+            let mut policy = GitPolicy::new(&arena);
             group.bench_with_input(
                 BenchmarkId::new(*name, length),
                 &history[..length],
-                |bencher, trace| bencher.iter(|| check(black_box(trace), black_box(candidate))),
+                |bencher, trace| {
+                    bencher.iter(|| check(&mut policy, black_box(trace), black_box(candidate)))
+                },
             );
         }
     }

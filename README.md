@@ -24,7 +24,8 @@ Windows.
 ## Benchmarking
 
 Criterion measures a single policy check as committed history grows from 0 to 1024 operations, so
-the scaling reads off directly:
+the scaling reads off directly. The static Git rule table is compiled once per benchmark case,
+outside the timed loop, matching the retained policy used by the napi validator:
 
 ```sh
 bun run --cwd packages/rust-validator bench

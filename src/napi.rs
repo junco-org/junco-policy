@@ -1,12 +1,13 @@
-//! Feature-gated napi-rs bindings: a stateful git authorizer backed by a `Vec<Event>` committed
-//! history store. Git legality is decided by the native trace policy in [`crate::policy::git`].
-//! Gated behind the default-off `napi` cargo feature, so it is absent from every default
-//! `cargo build`/`check`/`test`.
+//! Feature-gated napi-rs bindings for a stateful Git authorizer.
+//!
+//! The handle retains one compiled native policy and a `Vec<Event>` committed history. Gated behind
+//! the default-off `napi` cargo feature, so it is absent from default `cargo build`/`check`/`test`.
 
 use napi_derive::napi;
+use self_cell::self_cell;
 
-use crate::policy::{PolicyDecision, git::git_decision};
-use crate::{Action, Event};
+use crate::policy::{PolicyDecision, git::GitPolicy};
+use crate::{Action, Bump, Event};
 
 // -- napi surface -----------------------------------------------------------
 
@@ -53,11 +54,23 @@ pub struct JsGitDecision {
     pub allowed_fixes: Option<Vec<String>>,
 }
 
-/// Stateful git authorizer: threads the resource's committed grant history and decides each
-/// request by the native trace policy in [`crate::policy::git`]. Append-only-on-grant keeps `check`
-/// atomic.
+self_cell!(
+    /// Owns the arena and the compiled Git policy whose canonical nodes borrow it.
+    struct GitPolicyCell {
+        owner: Bump,
+
+        #[not_covariant]
+        dependent: GitPolicy,
+    }
+);
+
+/// Stateful Git authorizer retaining compiled policy state and committed grant history.
+///
+/// The 23-rule policy table is compiled once by the constructor. Each request reuses its canonical
+/// syntax and derivative caches; append-only-on-grant history updates keep `check` atomic.
 #[napi]
 pub struct GitValidator {
+    policy: GitPolicyCell,
     history: Vec<Event>,
 }
 
@@ -66,6 +79,7 @@ impl GitValidator {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
+            policy: GitPolicyCell::new(Bump::new(), |arena| GitPolicy::new(arena)),
             history: Vec::new(),
         }
     }
@@ -82,7 +96,10 @@ impl GitValidator {
     ) -> napi::Result<JsGitDecision> {
         let action: Action = action.try_into()?;
         let event = Event::new(principal, action, resource);
-        match git_decision(&self.history, &event) {
+        let decision = self
+            .policy
+            .with_dependent_mut(|_, policy| policy.decide(&self.history, &event));
+        match decision {
             PolicyDecision::Grant => {
                 self.history.push(event);
                 Ok(JsGitDecision {

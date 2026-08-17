@@ -58,20 +58,21 @@ fn context(history: &[Event], candidate: &Event) -> LastEditor {
 
 #[test]
 fn a_non_git_policy_reuses_the_kernel_loop() {
-    let rules = rules();
+    let table = rules();
     let candidate = Event::new("bob", Action::Read, ["src", "x"]);
 
     let history: Vec<Event> = Vec::new();
     assert_eq!(
-        decide(&rules, &history, &candidate, || context(
+        decide(table, &history, &candidate, || context(
             &history, &candidate
         )),
         PolicyDecision::Grant,
     );
 
+    let table = rules();
     let history = vec![Event::new("alice", Action::Edit, ["src", "x"])];
     assert_eq!(
-        decide(&rules, &history, &candidate, || context(
+        decide(table, &history, &candidate, || context(
             &history, &candidate
         )),
         PolicyDecision::Deny {

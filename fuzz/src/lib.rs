@@ -29,7 +29,7 @@ use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arbitrary::Unstructured;
-use rust_validator::{Action, Event, PolicyDecision, Resource, git_decision};
+use rust_validator::{Action, Bump, Event, GitPolicy, PolicyDecision, Resource};
 
 mod oracle;
 
@@ -94,11 +94,11 @@ pub struct TraceSummary {
     pub commits: usize,
 }
 
-/// Runs the git trace policy on one candidate against `history`; `true` means grant.
+/// Runs one candidate through a retained Git policy; `true` means grant.
 ///
 /// This is the single operation the benchmark times and the trace validator gates export on.
-pub fn check(history: &[Event], candidate: &Event) -> bool {
-    matches!(git_decision(history, candidate), PolicyDecision::Grant)
+pub fn check(policy: &mut GitPolicy<'_>, history: &[Event], candidate: &Event) -> bool {
+    matches!(policy.decide(history, candidate), PolicyDecision::Grant)
 }
 
 /// Deterministic pseudo-random bytes: the entropy source wherever libFuzzer is not driving
@@ -124,6 +124,8 @@ pub fn entropy(seed: u64, length: usize) -> Vec<u8> {
 /// Panics if `data` is exhausted before `length` events are granted; supply more bytes.
 pub fn granted_history(data: &[u8], length: usize) -> Vec<Event> {
     let mut generator = TraceGenerator::new(data);
+    let arena = Bump::new();
+    let mut policy = GitPolicy::new(&arena);
     let mut history = Vec::with_capacity(length);
     while history.len() < length {
         let Some(candidate) = generator.next_candidate() else {
@@ -132,7 +134,7 @@ pub fn granted_history(data: &[u8], length: usize) -> Vec<Event> {
                 history.len()
             );
         };
-        if check(&history, &candidate.event) {
+        if check(&mut policy, &history, &candidate.event) {
             generator.record_grant(&candidate);
             history.push(candidate.event);
         }
@@ -173,6 +175,8 @@ pub fn probe_candidates() -> [(&'static str, Event); 11] {
 /// counters only: they are exported nowhere and leave the history and working-tree model untouched.
 pub fn validate_trace(data: &[u8]) -> ValidatedTrace {
     let mut generator = TraceGenerator::new(data);
+    let arena = Bump::new();
+    let mut policy = GitPolicy::new(&arena);
     let budget = generator.step_budget();
     if budget == 0 {
         return ValidatedTrace::default();
@@ -184,7 +188,7 @@ pub fn validate_trace(data: &[u8]) -> ValidatedTrace {
         let Some(candidate) = generator.next_candidate() else {
             break;
         };
-        match git_decision(&history, &candidate.event) {
+        match policy.decide(&history, &candidate.event) {
             PolicyDecision::Grant => {
                 generator.record_grant(&candidate);
                 trace.summary.granted += 1;
