@@ -322,3 +322,27 @@ fn delete_settles_the_resource_into_the_staged_row() {
         PolicyDecision::Grant,
     );
 }
+
+#[test]
+fn retained_policy_matches_one_shot_decisions_across_history_updates() {
+    let arena = Bump::new();
+    let mut policy = super::GitPolicy::new(&arena);
+    let r = resource();
+    let mut history = Vec::new();
+    let candidates = [
+        Event::new("self", Action::Edit, r),
+        Event::new("self", Action::Stage, r),
+        Event::new("self", Action::commit("ship"), r),
+        Event::new("other", Action::Edit, r),
+        Event::new("other", Action::Read, r),
+    ];
+
+    for candidate in candidates {
+        let expected = git_decision(&history, &candidate);
+        let actual = policy.decide(&history, &candidate);
+        assert_eq!(actual, expected);
+        if actual == PolicyDecision::Grant {
+            history.push(candidate);
+        }
+    }
+}
