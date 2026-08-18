@@ -41,6 +41,12 @@ impl<'arena> RuntimeRule<'arena> {
     pub(crate) fn derivative_count(&self) -> usize {
         self.derivatives.len()
     }
+
+    /// Number of dense minterm transitions prepared before the first event is evaluated.
+    #[cfg(test)]
+    pub(crate) fn precompiled_transition_count(&self) -> usize {
+        self.derivatives.precompiled_len()
+    }
 }
 
 /// Compiles and validates one complete source rule.
@@ -50,11 +56,13 @@ pub(crate) fn compile_rule<'arena>(
 ) -> Result<RuntimeRule<'arena>, CompileError> {
     let (head, variables) = compile_head(store, &source.head)?;
     let tail = compile_regex(store, &variables, &source.tail)?;
+    let mut derivatives = SymbolicDerivativeCache::new();
+    SymbolicMatcher::new(store, &mut derivatives).precompile(tail);
     Ok(RuntimeRule {
         mode: source.mode,
         head,
         tail,
-        derivatives: SymbolicDerivativeCache::new(),
+        derivatives,
     })
 }
 

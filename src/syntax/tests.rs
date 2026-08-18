@@ -1,5 +1,7 @@
 //! White-box tests for source compilation, canonical reuse, and residual-state stability.
 
+use std::collections::HashSet;
+
 use bumpalo::Bump;
 
 use super::compile::compile_rule;
@@ -9,7 +11,9 @@ use super::source::{
     AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
 use super::store::CanonicalStore;
-use super::symbolic::{SymbolicDerivativeCache, SymbolicMatcher};
+use super::symbolic::{
+    MAX_PRECOMPILED_ATOMS, MAX_PRECOMPILED_STATES, SymbolicDerivativeCache, SymbolicMatcher,
+};
 use crate::model::{Action, Event};
 
 fn variable_head() -> Head {
@@ -664,7 +668,7 @@ fn symbolic_derivatives_equal_concrete_derivatives_for_every_regex_form() {
     let candidate = Event::new("alice", Action::Read, ["a"]);
 
     for source in cases {
-        let runtime_rule = compile_rule(&mut store, &rule(source)).unwrap();
+        let mut runtime_rule = compile_rule(&mut store, &rule(source)).unwrap();
         let substitution = runtime_rule
             .head
             .match_candidate(&mut store, &candidate)
@@ -695,6 +699,10 @@ fn symbolic_derivatives_equal_concrete_derivatives_for_every_regex_form() {
             &substitution,
         );
         assert_eq!(symbolic, direct);
+        assert_eq!(
+            runtime_rule.accepts_history(&mut store, history.iter(), &candidate),
+            Some(direct)
+        );
     }
 }
 
@@ -745,14 +753,19 @@ fn symbolic_derivative_cache_is_shared_across_events_and_bindings() {
     let mut runtime_rule = compile_rule(&mut store, &rule(tail)).unwrap();
     let read = Event::new("alice", Action::Read, ["a"]);
     let edit = Event::new("bob", Action::Edit, ["b"]);
+    let derivatives = runtime_rule.derivative_count();
+    let precompiled = runtime_rule.precompiled_transition_count();
+    let transitions = store.transition_node_count();
+    assert!(derivatives > 0);
+    assert!(precompiled > 0);
 
     assert_eq!(
         runtime_rule.accepts_history(&mut store, std::slice::from_ref(&read), &read),
         Some(true)
     );
-    let derivatives = runtime_rule.derivative_count();
-    let transitions = store.transition_node_count();
-    assert_eq!(derivatives, 1);
+    assert_eq!(runtime_rule.derivative_count(), derivatives);
+    assert_eq!(runtime_rule.precompiled_transition_count(), precompiled);
+    assert_eq!(store.transition_node_count(), transitions);
 
     assert_eq!(
         runtime_rule.accepts_history(&mut store, std::slice::from_ref(&edit), &edit),
@@ -760,4 +773,89 @@ fn symbolic_derivative_cache_is_shared_across_events_and_bindings() {
     );
     assert_eq!(runtime_rule.derivative_count(), derivatives);
     assert_eq!(store.transition_node_count(), transitions);
+}
+
+#[test]
+fn wide_symbolic_alphabet_uses_exact_transition_fallback() {
+    let arena = Bump::new();
+    let mut store = CanonicalStore::new(&arena);
+    let alternatives = (0..=MAX_PRECOMPILED_ATOMS)
+        .map(|index| {
+            RegexExpr::test(TestExpr::atom(
+                Comparison::Eq,
+                AtomPattern::Principal(ComponentPattern::constant(format!("principal-{index}"))),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut runtime_rule = compile_rule(&mut store, &rule(RegexExpr::union(alternatives))).unwrap();
+    assert_eq!(runtime_rule.precompiled_transition_count(), 0);
+
+    let candidate = Event::new("candidate", Action::Edit, ["target"]);
+    let matching = Event::new("principal-7", Action::Read, ["other"]);
+    let nonmatching = Event::new("outside-minterms", Action::Read, ["other"]);
+    assert_eq!(
+        runtime_rule.accepts_history(&mut store, [&matching], &candidate),
+        Some(true)
+    );
+    assert_eq!(
+        runtime_rule.accepts_history(&mut store, [&nonmatching], &candidate),
+        Some(false)
+    );
+}
+
+fn regex_dag_node_count(root: super::node::RegexId<'_>) -> usize {
+    let mut visited = HashSet::new();
+    let mut pending = vec![root];
+    while let Some(regex) = pending.pop() {
+        if !visited.insert(regex) {
+            continue;
+        }
+        match regex.get().kind {
+            RegexKind::Empty | RegexKind::All | RegexKind::Epsilon | RegexKind::Test(_) => {}
+            RegexKind::Union(children)
+            | RegexKind::Concat(children)
+            | RegexKind::Intersect(children) => pending.extend_from_slice(children),
+            RegexKind::Star(inner) | RegexKind::Not(inner) => pending.push(inner),
+        }
+    }
+    visited.len()
+}
+
+#[test]
+fn suffix_window_policy_residual_grows_after_every_matching_event() {
+    const WINDOW: usize = 8;
+
+    let arena = Bump::new();
+    let mut store = CanonicalStore::new(&arena);
+    let any_event = RegexExpr::test(TestExpr::true_test());
+    let factors = std::iter::once(RegexExpr::all())
+        .chain(std::iter::once(action_regex(Action::Read)))
+        .chain(std::iter::repeat_n(any_event, WINDOW + 1));
+    let runtime_rule = compile_rule(&mut store, &rule(RegexExpr::concat(factors))).unwrap();
+    assert_eq!(
+        runtime_rule.precompiled_transition_count(),
+        MAX_PRECOMPILED_STATES,
+        "stress policy must exercise the per-rule DFA state budget"
+    );
+    let candidate = Event::new("candidate", Action::Stage, ["target"]);
+    let substitution = runtime_rule
+        .head
+        .match_candidate(&mut store, &candidate)
+        .unwrap();
+    let event = Event::new("history", Action::Read, ["event"]);
+    let mut derivatives = SymbolicDerivativeCache::new();
+    let mut matcher = SymbolicMatcher::new(&mut store, &mut derivatives);
+    let mut state = runtime_rule.tail;
+    let mut sizes = Vec::with_capacity(WINDOW + 1);
+    sizes.push(regex_dag_node_count(state));
+    for _ in 0..WINDOW {
+        let transition = matcher.derivative(state);
+        state = matcher.instantiate(transition, &substitution, &event);
+        sizes.push(regex_dag_node_count(state));
+    }
+
+    assert!(
+        sizes.windows(2).all(|pair| pair[0] < pair[1]),
+        "residual DAG sizes must grow at every step: {sizes:?}"
+    );
 }

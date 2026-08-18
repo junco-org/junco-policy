@@ -186,6 +186,50 @@ fn advancing_optional_rule(steps: usize) -> Rule {
     )
 }
 
+/// Language whose residual DAG gains one suffix alternative after each matching event.
+///
+/// `Σ* · Read · Σ^(window + 1)` recognizes histories whose `(window + 2)`th event from the end is a
+/// read. A shorter all-read history keeps adding candidate suffixes without reaching a terminal
+/// residual. The full DFA has exponentially many states even though this measured path grows
+/// linearly.
+fn growing_residual_rule(window: usize) -> Rule {
+    assert!(window > 0, "residual-growth window must be positive");
+    let any_event = RegexExpr::test(TestExpr::true_test());
+    let read = RegexExpr::test(TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Action(ComponentPattern::constant(Action::Read)),
+    ));
+    let factors = std::iter::once(RegexExpr::all())
+        .chain(std::iter::once(read))
+        .chain(std::iter::repeat_n(any_event, window + 1));
+    Rule::new(
+        RuleMode::Forbid,
+        Head::new(
+            ComponentPattern::variable("actor"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::variable("target"),
+        ),
+        RegexExpr::concat(factors),
+    )
+}
+
+/// One unique absent-witness rule that forces a complete nonterminal history scan.
+fn absent_witness_rule(index: usize) -> Rule {
+    let absent = RegexExpr::test(TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Principal(ComponentPattern::constant(format!("missing-{index}"))),
+    ));
+    Rule::new(
+        RuleMode::Forbid,
+        Head::new(
+            ComponentPattern::variable("actor"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::variable("target"),
+        ),
+        RegexExpr::concat([RegexExpr::all(), absent, RegexExpr::all()]),
+    )
+}
+
 // The matching Require rule forces all one million committed events through the depth-32 tail.
 fn benchmark_million_event_nested_scan(criterion: &mut Criterion) {
     const HISTORY_LEN: usize = 1_000_000;
@@ -297,6 +341,163 @@ fn benchmark_advancing_derivatives(criterion: &mut Criterion) {
         });
     });
     group.finish();
+}
+
+fn benchmark_growing_residual_stress(criterion: &mut Criterion) {
+    let mut compile = criterion.benchmark_group("stress_growing_residual_compile");
+    compile
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(3))
+        .sample_size(10);
+    for window in [4_usize, 8, 12] {
+        compile.bench_with_input(
+            BenchmarkId::from_parameter(window),
+            &window,
+            |bencher, &window| {
+                bencher.iter_custom(|iterations| {
+                    let mut elapsed = Duration::ZERO;
+                    for _ in 0..iterations {
+                        let source = growing_residual_rule(window);
+                        let arena = Bump::new();
+                        let start = Instant::now();
+                        let mut builder = Validator::builder(&arena);
+                        builder.add_rule(source).expect("stress rule is valid");
+                        let validator = builder.finish();
+                        black_box(&validator);
+                        elapsed += start.elapsed();
+                    }
+                    elapsed
+                });
+            },
+        );
+    }
+    compile.finish();
+
+    let mut evaluate = criterion.benchmark_group("stress_growing_residual_evaluate");
+    evaluate
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(3))
+        .sample_size(10);
+    for window in [8_usize, 16, 32, 64] {
+        let arena = Bump::new();
+        let mut builder = Validator::builder(&arena);
+        builder
+            .add_rule(growing_residual_rule(window))
+            .expect("stress rule is valid");
+        let mut validator = builder.finish();
+        for _ in 0..window {
+            assert!(
+                validator
+                    .check(request("history", Action::Read, &["event"]))
+                    .is_grant()
+            );
+        }
+        let checkpoint = validator.checkpoint();
+        evaluate.throughput(Throughput::Elements(window as u64));
+        evaluate.bench_with_input(
+            BenchmarkId::from_parameter(window),
+            &window,
+            |bencher, _| {
+                bencher.iter_custom(|iterations| {
+                    let mut elapsed = Duration::ZERO;
+                    for _ in 0..iterations {
+                        let candidate = request("candidate", Action::Stage, &["target"]);
+                        let start = Instant::now();
+                        let decision = validator.check(black_box(candidate));
+                        elapsed += start.elapsed();
+                        assert!(decision.is_grant());
+                        validator.rollback(checkpoint);
+                    }
+                    elapsed
+                });
+            },
+        );
+    }
+    evaluate.finish();
+}
+
+fn benchmark_many_rules_stress(criterion: &mut Criterion) {
+    const HISTORY_LEN: usize = 64;
+    const RULE_COUNTS: [usize; 5] = [1, 16, 64, 256, 1_024];
+
+    let mut compile = criterion.benchmark_group("stress_many_rules_compile");
+    compile
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(3))
+        .sample_size(10);
+    for rule_count in RULE_COUNTS {
+        compile.bench_with_input(
+            BenchmarkId::from_parameter(rule_count),
+            &rule_count,
+            |bencher, &rule_count| {
+                bencher.iter_custom(|iterations| {
+                    let mut elapsed = Duration::ZERO;
+                    for _ in 0..iterations {
+                        let rules = (0..rule_count).map(absent_witness_rule).collect::<Vec<_>>();
+                        let arena = Bump::new();
+                        let start = Instant::now();
+                        let mut builder = Validator::builder(&arena);
+                        for rule in rules {
+                            builder.add_rule(rule).expect("stress rule is valid");
+                        }
+                        let validator = builder.finish();
+                        black_box(&validator);
+                        elapsed += start.elapsed();
+                    }
+                    elapsed
+                });
+            },
+        );
+    }
+    compile.finish();
+
+    let mut evaluate = criterion.benchmark_group("stress_many_rules_evaluate");
+    evaluate
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(3))
+        .sample_size(10);
+    for rule_count in RULE_COUNTS {
+        let arena = Bump::new();
+        let mut builder = Validator::builder(&arena);
+        for index in 0..rule_count {
+            builder
+                .add_rule(absent_witness_rule(index))
+                .expect("stress rule is valid");
+        }
+        let mut validator = builder.finish();
+        for _ in 0..HISTORY_LEN {
+            assert!(
+                validator
+                    .check(request("history", Action::Read, &["event"]))
+                    .is_grant()
+            );
+        }
+        let checkpoint = validator.checkpoint();
+        evaluate.throughput(Throughput::Elements(
+            rule_count
+                .checked_mul(HISTORY_LEN)
+                .expect("stress work count fits u64") as u64,
+        ));
+        evaluate.bench_with_input(
+            BenchmarkId::from_parameter(rule_count),
+            &rule_count,
+            |bencher, _| {
+                bencher.iter_custom(|iterations| {
+                    let mut elapsed = Duration::ZERO;
+                    for _ in 0..iterations {
+                        let candidate = request("candidate", Action::Stage, &["target"]);
+                        let start = Instant::now();
+                        let decision = validator.check(black_box(candidate));
+                        elapsed += start.elapsed();
+                        assert!(decision.is_grant());
+                        validator.rollback(checkpoint);
+                    }
+                    elapsed
+                });
+            },
+        );
+    }
+    evaluate.finish();
 }
 
 fn benchmark_compilation(criterion: &mut Criterion) {
@@ -435,6 +636,8 @@ criterion_group!(
     benchmark_million_event_nested_scan,
     benchmark_high_cardinality_scan,
     benchmark_advancing_derivatives,
+    benchmark_growing_residual_stress,
+    benchmark_many_rules_stress,
     benchmark_denial,
     benchmark_rollback,
 );
