@@ -1,5 +1,7 @@
 //! Event-independent symbolic derivatives and direct transition-DAG interpretation.
 
+use std::collections::VecDeque;
+
 use hashbrown::{HashMap, HashSet};
 use smallbitvec::SmallBitVec;
 use smallvec::SmallVec;
@@ -9,13 +11,30 @@ use crate::model::Event;
 use super::component::{CandidateSubstitution, CompiledAtomPattern};
 use super::evaluate::eval_test;
 use super::node::{RegexId, RegexKind, TestId, TestNode, TransitionId, TransitionNode};
+use super::source::Comparison;
 use super::store::CanonicalStore;
 
-/// Persistent event-independent derivatives and their relevant atom sets.
+/// Maximum atoms expanded into one dense minterm table.
+///
+/// Larger symbolic alphabets retain the direct transition-DAG fallback rather than paying
+/// exponential compilation cost.
+pub(super) const MAX_PRECOMPILED_ATOMS: usize = 12;
+/// Global per-rule budget for eagerly compiled minterm successors.
+const MAX_PRECOMPILED_MINTERMS: usize = 4_096;
+/// Global per-rule budget for eagerly explored DFA states.
+pub(super) const MAX_PRECOMPILED_STATES: usize = 64;
+
+/// Dense successor table indexed by the truth values of one transition's relevant atoms.
+struct CompiledMinterms<'arena> {
+    successors: Box<[RegexId<'arena>]>,
+}
+
+/// Persistent event-independent derivatives, atom alphabets, and precompiled minterm tables.
 #[derive(Default)]
 pub(crate) struct SymbolicDerivativeCache<'arena> {
     derivatives: HashMap<RegexId<'arena>, TransitionId<'arena>>,
     atoms: HashMap<TransitionId<'arena>, Vec<CompiledAtomPattern<'arena>>>,
+    minterms: HashMap<TransitionId<'arena>, CompiledMinterms<'arena>>,
 }
 
 impl<'arena> SymbolicDerivativeCache<'arena> {
@@ -26,6 +45,11 @@ impl<'arena> SymbolicDerivativeCache<'arena> {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.derivatives.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn precompiled_len(&self) -> usize {
+        self.minterms.len()
     }
 
     fn atoms(&mut self, transition: TransitionId<'arena>) -> &[CompiledAtomPattern<'arena>] {
@@ -150,6 +174,103 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
         transition
     }
 
+    /// Eagerly explores the reachable symbolic DFA and compiles small transition alphabets into
+    /// dense minterm tables.
+    ///
+    /// The budgets make compilation predictable for wide policies. A transition that exceeds a
+    /// budget remains executable through the exact transition-DAG fallback.
+    pub(super) fn precompile(&mut self, root: RegexId<'arena>) {
+        let mut pending = VecDeque::from([root]);
+        let mut seen = HashSet::new();
+        let mut compiled_minterms = 0;
+
+        while seen.len() < MAX_PRECOMPILED_STATES
+            && let Some(regex) = pending.pop_front()
+        {
+            if !seen.insert(regex) {
+                continue;
+            }
+            let transition = self.derivative(regex);
+            if matches!(*transition.get(), TransitionNode::Const(_)) {
+                continue;
+            }
+            if let Some(compiled) = self.derivatives.minterms.get(&transition) {
+                pending.extend(compiled.successors.iter().copied());
+                continue;
+            }
+
+            let atoms = self.derivatives.atoms(transition).to_vec();
+            if atoms.len() > MAX_PRECOMPILED_ATOMS {
+                continue;
+            }
+            let minterm_count = 1_usize << atoms.len();
+            if compiled_minterms + minterm_count > MAX_PRECOMPILED_MINTERMS {
+                continue;
+            }
+            let successors = (0..minterm_count)
+                .map(|minterm| self.evaluate_minterm(transition, &atoms, minterm))
+                .collect::<Vec<_>>();
+            pending.extend(successors.iter().copied());
+            compiled_minterms += minterm_count;
+            let previous = self.derivatives.minterms.insert(
+                transition,
+                CompiledMinterms {
+                    successors: successors.into_boxed_slice(),
+                },
+            );
+            debug_assert!(previous.is_none());
+        }
+    }
+
+    /// Interprets one symbolic transition under a precomputed atom minterm.
+    fn evaluate_minterm(
+        &mut self,
+        transition: TransitionId<'arena>,
+        atoms: &[CompiledAtomPattern<'arena>],
+        minterm: usize,
+    ) -> RegexId<'arena> {
+        match *transition.get() {
+            TransitionNode::Const(regex) => regex,
+            TransitionNode::If {
+                test,
+                then_transition,
+                else_transition,
+            } => {
+                let selected = if eval_test_minterm(test, atoms, minterm) {
+                    then_transition
+                } else {
+                    else_transition
+                };
+                self.evaluate_minterm(selected, atoms, minterm)
+            }
+            TransitionNode::Union(children) => {
+                let regexes = children
+                    .iter()
+                    .map(|child| self.evaluate_minterm(*child, atoms, minterm))
+                    .collect::<SmallVec<[RegexId<'arena>; 4]>>();
+                self.store.regex_union(regexes)
+            }
+            TransitionNode::Intersect(children) => {
+                let regexes = children
+                    .iter()
+                    .map(|child| self.evaluate_minterm(*child, atoms, minterm))
+                    .collect::<SmallVec<[RegexId<'arena>; 4]>>();
+                self.store.regex_intersect(regexes)
+            }
+            TransitionNode::Not(inner) => {
+                let regex = self.evaluate_minterm(inner, atoms, minterm);
+                self.store.regex_not(regex)
+            }
+            TransitionNode::Append { transition, suffix } => {
+                let regex = self.evaluate_minterm(transition, atoms, minterm);
+                let mut factors = SmallVec::<[RegexId<'arena>; 4]>::new();
+                factors.push(regex);
+                factors.extend_from_slice(suffix);
+                self.store.regex_concat(factors)
+            }
+        }
+    }
+
     /// Interprets one normalized transition under fixed candidate bindings and one history event.
     pub(super) fn evaluate(
         &mut self,
@@ -225,10 +346,34 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
         substitution: &CandidateSubstitution<'arena>,
         event: &'event Event,
     ) -> RegexId<'arena> {
+        if let TransitionNode::Const(regex) = *transition.get() {
+            return regex;
+        }
         if let Some((previous_transition, previous_event, regex)) = self.instances.last
             && previous_transition == transition
             && previous_event == event
         {
+            return regex;
+        }
+
+        if let Some(compiled) = self.derivatives.minterms.get(&transition) {
+            let atoms = self
+                .derivatives
+                .atoms
+                .get(&transition)
+                .expect("precompiled transition retains its atom order");
+            let resolver = &mut self.store.resolver;
+            let minterm = atoms
+                .iter()
+                .enumerate()
+                .fold(0_usize, |assignment, (index, atom)| {
+                    let matches = atom
+                        .subst(substitution)
+                        .is_some_and(|resolved| resolved.matches(resolver, event));
+                    assignment | (usize::from(matches) << index)
+                });
+            let regex = compiled.successors[minterm];
+            self.instances.last = Some((transition, event, regex));
             return regex;
         }
 
@@ -246,7 +391,7 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
         regex
     }
 
-    /// Evaluates complete history using event-independent derivatives cached across rule runs.
+    /// Evaluates complete history using precompiled symbolic derivatives and minterm successors.
     pub(super) fn accepts(
         &mut self,
         root: RegexId<'arena>,
@@ -256,6 +401,9 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
         let mut state = root;
         let mut previous_derivative = None;
         for event in history {
+            if state == self.store.all || state == self.store.empty {
+                break;
+            }
             let transition = match previous_derivative {
                 Some((previous_state, transition)) if previous_state == state => transition,
                 _ => self.derivative(state),
@@ -270,6 +418,38 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
     #[cfg(test)]
     pub(super) fn instantiation_count(&self) -> usize {
         self.instances.len()
+    }
+}
+
+/// Evaluates one canonical event test from a dense atom truth assignment.
+fn eval_test_minterm<'arena>(
+    test: TestId<'arena>,
+    atoms: &[CompiledAtomPattern<'arena>],
+    minterm: usize,
+) -> bool {
+    match *test.get() {
+        TestNode::True => true,
+        TestNode::False => false,
+        TestNode::Atom {
+            comparison,
+            pattern,
+        } => {
+            let index = atoms
+                .iter()
+                .position(|atom| *atom == pattern)
+                .expect("compiled minterm contains every transition atom");
+            let equal = minterm & (1_usize << index) != 0;
+            match comparison {
+                Comparison::Eq => equal,
+                Comparison::Neq => !equal,
+            }
+        }
+        TestNode::And(children) => children
+            .iter()
+            .all(|child| eval_test_minterm(*child, atoms, minterm)),
+        TestNode::Or(children) => children
+            .iter()
+            .any(|child| eval_test_minterm(*child, atoms, minterm)),
     }
 }
 
