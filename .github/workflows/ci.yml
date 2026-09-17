@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validator:
+    name: Validator (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        # No bun-version input: the action reads `packageManager` from package.json (bun@1.3.14).
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Rust
+        # Installs rustup itself when the image lacks it, then `rustup default stable`.
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            fuzz/target
+          key: validator-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.lock') }}
+          restore-keys: validator-cargo-${{ runner.os }}-
+
+      - name: Install dependencies
+        # `simple-git`, used by test:fuzz to replay granted operations against real repositories.
+        run: bun install --frozen-lockfile
+
+      - name: Check formatting
+        run: |
+          cargo fmt --check
+          cargo fmt --check --manifest-path fuzz/Cargo.toml
+
+      - name: Lint
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+
+      - name: Unit tests
+        run: cargo test
+
+      - name: No-surprise oracle
+        # Release: generation re-checks the whole history at every step (166s debug vs 23s release).
+        run: bun run test:oracle
+
+      - name: simple-git replay
+        # Needs a real `git`; the runner images provide it. The test supplies its own identity via
+        # per-command `-c` flags, so no global git config is required.
+        run: bun run test:fuzz
+
+  fuzz:
+    name: libFuzzer smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      # ASan reserves address space before malloc initialises; on macOS libmalloc then logs
+      # "nano zone abandoned due to inability to reserve vm space" on every run. Harmless; this
+      # silences it (google/sanitizers#1666). Unused on Linux.
+      MallocNanoZone: "0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Rust nightly
+        # cargo-fuzz needs -Zsanitizer and the sancov passes; the `fuzz` script is `cargo +nightly`.
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-fuzz
+            fuzz/target
+          key: fuzz-cargo-${{ runner.os }}-${{ hashFiles('fuzz/Cargo.lock') }}
+          restore-keys: fuzz-cargo-${{ runner.os }}-
+
+      - name: Install cargo-fuzz
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Fuzz for 60 seconds
+        # Exit 0 when the time bound is reached without a finding; a crash exits non-zero and
+        # writes the input to fuzz/artifacts/git_policy/.
+        run: bun run fuzz -max_total_time=60
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.os }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
