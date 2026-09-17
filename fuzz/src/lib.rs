@@ -253,8 +253,9 @@ pub enum GeneratedOperation {
     Clean,
 }
 
-/// Every generated operation, in a fixed order so generation is deterministic.
-const OPS: [GeneratedOperation; 13] = [
+/// Every generated operation, in a fixed order so generation is deterministic. Public so an
+/// external executor can check that a trace set covers every one of them.
+pub const OPS: [GeneratedOperation; 13] = [
     GeneratedOperation::Create,
     GeneratedOperation::Modify,
     GeneratedOperation::Delete,
@@ -287,6 +288,26 @@ impl GeneratedOperation {
             Self::History => "history",
             Self::Remove => "remove",
             Self::Clean => "clean",
+        }
+    }
+
+    /// What an agent that just ran this operation on a path would naturally do next to it: the git
+    /// pipeline, `edit → stage → commit`. `None` for every operation that ends a unit of work.
+    const fn follow_up(self) -> Option<Self> {
+        match self {
+            // The three distinct working-tree mutations all stage the same way.
+            Self::Create | Self::Modify | Self::Delete => Some(Self::Stage),
+            Self::Stage => Some(Self::Commit),
+            // A commit ends the unit of work; the rest are not pipeline steps at all.
+            Self::Commit
+            | Self::Unstage
+            | Self::Checkout
+            | Self::Stash
+            | Self::Read
+            | Self::Diff
+            | Self::History
+            | Self::Remove
+            | Self::Clean => None,
         }
     }
 
@@ -363,6 +384,14 @@ struct Candidate {
     event: Event,
 }
 
+/// The previous step's unit of work: one principal, one path, and what it last did to it.
+#[derive(Clone, Copy, Debug)]
+struct Burst {
+    agent: usize,
+    operation: GeneratedOperation,
+    file: usize,
+}
+
 /// Pure trace generation: entropy in, candidate operations out. Touches neither git nor the
 /// filesystem, so the replay oracle and the benchmark can drive the identical generator.
 struct TraceGenerator<'data> {
@@ -374,6 +403,10 @@ struct TraceGenerator<'data> {
     /// `git add` of an already-absent path, and an untracked path is what would make
     /// `stash`'s pathspec fail and `clean` destructive, so `Create` is gated on it.
     tracked: [bool; MAX_FILE_NUMBER],
+    /// What the previous candidate did, so a principal can keep working on one path across steps.
+    /// Recorded for denied candidates too: being refused does not move an agent onto another file,
+    /// and generation must not depend on what the policy decided.
+    burst: Option<Burst>,
     step: usize,
 }
 
@@ -385,6 +418,7 @@ impl<'data> TraceGenerator<'data> {
             unstructured: Unstructured::new(data),
             exists: [true; MAX_FILE_NUMBER],
             tracked: [true; MAX_FILE_NUMBER],
+            burst: None,
             step: 0,
         }
     }
@@ -405,22 +439,67 @@ impl<'data> TraceGenerator<'data> {
     /// precondition currently holds. Never wastes a step: the operation is chosen from those with
     /// at least one eligible path, and that set is never empty because `Stage`, `Unstage`,
     /// `Checkout`, `Stash`, `Diff`, `History`, and `Clean` accept every path.
+    ///
+    /// Steps come in bursts — one principal working one path, often along the git pipeline — rather
+    /// than three independent draws per step, which would leave the policy's whole staged row
+    /// unreachable. `stage` is granted only on a resource the acting principal itself left
+    /// unstaged and `commit` only on one it then staged, so scattering `MAX_AGENT_NUMBER`
+    /// principals over `MAX_FILE_NUMBER` paths every step means an edit is essentially never
+    /// followed by its own stage; and a freely drawn operation discards a dirty path (`checkout`,
+    /// `stash`, `clean`) about as often as it advances one, so the pipeline rarely survives to a
+    /// commit either. Bursts are also what real agent traces look like, and the fuzzer ends one or
+    /// breaks out of the pipeline whenever it likes, so no contention is lost.
     fn next_candidate(&mut self) -> Option<Candidate> {
         if self.unstructured.is_empty() {
             return None;
         }
-        let agent = self
-            .unstructured
-            .int_in_range(0..=MAX_AGENT_NUMBER - 1)
-            .ok()?;
-        let ops: Vec<GeneratedOperation> = OPS
-            .iter()
-            .copied()
-            .filter(|operation| !self.eligible(*operation).is_empty())
-            .collect();
-        let operation = *self.unstructured.choose(&ops).ok()?;
-        let files = self.eligible(operation);
-        let file = *self.unstructured.choose(&files).ok()?;
+
+        // How the previous burst continues: `0` ends it and redraws the principal and the path,
+        // `1` and `2` follow the pipeline on, `3` and `4` keep both but draw the operation freely.
+        let continuation = match self.burst {
+            Some(_) => self.unstructured.int_in_range(0u8..=4).ok()?,
+            None => 0,
+        };
+        let burst = self.burst.filter(|_| continuation > 0);
+
+        let agent = match burst {
+            Some(burst) => burst.agent,
+            None => self
+                .unstructured
+                .int_in_range(0..=MAX_AGENT_NUMBER - 1)
+                .ok()?,
+        };
+
+        // The pipeline step, taken only while the path still accepts it.
+        let pipelined = burst
+            .filter(|_| continuation <= 2)
+            .and_then(|burst| Some((burst.operation.follow_up()?, burst.file)))
+            .filter(|&(operation, file)| self.eligible(operation).contains(&file));
+
+        let (operation, file) = match pipelined {
+            Some(step) => step,
+            None => {
+                let ops: Vec<GeneratedOperation> = OPS
+                    .iter()
+                    .copied()
+                    .filter(|operation| !self.eligible(*operation).is_empty())
+                    .collect();
+                let operation = *self.unstructured.choose(&ops).ok()?;
+                let files = self.eligible(operation);
+                // The burst's path is kept only while the drawn operation accepts it; otherwise
+                // the step would be wasted on an operation whose precondition fails.
+                let file = match burst.filter(|burst| files.contains(&burst.file)) {
+                    Some(burst) => burst.file,
+                    None => *self.unstructured.choose(&files).ok()?,
+                };
+                (operation, file)
+            }
+        };
+        self.burst = Some(Burst {
+            agent,
+            operation,
+            file,
+        });
 
         let step = self.step;
         let event = Event::new(

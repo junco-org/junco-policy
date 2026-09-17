@@ -23,9 +23,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use git_policy_harness::{
-    BYTES_PER_TRACE, DETERMINISTIC_SEED, GeneratedOperation, MAX_FILE_NUMBER, RANDOM_TRACE_COUNT,
-    SEED_VARIABLE, SEEDED_TRACE_COUNT, TraceSummary, ValidatedOperation, ValidatedTrace, entropy,
-    random_seed, validate_trace,
+    BYTES_PER_TRACE, DETERMINISTIC_SEED, GeneratedOperation, MAX_FILE_NUMBER, OPS,
+    RANDOM_TRACE_COUNT, SEED_VARIABLE, SEEDED_TRACE_COUNT, TraceSummary, ValidatedOperation,
+    ValidatedTrace, entropy, random_seed, validate_trace,
 };
 use git2::build::{CheckoutBuilder, TreeUpdateBuilder};
 use git2::{
@@ -35,9 +35,9 @@ use git2::{
 
 /// Counters the fixed seeded stream must produce; a drift here means generation changed.
 const SEEDED_SUMMARY: TraceSummary = TraceSummary {
-    granted: 258,
-    denied: 191,
-    commits: 0,
+    granted: 304,
+    denied: 145,
+    commits: 9,
 };
 
 /// Why libgit2 or a porcelain precondition rejected a granted operation.
@@ -454,6 +454,26 @@ fn every_operation_the_git_policy_grants_succeeds_through_git2() {
     {
         traces.push((format!("random/{index}"), validate_trace(bytes)));
     }
+
+    // An operation the traces never grant is one this test proves nothing about, however many
+    // traces it replays. `commit` was exactly that until generation learned to follow the git
+    // pipeline: the policy grants it only on a resource the acting principal staged.
+    let uncovered: Vec<&str> = OPS
+        .iter()
+        .filter(|kind| {
+            !traces.iter().any(|(_, trace)| {
+                trace
+                    .operations
+                    .iter()
+                    .any(|operation| operation.operation == **kind)
+            })
+        })
+        .map(|kind| kind.as_str())
+        .collect();
+    assert!(
+        uncovered.is_empty(),
+        "no trace grants {uncovered:?}, so the replay never executes them",
+    );
 
     // The randomized traces differ every run, so a failure is only actionable with the seed that
     // produced them; the fixed set reproduces from its own name.

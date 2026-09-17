@@ -1,12 +1,12 @@
 //! The no-surprise oracle: a simulated repository that decides, from modelled content, whether a
 //! validated trace ever made one principal's knowledge of a resource wrong behind its back.
 //!
-//! Real git is this harness's ground truth for legality — `test/git-policy-fuzz.test.ts` replays
-//! every granted operation and asserts it exits zero — but it cannot decide surprise: it has no
-//! notion of agents or of what an agent has seen. This module supplies that ground truth instead.
-//! A content change is `worktree_after != worktree_before`, derived from the simulation rather than
-//! from a list of which actions "are writes", which is what keeps the oracle independent of the
-//! policy it checks.
+//! Real git is this harness's ground truth for legality — `tests/git_oracle.rs` replays every
+//! granted operation through libgit2 and asserts it is accepted — but it cannot decide surprise: it
+//! has no notion of agents or of what an agent has seen. This module supplies that ground truth
+//! instead. A content change is `worktree_after != worktree_before`, derived from the simulation
+//! rather than from a list of which actions "are writes", which is what keeps the oracle
+//! independent of the policy it checks.
 
 use std::collections::BTreeMap;
 use std::fmt;
