@@ -6,8 +6,8 @@ use git_policy_harness::{
     validate_trace,
 };
 
-/// Traces drawn purely to widen the strictness sample; unrelated to the exporter's
-/// `RANDOM_TRACE_COUNT`, which is how many traces the simple-git oracle replays per run.
+/// Traces drawn purely to widen the strictness sample; unrelated to the replay oracle's
+/// `RANDOM_TRACE_COUNT`, which is how many randomized traces it replays per run.
 const SAMPLED_TRACES: u64 = 20_000;
 
 #[derive(Default)]

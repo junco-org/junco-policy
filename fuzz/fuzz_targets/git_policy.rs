@@ -1,14 +1,14 @@
 //! libFuzzer driver for the git trace-policy generator and checker.
 //!
 //! Fuzzes trace generation and policy evaluation for panics; it executes no git and no filesystem
-//! operation. The ground-truth replay of granted operations lives in the simple-git oracle
-//! (`test/git-policy-fuzz.test.ts`), which drives the generator from its own seeds rather than
-//! from this target's corpus; the corpus stays local to libFuzzer.
+//! operations. The ground-truth replay of granted operations lives in the git2 replay oracle
+//! (`fuzz/tests/git_oracle.rs`), which drives the generator from its own seeds rather than from
+//! this target's corpus; the corpus stays local to libFuzzer.
 //!
-//! `bun run fuzz` is `cargo +nightly fuzz run git_policy --`; anything after the script name goes
-//! to libFuzzer. Linux and macOS only: their linkers pull libFuzzer's `main` out of the
-//! `libfuzzer-sys` static archive unaided, and the MSVC `/include:main` link workaround that
-//! Windows needed is deliberately not carried.
+//! Run with `cargo +nightly fuzz run git_policy`; anything after `--` goes to libFuzzer. Linux and
+//! macOS only: their linkers pull libFuzzer's `main` out of the `libfuzzer-sys` static archive
+//! unaided, and the MSVC `/include:main` link workaround that Windows needed is deliberately not
+//! carried.
 
 #![no_main]
 

@@ -2,11 +2,10 @@
 //! Trace-level generation and policy validation for the git trace policy.
 //!
 //! A trace is generated from fuzzer-chosen bytes and every candidate event is fed through the
-//! checker exactly as the napi boundary does: appended to the history on grant, dropped on deny.
+//! checker exactly as a retained validator does: appended to the history on grant, dropped on deny.
 //! Nothing in this crate touches git or the filesystem. [`validate_trace`] returns the granted
-//! operations as plain data, and an external ground-truth executor — the `git_policy_traces`
-//! example feeding the simple-git oracle in `test/git-policy-fuzz.test.ts` — replays them against
-//! a real repository.
+//! operations as plain data, and an external ground-truth executor — the git2 replay oracle in
+//! `tests/git_oracle.rs` — replays them against a real repository.
 //!
 //! Generation is constrained so that the *filesystem* preconditions always hold independently of
 //! the policy: a path is only created when it is currently absent, and only edited, deleted,
@@ -21,7 +20,7 @@
 //! embeds the monotonically increasing step index, so a write can never coincidentally reproduce
 //! the committed blob.
 //!
-//! [`TraceGenerator`] is the only entropy-to-candidate implementation, so the trace exporter, the
+//! [`TraceGenerator`] is the only entropy-to-candidate implementation, so the replay oracle, the
 //! criterion benchmark (through [`granted_history`]) and the libFuzzer target all drive identical
 //! generation and can never diverge.
 
@@ -45,7 +44,7 @@ pub const MAX_FILE_NUMBER: usize = 4;
 pub const DETERMINISTIC_SEED: u64 = 0x5eed_cafe_f00d_beef;
 /// Number of fixed traces replayed from the seeded stream.
 pub const SEEDED_TRACE_COUNT: usize = 32;
-/// Number of freshly seeded traces the exporter adds to every run.
+/// Number of freshly seeded traces the replay oracle adds to every run.
 pub const RANDOM_TRACE_COUNT: usize = 16;
 /// Environment variable that pins [`random_seed`], so a reported failure replays exactly.
 pub const SEED_VARIABLE: &str = "JUNCO_FUZZ_SEED";
@@ -59,9 +58,8 @@ pub const BYTES_PER_EVENT: usize = 32;
 /// Seed for the randomized trace set: [`SEED_VARIABLE`] when it is set, otherwise the wall clock,
 /// so every run explores traces no previous run has replayed.
 ///
-/// The exporter reports the seed it used and the replay oracle prints it on failure, which is what
-/// makes an exploratory run reproducible: rerun with `JUNCO_FUZZ_SEED=0x…` to get the identical
-/// traces back.
+/// The replay oracle prints the seed it used on failure, which is what makes an exploratory run
+/// reproducible: rerun with `JUNCO_FUZZ_SEED=0x…` to get the identical traces back.
 ///
 /// # Panics
 ///
@@ -86,9 +84,9 @@ pub fn random_seed() -> u64 {
 /// Counters describing one generated and validated trace.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TraceSummary {
-    /// Operations the policy granted, and which the harness exported for replay.
+    /// Operations the policy granted, and which the replay oracle executes.
     pub granted: usize,
-    /// Operations the policy denied, which are dropped without being exported.
+    /// Operations the policy denied, which are dropped without being replayed.
     pub denied: usize,
     /// Granted operations that were commits.
     pub commits: usize,
@@ -96,7 +94,7 @@ pub struct TraceSummary {
 
 /// Runs one candidate through a retained Git policy; `true` means grant.
 ///
-/// This is the single operation the benchmark times and the trace validator gates export on.
+/// This is the single operation the benchmark times and the trace validator gates replay on.
 pub fn check(policy: &mut GitPolicy<'_>, history: &[Event], candidate: &Event) -> bool {
     matches!(policy.decide(history, candidate), PolicyDecision::Grant)
 }
@@ -172,7 +170,7 @@ pub fn probe_candidates() -> [(&'static str, Event); 11] {
 /// Generates one trace from `data` and reduces it to the operations the policy granted.
 ///
 /// Empty or exhausted input yields a [`ValidatedTrace::default`]. Denied candidates advance the
-/// counters only: they are exported nowhere and leave the history and working-tree model untouched.
+/// counters only: they are replayed nowhere and leave the history and working-tree model untouched.
 pub fn validate_trace(data: &[u8]) -> ValidatedTrace {
     let mut generator = TraceGenerator::new(data);
     let arena = Bump::new();
@@ -273,7 +271,7 @@ const OPS: [GeneratedOperation; 13] = [
 ];
 
 impl GeneratedOperation {
-    /// Stable lowercase wire name used by the simple-git trace exporter.
+    /// Lowercase name the replay oracle uses when it renders an operation in a failure report.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Create => "create",
@@ -313,8 +311,8 @@ impl GeneratedOperation {
 
 /// One policy-granted concrete operation ready for an external ground-truth executor.
 ///
-/// Indices rather than rendered strings: the exporter formats `agent{agent}` and
-/// `src/file{file}.txt` once, at the JSON boundary.
+/// Indices rather than rendered strings: the replay oracle formats `agent{agent}` and
+/// `src/file{file}.txt` when it acts on them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValidatedOperation {
     /// Agent index in `0..MAX_AGENT_NUMBER`; principal `agent{agent}`.
@@ -349,7 +347,7 @@ pub struct ValidatedTrace {
     /// The granted events in order — the same values fed to the policy, for trace-level property
     /// checks such as [`no_surprise_violation`].
     pub history: Vec<Event>,
-    /// Counters for the whole trace, including the denied candidates that were never exported.
+    /// Counters for the whole trace, including the denied candidates that were never replayed.
     pub summary: TraceSummary,
     /// Every denied candidate in generation order, for strictness analysis.
     pub denials: Vec<DeniedCandidate>,
@@ -366,7 +364,7 @@ struct Candidate {
 }
 
 /// Pure trace generation: entropy in, candidate operations out. Touches neither git nor the
-/// filesystem, so the trace exporter and the benchmark can drive the identical generator.
+/// filesystem, so the replay oracle and the benchmark can drive the identical generator.
 struct TraceGenerator<'data> {
     unstructured: Unstructured<'data>,
     /// Working-tree presence per pooled path. An array, not a set, so iteration order (which feeds

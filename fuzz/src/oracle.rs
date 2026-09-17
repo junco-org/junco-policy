@@ -178,8 +178,8 @@ mod tests {
     }
 
     /// Every trace the fixed seeded stream produces, each paired with the source name a failure
-    /// message names. The randomized set the exporter adds is not replayed here: this test must
-    /// fail identically on every machine and every run.
+    /// message names. The randomized set the replay oracle adds is not replayed here: this test
+    /// must fail identically on every machine and every run.
     fn deterministic_traces() -> Vec<(String, Vec<Event>)> {
         let seeded = entropy(DETERMINISTIC_SEED, SEEDED_TRACE_COUNT * BYTES_PER_TRACE);
         seeded
