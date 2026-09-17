@@ -1,4 +1,4 @@
-# rust-validator
+# junco-policy
 
 Capability validation for Junco, written in Rust. It owns the git trace policy: the rule table, its
 no-surprise oracle, and the harness that both the fuzzer and the benchmark drive.
