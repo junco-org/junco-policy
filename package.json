@@ -2,6 +2,7 @@
   "name": "rust-validator",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "bun@1.3.14",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {
@@ -18,7 +19,7 @@
     "test:oracle": "cargo test --release --manifest-path fuzz/Cargo.toml --lib",
     "bench": "cargo bench --manifest-path fuzz/Cargo.toml --bench git_policy",
     "bench:validator": "cargo bench --bench validator",
-    "fuzz": "cargo +nightly fuzz run git_policy --no-include-main-msvc --"
+    "fuzz": "cargo +nightly fuzz run git_policy --"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2",

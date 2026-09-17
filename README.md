@@ -6,20 +6,31 @@ fuzzer and the benchmark drive.
 
 ## Fuzzing
 
-libFuzzer generates git traces and checks the policy for panics and no-surprise violations. It runs
-until it finds a crash or you stop it, so bound it when you just want a smoke run:
+Linux and macOS only. libFuzzer generates git traces and checks the policy for panics and
+no-surprise violations. It runs until it finds a crash or you stop it, so bound it when you just
+want a smoke run:
 
 ```sh
-bun run --cwd packages/rust-validator fuzz
-bun run --cwd packages/rust-validator fuzz -max_total_time=60
+bun run fuzz
+bun run fuzz -max_total_time=60
 ```
 
 Arguments after the script name go straight to libFuzzer. Crashing inputs are written to
 `fuzz/artifacts/`, and the corpus accumulates in `fuzz/corpus/`.
 
 Requires the nightly toolchain and `cargo-fuzz` (`rustup toolchain install nightly`,
-`cargo install cargo-fuzz`). Keep the default AddressSanitizer — `--sanitizer=none` does not link on
-Windows.
+`cargo install cargo-fuzz`). Windows is not supported: its linker needs an `/include:main`
+workaround to find libFuzzer's entry point, and this repository does not carry one.
+
+The same generator feeds two deterministic checks that need only stable Rust, `git`, and
+`bun install`:
+
+```sh
+bun run test:oracle   # no-surprise property tests over the modelled repository (release build)
+bun run test:fuzz     # replays every granted operation against scratch repositories via simple-git
+```
+
+CI (`.github/workflows/ci.yml`) runs both plus a 60-second libFuzzer smoke on Ubuntu and macOS.
 
 ## Benchmarking
 
@@ -28,11 +39,9 @@ rule table is compiled once per evaluation case, outside the timed check loop, m
 policy used by the napi validator:
 
 ```sh
-bun run --cwd packages/rust-validator bench
-cargo bench --manifest-path packages/rust-validator/Cargo.toml \
-  --bench validator -- stress_growing_residual --noplot
-cargo bench --manifest-path packages/rust-validator/Cargo.toml \
-  --bench validator -- stress_many_rules --noplot
+bun run bench
+cargo bench --bench validator -- stress_growing_residual --noplot
+cargo bench --bench validator -- stress_many_rules --noplot
 ```
 
 ### Growing-residual stress

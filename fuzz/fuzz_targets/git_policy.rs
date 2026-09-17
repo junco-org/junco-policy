@@ -2,14 +2,13 @@
 //!
 //! Fuzzes trace generation and policy evaluation for panics; it executes no git and no filesystem
 //! operation. The ground-truth replay of granted operations lives in the simple-git oracle
-//! (`packages/rust-validator/test/git-policy-fuzz.test.ts`), which drives the generator from its
-//! own seeds rather than from this target's corpus; the corpus stays local to libFuzzer.
+//! (`test/git-policy-fuzz.test.ts`), which drives the generator from its own seeds rather than
+//! from this target's corpus; the corpus stays local to libFuzzer.
 //!
-//! `bun run --cwd packages/rust-validator fuzz`, which is
-//! `cargo +nightly fuzz run git_policy --no-include-main-msvc` — the MSVC flag is inert elsewhere,
-//! see `fuzz/build.rs`. Keep the default AddressSanitizer: `--sanitizer=none` does not link on
-//! windows-msvc, because rustc's coverage pass emits ELF-style `__start___sancov_*` section
-//! bounds that `link.exe` cannot synthesize and only the sanitizer runtime supplies.
+//! `bun run fuzz` is `cargo +nightly fuzz run git_policy --`; anything after the script name goes
+//! to libFuzzer. Linux and macOS only: their linkers pull libFuzzer's `main` out of the
+//! `libfuzzer-sys` static archive unaided, and the MSVC `/include:main` link workaround that
+//! Windows needed is deliberately not carried.
 
 #![no_main]
 

@@ -5,8 +5,8 @@
 //! checker exactly as the napi boundary does: appended to the history on grant, dropped on deny.
 //! Nothing in this crate touches git or the filesystem. [`validate_trace`] returns the granted
 //! operations as plain data, and an external ground-truth executor — the `git_policy_traces`
-//! example feeding the simple-git oracle in `packages/rust-validator/test/git-policy-fuzz.test.ts`
-//! — replays them against a real repository.
+//! example feeding the simple-git oracle in `test/git-policy-fuzz.test.ts` — replays them against
+//! a real repository.
 //!
 //! Generation is constrained so that the *filesystem* preconditions always hold independently of
 //! the policy: a path is only created when it is currently absent, and only edited, deleted,

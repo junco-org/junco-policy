@@ -15,12 +15,9 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
   appendFile,
-  chmod,
-  lstat,
   mkdir,
   mkdtemp,
   readFile,
-  readdir,
   rm,
   stat,
   unlink,
@@ -253,20 +250,6 @@ function isolatedGitEnvironment(absentConfig: string): NodeJS.ProcessEnv {
     }
   }
 
-  if (process.platform === "win32") {
-    // Windows environment keys are case-insensitive; the spawned child gets exactly one PATH.
-    let search: string | undefined;
-    for (const key of Object.keys(environment)) {
-      if (key.toUpperCase() === "PATH") {
-        search ??= environment[key];
-        delete environment[key];
-      }
-    }
-    if (search !== undefined) {
-      environment.PATH = search;
-    }
-  }
-
   // Never created: git treats a missing configuration file as empty.
   environment.GIT_CONFIG_GLOBAL = absentConfig;
   environment.GIT_CONFIG_SYSTEM = absentConfig;
@@ -444,21 +427,7 @@ function describeFailure(
   );
 }
 
-/** Clears the read-only bit git sets on loose objects and packs, which blocks removal on Windows. */
-async function clearReadOnly(path: string): Promise<void> {
-  const entry = await lstat(path);
-  if (!entry.isDirectory()) {
-    await chmod(path, 0o666).catch(() => {});
-    return;
-  }
-  await chmod(path, 0o777).catch(() => {});
-  for (const child of await readdir(path)) {
-    await clearReadOnly(join(path, child));
-  }
-}
-
 async function discardRepository(root: string): Promise<void> {
-  await clearReadOnly(root);
   await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }
 
