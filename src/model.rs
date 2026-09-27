@@ -125,6 +125,35 @@ impl Action {
     pub fn commit_without_message() -> Self {
         Self::Commit { message: None }
     }
+
+    /// Returns `true` for actions that observe a resource without changing its policy state:
+    /// [`Action::Read`], [`Action::Diff`] and [`Action::History`].
+    ///
+    /// This classifies the capability itself. It inspects no command line, appends no event and
+    /// moves no claim; whether a read is recorded in a history is the caller's decision.
+    pub fn is_read(&self) -> bool {
+        matches!(self, Self::Read | Self::Diff | Self::History)
+    }
+
+    /// Returns `true` for actions that change a resource's policy state: its contents, its
+    /// staging, its committed history, or its presence in the working tree.
+    ///
+    /// Index and history transitions count even when no working-tree byte changes, because the
+    /// policy's ownership rows hinge on them. Like [`Action::is_read`], this classifies the
+    /// capability only and changes no history or rule.
+    pub fn is_write(&self) -> bool {
+        matches!(
+            self,
+            Self::Edit
+                | Self::Stage
+                | Self::Unstage
+                | Self::Commit { .. }
+                | Self::Checkout
+                | Self::Stash
+                | Self::Delete
+                | Self::Clean
+        )
+    }
 }
 
 impl fmt::Display for Action {
@@ -197,4 +226,31 @@ pub struct Grant<M> {
     pub event: Event,
     /// Original request metadata, preserved unchanged.
     pub metadata: M,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Action;
+
+    #[test]
+    fn action_predicates_classify_reads_and_state_changes() {
+        let cases = [
+            (Action::Read, true, false),
+            (Action::Diff, true, false),
+            (Action::History, true, false),
+            (Action::Edit, false, true),
+            (Action::Stage, false, true),
+            (Action::Unstage, false, true),
+            (Action::commit_without_message(), false, true),
+            (Action::commit("saved"), false, true),
+            (Action::Checkout, false, true),
+            (Action::Stash, false, true),
+            (Action::Delete, false, true),
+            (Action::Clean, false, true),
+        ];
+        for (action, read, write) in cases {
+            assert_eq!(action.is_read(), read, "{action} is_read");
+            assert_eq!(action.is_write(), write, "{action} is_write");
+        }
+    }
 }
