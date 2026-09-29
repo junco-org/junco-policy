@@ -1,4 +1,4 @@
-use rust_validator::{
+use junco_policy::{
     Action, AtomPattern, Bump, Comparison, ComponentPattern, Event, Head, RegexExpr, Request, Rule,
     RuleMode, TestExpr, Validator,
 };

@@ -1,5 +1,5 @@
 [package]
-name = "junco-rust-validator-fuzz"
+name = "junco-policy-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -20,7 +20,7 @@ path = "src/lib.rs"
 libfuzzer-sys = "0.4"
 arbitrary = "1.4"
 
-[dependencies.junco-rust-validator]
+[dependencies.junco-policy]
 path = ".."
 
 [dev-dependencies]

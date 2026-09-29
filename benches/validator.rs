@@ -8,7 +8,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use rust_validator::{
+use junco_policy::{
     Action, AtomPattern, Bump, Comparison, ComponentPattern, Decision, Event, Head, Principal,
     RegexExpr, Request, Rule, RuleMode, TestExpr, Validator,
 };

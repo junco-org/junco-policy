@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, PlottingBackend, criterion_group, criterion_main};
 use git_policy_harness::{BYTES_PER_EVENT, check, entropy, granted_history, probe_candidates};
-use rust_validator::{Bump, GitPolicy};
+use junco_policy::{Bump, GitPolicy};
 
 /// Committed history lengths measured; geometric, so the growth rate reads off directly.
 const LENGTHS: [usize; 6] = [0, 4, 16, 64, 256, 1024];

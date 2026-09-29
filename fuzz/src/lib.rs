@@ -28,7 +28,7 @@ use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arbitrary::Unstructured;
-use rust_validator::{Action, Bump, Event, GitPolicy, PolicyDecision, Resource};
+use junco_policy::{Action, Bump, Event, GitPolicy, PolicyDecision, Resource};
 
 mod oracle;
 
@@ -348,7 +348,7 @@ pub struct ValidatedOperation {
 
 /// One candidate the policy denied, kept so a trace can be asked what a denial cost.
 ///
-/// Named `DeniedCandidate`, not `Denial`: `rust_validator::Denial` is a different, exported type.
+/// Named `DeniedCandidate`, not `Denial`: `junco_policy::Denial` is a different, exported type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeniedCandidate {
     /// Length of the granted history when the denial happened; the prefix that produced it is

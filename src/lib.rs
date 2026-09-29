@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```rust
-//! use rust_validator::{
+//! use junco_policy::{
 //!     Action, AtomPattern, Bump, Comparison, ComponentPattern, Decision, Event, Head, RegexExpr,
 //!     Request, Rule, RuleMode, TestExpr, Validator,
 //! };
@@ -52,7 +52,7 @@
 //! assert!(validator.check(edit).is_grant());
 //! let stage = Request::new(Event::new("alice", Action::Stage, ["src", "a.rs"]), ());
 //! assert!(matches!(validator.check(stage), Decision::Grant(_)));
-//! # Ok::<(), rust_validator::CompileError>(())
+//! # Ok::<(), junco_policy::CompileError>(())
 //! ```
 
 mod model;

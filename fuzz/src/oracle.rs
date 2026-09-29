@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use rust_validator::{Action, Event, Principal, Resource};
+use junco_policy::{Action, Event, Principal, Resource};
 
 /// A working-tree blob. `0` is the seed commit's content and every `edit` at history index `i`
 /// stamps `i + 1`, so no write can reproduce an earlier blob.

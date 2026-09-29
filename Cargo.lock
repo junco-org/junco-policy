@@ -289,7 +289,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "junco-rust-validator"
+name = "junco-policy"
 version = "0.1.0"
 dependencies = [
  "bumpalo",

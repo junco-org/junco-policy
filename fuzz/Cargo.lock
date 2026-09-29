@@ -317,7 +317,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "junco-rust-validator"
+name = "junco-policy"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
@@ -330,13 +330,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "junco-rust-validator-fuzz"
+name = "junco-policy-fuzz"
 version = "0.0.0"
 dependencies = [
  "arbitrary",
  "criterion",
  "git2",
- "junco-rust-validator",
+ "junco-policy",
  "libfuzzer-sys",
 ]
 
