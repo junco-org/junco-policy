@@ -63,7 +63,7 @@ mod validator;
 pub use bumpalo::Bump;
 pub use model::{Action, Event, Grant, Principal, Request, Resource};
 pub use policy::{
-    PolicyDecision,
+    PolicyDecision, TraceDiagnostic, TracePolicy, TraceRule,
     git::{GitPolicy, git_decision},
 };
 pub use syntax::{
