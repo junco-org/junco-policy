@@ -1,17 +1,25 @@
 # junco-policy
 
-Capability validation for Junco, written in Rust. It owns the git trace policy: the rule table, its
-no-surprise oracle, and the harness that both the fuzzer and the benchmark drive.
+Capability validation for Junco, written in Rust. It owns the ownership-lock trace policy: the rule
+table, its no-surprise oracle, and the harness that both the fuzzer and the benchmark drive.
+
+## Lock policy
+
+`LockPolicy` decides four actions per resource. `read` always grants and takes the last-reader
+claim. `edit` acquires ownership; `release` relinquishes it and keeps the reader claim; `remove`
+(an observed successful deletion) clears both claims. `edit` and `remove` are denied while another
+principal owns the resource or last read it; `release` is denied only while another principal owns
+it. Releasing an unowned resource grants.
 
 ## Fuzzing
 
-Linux and macOS only. libFuzzer generates git traces and checks the policy for panics and
+Linux and macOS only. libFuzzer generates lock traces and checks the policy for panics and
 no-surprise violations. It runs until it finds a crash or you stop it, so bound it when you just
 want a smoke run:
 
 ```sh
-cargo +nightly fuzz run git_policy
-cargo +nightly fuzz run git_policy -- -max_total_time=60
+cargo +nightly fuzz run lock_policy
+cargo +nightly fuzz run lock_policy -- -max_total_time=60
 ```
 
 Arguments after `--` go to libFuzzer. Crashing inputs are written to `fuzz/artifacts/`, and the
@@ -21,20 +29,13 @@ Requires the nightly toolchain and `cargo-fuzz` (`rustup toolchain install night
 `cargo install cargo-fuzz`). Windows is not supported: its linker needs an `/include:main`
 workaround to find libFuzzer's entry point, and this repository does not carry one.
 
-The same generator feeds two deterministic checks that need only stable Rust and a C compiler
-(libgit2 is built from source):
+The same generator feeds deterministic no-surprise property tests that need only stable Rust:
 
 ```sh
-# no-surprise property tests over the modelled repository
 cargo test --release --manifest-path fuzz/Cargo.toml --lib
-# replays every granted operation against scratch repositories through libgit2
-cargo test --release --manifest-path fuzz/Cargo.toml --test git_oracle
 ```
 
-The replay covers 32 fixed traces plus 16 freshly seeded ones per run. A failure prints the seed
-and retains the scratch repository; `JUNCO_FUZZ_SEED=0x… cargo test …` replays the exact traces.
-
-CI (`.github/workflows/ci.yml`) runs both plus a 60-second libFuzzer smoke on Ubuntu and macOS.
+CI (`.github/workflows/ci.yml`) runs them plus a 60-second libFuzzer smoke on Ubuntu and macOS.
 
 ## Benchmarking
 
@@ -43,7 +44,7 @@ rule table is compiled once per evaluation case, outside the timed check loop, m
 policy a long-lived validator reuses across checks:
 
 ```sh
-cargo bench --manifest-path fuzz/Cargo.toml --bench git_policy
+cargo bench --manifest-path fuzz/Cargo.toml --bench lock_policy
 cargo bench --bench validator -- stress_growing_residual --noplot
 cargo bench --bench validator -- stress_many_rules --noplot
 ```

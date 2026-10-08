@@ -14,20 +14,13 @@ use crate::model::{Action, Event, Principal, Resource};
 
 use super::source::{Component, ComponentPattern};
 
-/// Resolved action value using string-interner symbols for commit messages.
+/// Resolved action value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum ResolvedAction {
     Read,
     Edit,
-    Stage,
-    Unstage,
-    Commit(Option<DefaultSymbol>),
-    Checkout,
-    Stash,
-    Delete,
-    Clean,
-    Diff,
-    History,
+    Release,
+    Remove,
 }
 
 /// Resolved resource value represented as an arena-backed sequence of segment symbols.
@@ -150,23 +143,12 @@ impl<'arena> ComponentDomain<'arena> for Action {
     const COMPONENT: Component = Component::Action;
     type Resolved = ResolvedAction;
 
-    fn resolve(resolver: &mut ComponentResolver<'arena>, value: &Self) -> Self::Resolved {
+    fn resolve(_: &mut ComponentResolver<'arena>, value: &Self) -> Self::Resolved {
         match value {
             Action::Read => ResolvedAction::Read,
             Action::Edit => ResolvedAction::Edit,
-            Action::Stage => ResolvedAction::Stage,
-            Action::Unstage => ResolvedAction::Unstage,
-            Action::Commit { message } => ResolvedAction::Commit(
-                message
-                    .as_deref()
-                    .map(|message| resolver.intern_string(message)),
-            ),
-            Action::Checkout => ResolvedAction::Checkout,
-            Action::Stash => ResolvedAction::Stash,
-            Action::Delete => ResolvedAction::Delete,
-            Action::Clean => ResolvedAction::Clean,
-            Action::Diff => ResolvedAction::Diff,
-            Action::History => ResolvedAction::History,
+            Action::Release => ResolvedAction::Release,
+            Action::Remove => ResolvedAction::Remove,
         }
     }
 
@@ -297,10 +279,6 @@ mod tests {
         let constant_resource = Resource::resolve(&mut resolver, &Resource::new(["src", "a.rs"]));
         let candidate_resource = Resource::resolve(&mut resolver, &Resource::new(["src", "a.rs"]));
         assert_eq!(constant_resource, candidate_resource);
-
-        let constant_action = Action::resolve(&mut resolver, &Action::commit("ship"));
-        let candidate_action = Action::resolve(&mut resolver, &Action::commit("ship"));
-        assert_eq!(constant_action, candidate_action);
     }
 
     #[test]

@@ -54,10 +54,6 @@ jobs:
         # Release: generation re-checks the whole history at every step (166s debug vs 23s release).
         run: cargo test --release --manifest-path fuzz/Cargo.toml --lib
 
-      - name: git2 replay
-        # libgit2 is compiled from source by libgit2-sys (vendored); both images ship a C compiler.
-        run: cargo test --release --manifest-path fuzz/Cargo.toml --test git_oracle
-
   fuzz:
     name: libFuzzer smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -96,8 +92,8 @@ jobs:
 
       - name: Fuzz for 60 seconds
         # Exit 0 when the time bound is reached without a finding; a crash exits non-zero and
-        # writes the input to fuzz/artifacts/git_policy/.
-        run: cargo +nightly fuzz run git_policy -- -max_total_time=60
+        # writes the input to fuzz/artifacts/lock_policy/.
+        run: cargo +nightly fuzz run lock_policy -- -max_total_time=60
 
       - name: Upload crash artifacts
         if: failure()

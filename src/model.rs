@@ -83,97 +83,43 @@ impl fmt::Display for Resource {
     }
 }
 
-/// Git-like capability action.
+/// Ownership-lock capability action.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Action {
-    /// Observe resource contents.
+    /// Observe resource contents; takes the resource's read claim.
     Read,
-    /// Modify resource contents.
+    /// Modify resource contents; acquires ownership of the resource.
     Edit,
-    /// Stage a resource.
-    Stage,
-    /// Remove a resource from the staging area.
-    Unstage,
-    /// Commit a staged resource, optionally with an exact message.
-    Commit {
-        /// Commit message. `None` is distinct from an empty message.
-        message: Option<String>,
-    },
-    /// Restore a resource from the repository.
-    Checkout,
-    /// Stash local resource changes.
-    Stash,
-    /// Remove a resource from the working tree and stage the removal.
-    Delete,
-    /// Discard untracked working-tree content at a resource.
-    Clean,
-    /// Observe resource differences.
-    Diff,
-    /// Observe resource history.
-    History,
+    /// Relinquish ownership of the resource; the read claim is untouched.
+    Release,
+    /// An observed successful removal of the resource's name; clears ownership and read claim.
+    Remove,
 }
 
 impl Action {
-    /// Creates a commit action with a present message.
-    pub fn commit(message: impl Into<String>) -> Self {
-        Self::Commit {
-            message: Some(message.into()),
-        }
-    }
-
-    /// Creates a commit action with no message field.
-    pub fn commit_without_message() -> Self {
-        Self::Commit { message: None }
-    }
-
-    /// Returns `true` for actions that observe a resource without changing its policy state:
-    /// [`Action::Read`], [`Action::Diff`] and [`Action::History`].
+    /// Returns `true` for [`Action::Read`], the one action that changes no ownership.
     ///
     /// This classifies the capability itself. It inspects no command line, appends no event and
     /// moves no claim; whether a read is recorded in a history is the caller's decision.
     pub fn is_read(&self) -> bool {
-        matches!(self, Self::Read | Self::Diff | Self::History)
+        matches!(self, Self::Read)
     }
 
-    /// Returns `true` for actions that change a resource's policy state: its contents, its
-    /// staging, its committed history, or its presence in the working tree.
-    ///
-    /// Index and history transitions count even when no working-tree byte changes, because the
-    /// policy's ownership rows hinge on them. Like [`Action::is_read`], this classifies the
-    /// capability only and changes no history or rule.
+    /// Returns `true` for actions that mutate a resource's policy state — its ownership or
+    /// presence — even when no byte changes, as for [`Action::Release`].
     pub fn is_write(&self) -> bool {
-        matches!(
-            self,
-            Self::Edit
-                | Self::Stage
-                | Self::Unstage
-                | Self::Commit { .. }
-                | Self::Checkout
-                | Self::Stash
-                | Self::Delete
-                | Self::Clean
-        )
+        matches!(self, Self::Edit | Self::Release | Self::Remove)
     }
 }
 
 impl fmt::Display for Action {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Read => formatter.write_str("read"),
-            Self::Edit => formatter.write_str("edit"),
-            Self::Stage => formatter.write_str("stage"),
-            Self::Unstage => formatter.write_str("unstage"),
-            Self::Commit {
-                message: Some(message),
-            } => write!(formatter, "commit({message:?})"),
-            Self::Commit { message: None } => formatter.write_str("commit(<missing message>)"),
-            Self::Checkout => formatter.write_str("checkout"),
-            Self::Stash => formatter.write_str("stash"),
-            Self::Delete => formatter.write_str("delete"),
-            Self::Clean => formatter.write_str("clean"),
-            Self::Diff => formatter.write_str("diff"),
-            Self::History => formatter.write_str("history"),
-        }
+        formatter.write_str(match self {
+            Self::Read => "read",
+            Self::Edit => "edit",
+            Self::Release => "release",
+            Self::Remove => "remove",
+        })
     }
 }
 
@@ -226,31 +172,4 @@ pub struct Grant<M> {
     pub event: Event,
     /// Original request metadata, preserved unchanged.
     pub metadata: M,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Action;
-
-    #[test]
-    fn action_predicates_classify_reads_and_state_changes() {
-        let cases = [
-            (Action::Read, true, false),
-            (Action::Diff, true, false),
-            (Action::History, true, false),
-            (Action::Edit, false, true),
-            (Action::Stage, false, true),
-            (Action::Unstage, false, true),
-            (Action::commit_without_message(), false, true),
-            (Action::commit("saved"), false, true),
-            (Action::Checkout, false, true),
-            (Action::Stash, false, true),
-            (Action::Delete, false, true),
-            (Action::Clean, false, true),
-        ];
-        for (action, read, write) in cases {
-            assert_eq!(action.is_read(), read, "{action} is_read");
-            assert_eq!(action.is_write(), write, "{action} is_write");
-        }
-    }
 }

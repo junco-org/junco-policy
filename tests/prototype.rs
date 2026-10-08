@@ -30,7 +30,7 @@ fn same_actor_edit_before_stage() -> Rule {
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         tail,
@@ -44,35 +44,35 @@ fn require_rule_uses_only_committed_pre_candidate_history() {
     builder.add_rule(same_actor_edit_before_stage()).unwrap();
     let mut validator = builder.finish();
 
-    let denied = validator.check(request("alice", Action::Stage, &["src", "a.rs"], 1));
+    let denied = validator.check(request("alice", Action::Release, &["src", "a.rs"], 1));
     assert!(matches!(denied, Decision::Denied(_)));
     assert!(validator.history().is_empty());
 
     let edit = validator.check(request("alice", Action::Edit, &["src", "a.rs"], 2));
     assert!(matches!(edit, Decision::Grant(grant) if grant.metadata == 2));
 
-    let stage = validator.check(request("alice", Action::Stage, &["src", "a.rs"], 3));
+    let stage = validator.check(request("alice", Action::Release, &["src", "a.rs"], 3));
     assert!(matches!(stage, Decision::Grant(grant) if grant.metadata == 3));
     assert_eq!(validator.history().len(), 2);
 }
 
 #[test]
-fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
+fn forbid_rule_denies_duplicate_remove_without_mutating_history() {
     let action = TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Action(ComponentPattern::constant(Action::commit("ship"))),
+        AtomPattern::Action(ComponentPattern::constant(Action::Remove)),
     );
     let resource = TestExpr::atom(
         Comparison::Eq,
         AtomPattern::Resource(ComponentPattern::variable("target")),
     );
-    let matching_commit = RegexExpr::test(TestExpr::and([action, resource]));
-    let tail = RegexExpr::concat([RegexExpr::all(), matching_commit, RegexExpr::all()]);
+    let matching_remove = RegexExpr::test(TestExpr::and([action, resource]));
+    let tail = RegexExpr::concat([RegexExpr::all(), matching_remove, RegexExpr::all()]);
     let rule = Rule::new(
         RuleMode::Forbid,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::commit("ship")),
+            ComponentPattern::constant(Action::Remove),
             ComponentPattern::variable("target"),
         ),
         tail,
@@ -85,18 +85,18 @@ fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
 
     assert!(
         validator
-            .check(request("alice", Action::commit("ship"), &["a"], ()))
+            .check(request("alice", Action::Remove, &["a"], ()))
             .is_grant()
     );
     let checkpoint = validator.checkpoint();
 
-    let denied = validator.check(request("alice", Action::commit("ship"), &["a"], ()));
+    let denied = validator.check(request("alice", Action::Remove, &["a"], ()));
     assert!(matches!(denied, Decision::Denied(denial) if denial.mode == RuleMode::Forbid));
     assert_eq!(validator.checkpoint(), checkpoint);
 
     assert!(
         validator
-            .check(request("alice", Action::commit("ship"), &["b"], ()))
+            .check(request("alice", Action::Remove, &["b"], ()))
             .is_grant()
     );
 }
@@ -112,7 +112,7 @@ fn complement_is_exact_over_complete_history() {
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         RegexExpr::complement(contains_edit),
@@ -125,7 +125,7 @@ fn complement_is_exact_over_complete_history() {
 
     assert!(
         validator
-            .check(request("alice", Action::Stage, &["a"], ()))
+            .check(request("alice", Action::Release, &["a"], ()))
             .is_grant()
     );
     assert!(
@@ -134,7 +134,7 @@ fn complement_is_exact_over_complete_history() {
             .is_grant()
     );
     assert!(matches!(
-        validator.check(request("alice", Action::Stage, &["a"], ())),
+        validator.check(request("alice", Action::Release, &["a"], ())),
         Decision::Denied(_)
     ));
 }
@@ -147,7 +147,7 @@ fn construction_rejects_unbound_and_cross_component_variables() {
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         RegexExpr::test(TestExpr::atom(
@@ -201,7 +201,7 @@ fn source_expressions_are_revalidated_and_reusable_across_rules() {
             RuleMode::Require,
             Head::new(
                 ComponentPattern::variable("actor"),
-                ComponentPattern::constant(Action::Diff),
+                ComponentPattern::constant(Action::Remove),
                 ComponentPattern::constant(["b"]),
             ),
             shared_tail,
@@ -221,7 +221,7 @@ fn checkpoint_restores_append_only_history() {
     let checkpoint = validator.checkpoint();
     assert!(
         validator
-            .check(request("bob", Action::Diff, &["b"], ()))
+            .check(request("bob", Action::Remove, &["b"], ()))
             .is_grant()
     );
     validator.rollback(checkpoint);

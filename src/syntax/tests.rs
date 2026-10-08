@@ -435,7 +435,7 @@ fn epsilon_set_rewrites_use_cached_nullability() {
 fn mixed_regex_operators_group_all_test_operands() {
     let arena = Bump::new();
     let mut store = CanonicalStore::new(&arena);
-    let non_test = RegexExpr::star(action_regex(Action::Stage));
+    let non_test = RegexExpr::star(action_regex(Action::Release));
 
     let mixed_union = RegexExpr::union([
         action_regex(Action::Read),
@@ -481,7 +481,7 @@ fn mixed_regex_operators_group_all_test_operands() {
     assert_eq!(mixed_intersection, store.empty);
 
     let read = action_regex(Action::Read);
-    let other = RegexExpr::star(action_regex(Action::Stage));
+    let other = RegexExpr::star(action_regex(Action::Release));
     let absorbed_union = RegexExpr::union([
         read.clone(),
         RegexExpr::intersect([read.clone(), other.clone()]),
@@ -558,7 +558,7 @@ fn mixed_transition_operators_group_all_constant_leaves() {
     let mut store = CanonicalStore::new(&arena);
     let read_test = action_test(&mut store, Action::Read);
     let edit_test = action_test(&mut store, Action::Edit);
-    let stage_test = action_test(&mut store, Action::Stage);
+    let stage_test = action_test(&mut store, Action::Release);
     let read = store.regex_test(read_test);
     let edit = store.regex_test(edit_test);
     let branch = store.transition_if(stage_test, store.transition_epsilon, store.transition_empty);
@@ -677,7 +677,7 @@ fn symbolic_derivatives_equal_concrete_derivatives_for_every_regex_form() {
         let transition =
             SymbolicMatcher::new(&mut store, &mut derivatives).derivative(runtime_rule.tail);
         assert_transition_normalized(transition);
-        for action in [Action::Read, Action::Edit, Action::Stage] {
+        for action in [Action::Read, Action::Edit, Action::Release] {
             let event = Event::new("alice", action, ["a"]);
             let concrete = derive(&mut store, runtime_rule.tail, &event, &substitution);
             let symbolic = SymbolicMatcher::new(&mut store, &mut derivatives).evaluate(
@@ -690,7 +690,7 @@ fn symbolic_derivatives_equal_concrete_derivatives_for_every_regex_form() {
         let history = [
             Event::new("alice", Action::Read, ["a"]),
             Event::new("alice", Action::Edit, ["a"]),
-            Event::new("alice", Action::Stage, ["a"]),
+            Event::new("alice", Action::Release, ["a"]),
         ];
         let direct = accepts_direct(&mut store, runtime_rule.tail, history.iter(), &substitution);
         let symbolic = SymbolicMatcher::new(&mut store, &mut derivatives).accepts(
@@ -837,7 +837,7 @@ fn suffix_window_policy_residual_grows_after_every_matching_event() {
         MAX_PRECOMPILED_STATES,
         "stress policy must exercise the per-rule DFA state budget"
     );
-    let candidate = Event::new("candidate", Action::Stage, ["target"]);
+    let candidate = Event::new("candidate", Action::Release, ["target"]);
     let substitution = runtime_rule
         .head
         .match_candidate(&mut store, &candidate)

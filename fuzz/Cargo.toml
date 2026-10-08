@@ -10,10 +10,10 @@ cargo-fuzz = true
 [workspace]
 
 # The generator/policy harness. It lives here rather than in the library so the shipped crate
-# carries no fuzzing code, and so the libFuzzer target, the criterion benchmark and the git2
-# replay oracle all drive one implementation.
+# carries no fuzzing code, and so the libFuzzer target, the criterion benchmark and the
+# no-surprise oracle all drive one implementation.
 [lib]
-name = "git_policy_harness"
+name = "lock_policy_harness"
 path = "src/lib.rs"
 
 [dependencies]
@@ -32,22 +32,19 @@ criterion = { version = "0.8", default-features = false, features = [
     "cargo_bench_support",
     "plotters",
 ] }
-# The replay oracle's ground truth. No https/ssh: scratch repositories never touch a network.
-# Vendored so every machine and both CI images build the identical libgit2 (needs a C compiler).
-git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
 
 [[bin]]
-name = "git_policy"
-path = "fuzz_targets/git_policy.rs"
+name = "lock_policy"
+path = "fuzz_targets/lock_policy.rs"
 test = false
 doc = false
 bench = false
 
 [[bench]]
-name = "git_policy"
-path = "benches/git_policy.rs"
+name = "lock_policy"
+path = "benches/lock_policy.rs"
 harness = false
 
 [[example]]
-name = "git_policy_strictness"
-path = "examples/git_policy_strictness.rs"
+name = "lock_policy_strictness"
+path = "examples/lock_policy_strictness.rs"

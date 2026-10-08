@@ -111,7 +111,7 @@ impl Generator {
         match self.next(3) {
             0 => Action::Read,
             1 => Action::Edit,
-            _ => Action::Stage,
+            _ => Action::Release,
         }
     }
 
@@ -160,14 +160,14 @@ impl Generator {
 
 fn implementation_accepts(regex: &RefRegex, history: &[Event]) -> bool {
     let arena = Bump::new();
-    let probe = Event::new("probe", Action::History, ["probe"]);
+    let probe = Event::new("probe", Action::Remove, ["probe"]);
     let mut builder = Validator::builder(&arena);
     builder
         .add_rule(Rule::new(
             RuleMode::Require,
             Head::new(
                 ComponentPattern::constant("probe"),
-                ComponentPattern::constant(Action::History),
+                ComponentPattern::constant(Action::Remove),
                 ComponentPattern::constant(["probe"]),
             ),
             source_regex(regex),
@@ -200,7 +200,7 @@ fn histories(max_len: usize) -> Vec<Vec<Event>> {
         if remaining == 0 {
             return;
         }
-        for action in [Action::Read, Action::Edit, Action::Stage] {
+        for action in [Action::Read, Action::Edit, Action::Release] {
             prefix.push(event(action));
             extend(prefix, remaining - 1, output);
             prefix.pop();
@@ -216,7 +216,7 @@ fn histories(max_len: usize) -> Vec<Vec<Event>> {
 fn every_short_word_matches_the_reference_for_boundary_expressions() {
     let read = RefRegex::Test(RefTest::Action(Comparison::Eq, Action::Read));
     let edit = RefRegex::Test(RefTest::Action(Comparison::Eq, Action::Edit));
-    let stage = RefRegex::Test(RefTest::Action(Comparison::Eq, Action::Stage));
+    let stage = RefRegex::Test(RefTest::Action(Comparison::Eq, Action::Release));
     let read_or_edit = RefRegex::Union(vec![read.clone(), edit.clone()]);
     let contains_edit = RefRegex::Concat(vec![RefRegex::All, edit.clone(), RefRegex::All]);
     let corpus = vec![

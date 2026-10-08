@@ -55,7 +55,7 @@ fn prior_edit_rule(suffix: usize) -> Rule {
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable(actor),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable(target),
         ),
         RegexExpr::concat([
@@ -65,11 +65,11 @@ fn prior_edit_rule(suffix: usize) -> Rule {
     )
 }
 
-fn duplicate_commit_rule() -> Rule {
-    let matching_commit = RegexExpr::test(TestExpr::and([
+fn duplicate_remove_rule() -> Rule {
+    let matching_remove = RegexExpr::test(TestExpr::and([
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Action(ComponentPattern::constant(Action::commit("ship"))),
+            AtomPattern::Action(ComponentPattern::constant(Action::Remove)),
         ),
         TestExpr::atom(
             Comparison::Eq,
@@ -80,25 +80,23 @@ fn duplicate_commit_rule() -> Rule {
         RuleMode::Forbid,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::commit("ship")),
+            ComponentPattern::constant(Action::Remove),
             ComponentPattern::variable("target"),
         ),
-        RegexExpr::concat([RegexExpr::all(), matching_commit, RegexExpr::all()]),
+        RegexExpr::concat([RegexExpr::all(), matching_remove, RegexExpr::all()]),
     )
 }
 
-fn every_action_leaf(index: usize) -> RegexExpr {
+fn every_resource_leaf(index: usize) -> RegexExpr {
     RegexExpr::star(RegexExpr::test(TestExpr::atom(
         Comparison::Neq,
-        AtomPattern::Action(ComponentPattern::constant(Action::commit(format!(
-            "blocked-{index}"
-        )))),
+        AtomPattern::Resource(ComponentPattern::constant(vec![format!("blocked-{index}")])),
     )))
 }
 
-fn deeply_nested_action_allow_all_rule(depth: usize) -> Rule {
+fn deeply_nested_resource_allow_all_rule(depth: usize) -> Rule {
     assert!(depth > 0, "regex depth must be positive");
-    let mut leaves = (0..depth).map(every_action_leaf);
+    let mut leaves = (0..depth).map(every_resource_leaf);
     let mut tail = leaves.next().expect("positive depth has one leaf");
     for (index, leaf) in leaves.enumerate() {
         tail = if index % 2 == 0 {
@@ -111,7 +109,7 @@ fn deeply_nested_action_allow_all_rule(depth: usize) -> Rule {
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         tail,
@@ -156,7 +154,7 @@ fn deeply_nested_allow_all_rule(depth: usize) -> Rule {
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         tail,
@@ -169,9 +167,7 @@ fn advancing_optional_rule(steps: usize) -> Rule {
             RegexExpr::epsilon(),
             RegexExpr::test(TestExpr::atom(
                 Comparison::Neq,
-                AtomPattern::Action(ComponentPattern::constant(Action::commit(format!(
-                    "blocked-{index}"
-                )))),
+                AtomPattern::Resource(ComponentPattern::constant(vec![format!("blocked-{index}")])),
             )),
         ])
     });
@@ -179,7 +175,7 @@ fn advancing_optional_rule(steps: usize) -> Rule {
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         RegexExpr::concat(factors),
@@ -206,7 +202,7 @@ fn growing_residual_rule(window: usize) -> Rule {
         RuleMode::Forbid,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         RegexExpr::concat(factors),
@@ -223,7 +219,7 @@ fn absent_witness_rule(index: usize) -> Rule {
         RuleMode::Forbid,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         RegexExpr::concat([RegexExpr::all(), absent, RegexExpr::all()]),
@@ -254,7 +250,7 @@ fn benchmark_million_event_nested_scan(criterion: &mut Criterion) {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request("alice", Action::Stage, &[]);
+                let candidate = request("alice", Action::Release, &[]);
                 let start = Instant::now();
                 let decision = validator.check(black_box(candidate)).checked();
                 elapsed += start.elapsed();
@@ -276,7 +272,7 @@ fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
     let arena = Bump::new();
     let mut builder = Validator::builder(&arena);
     builder
-        .add_rule(deeply_nested_action_allow_all_rule(REGEX_DEPTH))
+        .add_rule(deeply_nested_resource_allow_all_rule(REGEX_DEPTH))
         .expect("benchmark rule is valid");
     let mut validator = builder.finish();
     for index in 0..HISTORY_LEN {
@@ -292,7 +288,7 @@ fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request("candidate", Action::Stage, &[]);
+                let candidate = request("candidate", Action::Release, &[]);
                 let start = Instant::now();
                 let decision = validator.check(black_box(candidate)).checked();
                 elapsed += start.elapsed();
@@ -330,7 +326,7 @@ fn benchmark_advancing_derivatives(criterion: &mut Criterion) {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request("candidate", Action::Stage, &[]);
+                let candidate = request("candidate", Action::Release, &[]);
                 let start = Instant::now();
                 let decision = validator.check(black_box(candidate)).checked();
                 elapsed += start.elapsed();
@@ -401,7 +397,7 @@ fn benchmark_growing_residual_stress(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let candidate = request("candidate", Action::Stage, &["target"]);
+                        let candidate = request("candidate", Action::Release, &["target"]);
                         let start = Instant::now();
                         let decision = validator.check(black_box(candidate));
                         elapsed += start.elapsed();
@@ -485,7 +481,7 @@ fn benchmark_many_rules_stress(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let candidate = request("candidate", Action::Stage, &["target"]);
+                        let candidate = request("candidate", Action::Release, &["target"]);
                         let start = Instant::now();
                         let decision = validator.check(black_box(candidate));
                         elapsed += start.elapsed();
@@ -559,7 +555,7 @@ fn benchmark_history_scan(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let candidate = request("alice", Action::Stage, &["src", "a.rs"]);
+                        let candidate = request("alice", Action::Release, &["src", "a.rs"]);
                         let start = Instant::now();
                         let decision = validator.check(black_box(candidate));
                         elapsed += start.elapsed();
@@ -578,17 +574,17 @@ fn benchmark_denial(criterion: &mut Criterion) {
     let arena = Bump::new();
     let mut builder = Validator::builder(&arena);
     builder
-        .add_rule(duplicate_commit_rule())
+        .add_rule(duplicate_remove_rule())
         .expect("benchmark rule is valid");
     let mut validator = builder.finish();
-    let first = validator.check(request("alice", Action::commit("ship"), &["a"]));
+    let first = validator.check(request("alice", Action::Remove, &["a"]));
     debug_assert!(first.is_grant());
 
-    criterion.bench_function("deny_duplicate_commit", |bencher| {
+    criterion.bench_function("deny_duplicate_remove", |bencher| {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request("alice", Action::commit("ship"), &["a"]);
+                let candidate = request("alice", Action::Remove, &["a"]);
                 let start = Instant::now();
                 let decision = validator.check(black_box(candidate));
                 elapsed += start.elapsed();

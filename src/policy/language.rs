@@ -1,4 +1,4 @@
-//! The two tail shapes a state-machine policy classifies a resource's history with.
+//! The tail shape a state-machine policy classifies a resource's history with.
 
 use crate::{RegexExpr, TestExpr};
 
@@ -12,9 +12,4 @@ pub(super) fn last_state_change(setter: TestExpr, stable: TestExpr) -> RegexExpr
         RegexExpr::test(setter),
         RegexExpr::star(RegexExpr::test(stable)),
     ])
-}
-
-/// No state-changing event at all: every event in history is `stable`.
-pub(super) fn never_state_change(stable: TestExpr) -> RegexExpr {
-    RegexExpr::star(RegexExpr::test(stable))
 }

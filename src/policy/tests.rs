@@ -1,7 +1,7 @@
-//! A miniature non-git policy, assembled only from kernel pieces.
+//! A miniature non-lock policy, assembled only from kernel pieces.
 //!
-//! The git table is not the contract under test here: this file exists to pin that [`super::atoms`],
-//! [`super::language`], [`super::rule`] and [`super::evaluate`] carry no git assumptions, by
+//! The lock table is not the contract under test here: this file exists to pin that [`super::atoms`],
+//! [`super::language`], [`super::rule`] and [`super::evaluate`] carry no lock assumptions, by
 //! building a policy over a different vocabulary and running it through the same loop.
 
 use super::atoms::{action_is, principal_is, resource_is};
@@ -35,7 +35,7 @@ fn rules() -> Vec<PolicyRule<LastEditor>> {
             let LastEditor { resource, editor } = context;
             (
                 format!("{resource} was last edited by {editor}"),
-                vec![format!("{editor} commit {resource}")],
+                vec![format!("{editor} release {resource}")],
             )
         }),
     )]
@@ -57,7 +57,7 @@ fn context(history: &[Event], candidate: &Event) -> LastEditor {
 }
 
 #[test]
-fn a_non_git_policy_reuses_the_kernel_loop() {
+fn a_non_lock_policy_reuses_the_kernel_loop() {
     let table = rules();
     let candidate = Event::new("bob", Action::Read, ["src", "x"]);
 
@@ -77,7 +77,7 @@ fn a_non_git_policy_reuses_the_kernel_loop() {
         )),
         PolicyDecision::Deny {
             failed_precondition: "src/x was last edited by alice".to_string(),
-            allowed_fixes: vec!["alice commit src/x".to_string()],
+            allowed_fixes: vec!["alice release src/x".to_string()],
         },
     );
 }

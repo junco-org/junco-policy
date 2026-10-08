@@ -1,7 +1,7 @@
-//! Classifies every policy denial as git legality or read-claim contention, and asks the
+//! Classifies every policy denial as ownership or read-claim contention, and asks the
 //! no-surprise oracle whether each claim denial prevented a real surprise or was over-strict.
 
-use git_policy_harness::{
+use lock_policy_harness::{
     BYTES_PER_TRACE, DETERMINISTIC_SEED, SEEDED_TRACE_COUNT, entropy, no_surprise_violation,
     validate_trace,
 };
@@ -54,7 +54,7 @@ fn report(label: &str, tally: &Tally) {
     println!("== {label} ==");
     println!("granted events:            {}", tally.granted);
     println!("denied candidates:         {denied}");
-    println!("  git-legality denials:    {}", tally.legality_denials);
+    println!("  ownership denials:       {}", tally.legality_denials);
     println!("  read-claim denials:      {}", tally.claim_denials);
     println!(
         "    prevented a surprise:  {} ({:.1}% of claim denials)",

@@ -1,12 +1,10 @@
-//! The no-surprise oracle: a simulated repository that decides, from modelled content, whether a
+//! The no-surprise oracle: a simulated file tree that decides, from modelled content, whether a
 //! validated trace ever made one principal's knowledge of a resource wrong behind its back.
 //!
-//! Real git is this harness's ground truth for legality — `tests/git_oracle.rs` replays every
-//! granted operation through libgit2 and asserts it is accepted — but it cannot decide surprise: it
-//! has no notion of agents or of what an agent has seen. This module supplies that ground truth
-//! instead. A content change is `worktree_after != worktree_before`, derived from the simulation
-//! rather than from a list of which actions "are writes", which is what keeps the oracle
-//! independent of the policy it checks.
+//! The lock policy has no notion of content; this module supplies that ground truth. A content
+//! change is `worktree_after != worktree_before`, derived from the simulation rather than from a
+//! list of which actions "are writes", which is what keeps the oracle independent of the policy
+//! it checks.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -17,46 +15,24 @@ use junco_policy::{Action, Event, Principal, Resource};
 /// stamps `i + 1`, so no write can reproduce an earlier blob.
 type Version = u64;
 
-/// Modelled repository state for one resource. The index is not modelled: no transition reads it,
-/// so it cannot change what a principal would observe.
+/// Modelled content state for one resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FileState {
     worktree: Option<Version>,
-    head: Option<Version>,
 }
 
 impl FileState {
-    /// The seed commit, in which every pooled path exists and is committed.
-    const SEEDED: Self = Self {
-        worktree: Some(0),
-        head: Some(0),
-    };
+    /// The seed, in which every pooled path exists.
+    const SEEDED: Self = Self { worktree: Some(0) };
 
     /// Applies the event at `index` and returns the state after it.
     fn apply(self, action: &Action, index: usize) -> Self {
         match action {
             Action::Edit => Self {
                 worktree: Some(index as Version + 1),
-                ..self
             },
-            Action::Delete => Self {
-                worktree: None,
-                ..self
-            },
-            Action::Commit { .. } => Self {
-                head: self.worktree,
-                ..self
-            },
-            Action::Checkout | Action::Stash => Self {
-                worktree: self.head,
-                ..self
-            },
-            Action::Stage
-            | Action::Unstage
-            | Action::Clean
-            | Action::Read
-            | Action::Diff
-            | Action::History => self,
+            Action::Remove => Self { worktree: None },
+            Action::Read | Action::Release => self,
         }
     }
 }
@@ -138,14 +114,10 @@ fn replay(history: &[Event]) -> (Option<Surprise>, usize) {
             Action::Read | Action::Edit => {
                 views.insert((&event.principal, &event.resource), (after.worktree, index));
             }
-            Action::Stage
-            | Action::Delete
-            | Action::Commit { .. }
-            | Action::Checkout
-            | Action::Stash => {
+            // Releasing or removing relinquishes the principal's interest in the resource.
+            Action::Release | Action::Remove => {
                 views.remove(&(&event.principal, &event.resource));
             }
-            Action::Unstage | Action::Diff | Action::History | Action::Clean => {}
         }
         files.insert(&event.resource, after);
     }
@@ -213,14 +185,14 @@ mod tests {
         let history = vec![
             Event::new("a", Action::Edit, r),
             Event::new("b", Action::Read, r),
-            Event::new("a", Action::Checkout, r),
+            Event::new("a", Action::Remove, r),
         ];
         assert_eq!(
             no_surprise_violation(&history),
             Some(Surprise {
                 index: 2,
                 principal: "a".to_string(),
-                action: "checkout".to_string(),
+                action: "remove".to_string(),
                 resource: "src/x".to_string(),
                 surprised: "b".to_string(),
                 learned_at: 1,
@@ -229,15 +201,14 @@ mod tests {
     }
 
     #[test]
-    fn a_checkout_of_a_pristine_resource_changes_nothing() {
+    fn a_release_changes_nothing() {
         let r = resource();
         let history = vec![
             Event::new("b", Action::Read, r),
-            Event::new("a", Action::Checkout, r),
+            Event::new("a", Action::Release, r),
             Event::new("a", Action::Edit, r),
         ];
-        // The checkout at index 1 restores content identical to the working tree, which the oracle
-        // derives rather than assumes; only the edit at index 2 changes anything.
+        // The release at index 1 leaves the content alone; only the edit at index 2 changes it.
         assert_eq!(
             no_surprise_violation(&history).map(|surprise| surprise.index),
             Some(2),
@@ -261,8 +232,8 @@ mod tests {
         let history = vec![
             Event::new("a", Action::Read, r),
             Event::new("a", Action::Edit, r),
-            Event::new("a", Action::Stage, r),
-            Event::new("a", Action::commit("m"), r),
+            Event::new("a", Action::Release, r),
+            Event::new("a", Action::Remove, r),
         ];
         assert_eq!(no_surprise_violation(&history), None);
     }

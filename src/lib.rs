@@ -37,7 +37,7 @@
 //!     RuleMode::Require,
 //!     Head::new(
 //!         ComponentPattern::variable("actor"),
-//!         ComponentPattern::constant(Action::Stage),
+//!         ComponentPattern::constant(Action::Release),
 //!         ComponentPattern::variable("target"),
 //!     ),
 //!     tail,
@@ -50,8 +50,8 @@
 //!
 //! let edit = Request::new(Event::new("alice", Action::Edit, ["src", "a.rs"]), ());
 //! assert!(validator.check(edit).is_grant());
-//! let stage = Request::new(Event::new("alice", Action::Stage, ["src", "a.rs"]), ());
-//! assert!(matches!(validator.check(stage), Decision::Grant(_)));
+//! let release = Request::new(Event::new("alice", Action::Release, ["src", "a.rs"]), ());
+//! assert!(matches!(validator.check(release), Decision::Grant(_)));
 //! # Ok::<(), junco_policy::CompileError>(())
 //! ```
 
@@ -64,7 +64,7 @@ pub use bumpalo::Bump;
 pub use model::{Action, Event, Grant, Principal, Request, Resource};
 pub use policy::{
     PolicyDecision,
-    git::{GitPolicy, git_decision},
+    lock::{LockPolicy, lock_decision},
 };
 pub use syntax::{
     AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
