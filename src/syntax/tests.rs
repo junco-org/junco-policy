@@ -11,7 +11,7 @@ use super::source::{
 use super::store::CanonicalStore;
 use super::symbolic::{MAX_PRECOMPILED_ATOMS, SymbolicDerivativeCache, SymbolicMatcher};
 use crate::history::History;
-use crate::model::{Action, GitEvent, git_event};
+use crate::model::{Action, LockEvent};
 
 /// Test principal identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -32,7 +32,7 @@ const B: Path = Path(1);
 const OTHER: Path = Path(2);
 const TARGET: Path = Path(3);
 
-fn variable_head() -> Head<GitEvent<Actor, Path>> {
+fn variable_head() -> Head<LockEvent<Actor, Path>> {
     Head::new(
         ComponentPattern::variable("principal"),
         ComponentPattern::variable("action"),
@@ -40,32 +40,32 @@ fn variable_head() -> Head<GitEvent<Actor, Path>> {
     )
 }
 
-fn rule(tail: RegexExpr<GitEvent<Actor, Path>>) -> Rule<GitEvent<Actor, Path>> {
+fn rule(tail: RegexExpr<LockEvent<Actor, Path>>) -> Rule<LockEvent<Actor, Path>> {
     Rule::new(RuleMode::Require, variable_head(), tail)
 }
 
 fn action_test_expr_with(
     comparison: Comparison,
     action: Action,
-) -> TestExpr<GitEvent<Actor, Path>> {
+) -> TestExpr<LockEvent<Actor, Path>> {
     TestExpr::atom(
         comparison,
         AtomPattern::Action(ComponentPattern::constant(action)),
     )
 }
 
-fn action_test_expr(action: Action) -> TestExpr<GitEvent<Actor, Path>> {
+fn action_test_expr(action: Action) -> TestExpr<LockEvent<Actor, Path>> {
     action_test_expr_with(Comparison::Eq, action)
 }
 
-fn action_regex(action: Action) -> RegexExpr<GitEvent<Actor, Path>> {
+fn action_regex(action: Action) -> RegexExpr<LockEvent<Actor, Path>> {
     RegexExpr::test(action_test_expr(action))
 }
 
 fn compiled_test<'arena>(
-    store: &mut CanonicalStore<'arena, GitEvent<Actor, Path>>,
-    source: TestExpr<GitEvent<Actor, Path>>,
-) -> TestId<'arena, GitEvent<Actor, Path>> {
+    store: &mut CanonicalStore<'arena, LockEvent<Actor, Path>>,
+    source: TestExpr<LockEvent<Actor, Path>>,
+) -> TestId<'arena, LockEvent<Actor, Path>> {
     let regex = compile_rule(store, &rule(RegexExpr::test(source)))
         .unwrap()
         .tail;
@@ -76,13 +76,13 @@ fn compiled_test<'arena>(
 }
 
 fn action_test<'arena>(
-    store: &mut CanonicalStore<'arena, GitEvent<Actor, Path>>,
+    store: &mut CanonicalStore<'arena, LockEvent<Actor, Path>>,
     action: Action,
-) -> TestId<'arena, GitEvent<Actor, Path>> {
+) -> TestId<'arena, LockEvent<Actor, Path>> {
     compiled_test(store, action_test_expr(action))
 }
 
-fn assert_transition_normalized(transition: TransitionId<'_, GitEvent<Actor, Path>>) {
+fn assert_transition_normalized(transition: TransitionId<'_, LockEvent<Actor, Path>>) {
     match *transition.get() {
         TransitionNode::Const(_) => {}
         TransitionNode::If {
@@ -177,7 +177,7 @@ fn derivative_cycle_returns_the_same_hashconsed_state() {
     ]));
     let runtime_rule = compile_rule(&mut store, &rule(cycle)).unwrap();
 
-    let event = git_event(ALICE, Action::Read, A);
+    let event = LockEvent::new(ALICE, Action::Read, A);
     let substitution = runtime_rule.head.match_candidate(&event).unwrap();
     let before = store.regex_node_count();
     let mut state = runtime_rule.tail;
@@ -197,7 +197,7 @@ fn concrete_derivatives_reuse_equal_event_transitions() {
         action_regex(Action::Edit),
     ]));
     let runtime_rule = compile_rule(&mut store, &rule(cycle)).unwrap();
-    let first_event = git_event(ALICE, Action::Read, A);
+    let first_event = LockEvent::new(ALICE, Action::Read, A);
     let equal_event = first_event;
     let substitution = runtime_rule.head.match_candidate(&first_event).unwrap();
     let mut derivatives = DerivativeCache::new();
@@ -453,7 +453,7 @@ fn epsilon_set_rewrites_use_cached_nullability() {
 fn mixed_regex_operators_group_all_test_operands() {
     let arena = Bump::new();
     let mut store = CanonicalStore::new(&arena);
-    let non_test = RegexExpr::star(action_regex(Action::Stage));
+    let non_test = RegexExpr::star(action_regex(Action::Release));
 
     let mixed_union = RegexExpr::union([
         action_regex(Action::Read),
@@ -499,7 +499,7 @@ fn mixed_regex_operators_group_all_test_operands() {
     assert_eq!(mixed_intersection, store.empty);
 
     let read = action_regex(Action::Read);
-    let other = RegexExpr::star(action_regex(Action::Stage));
+    let other = RegexExpr::star(action_regex(Action::Release));
     let absorbed_union = RegexExpr::union([
         read.clone(),
         RegexExpr::intersect([read.clone(), other.clone()]),
@@ -576,10 +576,14 @@ fn mixed_transition_operators_group_all_constant_leaves() {
     let mut store = CanonicalStore::new(&arena);
     let read_test = action_test(&mut store, Action::Read);
     let edit_test = action_test(&mut store, Action::Edit);
-    let stage_test = action_test(&mut store, Action::Stage);
+    let release_test = action_test(&mut store, Action::Release);
     let read = store.regex_test(read_test);
     let edit = store.regex_test(edit_test);
-    let branch = store.transition_if(stage_test, store.transition_epsilon, store.transition_empty);
+    let branch = store.transition_if(
+        release_test,
+        store.transition_epsilon,
+        store.transition_empty,
+    );
     let read_transition = store.transition_const(read);
     let edit_transition = store.transition_const(edit);
 
@@ -683,7 +687,7 @@ fn symbolic_derivatives_equal_concrete_derivatives_for_every_regex_form() {
         RegexExpr::star(RegexExpr::union([read.clone(), edit.clone()])),
         RegexExpr::complement(RegexExpr::concat([read, edit])),
     ];
-    let candidate = git_event(ALICE, Action::Read, A);
+    let candidate = LockEvent::new(ALICE, Action::Read, A);
 
     for source in cases {
         let mut runtime_rule = compile_rule(&mut store, &rule(source)).unwrap();
@@ -692,8 +696,8 @@ fn symbolic_derivatives_equal_concrete_derivatives_for_every_regex_form() {
         let transition =
             SymbolicMatcher::new(&mut store, &mut derivatives).derivative(runtime_rule.tail);
         assert_transition_normalized(transition);
-        for action in [Action::Read, Action::Edit, Action::Stage] {
-            let event = git_event(ALICE, action, A);
+        for action in [Action::Read, Action::Edit, Action::Release] {
+            let event = LockEvent::new(ALICE, action, A);
             let concrete = derive(&mut store, runtime_rule.tail, &event, &substitution);
             let symbolic = SymbolicMatcher::new(&mut store, &mut derivatives).evaluate(
                 transition,
@@ -703,9 +707,9 @@ fn symbolic_derivatives_equal_concrete_derivatives_for_every_regex_form() {
             assert_eq!(symbolic, concrete);
         }
         let history = [
-            git_event(ALICE, Action::Read, A),
-            git_event(ALICE, Action::Edit, A),
-            git_event(ALICE, Action::Stage, A),
+            LockEvent::new(ALICE, Action::Read, A),
+            LockEvent::new(ALICE, Action::Edit, A),
+            LockEvent::new(ALICE, Action::Release, A),
         ];
         let direct = accepts_direct(&mut store, runtime_rule.tail, history.iter(), &substitution);
         let residual = SymbolicMatcher::new(&mut store, &mut derivatives).residual(
@@ -730,10 +734,10 @@ fn symbolic_instantiations_reuse_equal_truth_assignments() {
         action_regex(Action::Edit),
     ]));
     let runtime_rule = compile_rule(&mut store, &rule(cycle)).unwrap();
-    let candidate = git_event(ALICE, Action::Read, A);
+    let candidate = LockEvent::new(ALICE, Action::Read, A);
     let same_event = candidate;
-    let equivalent_assignment_event = git_event(BOB, Action::Read, B);
-    let distinct_assignment_event = git_event(ALICE, Action::Edit, A);
+    let equivalent_assignment_event = LockEvent::new(BOB, Action::Read, B);
+    let distinct_assignment_event = LockEvent::new(ALICE, Action::Edit, A);
     let substitution = runtime_rule.head.match_candidate(&candidate).unwrap();
     let mut derivatives = SymbolicDerivativeCache::new();
     let mut matcher = SymbolicMatcher::new(&mut store, &mut derivatives);
@@ -763,8 +767,8 @@ fn symbolic_derivative_cache_is_shared_across_events_and_bindings() {
         AtomPattern::Action(ComponentPattern::variable("action")),
     ));
     let mut runtime_rule = compile_rule(&mut store, &rule(tail)).unwrap();
-    let read = git_event(ALICE, Action::Read, A);
-    let edit = git_event(BOB, Action::Edit, B);
+    let read = LockEvent::new(ALICE, Action::Read, A);
+    let edit = LockEvent::new(BOB, Action::Edit, B);
     let derivatives = runtime_rule.derivative_count();
     let precompiled = runtime_rule.precompiled_transition_count();
     let transitions = store.transition_node_count();
@@ -802,9 +806,9 @@ fn wide_symbolic_alphabet_uses_exact_transition_fallback() {
     let mut runtime_rule = compile_rule(&mut store, &rule(RegexExpr::union(alternatives))).unwrap();
     assert_eq!(runtime_rule.precompiled_transition_count(), 0);
 
-    let candidate = git_event(CANDIDATE, Action::Edit, TARGET);
-    let matching = git_event(Actor(7), Action::Read, OTHER);
-    let nonmatching = git_event(OUTSIDE, Action::Read, OTHER);
+    let candidate = LockEvent::new(CANDIDATE, Action::Edit, TARGET);
+    let matching = LockEvent::new(Actor(7), Action::Read, OTHER);
+    let nonmatching = LockEvent::new(OUTSIDE, Action::Read, OTHER);
     assert_eq!(
         runtime_rule.accepts_history(&mut store, &History::from_events([matching]), &candidate),
         Some(true)

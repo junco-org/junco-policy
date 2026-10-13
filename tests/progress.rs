@@ -6,8 +6,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use junco_policy::{
     Action, AtomPattern, Bump, Comparison, ComponentPattern, Coprod, Coproduct, Decision, Event,
-    GitPolicy, Head, History, MessageId, PolicyDecision, RegexExpr, Request, Rule, RuleMode,
-    TestExpr, Validator, git_decision, git_event,
+    Head, History, LockEvent, LockPolicy, PolicyDecision, RegexExpr, Request, Rule, RuleMode,
+    TestExpr, Validator, lock_decision,
 };
 
 /// Caller-assigned principal identity.
@@ -34,6 +34,7 @@ const ALICE: Actor = Actor(1);
 const BOB: Actor = Actor(2);
 const A: Doc = Doc(1);
 const B: Doc = Doc(2);
+const OPERATIONS: [Action; 4] = [Action::Read, Action::Edit, Action::Release, Action::Remove];
 
 fn action_is<E: Event<Action = Action>>(action: Action) -> TestExpr<E> {
     TestExpr::atom(
@@ -42,11 +43,11 @@ fn action_is<E: Event<Action = Action>>(action: Action) -> TestExpr<E> {
     )
 }
 
-/// Head matching every `Stage` candidate, binding its principal `actor` and resource `doc`.
-fn stage_head<E: Event<Action = Action>>() -> Head<E> {
+/// Head matching every `Release` candidate, binding its principal `actor` and resource `doc`.
+fn release_head<E: Event<Action = Action>>() -> Head<E> {
     Head::new(
         ComponentPattern::variable("actor"),
-        ComponentPattern::constant(Action::Stage),
+        ComponentPattern::constant(Action::Release),
         ComponentPattern::variable("doc"),
     )
 }
@@ -56,7 +57,7 @@ fn contains<E: Event>(test: TestExpr<E>) -> RegexExpr<E> {
     RegexExpr::concat([RegexExpr::all(), RegexExpr::test(test), RegexExpr::all()])
 }
 
-/// Stage requires an earlier edit of the same resource by the same principal.
+/// Release requires an earlier edit of the same resource by the same principal.
 fn prior_edit<E: Event<Action = Action>>() -> Rule<E> {
     let same_edit = TestExpr::and([
         TestExpr::atom(
@@ -69,7 +70,7 @@ fn prior_edit<E: Event<Action = Action>>() -> Rule<E> {
             AtomPattern::Resource(ComponentPattern::variable("doc")),
         ),
     ]);
-    Rule::new(RuleMode::Require, stage_head(), contains(same_edit))
+    Rule::new(RuleMode::Require, release_head(), contains(same_edit))
 }
 
 fn validator_with<'arena, E>(arena: &'arena Bump, rules: &[Rule<E>]) -> Validator<'arena, E>
@@ -148,8 +149,8 @@ macro_rules! payload {
 
 payload!(ReadPayload, Action::Read);
 payload!(EditPayload, Action::Edit);
-payload!(ApprovalPayload, Action::Diff);
-payload!(ProbePayload, Action::Stage);
+payload!(ApprovalPayload, Action::Remove);
+payload!(ProbePayload, Action::Release);
 
 fn read(
     actor: Actor,
@@ -201,39 +202,15 @@ fn caller_coproduct_events_keep_full_component_identity() {
 }
 
 #[test]
-fn exact_commit_message_identity_is_part_of_event_equality() {
-    let committed = git_event(ALICE, Action::commit(MessageId(1)), A);
-    for (required, accepted) in [
-        (Action::commit(MessageId(1)), true),
-        (Action::commit_without_message(), false),
-        (Action::commit(MessageId(2)), false),
-    ] {
-        let rules = [Rule::new(
-            RuleMode::Require,
-            stage_head(),
-            contains(action_is(required)),
-        )];
-        let arena = Bump::new();
-        let mut validator = validator_with(&arena, &rules);
-        assert!(validator.check(Request::new(committed, ())).is_grant());
-        assert_eq!(
-            validator.permits(&git_event(ALICE, Action::Stage, A)),
-            accepted,
-            "history {committed:?} against required {required}"
-        );
-    }
-}
-
-#[test]
 fn cached_residual_advances_at_every_appended_event() {
-    // Probe-only head; `a · All · b` with a = Read, b = Edit, x = Diff.
+    // Probe-only head; `a · All · b` with a = Read, b = Edit, x = Remove.
     let probe_actor = Actor(99);
     let probe_doc = Doc(99);
     let rules = [Rule::new(
         RuleMode::Require,
         Head::new(
             ComponentPattern::constant(probe_actor),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::constant(probe_doc),
         ),
         RegexExpr::concat([
@@ -242,12 +219,12 @@ fn cached_residual_advances_at_every_appended_event() {
             RegexExpr::test(action_is(Action::Edit)),
         ]),
     )];
-    let candidate = git_event(probe_actor, Action::Stage, probe_doc);
+    let candidate = LockEvent::new(probe_actor, Action::Release, probe_doc);
     let word = [
         Action::Read,
         Action::Edit,
         Action::Edit,
-        Action::Diff,
+        Action::Remove,
         Action::Edit,
     ];
     let expected = [false, false, true, true, false, true];
@@ -269,7 +246,7 @@ fn cached_residual_advances_at_every_appended_event() {
         if let Some(&action) = word.get(split) {
             assert!(
                 validator
-                    .check(Request::new(git_event(ALICE, action, A), ()))
+                    .check(Request::new(LockEvent::new(ALICE, action, A), ()))
                     .is_grant()
             );
         }
@@ -280,64 +257,64 @@ fn cached_residual_advances_at_every_appended_event() {
 #[test]
 fn rollback_then_same_length_append_does_not_leak_a_warmed_grant() {
     let rules = [prior_edit()];
-    let stage = git_event(ALICE, Action::Stage, A);
+    let release = LockEvent::new(ALICE, Action::Release, A);
     let arena = Bump::new();
     let mut validator = validator_with(&arena, &rules);
 
     let before = validator.checkpoint();
     assert!(
         validator
-            .check(Request::new(git_event(ALICE, Action::Edit, A), ()))
+            .check(Request::new(LockEvent::new(ALICE, Action::Edit, A), ()))
             .is_grant()
     );
-    assert!(validator.permits(&stage));
-    assert!(validator.permits(&stage));
+    assert!(validator.permits(&release));
+    assert!(validator.permits(&release));
 
     validator.rollback(before);
     assert!(
         validator
-            .check(Request::new(git_event(BOB, Action::Edit, B), ()))
+            .check(Request::new(LockEvent::new(BOB, Action::Edit, B), ()))
             .is_grant()
     );
     assert_eq!(validator.history().len(), 1);
-    assert!(!validator.permits(&stage));
-    assert!(fresh(&rules, validator.history(), &stage).is_some());
+    assert!(!validator.permits(&release));
+    assert!(fresh(&rules, validator.history(), &release).is_some());
 }
 
 #[test]
 fn owners_and_replacements_keep_separate_progress() {
     let arena = Bump::new();
-    let mut policy = GitPolicy::new(&arena);
-    let stage = git_event(ALICE, Action::Stage, A);
+    let mut policy = LockPolicy::new(&arena);
+    let release = LockEvent::new(ALICE, Action::Release, A);
 
     // Two clones of one empty owner share length and revision but never progress.
     let empty = History::new();
     let mut first = empty.clone();
     let mut second = empty.clone();
-    first.push(git_event(ALICE, Action::Edit, A));
-    second.push(git_event(BOB, Action::Edit, A));
-    assert_eq!(policy.decide(&first, &stage), PolicyDecision::Grant);
-    assert_eq!(policy.decide(&first, &stage), PolicyDecision::Grant);
-    let denied = policy.decide(&second, &stage);
+    first.push(LockEvent::new(ALICE, Action::Edit, A));
+    second.push(LockEvent::new(BOB, Action::Edit, A));
+    assert_eq!(policy.decide(&first, &release), PolicyDecision::Grant);
+    assert_eq!(policy.decide(&first, &release), PolicyDecision::Grant);
+    let denied = policy.decide(&second, &release);
     assert_ne!(denied, PolicyDecision::Grant);
-    assert_eq!(denied, git_decision(&second, &stage));
+    assert_eq!(denied, lock_decision(&second, &release));
 
     // Truncate-and-reappend replaces a warmed branch on one owner.
-    let mut owner = History::from_events([git_event(ALICE, Action::Edit, A)]);
-    assert_eq!(policy.decide(&owner, &stage), PolicyDecision::Grant);
-    assert_eq!(policy.decide(&owner, &stage), PolicyDecision::Grant);
+    let mut owner = History::from_events([LockEvent::new(ALICE, Action::Edit, A)]);
+    assert_eq!(policy.decide(&owner, &release), PolicyDecision::Grant);
+    assert_eq!(policy.decide(&owner, &release), PolicyDecision::Grant);
     owner.truncate(0);
-    owner.push(git_event(BOB, Action::Edit, A));
-    let replaced = policy.decide(&owner, &stage);
+    owner.push(LockEvent::new(BOB, Action::Edit, A));
+    let replaced = policy.decide(&owner, &release);
     assert_ne!(replaced, PolicyDecision::Grant);
-    assert_eq!(replaced, git_decision(&owner, &stage));
+    assert_eq!(replaced, lock_decision(&owner, &release));
 }
 
 #[test]
 fn foreign_and_future_checkpoints_are_rejected_before_mutation() {
     let events = [
-        git_event(ALICE, Action::Read, A),
-        git_event(BOB, Action::Read, B),
+        LockEvent::new(ALICE, Action::Read, A),
+        LockEvent::new(BOB, Action::Read, B),
     ];
     let mut owner = History::from_events(events);
     let other = History::from_events(events);
@@ -364,13 +341,13 @@ fn foreign_and_future_checkpoints_are_rejected_before_mutation() {
     let mut stranger = validator_with(&arena, &rules);
     assert!(
         stranger
-            .check(Request::new(git_event(BOB, Action::Read, B), ()))
+            .check(Request::new(LockEvent::new(BOB, Action::Read, B), ()))
             .is_grant()
     );
     let stranger_checkpoint = stranger.checkpoint();
     assert!(catch_unwind(AssertUnwindSafe(|| validator.rollback(stranger_checkpoint))).is_err());
     for _ in 0..2 {
-        let denied = validator.check(Request::new(git_event(ALICE, Action::Stage, A), ()));
+        let denied = validator.check(Request::new(LockEvent::new(ALICE, Action::Release, A), ()));
         assert_eq!(mode(denied), Some(RuleMode::Require));
         assert!(validator.history().is_empty());
     }
@@ -441,12 +418,12 @@ fn recorded(sequence: u32, actor: Actor, action: Action, doc: Doc) -> Counted {
     }
 }
 
-fn staged(actor: Actor, doc: Doc) -> Counted {
+fn released(actor: Actor, doc: Doc) -> Counted {
     Counted {
         role: Role::Probe,
         sequence: Sequence(0),
         actor,
-        action: Action::Stage,
+        action: Action::Release,
         doc,
     }
 }
@@ -462,14 +439,14 @@ fn evicted_cursor_rereads_history_and_keeps_its_verdict() {
             .is_grant()
     );
 
-    let alice = staged(ALICE, A);
+    let alice = released(ALICE, A);
     assert!(validator.permits(&alice));
     take_projections();
     assert!(validator.permits(&alice));
     assert_eq!(take_projections(), 0, "a warm cursor reads no history");
 
     for actor in 100..116 {
-        assert!(!validator.permits(&staged(Actor(actor), A)));
+        assert!(!validator.permits(&released(Actor(actor), A)));
     }
     take_projections();
     assert!(validator.permits(&alice));
@@ -478,7 +455,7 @@ fn evicted_cursor_rereads_history_and_keeps_its_verdict() {
     assert_eq!(validator.history().len(), 1);
 
     // Opposite verdicts after append and after rollback.
-    let bob = staged(BOB, A);
+    let bob = released(BOB, A);
     assert!(!validator.permits(&bob));
     let before = validator.checkpoint();
     assert!(
@@ -496,7 +473,7 @@ fn evicted_cursor_rereads_history_and_keeps_its_verdict() {
 #[test]
 fn alternating_bindings_and_owners_change_work_never_verdicts() {
     // Forbid repeating an identical operation; the head binds the action, so every distinct
-    // message ID and resource is a distinct cursor key.
+    // action and resource is a distinct cursor key.
     let same_operation = TestExpr::and([
         TestExpr::atom(
             Comparison::Eq,
@@ -522,21 +499,14 @@ fn alternating_bindings_and_owners_change_work_never_verdicts() {
     )];
     let arena = Bump::new();
     let mut validator = validator_with(&arena, &rules);
-    for message in 0..9 {
-        let commit = git_event(
-            ALICE,
-            Action::commit(MessageId(message)),
-            Doc(message as u32 % 3),
-        );
-        assert!(validator.check(Request::new(commit, ())).is_grant());
+    // Nine distinct (operation, doc) pairs, so every seed is granted.
+    for index in 0..9_u32 {
+        let event = LockEvent::new(ALICE, OPERATIONS[index as usize % 4], Doc(index % 3));
+        assert!(validator.check(Request::new(event, ())).is_grant());
     }
     for _ in 0..2 {
         for index in 0..40_u32 {
-            let candidate = git_event(
-                ALICE,
-                Action::commit(MessageId(u64::from(index % 12))),
-                Doc(index % 4),
-            );
+            let candidate = LockEvent::new(ALICE, OPERATIONS[index as usize % 4], Doc(index % 6));
             assert_eq!(
                 validator.permits(&candidate),
                 fresh(&rules, validator.history(), &candidate).is_none(),
@@ -545,19 +515,19 @@ fn alternating_bindings_and_owners_change_work_never_verdicts() {
         }
     }
 
-    let mut policy = GitPolicy::new(&arena);
+    let mut policy = LockPolicy::new(&arena);
     let owners = [
-        History::from_events([git_event(ALICE, Action::Edit, A)]),
-        History::from_events([git_event(BOB, Action::Edit, A)]),
+        History::from_events([LockEvent::new(ALICE, Action::Edit, A)]),
+        History::from_events([LockEvent::new(BOB, Action::Edit, A)]),
         History::new(),
     ];
     for _ in 0..2 {
         for index in 0..30_u32 {
             let owner = &owners[index as usize % owners.len()];
-            let candidate = git_event(Actor(index % 20), Action::Stage, Doc(index % 2 + 1));
+            let candidate = LockEvent::new(Actor(index % 20), Action::Release, Doc(index % 2 + 1));
             assert_eq!(
                 policy.decide(owner, &candidate),
-                git_decision(owner, &candidate)
+                lock_decision(owner, &candidate)
             );
         }
     }
@@ -568,42 +538,54 @@ fn lagging_rules_resume_independently_after_rollback() {
     let rules = [
         Rule::new(
             RuleMode::Require,
-            stage_head(),
+            release_head(),
             contains(action_is(Action::Edit)),
         ),
         Rule::new(
             RuleMode::Forbid,
-            stage_head(),
-            contains(action_is(Action::Diff)),
+            release_head(),
+            contains(action_is(Action::Remove)),
         ),
     ];
-    let stage = git_event(ALICE, Action::Stage, A);
+    let release = LockEvent::new(ALICE, Action::Release, A);
     let arena = Bump::new();
     let mut validator = validator_with(&arena, &rules);
     let empty = validator.checkpoint();
 
     assert_eq!(
-        check_matches_fresh(&mut validator, &rules, git_event(ALICE, Action::Edit, A)),
+        check_matches_fresh(
+            &mut validator,
+            &rules,
+            LockEvent::new(ALICE, Action::Edit, A)
+        ),
         None
     );
-    assert_eq!(check_matches_fresh(&mut validator, &rules, stage), None);
+    assert_eq!(check_matches_fresh(&mut validator, &rules, release), None);
 
     validator.rollback(empty);
     assert_eq!(
-        check_matches_fresh(&mut validator, &rules, stage),
+        check_matches_fresh(&mut validator, &rules, release),
         Some(RuleMode::Require)
     );
 
     assert_eq!(
-        check_matches_fresh(&mut validator, &rules, git_event(ALICE, Action::Diff, A)),
+        check_matches_fresh(
+            &mut validator,
+            &rules,
+            LockEvent::new(ALICE, Action::Remove, A)
+        ),
         None
     );
     assert_eq!(
-        check_matches_fresh(&mut validator, &rules, git_event(ALICE, Action::Edit, A)),
+        check_matches_fresh(
+            &mut validator,
+            &rules,
+            LockEvent::new(ALICE, Action::Edit, A)
+        ),
         None
     );
     assert_eq!(
-        check_matches_fresh(&mut validator, &rules, stage),
+        check_matches_fresh(&mut validator, &rules, release),
         Some(RuleMode::Forbid)
     );
 }
@@ -612,7 +594,7 @@ fn lagging_rules_resume_independently_after_rollback() {
 fn warm_permits_read_no_history_and_one_append_reads_one_event() {
     let rules = [Rule::new(
         RuleMode::Require,
-        stage_head(),
+        release_head(),
         RegexExpr::star(RegexExpr::test(action_is(Action::Read))),
     )];
     let arena = Bump::new();
@@ -626,7 +608,7 @@ fn warm_permits_read_no_history_and_one_append_reads_one_event() {
         );
         assert!(validator.check(Request::new(event, ())).is_grant());
     }
-    let candidate = staged(ALICE, A);
+    let candidate = released(ALICE, A);
 
     take_projections();
     assert!(validator.permits(&candidate));

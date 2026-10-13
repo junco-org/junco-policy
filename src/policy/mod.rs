@@ -4,11 +4,11 @@
 //! committed history, each deny cell paired with a diagnostic that renders the exact
 //! precondition/fix strings the consumer boundary surfaces. The kernel is policy-agnostic:
 //! [`atoms`] are the one-event tests over the head-bound principal and resource, [`language`] the
-//! two tail shapes that classify a resource's history, [`rule`] the rule/diagnostic pairing over a
+//! tail shape that classifies a resource's history, [`rule`] the rule/diagnostic pairing over a
 //! per-policy context, [`evaluate`] the loop that walks a table, and [`decision`] the verdict it
 //! returns.
 //!
-//! [`git`] is the one policy built on it today: multi-agent git legality.
+//! [`lock`] is the one policy built on it today: multi-agent file ownership.
 
 mod atoms;
 mod decision;
@@ -16,7 +16,7 @@ mod evaluate;
 mod language;
 mod rule;
 
-pub mod git;
+pub mod lock;
 
 pub use decision::PolicyDecision;
 

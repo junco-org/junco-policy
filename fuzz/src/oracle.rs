@@ -1,64 +1,43 @@
-//! The no-surprise oracle: a simulated repository that decides, from modelled content, whether a
+//! The no-surprise oracle: a simulated file tree that decides, from modelled content, whether a
 //! validated trace ever made one principal's knowledge of a resource wrong behind its back.
 //!
-//! Real git is this harness's ground truth for legality — `tests/git_oracle.rs` replays every
-//! granted operation through libgit2 and asserts it is accepted — but it cannot decide surprise: it
-//! has no notion of agents or of what an agent has seen. This module supplies that ground truth
-//! instead. A content change is `worktree_after != worktree_before`, derived from the simulation
-//! rather than from a list of which actions "are writes", which is what keeps the oracle
-//! independent of the policy it checks.
+//! The lock policy has no notion of content; this module supplies that ground truth. A content
+//! change is `worktree_after != worktree_before`, derived from the simulation rather than from a
+//! list of which actions "are writes", which is what keeps the oracle independent of the policy
+//! it checks.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-use junco_policy::{Action, Event, GitEvent};
+use junco_policy::{Action, LockEvent};
 
 use crate::{Agent, PooledPath};
 
-/// A working-tree blob. `0` is the seed commit's content and every `edit` at history index `i`
-/// stamps `i + 1`, so no write can reproduce an earlier blob.
-type Version = u64;
+/// A working-tree blob. `0` is the seed's content and every `edit` at history index `i` stamps
+/// `i + 1`, so no write can reproduce an earlier blob.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Version(u64);
 
-/// Modelled repository state for one resource. The index is not modelled: no transition reads it,
-/// so it cannot change what a principal would observe.
+/// Modelled content state for one resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FileState {
     worktree: Option<Version>,
-    head: Option<Version>,
 }
 
 impl FileState {
-    /// The seed commit, in which every pooled path exists and is committed.
+    /// The seed, in which every pooled path exists.
     const SEEDED: Self = Self {
-        worktree: Some(0),
-        head: Some(0),
+        worktree: Some(Version(0)),
     };
 
     /// Applies the event at `index` and returns the state after it.
     fn apply(self, action: Action, index: usize) -> Self {
         match action {
             Action::Edit => Self {
-                worktree: Some(index as Version + 1),
-                ..self
+                worktree: Some(Version(index as u64 + 1)),
             },
-            Action::Delete => Self {
-                worktree: None,
-                ..self
-            },
-            Action::Commit { .. } => Self {
-                head: self.worktree,
-                ..self
-            },
-            Action::Checkout | Action::Stash => Self {
-                worktree: self.head,
-                ..self
-            },
-            Action::Stage
-            | Action::Unstage
-            | Action::Clean
-            | Action::Read
-            | Action::Diff
-            | Action::History => self,
+            Action::Remove => Self { worktree: None },
+            Action::Read | Action::Release => self,
         }
     }
 }
@@ -91,20 +70,24 @@ impl fmt::Display for Surprise {
     }
 }
 
-/// Replays `history` through the modelled repository. Returns the first violation and how many
+/// Replays `history` through the modelled file tree. Returns the first violation and how many
 /// events acted on a resource another principal held an outstanding view of. Both answers come from
 /// one fold so the two public entry points can never drift apart.
 ///
 /// `BTreeMap`, not `HashMap`: with several surprised principals the reported one must be
 /// deterministic.
-fn replay(history: &[GitEvent<Agent, PooledPath>]) -> (Option<Surprise>, usize) {
+fn replay(history: &[LockEvent<Agent, PooledPath>]) -> (Option<Surprise>, usize) {
     let mut files: BTreeMap<PooledPath, FileState> = BTreeMap::new();
     let mut views: BTreeMap<(Agent, PooledPath), (Option<Version>, usize)> = BTreeMap::new();
     let mut first: Option<Surprise> = None;
     let mut contended = 0usize;
 
-    for (index, event) in history.iter().enumerate() {
-        let (principal, action, resource) = (event.principal(), event.action(), event.resource());
+    for (index, &event) in history.iter().enumerate() {
+        let LockEvent {
+            principal,
+            action,
+            resource,
+        } = event;
         let before = *files.get(&resource).unwrap_or(&FileState::SEEDED);
         let after = before.apply(action, index);
 
@@ -139,14 +122,10 @@ fn replay(history: &[GitEvent<Agent, PooledPath>]) -> (Option<Surprise>, usize) 
             Action::Read | Action::Edit => {
                 views.insert((principal, resource), (after.worktree, index));
             }
-            Action::Stage
-            | Action::Delete
-            | Action::Commit { .. }
-            | Action::Checkout
-            | Action::Stash => {
+            // Releasing or removing relinquishes the principal's interest in the resource.
+            Action::Release | Action::Remove => {
                 views.remove(&(principal, resource));
             }
-            Action::Unstage | Action::Diff | Action::History | Action::Clean => {}
         }
         files.insert(resource, after);
     }
@@ -154,20 +133,20 @@ fn replay(history: &[GitEvent<Agent, PooledPath>]) -> (Option<Surprise>, usize) 
 }
 
 /// The first no-surprise violation in `history`, or `None` when the trace has the property.
-pub fn no_surprise_violation(history: &[GitEvent<Agent, PooledPath>]) -> Option<Surprise> {
+pub fn no_surprise_violation(history: &[LockEvent<Agent, PooledPath>]) -> Option<Surprise> {
     replay(history).0
 }
 
 /// How many events in `history` acted on a resource another principal held an outstanding view of —
 /// the interleavings the property is about. A deterministic sweep whose total is zero would pass
 /// [`no_surprise_violation`] vacuously.
-pub fn contended_events(history: &[GitEvent<Agent, PooledPath>]) -> usize {
+pub fn contended_events(history: &[LockEvent<Agent, PooledPath>]) -> usize {
     replay(history).1
 }
 
 #[cfg(test)]
 mod tests {
-    use junco_policy::{History, MessageId, git_event};
+    use junco_policy::History;
 
     use super::*;
     use crate::{
@@ -180,14 +159,13 @@ mod tests {
     const B: Agent = Agent(1);
 
     /// One event on the pooled path every hand-written trace below acts on.
-    fn event(agent: Agent, action: Action) -> GitEvent<Agent, PooledPath> {
-        git_event(agent, action, PooledPath(0))
+    fn event(agent: Agent, action: Action) -> LockEvent<Agent, PooledPath> {
+        LockEvent::new(agent, action, PooledPath(0))
     }
 
     /// Every trace the fixed seeded stream produces, each paired with the source name a failure
-    /// message names. The randomized set the replay oracle adds is not replayed here: this test
-    /// must fail identically on every machine and every run.
-    fn deterministic_traces() -> Vec<(String, History<GitEvent<Agent, PooledPath>>)> {
+    /// message names. This test must fail identically on every machine and every run.
+    fn deterministic_traces() -> Vec<(String, History<LockEvent<Agent, PooledPath>>)> {
         let seeded = entropy(DETERMINISTIC_SEED, SEEDED_TRACE_COUNT * BYTES_PER_TRACE);
         seeded
             .chunks(BYTES_PER_TRACE)
@@ -219,14 +197,14 @@ mod tests {
         let history = [
             event(A, Action::Edit),
             event(B, Action::Read),
-            event(A, Action::Checkout),
+            event(A, Action::Remove),
         ];
         assert_eq!(
             no_surprise_violation(&history),
             Some(Surprise {
                 index: 2,
                 principal: "agent0".to_string(),
-                action: "checkout".to_string(),
+                action: "remove".to_string(),
                 resource: "src/file0.txt".to_string(),
                 surprised: "agent1".to_string(),
                 learned_at: 1,
@@ -235,14 +213,13 @@ mod tests {
     }
 
     #[test]
-    fn a_checkout_of_a_pristine_resource_changes_nothing() {
+    fn a_release_changes_nothing() {
         let history = [
             event(B, Action::Read),
-            event(A, Action::Checkout),
+            event(A, Action::Release),
             event(A, Action::Edit),
         ];
-        // The checkout at index 1 restores content identical to the working tree, which the oracle
-        // derives rather than assumes; only the edit at index 2 changes anything.
+        // The release at index 1 leaves the content alone; only the edit at index 2 changes it.
         assert_eq!(
             no_surprise_violation(&history).map(|surprise| surprise.index),
             Some(2),
@@ -264,8 +241,8 @@ mod tests {
         let history = [
             event(A, Action::Read),
             event(A, Action::Edit),
-            event(A, Action::Stage),
-            event(A, Action::commit(MessageId(1))),
+            event(A, Action::Release),
+            event(A, Action::Remove),
         ];
         assert_eq!(no_surprise_violation(&history), None);
     }

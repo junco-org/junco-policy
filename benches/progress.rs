@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use junco_policy::{
-    Action, AtomPattern, Bump, Checkpoint, Comparison, ComponentPattern, Event, GitEvent, Head,
-    RegexExpr, Request, Rule, RuleMode, TestExpr, Validator, git_event,
+    Action, AtomPattern, Bump, Checkpoint, Comparison, ComponentPattern, Event, Head, LockEvent,
+    RegexExpr, Request, Rule, RuleMode, TestExpr, Validator,
 };
 
 const HISTORY_LENGTHS: [usize; 4] = [16, 4096, 8192, 16384];
@@ -34,37 +34,37 @@ const BOB: Actor = Actor(1);
 const RESOURCE: Path = Path(0);
 const OTHER_RESOURCE: Path = Path(1);
 
-fn principal_is(comparison: Comparison) -> TestExpr<GitEvent<Actor, Path>> {
+fn principal_is(comparison: Comparison) -> TestExpr<LockEvent<Actor, Path>> {
     TestExpr::atom(
         comparison,
         AtomPattern::Principal(ComponentPattern::variable("actor")),
     )
 }
 
-fn resource_is(comparison: Comparison) -> TestExpr<GitEvent<Actor, Path>> {
+fn resource_is(comparison: Comparison) -> TestExpr<LockEvent<Actor, Path>> {
     TestExpr::atom(
         comparison,
         AtomPattern::Resource(ComponentPattern::variable("resource")),
     )
 }
 
-fn action_is(action: Action, comparison: Comparison) -> TestExpr<GitEvent<Actor, Path>> {
+fn action_is(action: Action, comparison: Comparison) -> TestExpr<LockEvent<Actor, Path>> {
     TestExpr::atom(
         comparison,
         AtomPattern::Action(ComponentPattern::constant(action)),
     )
 }
 
-fn stage_head() -> Head<GitEvent<Actor, Path>> {
+fn release_head() -> Head<LockEvent<Actor, Path>> {
     Head::new(
         ComponentPattern::variable("actor"),
-        ComponentPattern::constant(Action::Stage),
+        ComponentPattern::constant(Action::Release),
         ComponentPattern::variable("resource"),
     )
 }
 
 /// `All · Test(principal = actor ∧ action = Edit ∧ resource = resource) · All`.
-fn prior_edit_rule() -> Rule<GitEvent<Actor, Path>> {
+fn prior_edit_rule() -> Rule<LockEvent<Actor, Path>> {
     let matching_edit = TestExpr::and([
         principal_is(Comparison::Eq),
         action_is(Action::Edit, Comparison::Eq),
@@ -72,7 +72,7 @@ fn prior_edit_rule() -> Rule<GitEvent<Actor, Path>> {
     ]);
     Rule::new(
         RuleMode::Require,
-        stage_head(),
+        release_head(),
         RegexExpr::concat([
             RegexExpr::all(),
             RegexExpr::test(matching_edit),
@@ -82,7 +82,7 @@ fn prior_edit_rule() -> Rule<GitEvent<Actor, Path>> {
 }
 
 /// `All · Edit(r) · NonEdit(r)* · Approval(r, principal ≠ actor) · NonEdit(r)*`.
-fn release_approval_rule() -> Rule<GitEvent<Actor, Path>> {
+fn release_approval_rule() -> Rule<LockEvent<Actor, Path>> {
     let edit = TestExpr::and([
         resource_is(Comparison::Eq),
         action_is(Action::Edit, Comparison::Eq),
@@ -93,12 +93,12 @@ fn release_approval_rule() -> Rule<GitEvent<Actor, Path>> {
     ]);
     let approval = TestExpr::and([
         resource_is(Comparison::Eq),
-        action_is(Action::Diff, Comparison::Eq),
+        action_is(Action::Remove, Comparison::Eq),
         principal_is(Comparison::Neq),
     ]);
     Rule::new(
         RuleMode::Require,
-        stage_head(),
+        release_head(),
         RegexExpr::concat([
             RegexExpr::all(),
             RegexExpr::test(edit),
@@ -110,16 +110,16 @@ fn release_approval_rule() -> Rule<GitEvent<Actor, Path>> {
 }
 
 /// Alice reads throughout, with her matching edit at the midpoint.
-fn prior_edit_event(index: usize, history_len: usize) -> GitEvent<Actor, Path> {
+fn prior_edit_event(index: usize, history_len: usize) -> LockEvent<Actor, Path> {
     let action = if index == history_len / 2 {
         Action::Edit
     } else {
         Action::Read
     };
-    git_event(ALICE, action, RESOURCE)
+    LockEvent::new(ALICE, action, RESOURCE)
 }
 
-/// Release-approval seed variants and whether Alice may then stage the resource.
+/// Release-approval seed variants and whether Alice may then release the resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReleaseCase {
     Approved,
@@ -144,11 +144,11 @@ const RELEASE_CASES: [(ReleaseCase, bool); 8] = [
 ];
 
 /// Alice reads throughout; her edit sits at one third and Bob's approval at two thirds.
-fn release_event(case: ReleaseCase, index: usize, history_len: usize) -> GitEvent<Actor, Path> {
+fn release_event(case: ReleaseCase, index: usize, history_len: usize) -> LockEvent<Actor, Path> {
     let (mut actor, mut action, mut resource) = (ALICE, Action::Read, RESOURCE);
     if index == history_len / 3 {
         match case {
-            ReleaseCase::ApprovalBeforeEdit => (actor, action) = (BOB, Action::Diff),
+            ReleaseCase::ApprovalBeforeEdit => (actor, action) = (BOB, Action::Remove),
             ReleaseCase::MissingEdit => {}
             _ => action = Action::Edit,
         }
@@ -156,11 +156,11 @@ fn release_event(case: ReleaseCase, index: usize, history_len: usize) -> GitEven
         match case {
             ReleaseCase::ApprovalBeforeEdit => action = Action::Edit,
             ReleaseCase::MissingApproval => {}
-            ReleaseCase::SelfApproval => action = Action::Diff,
+            ReleaseCase::SelfApproval => action = Action::Remove,
             ReleaseCase::WrongResource => {
-                (actor, action, resource) = (BOB, Action::Diff, OTHER_RESOURCE);
+                (actor, action, resource) = (BOB, Action::Remove, OTHER_RESOURCE);
             }
-            _ => (actor, action) = (BOB, Action::Diff),
+            _ => (actor, action) = (BOB, Action::Remove),
         }
     } else if index == history_len - 1 {
         match case {
@@ -171,21 +171,21 @@ fn release_event(case: ReleaseCase, index: usize, history_len: usize) -> GitEven
             _ => {}
         }
     }
-    git_event(actor, action, resource)
+    LockEvent::new(actor, action, resource)
 }
 
 /// A seeded validator plus the checkpoint immediately before its final committed event.
 struct Scenario<'arena> {
-    validator: Validator<'arena, GitEvent<Actor, Path>>,
+    validator: Validator<'arena, LockEvent<Actor, Path>>,
     before_final: Checkpoint,
-    final_event: GitEvent<Actor, Path>,
+    final_event: LockEvent<Actor, Path>,
 }
 
 fn seed<'arena>(
     arena: &'arena Bump,
-    rule: Rule<GitEvent<Actor, Path>>,
+    rule: Rule<LockEvent<Actor, Path>>,
     history_len: usize,
-    event: impl Fn(usize) -> GitEvent<Actor, Path>,
+    event: impl Fn(usize) -> LockEvent<Actor, Path>,
 ) -> Scenario<'arena> {
     let mut builder = Validator::builder(arena);
     builder.add_rule(rule).expect("benchmark rule compiles");
@@ -210,8 +210,8 @@ fn seed<'arena>(
     }
 }
 
-fn candidate() -> GitEvent<Actor, Path> {
-    git_event(ALICE, Action::Stage, RESOURCE)
+fn candidate() -> LockEvent<Actor, Path> {
+    LockEvent::new(ALICE, Action::Release, RESOURCE)
 }
 
 /// Seeds the prior-edit scenario and checks its grant outside timing.
@@ -282,8 +282,8 @@ fn configure<'criterion>(
 
 fn tagged_replay(criterion: &mut Criterion) {
     eprintln!(
-        "size_of::<GitEvent<Actor, Path>>() = {} bytes",
-        size_of::<GitEvent<Actor, Path>>()
+        "size_of::<LockEvent<Actor, Path>>() = {} bytes",
+        size_of::<LockEvent<Actor, Path>>()
     );
     let mut group = configure(criterion, "tagged_replay");
     for workload in Workload::ALL {

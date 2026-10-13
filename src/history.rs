@@ -198,7 +198,7 @@ impl<E: Event> Eq for History<E> {}
 #[cfg(test)]
 mod tests {
     use super::{History, Revision};
-    use crate::model::{Action, GitEvent, git_event};
+    use crate::model::{Action, LockEvent};
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     struct Actor(u32);
@@ -206,8 +206,8 @@ mod tests {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     struct Path(u32);
 
-    fn read(actor: Actor) -> GitEvent<Actor, Path> {
-        git_event(actor, Action::Read, Path(0))
+    fn read(actor: Actor) -> LockEvent<Actor, Path> {
+        LockEvent::new(actor, Action::Read, Path(0))
     }
 
     #[test]
@@ -249,9 +249,9 @@ mod tests {
     #[test]
     fn every_constructor_allocates_a_distinct_identity() {
         let ids = [
-            History::<GitEvent<Actor, Path>>::new().id(),
-            History::<GitEvent<Actor, Path>>::new().id(),
-            History::<GitEvent<Actor, Path>>::default().id(),
+            History::<LockEvent<Actor, Path>>::new().id(),
+            History::<LockEvent<Actor, Path>>::new().id(),
+            History::<LockEvent<Actor, Path>>::default().id(),
             [read(Actor(1))].into_iter().collect::<History<_>>().id(),
         ];
         for (index, id) in ids.iter().enumerate() {

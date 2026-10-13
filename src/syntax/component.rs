@@ -131,14 +131,14 @@ impl<E: Event> CompiledAtomPattern<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Action, GitEvent, git_event};
+    use crate::model::{Action, LockEvent};
     use string_interner::DefaultStringInterner;
 
     /// Deliberately shared principal and resource type: coordinate tags alone must separate them.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     struct Id(u32);
 
-    fn principal(id: u32) -> ResolvedValue<GitEvent<Id, Id>> {
+    fn principal(id: u32) -> ResolvedValue<LockEvent<Id, Id>> {
         ResolvedValue::Principal(Id(id))
     }
 
@@ -189,12 +189,12 @@ mod tests {
         let mut variables = <DefaultStringInterner>::with_capacity(128);
         let actor = variables.get_or_intern("actor");
         let substitution = CandidateSubstitution::singleton(actor, principal(1));
-        let event = git_event(Id(1), Action::Read, Id(2));
+        let event = LockEvent::new(Id(1), Action::Read, Id(2));
 
-        let constant: CompiledAtomPattern<GitEvent<Id, Id>> =
+        let constant: CompiledAtomPattern<LockEvent<Id, Id>> =
             CompiledAtomPattern::Principal(ComponentPattern::Constant(Id(1)));
         assert_eq!(constant.subst(&substitution), Some(principal(1)));
-        let variable: CompiledAtomPattern<GitEvent<Id, Id>> =
+        let variable: CompiledAtomPattern<LockEvent<Id, Id>> =
             CompiledAtomPattern::Principal(ComponentPattern::Variable(actor));
         let bound = variable
             .subst(&substitution)
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(bound, principal(1));
         assert!(bound.matches(&event));
 
-        let cross_domain: CompiledAtomPattern<GitEvent<Id, Id>> =
+        let cross_domain: CompiledAtomPattern<LockEvent<Id, Id>> =
             CompiledAtomPattern::Resource(ComponentPattern::Variable(actor));
         assert_eq!(cross_domain.subst(&substitution), None);
 

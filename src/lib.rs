@@ -4,7 +4,7 @@
 //! Policies are assembled from owned, context-free [`Rule`], [`TestExpr`], and [`RegexExpr`]
 //! values over a caller-chosen [`Event`] type. Events are compact `Copy` values: caller-owned
 //! enums, or finite Frunk [`Coproduct`] unions of payload structs whose principal, action, and
-//! resource projections share component types. [`GitEvent`] is the built-in Git representation.
+//! resource projections share component types. [`LockEvent`] is the built-in ownership-lock event.
 //! Labels for diagnostics live outside the evaluator; equality is the event's full value equality.
 //!
 //! `ValidatorBuilder` compiles each complete rule by passing a shared canonical store and a
@@ -18,8 +18,8 @@
 //!
 //! ```rust
 //! use junco_policy::{
-//!     Action, AtomPattern, Bump, Comparison, ComponentPattern, Decision, GitEvent, Head,
-//!     RegexExpr, Request, Rule, RuleMode, TestExpr, Validator, git_event,
+//!     Action, AtomPattern, Bump, Comparison, ComponentPattern, Decision, Head, LockEvent,
+//!     RegexExpr, Request, Rule, RuleMode, TestExpr, Validator,
 //! };
 //!
 //! /// Caller-assigned actor identity; its label lives outside the evaluator.
@@ -46,11 +46,11 @@
 //! );
 //! let matching_edit = RegexExpr::test(TestExpr::and([principal, action, resource]));
 //! let tail = RegexExpr::concat([RegexExpr::all(), matching_edit]);
-//! let rule: Rule<GitEvent<Actor, Path>> = Rule::new(
+//! let rule: Rule<LockEvent<Actor, Path>> = Rule::new(
 //!     RuleMode::Require,
 //!     Head::new(
 //!         ComponentPattern::variable("actor"),
-//!         ComponentPattern::constant(Action::Stage),
+//!         ComponentPattern::constant(Action::Release),
 //!         ComponentPattern::variable("target"),
 //!     ),
 //!     tail,
@@ -61,11 +61,11 @@
 //! builder.add_rule(rule)?;
 //! let mut validator = builder.finish();
 //!
-//! let stage = git_event(alice, Action::Stage, src_a);
-//! assert!(!validator.permits(&stage));
-//! let edit = Request::new(git_event(alice, Action::Edit, src_a), ());
+//! let release = LockEvent::new(alice, Action::Release, src_a);
+//! assert!(!validator.permits(&release));
+//! let edit = Request::new(LockEvent::new(alice, Action::Edit, src_a), ());
 //! assert!(validator.check(edit).is_grant());
-//! assert!(matches!(validator.check(Request::new(stage, ())), Decision::Grant(_)));
+//! assert!(matches!(validator.check(Request::new(release, ())), Decision::Grant(_)));
 //! # Ok::<(), junco_policy::CompileError>(())
 //! ```
 
@@ -79,12 +79,10 @@ pub use bumpalo::Bump;
 pub use frunk_core::Coprod;
 pub use frunk_core::coproduct::{CNil, Coproduct};
 pub use history::{Checkpoint, History};
-pub use model::{
-    Action, Event, GitCommit, GitEvent, GitOperation, Grant, MessageId, Request, git_event,
-};
+pub use model::{Action, Event, Grant, LockEvent, Request};
 pub use policy::{
     PolicyDecision,
-    git::{GitPolicy, git_decision},
+    lock::{LockPolicy, lock_decision},
 };
 pub use syntax::{
     AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,

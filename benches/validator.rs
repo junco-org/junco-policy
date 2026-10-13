@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use junco_policy::{
-    Action, AtomPattern, Bump, Comparison, ComponentPattern, Decision, GitEvent, Head, MessageId,
-    RegexExpr, Request, Rule, RuleMode, TestExpr, Validator, git_event,
+    Action, AtomPattern, Bump, Comparison, ComponentPattern, Decision, Head, LockEvent, RegexExpr,
+    Request, Rule, RuleMode, TestExpr, Validator,
 };
 
 /// Benchmark principal identity.
@@ -23,8 +23,9 @@ struct Path(u32);
 const ALICE: Actor = Actor(0);
 const CANDIDATE: Actor = Actor(1);
 const HISTORY: Actor = Actor(2);
-/// First id of principals named only by rule constants; no benchmark event carries one.
-const ABSENT_ACTORS: u32 = 1 << 20;
+/// First id of principals and resources named only by rule constants; no benchmark event carries
+/// one.
+const ABSENT_IDS: u32 = 1 << 20;
 /// First id of the high-cardinality history's unique principals and resources.
 const UNIQUE_IDS: u32 = 1 << 24;
 
@@ -34,14 +35,11 @@ const A: Path = Path(2);
 const TARGET: Path = Path(3);
 const EVENT: Path = Path(4);
 
-/// Commit message identity the duplicate-commit rule forbids repeating.
-const SHIP: MessageId = MessageId(0);
-
-fn request(actor: Actor, action: Action, path: Path) -> Request<GitEvent<Actor, Path>, ()> {
-    Request::new(git_event(actor, action, path), ())
+fn request(actor: Actor, action: Action, path: Path) -> Request<LockEvent<Actor, Path>, ()> {
+    Request::new(LockEvent::new(actor, action, path), ())
 }
 
-fn prior_edit_rule(suffix: usize) -> Rule<GitEvent<Actor, Path>> {
+fn prior_edit_rule(suffix: usize) -> Rule<LockEvent<Actor, Path>> {
     let actor = format!("actor-{suffix}");
     let target = format!("target-{suffix}");
     let principal = TestExpr::atom(
@@ -60,7 +58,7 @@ fn prior_edit_rule(suffix: usize) -> Rule<GitEvent<Actor, Path>> {
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable(actor),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable(target),
         ),
         RegexExpr::concat([
@@ -70,11 +68,11 @@ fn prior_edit_rule(suffix: usize) -> Rule<GitEvent<Actor, Path>> {
     )
 }
 
-fn duplicate_commit_rule() -> Rule<GitEvent<Actor, Path>> {
-    let matching_commit = RegexExpr::test(TestExpr::and([
+fn duplicate_remove_rule() -> Rule<LockEvent<Actor, Path>> {
+    let matching_remove = RegexExpr::test(TestExpr::and([
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Action(ComponentPattern::constant(Action::commit(SHIP))),
+            AtomPattern::Action(ComponentPattern::constant(Action::Remove)),
         ),
         TestExpr::atom(
             Comparison::Eq,
@@ -85,25 +83,23 @@ fn duplicate_commit_rule() -> Rule<GitEvent<Actor, Path>> {
         RuleMode::Forbid,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::commit(SHIP)),
+            ComponentPattern::constant(Action::Remove),
             ComponentPattern::variable("target"),
         ),
-        RegexExpr::concat([RegexExpr::all(), matching_commit, RegexExpr::all()]),
+        RegexExpr::concat([RegexExpr::all(), matching_remove, RegexExpr::all()]),
     )
 }
 
-fn every_action_leaf(index: usize) -> RegexExpr<GitEvent<Actor, Path>> {
+fn every_resource_leaf(index: usize) -> RegexExpr<LockEvent<Actor, Path>> {
     RegexExpr::star(RegexExpr::test(TestExpr::atom(
         Comparison::Neq,
-        AtomPattern::Action(ComponentPattern::constant(Action::commit(MessageId(
-            index as u64 + 1,
-        )))),
+        AtomPattern::Resource(ComponentPattern::constant(Path(ABSENT_IDS + index as u32))),
     )))
 }
 
-fn deeply_nested_action_allow_all_rule(depth: usize) -> Rule<GitEvent<Actor, Path>> {
+fn deeply_nested_resource_allow_all_rule(depth: usize) -> Rule<LockEvent<Actor, Path>> {
     assert!(depth > 0, "regex depth must be positive");
-    let mut leaves = (0..depth).map(every_action_leaf);
+    let mut leaves = (0..depth).map(every_resource_leaf);
     let mut tail = leaves.next().expect("positive depth has one leaf");
     for (index, leaf) in leaves.enumerate() {
         tail = if index % 2 == 0 {
@@ -116,29 +112,27 @@ fn deeply_nested_action_allow_all_rule(depth: usize) -> Rule<GitEvent<Actor, Pat
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         tail,
     )
 }
 
-fn unique_read(index: usize) -> Request<GitEvent<Actor, Path>, ()> {
+fn unique_read(index: usize) -> Request<LockEvent<Actor, Path>, ()> {
     let id = UNIQUE_IDS + u32::try_from(index).expect("benchmark index fits u32");
     request(Actor(id), Action::Read, Path(id))
 }
 
 // Each distinct star accepts every benchmark event and is stable under differentiation.
-fn every_event_leaf(index: usize) -> RegexExpr<GitEvent<Actor, Path>> {
+fn every_event_leaf(index: usize) -> RegexExpr<LockEvent<Actor, Path>> {
     RegexExpr::star(RegexExpr::test(TestExpr::atom(
         Comparison::Neq,
-        AtomPattern::Principal(ComponentPattern::constant(Actor(
-            ABSENT_ACTORS + index as u32,
-        ))),
+        AtomPattern::Principal(ComponentPattern::constant(Actor(ABSENT_IDS + index as u32))),
     )))
 }
 
-fn deeply_nested_allow_all_rule(depth: usize) -> Rule<GitEvent<Actor, Path>> {
+fn deeply_nested_allow_all_rule(depth: usize) -> Rule<LockEvent<Actor, Path>> {
     assert!(depth > 0, "regex depth must be positive");
     let mut leaves = (0..depth).map(every_event_leaf);
     let mut tail = leaves.next().expect("positive depth has one leaf");
@@ -155,22 +149,20 @@ fn deeply_nested_allow_all_rule(depth: usize) -> Rule<GitEvent<Actor, Path>> {
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         tail,
     )
 }
 
-fn advancing_optional_rule(steps: usize) -> Rule<GitEvent<Actor, Path>> {
+fn advancing_optional_rule(steps: usize) -> Rule<LockEvent<Actor, Path>> {
     let factors = (0..steps).map(|index| {
         RegexExpr::union([
             RegexExpr::epsilon(),
             RegexExpr::test(TestExpr::atom(
                 Comparison::Neq,
-                AtomPattern::Action(ComponentPattern::constant(Action::commit(MessageId(
-                    index as u64 + 1,
-                )))),
+                AtomPattern::Resource(ComponentPattern::constant(Path(ABSENT_IDS + index as u32))),
             )),
         ])
     });
@@ -178,7 +170,7 @@ fn advancing_optional_rule(steps: usize) -> Rule<GitEvent<Actor, Path>> {
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         RegexExpr::concat(factors),
@@ -191,7 +183,7 @@ fn advancing_optional_rule(steps: usize) -> Rule<GitEvent<Actor, Path>> {
 /// read. A shorter all-read history keeps adding candidate suffixes without reaching a terminal
 /// residual. The full DFA has exponentially many states even though this measured path grows
 /// linearly.
-fn growing_residual_rule(window: usize) -> Rule<GitEvent<Actor, Path>> {
+fn growing_residual_rule(window: usize) -> Rule<LockEvent<Actor, Path>> {
     assert!(window > 0, "residual-growth window must be positive");
     let any_event = RegexExpr::test(TestExpr::true_test());
     let read = RegexExpr::test(TestExpr::atom(
@@ -205,7 +197,7 @@ fn growing_residual_rule(window: usize) -> Rule<GitEvent<Actor, Path>> {
         RuleMode::Forbid,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         RegexExpr::concat(factors),
@@ -213,18 +205,16 @@ fn growing_residual_rule(window: usize) -> Rule<GitEvent<Actor, Path>> {
 }
 
 /// One unique absent-witness rule that forces a complete nonterminal history scan.
-fn absent_witness_rule(index: usize) -> Rule<GitEvent<Actor, Path>> {
+fn absent_witness_rule(index: usize) -> Rule<LockEvent<Actor, Path>> {
     let absent = RegexExpr::test(TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Principal(ComponentPattern::constant(Actor(
-            ABSENT_ACTORS + index as u32,
-        ))),
+        AtomPattern::Principal(ComponentPattern::constant(Actor(ABSENT_IDS + index as u32))),
     ));
     Rule::new(
         RuleMode::Forbid,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Action::Release),
             ComponentPattern::variable("target"),
         ),
         RegexExpr::concat([RegexExpr::all(), absent, RegexExpr::all()]),
@@ -255,7 +245,7 @@ fn benchmark_million_event_nested_scan(criterion: &mut Criterion) {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request(ALICE, Action::Stage, ROOT);
+                let candidate = request(ALICE, Action::Release, ROOT);
                 let start = Instant::now();
                 let decision = validator.check(black_box(candidate));
                 elapsed += start.elapsed();
@@ -268,8 +258,8 @@ fn benchmark_million_event_nested_scan(criterion: &mut Criterion) {
     group.finish();
 }
 
-// Every history symbol is distinct, defeating symbol-indexed successor caches. The regex only
-// inspects actions, so the unique principal/resource values are never compared.
+// Every history symbol is distinct, defeating symbol-indexed successor caches. Each leaf compares
+// the event's resource with a constant no event carries, so every unique resource is compared.
 fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
     const HISTORY_LEN: usize = 100_000;
     const REGEX_DEPTH: usize = 32;
@@ -277,7 +267,7 @@ fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
     let arena = Bump::new();
     let mut builder = Validator::builder(&arena);
     builder
-        .add_rule(deeply_nested_action_allow_all_rule(REGEX_DEPTH))
+        .add_rule(deeply_nested_resource_allow_all_rule(REGEX_DEPTH))
         .expect("benchmark rule is valid");
     let mut validator = builder.finish();
     for index in 0..HISTORY_LEN {
@@ -293,7 +283,7 @@ fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request(CANDIDATE, Action::Stage, ROOT);
+                let candidate = request(CANDIDATE, Action::Release, ROOT);
                 let start = Instant::now();
                 let decision = validator.check(black_box(candidate));
                 elapsed += start.elapsed();
@@ -329,7 +319,7 @@ fn benchmark_advancing_derivatives(criterion: &mut Criterion) {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request(CANDIDATE, Action::Stage, ROOT);
+                let candidate = request(CANDIDATE, Action::Release, ROOT);
                 let start = Instant::now();
                 let decision = validator.check(black_box(candidate));
                 elapsed += start.elapsed();
@@ -400,7 +390,7 @@ fn benchmark_growing_residual_stress(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let candidate = request(CANDIDATE, Action::Stage, TARGET);
+                        let candidate = request(CANDIDATE, Action::Release, TARGET);
                         let start = Instant::now();
                         let decision = validator.check(black_box(candidate));
                         elapsed += start.elapsed();
@@ -484,7 +474,7 @@ fn benchmark_many_rules_stress(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let candidate = request(CANDIDATE, Action::Stage, TARGET);
+                        let candidate = request(CANDIDATE, Action::Release, TARGET);
                         let start = Instant::now();
                         let decision = validator.check(black_box(candidate));
                         elapsed += start.elapsed();
@@ -509,7 +499,7 @@ fn benchmark_compilation(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let rules: Vec<Rule<GitEvent<Actor, Path>>> =
+                        let rules: Vec<Rule<LockEvent<Actor, Path>>> =
                             (0..count).map(prior_edit_rule).collect();
                         let arena = Bump::new();
                         let start = Instant::now();
@@ -533,7 +523,7 @@ fn benchmark_compilation(criterion: &mut Criterion) {
 fn validator_with_edit_history<'arena>(
     arena: &'arena Bump,
     history_len: usize,
-) -> Validator<'arena, GitEvent<Actor, Path>> {
+) -> Validator<'arena, LockEvent<Actor, Path>> {
     let mut builder = Validator::builder(arena);
     builder
         .add_rule(prior_edit_rule(0))
@@ -559,7 +549,7 @@ fn benchmark_history_scan(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let candidate = request(ALICE, Action::Stage, SRC_A);
+                        let candidate = request(ALICE, Action::Release, SRC_A);
                         let start = Instant::now();
                         let decision = validator.check(black_box(candidate));
                         elapsed += start.elapsed();
@@ -578,17 +568,17 @@ fn benchmark_denial(criterion: &mut Criterion) {
     let arena = Bump::new();
     let mut builder = Validator::builder(&arena);
     builder
-        .add_rule(duplicate_commit_rule())
+        .add_rule(duplicate_remove_rule())
         .expect("benchmark rule is valid");
     let mut validator = builder.finish();
-    let first = validator.check(request(ALICE, Action::commit(SHIP), A));
+    let first = validator.check(request(ALICE, Action::Remove, A));
     debug_assert!(first.is_grant());
 
-    criterion.bench_function("deny_duplicate_commit", |bencher| {
+    criterion.bench_function("deny_duplicate_remove", |bencher| {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request(ALICE, Action::commit(SHIP), A);
+                let candidate = request(ALICE, Action::Remove, A);
                 let start = Instant::now();
                 let decision = validator.check(black_box(candidate));
                 elapsed += start.elapsed();

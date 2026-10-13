@@ -104,7 +104,7 @@ mod tests {
 
     use super::{PROGRESS_CACHE_CAPACITY, ProgressCache};
     use crate::history::History;
-    use crate::model::{Action, GitEvent, git_event};
+    use crate::model::{Action, LockEvent};
     use crate::syntax::compile::{RuntimeRule, compile_rule};
     use crate::syntax::evaluate::accepts_direct;
     use crate::syntax::source::{
@@ -121,22 +121,22 @@ mod tests {
 
     const A: Action = Action::Read;
     const B: Action = Action::Edit;
-    const X: Action = Action::Diff;
+    const X: Action = Action::Remove;
 
     const ALICE: Actor = Actor(1);
     const BOB: Actor = Actor(2);
     const SRC: Path = Path(7);
     const DOCS: Path = Path(9);
 
-    fn event(actor: Actor, action: Action, path: Path) -> GitEvent<Actor, Path> {
-        git_event(actor, action, path)
+    fn event(actor: Actor, action: Action, path: Path) -> LockEvent<Actor, Path> {
+        LockEvent::new(actor, action, path)
     }
 
-    fn stage(actor: Actor, path: Path) -> GitEvent<Actor, Path> {
-        event(actor, Action::Stage, path)
+    fn release(actor: Actor, path: Path) -> LockEvent<Actor, Path> {
+        event(actor, Action::Release, path)
     }
 
-    fn action_regex(action: Action) -> RegexExpr<GitEvent<Actor, Path>> {
+    fn action_regex(action: Action) -> RegexExpr<LockEvent<Actor, Path>> {
         RegexExpr::test(TestExpr::atom(
             Comparison::Eq,
             AtomPattern::Action(ComponentPattern::constant(action)),
@@ -145,19 +145,19 @@ mod tests {
 
     /// One retained rule, derivative cache, and progress cache checked against full replay.
     struct Fixture<'arena> {
-        store: CanonicalStore<'arena, GitEvent<Actor, Path>>,
-        derivatives: SymbolicDerivativeCache<'arena, GitEvent<Actor, Path>>,
-        progress: ProgressCache<'arena, GitEvent<Actor, Path>>,
-        rule: RuntimeRule<'arena, GitEvent<Actor, Path>>,
+        store: CanonicalStore<'arena, LockEvent<Actor, Path>>,
+        derivatives: SymbolicDerivativeCache<'arena, LockEvent<Actor, Path>>,
+        progress: ProgressCache<'arena, LockEvent<Actor, Path>>,
+        rule: RuntimeRule<'arena, LockEvent<Actor, Path>>,
     }
 
     impl<'arena> Fixture<'arena> {
-        /// Compiles a Require rule with a Stage-only `(actor, Stage, resource)` head.
-        fn new(arena: &'arena Bump, tail: RegexExpr<GitEvent<Actor, Path>>) -> Self {
+        /// Compiles a Require rule with a Release-only `(actor, Release, resource)` head.
+        fn new(arena: &'arena Bump, tail: RegexExpr<LockEvent<Actor, Path>>) -> Self {
             let mut store = CanonicalStore::new(arena);
             let head = Head::new(
                 ComponentPattern::variable("actor"),
-                ComponentPattern::constant(Action::Stage),
+                ComponentPattern::constant(Action::Release),
                 ComponentPattern::variable("resource"),
             );
             let rule = compile_rule(&mut store, &Rule::new(RuleMode::Require, head, tail)).unwrap();
@@ -174,14 +174,14 @@ mod tests {
         /// Evaluates through the progress cache and asserts equality with uncached replay.
         fn accepts(
             &mut self,
-            history: &History<GitEvent<Actor, Path>>,
-            candidate: &GitEvent<Actor, Path>,
+            history: &History<LockEvent<Actor, Path>>,
+            candidate: &LockEvent<Actor, Path>,
         ) -> bool {
             let substitution = self
                 .rule
                 .head
                 .match_candidate(candidate)
-                .expect("candidate matches the Stage head");
+                .expect("candidate matches the Release head");
             let cached = self.progress.accepts(
                 &mut self.store,
                 &mut self.derivatives,
@@ -201,7 +201,7 @@ mod tests {
     }
 
     /// `a · All · b` over actions.
-    fn a_all_b() -> RegexExpr<GitEvent<Actor, Path>> {
+    fn a_all_b() -> RegexExpr<LockEvent<Actor, Path>> {
         RegexExpr::concat([action_regex(A), RegexExpr::all(), action_regex(B)])
     }
 
@@ -209,7 +209,7 @@ mod tests {
     fn appended_suffixes_advance_the_exact_residual() {
         let arena = Bump::new();
         let mut fixture = Fixture::new(&arena, a_all_b());
-        let candidate = stage(ALICE, SRC);
+        let candidate = release(ALICE, SRC);
         let mut history = History::new();
 
         let expected = [false, false, true, true, false, true];
@@ -228,7 +228,7 @@ mod tests {
     fn equal_length_replacement_invalidates_progress() {
         let arena = Bump::new();
         let mut fixture = Fixture::new(&arena, a_all_b());
-        let candidate = stage(ALICE, SRC);
+        let candidate = release(ALICE, SRC);
         let mut history = History::from_events([event(ALICE, A, SRC), event(ALICE, B, SRC)]);
         assert!(fixture.accepts(&history, &candidate));
 
@@ -247,7 +247,7 @@ mod tests {
     fn cloned_owners_at_equal_revision_keep_separate_cursors() {
         let arena = Bump::new();
         let mut fixture = Fixture::new(&arena, a_all_b());
-        let candidate = stage(ALICE, SRC);
+        let candidate = release(ALICE, SRC);
         let empty = History::new();
         let mut first = empty.clone();
         let mut second = empty.clone();
@@ -288,7 +288,7 @@ mod tests {
             event(BOB, A, SRC),
         ]);
 
-        let first = stage(ALICE, SRC);
+        let first = release(ALICE, SRC);
         assert!(fixture.accepts(&history, &first));
         let first_key = (
             history.id(),
@@ -296,13 +296,13 @@ mod tests {
         );
         let others = (1..=PROGRESS_CACHE_CAPACITY).map(|index| Actor(1_000 + index as u32));
         for actor in others {
-            assert!(!fixture.accepts(&history, &stage(actor, SRC)));
+            assert!(!fixture.accepts(&history, &release(actor, SRC)));
         }
         assert_eq!(fixture.progress.cursors.len(), PROGRESS_CACHE_CAPACITY);
         assert!(!fixture.progress.cursors.contains(&first_key));
 
         assert!(fixture.accepts(&history, &first));
         assert!(fixture.progress.cursors.contains(&first_key));
-        assert!(!fixture.accepts(&history, &stage(ALICE, DOCS)));
+        assert!(!fixture.accepts(&history, &release(ALICE, DOCS)));
     }
 }
