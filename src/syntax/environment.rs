@@ -1,61 +1,58 @@
 //! Variable typing and per-candidate substitution.
 //!
 //! A [`VariableEnvironment`] validates one source head while its patterns are compiled. A matching
-//! [`CompiledHead`] resolves candidate values into a temporary [`CandidateSubstitution`]. Neither
-//! object is stored in source expressions or canonical syntax nodes.
+//! [`CompiledHead`] copies candidate component values into a temporary [`CandidateSubstitution`].
+//! Neither object is stored in source expressions or canonical syntax nodes.
 
 use std::collections::HashMap;
 use string_interner::DefaultSymbol;
 
-use crate::model::{Action, Event, Principal, Resource};
+use crate::model::Event;
 
-use super::component::{CandidateSubstitution, CompiledPattern, ComponentDomain};
+use super::component::{CandidateSubstitution, CompiledPattern, ResolvedValue};
 use super::source::{Component, ComponentPattern};
-use super::store::CanonicalStore;
 
 /// Matches one typed head coordinate and returns its partial substitution.
-fn match_head_pattern<'arena, ComponentType>(
-    store: &mut CanonicalStore<'arena>,
-    pattern: CompiledPattern<'arena, ComponentType>,
-    actual: &ComponentType,
-) -> Option<CandidateSubstitution<'arena>>
-where
-    ComponentType: ComponentDomain<'arena>,
-{
+///
+/// `tag` places a bound value in the coordinate selected by the caller.
+fn match_head_pattern<E: Event, T: Copy + Eq>(
+    pattern: CompiledPattern<T>,
+    actual: T,
+    tag: impl FnOnce(T) -> ResolvedValue<E>,
+) -> Option<CandidateSubstitution<E>> {
     match pattern {
         ComponentPattern::Constant(expected) => {
-            let actual = ComponentType::resolve(&mut store.resolver, actual);
             (expected == actual).then(CandidateSubstitution::default)
         }
         ComponentPattern::Variable(variable) => {
-            let value = ComponentType::resolve(&mut store.resolver, actual);
-            Some(CandidateSubstitution::singleton(
-                variable,
-                ComponentType::inject(value),
-            ))
+            Some(CandidateSubstitution::singleton(variable, tag(actual)))
         }
     }
 }
 
 /// Compiled head patterns stored in one runtime rule.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct CompiledHead<'arena> {
-    pub(super) principal: CompiledPattern<'arena, Principal>,
-    pub(super) action: CompiledPattern<'arena, Action>,
-    pub(super) resource: CompiledPattern<'arena, Resource>,
+pub(crate) struct CompiledHead<E: Event> {
+    pub(super) principal: CompiledPattern<E::Principal>,
+    pub(super) action: CompiledPattern<E::Action>,
+    pub(super) resource: CompiledPattern<E::Resource>,
 }
 
-impl<'arena> CompiledHead<'arena> {
-    /// Matches the candidate, resolves variable bindings, and merges partial substitutions.
-    pub(crate) fn match_candidate(
-        &self,
-        store: &mut CanonicalStore<'arena>,
-        event: &Event,
-    ) -> Option<CandidateSubstitution<'arena>> {
-        let principal = match_head_pattern(store, self.principal, &event.principal)?;
-        let action = match_head_pattern(store, self.action, &event.action)?;
+impl<E: Event> CompiledHead<E> {
+    /// Matches the candidate's projected components and merges their partial substitutions.
+    pub(crate) fn match_candidate(&self, event: &E) -> Option<CandidateSubstitution<E>> {
+        let principal = match_head_pattern(
+            self.principal,
+            event.principal(),
+            ResolvedValue::<E>::Principal,
+        )?;
+        let action = match_head_pattern(self.action, event.action(), ResolvedValue::<E>::Action)?;
         let principal_action = principal.merge(&action)?;
-        let resource = match_head_pattern(store, self.resource, &event.resource)?;
+        let resource = match_head_pattern(
+            self.resource,
+            event.resource(),
+            ResolvedValue::<E>::Resource,
+        )?;
         principal_action.merge(&resource)
     }
 }
@@ -71,7 +68,7 @@ pub(super) enum ResolveError {
 
 /// Rule-local type environment declared by a source head.
 ///
-/// The map records which arena-backed names exist and the product component occupied by each name. It
+/// The map records which interned names exist and the product component occupied by each name. It
 /// is a transient compiler input and is dropped after the tail has been compiled.
 #[derive(Default)]
 pub(crate) struct VariableEnvironment {

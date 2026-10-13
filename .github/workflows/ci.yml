@@ -58,6 +58,24 @@ jobs:
         # libgit2 is compiled from source by libgit2-sys (vendored); both images ship a C compiler.
         run: cargo test --release --manifest-path fuzz/Cargo.toml --test git_oracle
 
+  msrv:
+    name: MSRV (Rust 1.91.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust 1.91.0
+        # The declared `rust-version` of both manifests; stable and nightly jobs float above it.
+        uses: dtolnay/rust-toolchain@1.91.0
+
+      - name: Check at the minimum supported Rust
+        run: |
+          cargo check --locked --all-targets
+          cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
+
   fuzz:
     name: libFuzzer smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

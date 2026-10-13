@@ -3,7 +3,7 @@
 //! Head variables are the string names [`PRINCIPAL_VAR`] and [`RESOURCE_VAR`]; a rule head binds
 //! them and a tail atom refers back to them.
 
-use crate::{Action, AtomPattern, Comparison, ComponentPattern, TestExpr};
+use crate::{AtomPattern, Comparison, ComponentPattern, Event, TestExpr};
 
 /// Head variable bound to the acting principal.
 pub(super) const PRINCIPAL_VAR: &str = "p";
@@ -11,7 +11,7 @@ pub(super) const PRINCIPAL_VAR: &str = "p";
 pub(super) const RESOURCE_VAR: &str = "r";
 
 /// An event whose principal compares against the head-bound principal `p`.
-pub(super) fn principal_is(comparison: Comparison) -> TestExpr {
+pub(super) fn principal_is<E: Event>(comparison: Comparison) -> TestExpr<E> {
     TestExpr::atom(
         comparison,
         AtomPattern::Principal(ComponentPattern::variable(PRINCIPAL_VAR)),
@@ -19,7 +19,7 @@ pub(super) fn principal_is(comparison: Comparison) -> TestExpr {
 }
 
 /// An event whose resource compares against the head-bound resource `r`.
-pub(super) fn resource_is(comparison: Comparison) -> TestExpr {
+pub(super) fn resource_is<E: Event>(comparison: Comparison) -> TestExpr<E> {
     TestExpr::atom(
         comparison,
         AtomPattern::Resource(ComponentPattern::variable(RESOURCE_VAR)),
@@ -27,7 +27,7 @@ pub(super) fn resource_is(comparison: Comparison) -> TestExpr {
 }
 
 /// An event whose action compares against the constant `action`.
-pub(super) fn action_is(action: Action, comparison: Comparison) -> TestExpr {
+pub(super) fn action_is<E: Event>(action: E::Action, comparison: Comparison) -> TestExpr<E> {
     TestExpr::atom(
         comparison,
         AtomPattern::Action(ComponentPattern::constant(action)),

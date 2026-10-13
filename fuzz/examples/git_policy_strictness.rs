@@ -23,7 +23,7 @@ struct Tally {
 fn analyse(data: &[u8], tally: &mut Tally) {
     let trace = validate_trace(data);
     tally.granted += trace.history.len();
-    if no_surprise_violation(&trace.history).is_some() {
+    if no_surprise_violation(trace.history.as_slice()).is_some() {
         tally.surprises_among_grants += 1;
     }
     for denial in &trace.denials {
@@ -32,8 +32,8 @@ fn analyse(data: &[u8], tally: &mut Tally) {
             continue;
         }
         tally.claim_denials += 1;
-        let mut counterfactual = trace.history[..denial.granted_prefix_len].to_vec();
-        counterfactual.push(denial.event.clone());
+        let mut counterfactual = trace.history.as_slice()[..denial.granted_prefix_len].to_vec();
+        counterfactual.push(denial.event);
         let last = counterfactual.len() - 1;
         match no_surprise_violation(&counterfactual) {
             Some(surprise) if surprise.index == last => tally.prevented_surprise += 1,

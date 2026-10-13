@@ -3,11 +3,11 @@
 //! Each is a conjunction of kernel atoms over the head-bound principal `p` and resource `r`.
 
 use crate::policy::atoms::{action_is, principal_is, resource_is};
-use crate::{Action, Comparison, TestExpr};
+use crate::{Action, Comparison, Event, TestExpr};
 
 /// An event that does not change `r`'s state: off-`r`, an observation of `r`, or a `clean` (a
 /// no-op on tracked `r`).
-pub(super) fn read_only_not_r() -> TestExpr {
+pub(super) fn read_only_not_r<E: Event<Action = Action>>() -> TestExpr<E> {
     TestExpr::or([
         resource_is(Comparison::Neq),
         action_is(Action::Read, Comparison::Eq),
@@ -18,7 +18,7 @@ pub(super) fn read_only_not_r() -> TestExpr {
 }
 
 /// An on-`r` `stage`/`delete` event: both settle `r` into the staged row.
-pub(super) fn stage_delete_on_r() -> TestExpr {
+pub(super) fn stage_delete_on_r<E: Event<Action = Action>>() -> TestExpr<E> {
     TestExpr::and([
         resource_is(Comparison::Eq),
         TestExpr::or([
@@ -29,7 +29,7 @@ pub(super) fn stage_delete_on_r() -> TestExpr {
 }
 
 /// An on-`r`, on-`p` `edit`/`unstage` event.
-pub(super) fn edit_unstage_on_r_on_p() -> TestExpr {
+pub(super) fn edit_unstage_on_r_on_p<E: Event<Action = Action>>() -> TestExpr<E> {
     TestExpr::and([
         resource_is(Comparison::Eq),
         TestExpr::or([
@@ -41,7 +41,7 @@ pub(super) fn edit_unstage_on_r_on_p() -> TestExpr {
 }
 
 /// An on-`r`, not-`p` `edit`/`unstage` event.
-pub(super) fn edit_unstage_on_r_not_p() -> TestExpr {
+pub(super) fn edit_unstage_on_r_not_p<E: Event<Action = Action>>() -> TestExpr<E> {
     TestExpr::and([
         resource_is(Comparison::Eq),
         TestExpr::or([
@@ -55,7 +55,7 @@ pub(super) fn edit_unstage_on_r_not_p() -> TestExpr {
 /// An on-`r` event that is none of the eight enumerated actions, i.e. exactly
 /// `{commit(any message), checkout, stash}`. The `Neq`-enumeration is message-agnostic by
 /// construction, so it matches a commit regardless of its message payload.
-pub(super) fn commit_checkout_stash_on_r() -> TestExpr {
+pub(super) fn commit_checkout_stash_on_r<E: Event<Action = Action>>() -> TestExpr<E> {
     TestExpr::and([
         resource_is(Comparison::Eq),
         action_is(Action::Read, Comparison::Neq),
@@ -70,7 +70,7 @@ pub(super) fn commit_checkout_stash_on_r() -> TestExpr {
 }
 
 /// An on-`r` `read` by a principal other than the acting one: the event that takes a read claim.
-pub(super) fn read_on_r_not_p() -> TestExpr {
+pub(super) fn read_on_r_not_p<E: Event<Action = Action>>() -> TestExpr<E> {
     TestExpr::and([
         resource_is(Comparison::Eq),
         action_is(Action::Read, Comparison::Eq),
@@ -81,7 +81,7 @@ pub(super) fn read_on_r_not_p() -> TestExpr {
 /// Any event that is not a `read` of `r`. The claim on `r` moves only when someone reads it:
 /// leaving `r` staged or committed/clean relinquishes it, but the next principal takes it over by
 /// reading it.
-pub(super) fn not_read_on_r() -> TestExpr {
+pub(super) fn not_read_on_r<E: Event<Action = Action>>() -> TestExpr<E> {
     TestExpr::or([
         resource_is(Comparison::Neq),
         action_is(Action::Read, Comparison::Neq),

@@ -1,10 +1,11 @@
-//! Owned source language for declarative policy rules.
+//! Owned source language for declarative policy rules over one [`Event`] type.
 //!
+//! Component constants are the event's compact associated values; variables are source names.
 //! Source expressions contain no arena references, canonical handles, compiler identities, or
 //! rule-scope backreferences. A complete [`Rule`] is compiled in one pass with its variable
 //! environment and canonical store supplied explicitly by the caller.
 
-use crate::model::{Action, Principal, Resource};
+use crate::model::Event;
 
 /// Constant-or-variable pattern for one statically selected product component.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -32,21 +33,21 @@ impl<T> ComponentPattern<T, String> {
 /// Variables occurring here form the rule's variable environment. The tail may resolve exactly
 /// those names in the same component domains.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Head {
+pub struct Head<E: Event> {
     /// Principal constant or variable.
-    pub principal: ComponentPattern<Principal>,
+    pub principal: ComponentPattern<E::Principal>,
     /// Action constant or variable.
-    pub action: ComponentPattern<Action>,
+    pub action: ComponentPattern<E::Action>,
     /// Resource constant or variable.
-    pub resource: ComponentPattern<Resource>,
+    pub resource: ComponentPattern<E::Resource>,
 }
 
-impl Head {
+impl<E: Event> Head<E> {
     /// Creates a typed `(principal, action, resource)` head.
     pub fn new(
-        principal: ComponentPattern<Principal>,
-        action: ComponentPattern<Action>,
-        resource: ComponentPattern<Resource>,
+        principal: ComponentPattern<E::Principal>,
+        action: ComponentPattern<E::Action>,
+        resource: ComponentPattern<E::Resource>,
     ) -> Self {
         Self {
             principal,
@@ -89,16 +90,16 @@ impl std::ops::Not for Comparison {
 
 /// Owned one-event component pattern.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum AtomPattern {
+pub enum AtomPattern<E: Event> {
     /// Test the event principal.
-    Principal(ComponentPattern<Principal>),
+    Principal(ComponentPattern<E::Principal>),
     /// Test the event action.
-    Action(ComponentPattern<Action>),
+    Action(ComponentPattern<E::Action>),
     /// Test the event resource.
-    Resource(ComponentPattern<Resource>),
+    Resource(ComponentPattern<E::Resource>),
 }
 
-impl AtomPattern {
+impl<E: Event> AtomPattern<E> {
     /// Returns the product coordinate selected by this atom.
     pub fn component(&self) -> Component {
         match self {
@@ -111,7 +112,7 @@ impl AtomPattern {
 
 /// Owned boolean expression over one history event.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum TestExpr {
+pub enum TestExpr<E: Event> {
     /// Predicate accepting every event.
     True,
     /// Predicate accepting no event.
@@ -121,15 +122,15 @@ pub enum TestExpr {
         /// Comparison applied after resolving the component pattern.
         comparison: Comparison,
         /// Typed component pattern.
-        pattern: AtomPattern,
+        pattern: AtomPattern<E>,
     },
     /// Conjunction. Empty input is true.
-    And(Vec<TestExpr>),
+    And(Vec<TestExpr<E>>),
     /// Disjunction. Empty input is false.
-    Or(Vec<TestExpr>),
+    Or(Vec<TestExpr<E>>),
 }
 
-impl TestExpr {
+impl<E: Event> TestExpr<E> {
     /// Returns the predicate accepting every event.
     pub const fn true_test() -> Self {
         Self::True
@@ -141,7 +142,7 @@ impl TestExpr {
     }
 
     /// Creates a component equality or disequality predicate.
-    pub fn atom(comparison: Comparison, pattern: AtomPattern) -> Self {
+    pub fn atom(comparison: Comparison, pattern: AtomPattern<E>) -> Self {
         Self::Atom {
             comparison,
             pattern,
@@ -149,19 +150,19 @@ impl TestExpr {
     }
 
     /// Conjoins source predicates.
-    pub fn and(tests: impl IntoIterator<Item = TestExpr>) -> Self {
+    pub fn and(tests: impl IntoIterator<Item = TestExpr<E>>) -> Self {
         Self::And(tests.into_iter().collect())
     }
 
     /// Disjoins source predicates.
-    pub fn or(tests: impl IntoIterator<Item = TestExpr>) -> Self {
+    pub fn or(tests: impl IntoIterator<Item = TestExpr<E>>) -> Self {
         Self::Or(tests.into_iter().collect())
     }
 }
 
 /// Owned regular expression over complete event histories.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum RegexExpr {
+pub enum RegexExpr<E: Event> {
     /// Empty language.
     Empty,
     /// Universal language over complete histories.
@@ -169,20 +170,20 @@ pub enum RegexExpr {
     /// Language containing only the empty history.
     Epsilon,
     /// One-event language selected by a boolean source expression.
-    Test(TestExpr),
+    Test(TestExpr<E>),
     /// Set union. Empty input is the empty language.
-    Union(Vec<RegexExpr>),
+    Union(Vec<RegexExpr<E>>),
     /// Ordered language concatenation. Empty input is epsilon.
-    Concat(Vec<RegexExpr>),
+    Concat(Vec<RegexExpr<E>>),
     /// Kleene star.
-    Star(Box<RegexExpr>),
+    Star(Box<RegexExpr<E>>),
     /// Set intersection. Empty input is the universal language.
-    Intersect(Vec<RegexExpr>),
+    Intersect(Vec<RegexExpr<E>>),
     /// Whole-language complement.
-    Not(Box<RegexExpr>),
+    Not(Box<RegexExpr<E>>),
 }
 
-impl RegexExpr {
+impl<E: Event> RegexExpr<E> {
     /// Returns the empty language.
     pub const fn empty() -> Self {
         Self::Empty
@@ -199,32 +200,32 @@ impl RegexExpr {
     }
 
     /// Lifts a one-event predicate into a one-event language.
-    pub fn test(test: TestExpr) -> Self {
+    pub fn test(test: TestExpr<E>) -> Self {
         Self::Test(test)
     }
 
     /// Constructs set union.
-    pub fn union(regexes: impl IntoIterator<Item = RegexExpr>) -> Self {
+    pub fn union(regexes: impl IntoIterator<Item = RegexExpr<E>>) -> Self {
         Self::Union(regexes.into_iter().collect())
     }
 
     /// Constructs ordered language concatenation.
-    pub fn concat(regexes: impl IntoIterator<Item = RegexExpr>) -> Self {
+    pub fn concat(regexes: impl IntoIterator<Item = RegexExpr<E>>) -> Self {
         Self::Concat(regexes.into_iter().collect())
     }
 
     /// Constructs Kleene star.
-    pub fn star(regex: RegexExpr) -> Self {
+    pub fn star(regex: RegexExpr<E>) -> Self {
         Self::Star(Box::new(regex))
     }
 
     /// Constructs set intersection.
-    pub fn intersect(regexes: impl IntoIterator<Item = RegexExpr>) -> Self {
+    pub fn intersect(regexes: impl IntoIterator<Item = RegexExpr<E>>) -> Self {
         Self::Intersect(regexes.into_iter().collect())
     }
 
     /// Constructs whole-language complement.
-    pub fn complement(regex: RegexExpr) -> Self {
+    pub fn complement(regex: RegexExpr<E>) -> Self {
         Self::Not(Box::new(regex))
     }
 }
@@ -240,18 +241,18 @@ pub enum RuleMode {
 
 /// Complete owned source rule.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Rule {
+pub struct Rule<E: Event> {
     /// Required or forbidden relationship to the tail language.
     pub mode: RuleMode,
     /// Candidate-only pattern declaring the rule's variables.
-    pub head: Head,
+    pub head: Head<E>,
     /// Complete-history language evaluated under candidate bindings.
-    pub tail: RegexExpr,
+    pub tail: RegexExpr<E>,
 }
 
-impl Rule {
+impl<E: Event> Rule<E> {
     /// Creates a declarative rule with no compiler or validator backreferences.
-    pub fn new(mode: RuleMode, head: Head, tail: RegexExpr) -> Self {
+    pub fn new(mode: RuleMode, head: Head<E>, tail: RegexExpr<E>) -> Self {
         Self { mode, head, tail }
     }
 }

@@ -16,7 +16,7 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     let trace = git_policy_harness::validate_trace(data);
-    if let Some(surprise) = git_policy_harness::no_surprise_violation(&trace.history) {
+    if let Some(surprise) = git_policy_harness::no_surprise_violation(trace.history.as_slice()) {
         panic!("no-surprise violated: {surprise}");
     }
 });

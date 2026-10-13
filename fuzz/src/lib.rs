@@ -25,10 +25,13 @@
 //! generation and can never diverge.
 
 use std::env;
+use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arbitrary::Unstructured;
-use junco_policy::{Action, Bump, Event, GitPolicy, PolicyDecision, Resource};
+use junco_policy::{
+    Action, Bump, GitEvent, GitPolicy, History, MessageId, PolicyDecision, git_event,
+};
 
 mod oracle;
 
@@ -92,10 +95,38 @@ pub struct TraceSummary {
     pub commits: usize,
 }
 
+/// Principal identity of a simulated agent: its index in `0..MAX_AGENT_NUMBER`.
+///
+/// Displays as `agent{index}`, the label reports and the replay oracle use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Agent(pub usize);
+
+impl fmt::Display for Agent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "agent{}", self.0)
+    }
+}
+
+/// Resource identity of a pooled repository path: its index in `0..MAX_FILE_NUMBER`.
+///
+/// Displays as `src/file{index}.txt`, the path the replay oracle writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PooledPath(pub usize);
+
+impl fmt::Display for PooledPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "src/file{}.txt", self.0)
+    }
+}
+
 /// Runs one candidate through a retained Git policy; `true` means grant.
 ///
 /// This is the single operation the benchmark times and the trace validator gates replay on.
-pub fn check(policy: &mut GitPolicy<'_>, history: &[Event], candidate: &Event) -> bool {
+pub fn check(
+    policy: &mut GitPolicy<'_, Agent, PooledPath>,
+    history: &History<GitEvent<Agent, PooledPath>>,
+    candidate: &GitEvent<Agent, PooledPath>,
+) -> bool {
     matches!(policy.decide(history, candidate), PolicyDecision::Grant)
 }
 
@@ -115,16 +146,16 @@ pub fn entropy(seed: u64, length: usize) -> Vec<u8> {
 
 /// Generates a policy-legal history of exactly `length` granted events from `data`, touching
 /// neither git nor the filesystem. Every prefix of the result is itself a legal history, so
-/// `&history[..n]` is a valid trace of length `n`.
+/// `&history.as_slice()[..n]` is a valid trace of length `n`.
 ///
 /// # Panics
 ///
 /// Panics if `data` is exhausted before `length` events are granted; supply more bytes.
-pub fn granted_history(data: &[u8], length: usize) -> Vec<Event> {
+pub fn granted_history(data: &[u8], length: usize) -> History<GitEvent<Agent, PooledPath>> {
     let mut generator = TraceGenerator::new(data);
     let arena = Bump::new();
     let mut policy = GitPolicy::new(&arena);
-    let mut history = Vec::with_capacity(length);
+    let mut history = History::new();
     while history.len() < length {
         let Some(candidate) = generator.next_candidate() else {
             panic!(
@@ -144,20 +175,14 @@ pub fn granted_history(data: &[u8], length: usize) -> Vec<Event> {
 /// `src/file0.txt`, paired with the lowercase action name used as the benchmark's function name.
 /// Order is fixed: `read`, `edit`, `stage`, `unstage`, `commit`, `checkout`, `stash`, `diff`,
 /// `history`, `delete`, `clean`.
-pub fn probe_candidates() -> [(&'static str, Event); 11] {
-    let probe = |action: Action| {
-        Event::new(
-            "agent0".to_string(),
-            action,
-            Resource::from(vec!["src".to_string(), "file0.txt".to_string()]),
-        )
-    };
+pub fn probe_candidates() -> [(&'static str, GitEvent<Agent, PooledPath>); 11] {
+    let probe = |action: Action| git_event(Agent(0), action, PooledPath(0));
     [
         ("read", probe(Action::Read)),
         ("edit", probe(Action::Edit)),
         ("stage", probe(Action::Stage)),
         ("unstage", probe(Action::Unstage)),
-        ("commit", probe(Action::commit("probe"))),
+        ("commit", probe(Action::commit(MessageId(0)))),
         ("checkout", probe(Action::Checkout)),
         ("stash", probe(Action::Stash)),
         ("diff", probe(Action::Diff)),
@@ -181,7 +206,7 @@ pub fn validate_trace(data: &[u8]) -> ValidatedTrace {
     }
 
     let mut trace = ValidatedTrace::default();
-    let mut history = Vec::new();
+    let mut history = History::new();
     for _ in 0..budget {
         let Some(candidate) = generator.next_candidate() else {
             break;
@@ -311,14 +336,14 @@ impl GeneratedOperation {
         }
     }
 
-    /// The policy action this operation requests. Commit messages are per-step so distinct commits
-    /// stay distinguishable in a rendered trace.
+    /// The policy action this operation requests. Commit message identities are the step index,
+    /// so distinct commits stay distinguishable; the replay oracle renders them as `step <n>`.
     fn action(self, step: usize) -> Action {
         match self {
             Self::Create | Self::Modify | Self::Delete => Action::Edit,
             Self::Stage => Action::Stage,
             Self::Unstage => Action::Unstage,
-            Self::Commit => Action::commit(format!("step {step}")),
+            Self::Commit => Action::commit(MessageId(step as u64)),
             Self::Checkout => Action::Checkout,
             Self::Stash => Action::Stash,
             Self::Read => Action::Read,
@@ -352,10 +377,10 @@ pub struct ValidatedOperation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeniedCandidate {
     /// Length of the granted history when the denial happened; the prefix that produced it is
-    /// `&trace.history[..granted_prefix_len]`, because a denial never mutates history.
+    /// `&trace.history.as_slice()[..granted_prefix_len]`, because a denial never mutates history.
     pub granted_prefix_len: usize,
     /// The event the policy refused.
-    pub event: Event,
+    pub event: GitEvent<Agent, PooledPath>,
     /// The denial's `failed_precondition` string, verbatim.
     pub failed_precondition: String,
 }
@@ -367,7 +392,7 @@ pub struct ValidatedTrace {
     pub operations: Vec<ValidatedOperation>,
     /// The granted events in order — the same values fed to the policy, for trace-level property
     /// checks such as [`no_surprise_violation`].
-    pub history: Vec<Event>,
+    pub history: History<GitEvent<Agent, PooledPath>>,
     /// Counters for the whole trace, including the denied candidates that were never replayed.
     pub summary: TraceSummary,
     /// Every denied candidate in generation order, for strictness analysis.
@@ -381,7 +406,7 @@ struct Candidate {
     operation: GeneratedOperation,
     file: usize,
     step: usize,
-    event: Event,
+    event: GitEvent<Agent, PooledPath>,
 }
 
 /// The previous step's unit of work: one principal, one path, and what it last did to it.
@@ -502,11 +527,7 @@ impl<'data> TraceGenerator<'data> {
         });
 
         let step = self.step;
-        let event = Event::new(
-            format!("agent{agent}"),
-            operation.action(step),
-            Resource::from(vec!["src".to_string(), format!("file{file}.txt")]),
-        );
+        let event = git_event(Agent(agent), operation.action(step), PooledPath(file));
         self.step += 1;
         Some(Candidate {
             agent,

@@ -3,40 +3,45 @@
 //! Run the suite from this package with `cargo bench --bench validator`. Pass a Criterion filter,
 //! for example `cargo bench --bench validator -- history_scan`, to run one group.
 
-use std::fmt::Debug;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use junco_policy::{
-    Action, AtomPattern, Bump, Comparison, ComponentPattern, Decision, Event, Head, Principal,
-    RegexExpr, Request, Rule, RuleMode, TestExpr, Validator,
+    Action, AtomPattern, Bump, Comparison, ComponentPattern, Decision, GitEvent, Head, MessageId,
+    RegexExpr, Request, Rule, RuleMode, TestExpr, Validator, git_event,
 };
 
-trait CheckedDecision<Metadata> {
-    fn checked(self) -> Decision<Metadata>;
+/// Benchmark principal identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Actor(u32);
+
+/// Benchmark resource identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Path(u32);
+
+const ALICE: Actor = Actor(0);
+const CANDIDATE: Actor = Actor(1);
+const HISTORY: Actor = Actor(2);
+/// First id of principals named only by rule constants; no benchmark event carries one.
+const ABSENT_ACTORS: u32 = 1 << 20;
+/// First id of the high-cardinality history's unique principals and resources.
+const UNIQUE_IDS: u32 = 1 << 24;
+
+const ROOT: Path = Path(0);
+const SRC_A: Path = Path(1);
+const A: Path = Path(2);
+const TARGET: Path = Path(3);
+const EVENT: Path = Path(4);
+
+/// Commit message identity the duplicate-commit rule forbids repeating.
+const SHIP: MessageId = MessageId(0);
+
+fn request(actor: Actor, action: Action, path: Path) -> Request<GitEvent<Actor, Path>, ()> {
+    Request::new(git_event(actor, action, path), ())
 }
 
-impl<Metadata> CheckedDecision<Metadata> for Decision<Metadata> {
-    fn checked(self) -> Decision<Metadata> {
-        self
-    }
-}
-
-impl<Metadata, Error> CheckedDecision<Metadata> for Result<Decision<Metadata>, Error>
-where
-    Error: Debug,
-{
-    fn checked(self) -> Decision<Metadata> {
-        self.expect("validator evaluation succeeds")
-    }
-}
-
-fn request(principal: &str, action: Action, resource: &[&str]) -> Request<()> {
-    Request::new(Event::new(principal, action, resource.to_vec()), ())
-}
-
-fn prior_edit_rule(suffix: usize) -> Rule {
+fn prior_edit_rule(suffix: usize) -> Rule<GitEvent<Actor, Path>> {
     let actor = format!("actor-{suffix}");
     let target = format!("target-{suffix}");
     let principal = TestExpr::atom(
@@ -65,11 +70,11 @@ fn prior_edit_rule(suffix: usize) -> Rule {
     )
 }
 
-fn duplicate_commit_rule() -> Rule {
+fn duplicate_commit_rule() -> Rule<GitEvent<Actor, Path>> {
     let matching_commit = RegexExpr::test(TestExpr::and([
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Action(ComponentPattern::constant(Action::commit("ship"))),
+            AtomPattern::Action(ComponentPattern::constant(Action::commit(SHIP))),
         ),
         TestExpr::atom(
             Comparison::Eq,
@@ -80,23 +85,23 @@ fn duplicate_commit_rule() -> Rule {
         RuleMode::Forbid,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::commit("ship")),
+            ComponentPattern::constant(Action::commit(SHIP)),
             ComponentPattern::variable("target"),
         ),
         RegexExpr::concat([RegexExpr::all(), matching_commit, RegexExpr::all()]),
     )
 }
 
-fn every_action_leaf(index: usize) -> RegexExpr {
+fn every_action_leaf(index: usize) -> RegexExpr<GitEvent<Actor, Path>> {
     RegexExpr::star(RegexExpr::test(TestExpr::atom(
         Comparison::Neq,
-        AtomPattern::Action(ComponentPattern::constant(Action::commit(format!(
-            "blocked-{index}"
+        AtomPattern::Action(ComponentPattern::constant(Action::commit(MessageId(
+            index as u64 + 1,
         )))),
     )))
 }
 
-fn deeply_nested_action_allow_all_rule(depth: usize) -> Rule {
+fn deeply_nested_action_allow_all_rule(depth: usize) -> Rule<GitEvent<Actor, Path>> {
     assert!(depth > 0, "regex depth must be positive");
     let mut leaves = (0..depth).map(every_action_leaf);
     let mut tail = leaves.next().expect("positive depth has one leaf");
@@ -118,28 +123,22 @@ fn deeply_nested_action_allow_all_rule(depth: usize) -> Rule {
     )
 }
 
-fn unique_read(index: usize) -> Request<()> {
-    Request::new(
-        Event::new(
-            format!("actor-{index}"),
-            Action::Read,
-            vec![format!("resource-{index}")],
-        ),
-        (),
-    )
+fn unique_read(index: usize) -> Request<GitEvent<Actor, Path>, ()> {
+    let id = UNIQUE_IDS + u32::try_from(index).expect("benchmark index fits u32");
+    request(Actor(id), Action::Read, Path(id))
 }
 
 // Each distinct star accepts every benchmark event and is stable under differentiation.
-fn every_event_leaf(index: usize) -> RegexExpr {
+fn every_event_leaf(index: usize) -> RegexExpr<GitEvent<Actor, Path>> {
     RegexExpr::star(RegexExpr::test(TestExpr::atom(
         Comparison::Neq,
-        AtomPattern::Principal(ComponentPattern::constant(Principal::new(format!(
-            "blocked-{index}"
-        )))),
+        AtomPattern::Principal(ComponentPattern::constant(Actor(
+            ABSENT_ACTORS + index as u32,
+        ))),
     )))
 }
 
-fn deeply_nested_allow_all_rule(depth: usize) -> Rule {
+fn deeply_nested_allow_all_rule(depth: usize) -> Rule<GitEvent<Actor, Path>> {
     assert!(depth > 0, "regex depth must be positive");
     let mut leaves = (0..depth).map(every_event_leaf);
     let mut tail = leaves.next().expect("positive depth has one leaf");
@@ -163,14 +162,14 @@ fn deeply_nested_allow_all_rule(depth: usize) -> Rule {
     )
 }
 
-fn advancing_optional_rule(steps: usize) -> Rule {
+fn advancing_optional_rule(steps: usize) -> Rule<GitEvent<Actor, Path>> {
     let factors = (0..steps).map(|index| {
         RegexExpr::union([
             RegexExpr::epsilon(),
             RegexExpr::test(TestExpr::atom(
                 Comparison::Neq,
-                AtomPattern::Action(ComponentPattern::constant(Action::commit(format!(
-                    "blocked-{index}"
+                AtomPattern::Action(ComponentPattern::constant(Action::commit(MessageId(
+                    index as u64 + 1,
                 )))),
             )),
         ])
@@ -192,7 +191,7 @@ fn advancing_optional_rule(steps: usize) -> Rule {
 /// read. A shorter all-read history keeps adding candidate suffixes without reaching a terminal
 /// residual. The full DFA has exponentially many states even though this measured path grows
 /// linearly.
-fn growing_residual_rule(window: usize) -> Rule {
+fn growing_residual_rule(window: usize) -> Rule<GitEvent<Actor, Path>> {
     assert!(window > 0, "residual-growth window must be positive");
     let any_event = RegexExpr::test(TestExpr::true_test());
     let read = RegexExpr::test(TestExpr::atom(
@@ -214,10 +213,12 @@ fn growing_residual_rule(window: usize) -> Rule {
 }
 
 /// One unique absent-witness rule that forces a complete nonterminal history scan.
-fn absent_witness_rule(index: usize) -> Rule {
+fn absent_witness_rule(index: usize) -> Rule<GitEvent<Actor, Path>> {
     let absent = RegexExpr::test(TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Principal(ComponentPattern::constant(format!("missing-{index}"))),
+        AtomPattern::Principal(ComponentPattern::constant(Actor(
+            ABSENT_ACTORS + index as u32,
+        ))),
     ));
     Rule::new(
         RuleMode::Forbid,
@@ -242,7 +243,7 @@ fn benchmark_million_event_nested_scan(criterion: &mut Criterion) {
         .expect("benchmark rule is valid");
     let mut validator = builder.finish();
     for _ in 0..HISTORY_LEN {
-        let _ = validator.check(request("alice", Action::Read, &[]));
+        let _ = validator.check(request(ALICE, Action::Read, ROOT));
     }
     assert_eq!(validator.history().len(), HISTORY_LEN);
     let checkpoint = validator.checkpoint();
@@ -254,9 +255,9 @@ fn benchmark_million_event_nested_scan(criterion: &mut Criterion) {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request("alice", Action::Stage, &[]);
+                let candidate = request(ALICE, Action::Stage, ROOT);
                 let start = Instant::now();
-                let decision = validator.check(black_box(candidate)).checked();
+                let decision = validator.check(black_box(candidate));
                 elapsed += start.elapsed();
                 assert!(decision.is_grant());
                 validator.rollback(checkpoint);
@@ -268,7 +269,7 @@ fn benchmark_million_event_nested_scan(criterion: &mut Criterion) {
 }
 
 // Every history symbol is distinct, defeating symbol-indexed successor caches. The regex only
-// inspects actions, so unique principal/resource strings do not enter component resolution.
+// inspects actions, so the unique principal/resource values are never compared.
 fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
     const HISTORY_LEN: usize = 100_000;
     const REGEX_DEPTH: usize = 32;
@@ -280,7 +281,7 @@ fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
         .expect("benchmark rule is valid");
     let mut validator = builder.finish();
     for index in 0..HISTORY_LEN {
-        let _ = validator.check(unique_read(index)).checked();
+        let _ = validator.check(unique_read(index));
     }
     assert_eq!(validator.history().len(), HISTORY_LEN);
     let checkpoint = validator.checkpoint();
@@ -292,9 +293,9 @@ fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request("candidate", Action::Stage, &[]);
+                let candidate = request(CANDIDATE, Action::Stage, ROOT);
                 let start = Instant::now();
-                let decision = validator.check(black_box(candidate)).checked();
+                let decision = validator.check(black_box(candidate));
                 elapsed += start.elapsed();
                 assert!(decision.is_grant());
                 validator.rollback(checkpoint);
@@ -317,9 +318,7 @@ fn benchmark_advancing_derivatives(criterion: &mut Criterion) {
         .expect("benchmark rule is valid");
     let mut validator = builder.finish();
     for _ in 0..STEPS {
-        let _ = validator
-            .check(request("history", Action::Read, &[]))
-            .checked();
+        let _ = validator.check(request(HISTORY, Action::Read, ROOT));
     }
     let checkpoint = validator.checkpoint();
 
@@ -330,9 +329,9 @@ fn benchmark_advancing_derivatives(criterion: &mut Criterion) {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request("candidate", Action::Stage, &[]);
+                let candidate = request(CANDIDATE, Action::Stage, ROOT);
                 let start = Instant::now();
-                let decision = validator.check(black_box(candidate)).checked();
+                let decision = validator.check(black_box(candidate));
                 elapsed += start.elapsed();
                 assert!(decision.is_grant());
                 validator.rollback(checkpoint);
@@ -388,7 +387,7 @@ fn benchmark_growing_residual_stress(criterion: &mut Criterion) {
         for _ in 0..window {
             assert!(
                 validator
-                    .check(request("history", Action::Read, &["event"]))
+                    .check(request(HISTORY, Action::Read, EVENT))
                     .is_grant()
             );
         }
@@ -401,7 +400,7 @@ fn benchmark_growing_residual_stress(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let candidate = request("candidate", Action::Stage, &["target"]);
+                        let candidate = request(CANDIDATE, Action::Stage, TARGET);
                         let start = Instant::now();
                         let decision = validator.check(black_box(candidate));
                         elapsed += start.elapsed();
@@ -468,7 +467,7 @@ fn benchmark_many_rules_stress(criterion: &mut Criterion) {
         for _ in 0..HISTORY_LEN {
             assert!(
                 validator
-                    .check(request("history", Action::Read, &["event"]))
+                    .check(request(HISTORY, Action::Read, EVENT))
                     .is_grant()
             );
         }
@@ -485,7 +484,7 @@ fn benchmark_many_rules_stress(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let candidate = request("candidate", Action::Stage, &["target"]);
+                        let candidate = request(CANDIDATE, Action::Stage, TARGET);
                         let start = Instant::now();
                         let decision = validator.check(black_box(candidate));
                         elapsed += start.elapsed();
@@ -510,7 +509,8 @@ fn benchmark_compilation(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let rules: Vec<Rule> = (0..count).map(prior_edit_rule).collect();
+                        let rules: Vec<Rule<GitEvent<Actor, Path>>> =
+                            (0..count).map(prior_edit_rule).collect();
                         let arena = Bump::new();
                         let start = Instant::now();
                         let mut builder = Validator::builder(&arena);
@@ -533,14 +533,14 @@ fn benchmark_compilation(criterion: &mut Criterion) {
 fn validator_with_edit_history<'arena>(
     arena: &'arena Bump,
     history_len: usize,
-) -> Validator<'arena> {
+) -> Validator<'arena, GitEvent<Actor, Path>> {
     let mut builder = Validator::builder(arena);
     builder
         .add_rule(prior_edit_rule(0))
         .expect("benchmark rule is valid");
     let mut validator = builder.finish();
     for _ in 0..history_len {
-        let decision = validator.check(request("alice", Action::Edit, &["src", "a.rs"]));
+        let decision = validator.check(request(ALICE, Action::Edit, SRC_A));
         debug_assert!(decision.is_grant());
     }
     validator
@@ -559,7 +559,7 @@ fn benchmark_history_scan(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let candidate = request("alice", Action::Stage, &["src", "a.rs"]);
+                        let candidate = request(ALICE, Action::Stage, SRC_A);
                         let start = Instant::now();
                         let decision = validator.check(black_box(candidate));
                         elapsed += start.elapsed();
@@ -581,14 +581,14 @@ fn benchmark_denial(criterion: &mut Criterion) {
         .add_rule(duplicate_commit_rule())
         .expect("benchmark rule is valid");
     let mut validator = builder.finish();
-    let first = validator.check(request("alice", Action::commit("ship"), &["a"]));
+    let first = validator.check(request(ALICE, Action::commit(SHIP), A));
     debug_assert!(first.is_grant());
 
     criterion.bench_function("deny_duplicate_commit", |bencher| {
         bencher.iter_custom(|iterations| {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
-                let candidate = request("alice", Action::commit("ship"), &["a"]);
+                let candidate = request(ALICE, Action::commit(SHIP), A);
                 let start = Instant::now();
                 let decision = validator.check(black_box(candidate));
                 elapsed += start.elapsed();
@@ -612,7 +612,7 @@ fn benchmark_rollback(criterion: &mut Criterion) {
                         let mut validator = Validator::builder(&arena).finish();
                         let checkpoint = validator.checkpoint();
                         for _ in 0..removed_events {
-                            let decision = validator.check(request("alice", Action::Read, &["a"]));
+                            let decision = validator.check(request(ALICE, Action::Read, A));
                             debug_assert!(decision.is_grant());
                         }
                         (validator, checkpoint)

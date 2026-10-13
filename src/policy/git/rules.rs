@@ -4,14 +4,14 @@ use super::diagnostics::{GitContext, opf, rcf};
 use super::languages::{
     clean_lang, read_claimed_other_lang, staged_lang, unstaged_other_lang, unstaged_self_lang,
 };
-use crate::Action;
 use crate::policy::rule::{PolicyRule, forbid};
+use crate::{Action, Event};
 
 /// The 23-rule git legality table. Within one action the row-languages are mutually exclusive, but
 /// the claim language is independent of them, so the row cells are ordered before the claim cells
 /// and the row diagnostic wins when both hold. Across actions heads pin distinct action constants.
 /// Read/Diff/History and every staged-row commit have no rule and thus grant.
-pub(super) fn git_rules() -> Vec<PolicyRule<GitContext>> {
+pub(super) fn git_rules<E: Event<Action = Action>>() -> Vec<PolicyRule<E, GitContext>> {
     vec![
         // 1. edit on a resource unstaged by another principal.
         forbid(

@@ -2,11 +2,12 @@
 //!
 //! Source rules are complete owned values. `ValidatorBuilder` resolves each rule through the
 //! canonical store and a temporary variable environment. The executable validator retains only
-//! canonical runtime rules and committed history.
+//! canonical runtime rules and its tracked committed [`History`].
 
 use bumpalo::Bump;
 use thiserror::Error;
 
+use crate::history::{Checkpoint, History};
 use crate::model::{Event, Grant, Request};
 use crate::syntax::{CanonicalStore, Rule, RuleMode, RuntimeRule, compile_rule};
 
@@ -36,44 +37,44 @@ pub enum CompileError {
 /// internal rule vector. Applications needing rule identity should carry an explicit domain label
 /// in their policy model rather than depending on storage order.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Denial {
+pub struct Denial<E: Event> {
     /// Whether the violated rule required or forbade its tail language.
     pub mode: RuleMode,
     /// Candidate event that was denied and was not appended to history.
-    pub event: Event,
+    pub event: E,
     /// Human-readable explanation of the failed history relation.
     pub message: String,
 }
 
 /// Result of checking one capability request.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Decision<M> {
+pub enum Decision<E: Event, M> {
     /// Request was accepted and appended to committed history.
-    Grant(Grant<M>),
+    Grant(Grant<E, M>),
     /// Request was rejected atomically; committed history is unchanged.
-    Denied(Denial),
+    Denied(Denial<E>),
 }
 
-impl<M> Decision<M> {
+impl<E: Event, M> Decision<E, M> {
     /// Returns `true` exactly for [`Decision::Grant`].
     pub fn is_grant(&self) -> bool {
         matches!(self, Self::Grant(_))
     }
 }
 
-/// Opaque committed-history cursor.
-///
-/// The position is produced and range-checked only by `Validator`; callers cannot manufacture it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Checkpoint(usize);
-
 /// Resolves complete source rules into runtime rules sharing one canonical store.
-pub struct ValidatorBuilder<'arena> {
-    store: CanonicalStore<'arena>,
-    rules: Vec<RuntimeRule<'arena>>,
+pub struct ValidatorBuilder<'arena, E>
+where
+    E: Event + 'arena,
+{
+    store: CanonicalStore<'arena, E>,
+    rules: Vec<RuntimeRule<'arena, E>>,
 }
 
-impl<'arena> ValidatorBuilder<'arena> {
+impl<'arena, E> ValidatorBuilder<'arena, E>
+where
+    E: Event + 'arena,
+{
     /// Creates an empty builder whose resolved values live in `arena`.
     pub fn new(arena: &'arena Bump) -> Self {
         Self {
@@ -86,32 +87,38 @@ impl<'arena> ValidatorBuilder<'arena> {
     ///
     /// The source expression is context-free. Its head creates a temporary variable environment,
     /// and only the resulting runtime rule is kept.
-    pub fn add_rule(&mut self, source: Rule) -> Result<&mut Self, CompileError> {
+    pub fn add_rule(&mut self, source: Rule<E>) -> Result<&mut Self, CompileError> {
         let runtime_rule = compile_rule(&mut self.store, &source)?;
         self.rules.push(runtime_rule);
         Ok(self)
     }
 
     /// Finishes compilation with an empty committed history.
-    pub fn finish(self) -> Validator<'arena> {
+    pub fn finish(self) -> Validator<'arena, E> {
         Validator {
             store: self.store,
             rules: self.rules,
-            history: Vec::new(),
+            history: History::new(),
         }
     }
 }
 
 /// Stateful validator for a fixed ordered rule set.
-pub struct Validator<'arena> {
-    store: CanonicalStore<'arena>,
-    rules: Vec<RuntimeRule<'arena>>,
-    history: Vec<Event>,
+pub struct Validator<'arena, E>
+where
+    E: Event + 'arena,
+{
+    store: CanonicalStore<'arena, E>,
+    rules: Vec<RuntimeRule<'arena, E>>,
+    history: History<E>,
 }
 
-impl<'arena> Validator<'arena> {
+impl<'arena, E> Validator<'arena, E>
+where
+    E: Event + 'arena,
+{
     /// Starts compiling a validator in `arena`.
-    pub fn builder(arena: &'arena Bump) -> ValidatorBuilder<'arena> {
+    pub fn builder(arena: &'arena Bump) -> ValidatorBuilder<'arena, E> {
         ValidatorBuilder::new(arena)
     }
 
@@ -121,10 +128,38 @@ impl<'arena> Validator<'arena> {
     /// committed history is outside the tail language, while `Forbid` denies when it is inside.
     /// The first violation wins. On success the candidate is appended once and its metadata is
     /// preserved in the returned grant.
-    pub fn check<M>(&mut self, request: Request<M>) -> Decision<M> {
+    pub fn check<M>(&mut self, request: Request<E, M>) -> Decision<E, M> {
+        if let Some(mode) = self.first_violation(&request.event) {
+            let relation = match mode {
+                RuleMode::Require => "does not satisfy required",
+                RuleMode::Forbid => "satisfies forbidden",
+            };
+            return Decision::Denied(Denial {
+                mode,
+                event: request.event,
+                message: format!("committed history {relation} past-regex rule"),
+            });
+        }
+
+        self.history.push(request.event);
+        Decision::Grant(Grant {
+            event: request.event,
+            metadata: request.metadata,
+        })
+    }
+
+    /// Returns whether [`Validator::check`] would grant `candidate`, without appending it.
+    ///
+    /// Evaluation is identical to `check`; repeated calls over an unchanged or append-extended
+    /// history resume each rule's cached residual and fold only newly committed events.
+    pub fn permits(&mut self, candidate: &E) -> bool {
+        self.first_violation(candidate).is_none()
+    }
+
+    /// Returns the mode of the first rule, in source order, that `candidate` violates.
+    fn first_violation(&mut self, candidate: &E) -> Option<RuleMode> {
         for rule in &mut self.rules {
-            let Some(accepted) =
-                rule.accepts_history(&mut self.store, self.history.iter(), &request.event)
+            let Some(accepted) = rule.accepts_history(&mut self.store, &self.history, candidate)
             else {
                 continue;
             };
@@ -133,41 +168,29 @@ impl<'arena> Validator<'arena> {
                 RuleMode::Forbid => accepted,
             };
             if violated {
-                let relation = match rule.mode {
-                    RuleMode::Require => "does not satisfy required",
-                    RuleMode::Forbid => "satisfies forbidden",
-                };
-                return Decision::Denied(Denial {
-                    mode: rule.mode,
-                    event: request.event,
-                    message: format!("committed history {relation} past-regex rule"),
-                });
+                return Some(rule.mode);
             }
         }
-
-        self.history.push(request.event.clone());
-        Decision::Grant(Grant {
-            event: request.event,
-            metadata: request.metadata,
-        })
+        None
     }
 
     /// Returns committed grants' events in exact acceptance order.
-    pub fn history(&self) -> &[Event] {
-        &self.history
+    pub fn history(&self) -> &[E] {
+        self.history.as_slice()
     }
 
     /// Captures the current committed-history position in constant time.
     pub fn checkpoint(&self) -> Checkpoint {
-        Checkpoint(self.history.len())
+        self.history.checkpoint()
     }
 
-    /// Restores history to a previously captured position.
+    /// Restores history to a previously captured position of this validator.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `checkpoint` belongs to another validator's history or lies beyond the current
+    /// history; history is unchanged in that case.
     pub fn rollback(&mut self, checkpoint: Checkpoint) {
-        assert!(
-            checkpoint.0 <= self.history.len(),
-            "invalid validator checkpoint"
-        );
-        self.history.truncate(checkpoint.0);
+        self.history.rollback(checkpoint);
     }
 }

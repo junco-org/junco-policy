@@ -1,17 +1,37 @@
 use junco_policy::{
-    Action, AtomPattern, Bump, Comparison, CompileError, ComponentPattern, Decision, Event, Head,
-    RegexExpr, Request, Rule, RuleMode, TestExpr, Validator,
+    Action, AtomPattern, Bump, Comparison, CompileError, ComponentPattern, Decision, GitEvent,
+    Head, MessageId, RegexExpr, Request, Rule, RuleMode, TestExpr, Validator, git_event,
 };
 
-fn event(principal: &str, action: Action, path: &[&str]) -> Event {
-    Event::new(principal, action, path.to_vec())
+/// Caller-owned principal identities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Actor {
+    Alice,
+    Bob,
 }
 
-fn request<M>(principal: &str, action: Action, path: &[&str], metadata: M) -> Request<M> {
-    Request::new(event(principal, action, path), metadata)
+/// Caller-owned resource identities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Path {
+    SrcA,
+    A,
+    B,
+    Elsewhere,
 }
 
-fn same_actor_edit_before_stage() -> Rule {
+/// Commit message identity the duplicate-commit rule forbids repeating.
+const SHIP: MessageId = MessageId(1);
+
+fn request<M>(
+    actor: Actor,
+    action: Action,
+    path: Path,
+    metadata: M,
+) -> Request<GitEvent<Actor, Path>, M> {
+    Request::new(git_event(actor, action, path), metadata)
+}
+
+fn same_actor_edit_before_stage() -> Rule<GitEvent<Actor, Path>> {
     let principal = TestExpr::atom(
         Comparison::Eq,
         AtomPattern::Principal(ComponentPattern::variable("actor")),
@@ -44,14 +64,14 @@ fn require_rule_uses_only_committed_pre_candidate_history() {
     builder.add_rule(same_actor_edit_before_stage()).unwrap();
     let mut validator = builder.finish();
 
-    let denied = validator.check(request("alice", Action::Stage, &["src", "a.rs"], 1));
+    let denied = validator.check(request(Actor::Alice, Action::Stage, Path::SrcA, 1));
     assert!(matches!(denied, Decision::Denied(_)));
     assert!(validator.history().is_empty());
 
-    let edit = validator.check(request("alice", Action::Edit, &["src", "a.rs"], 2));
+    let edit = validator.check(request(Actor::Alice, Action::Edit, Path::SrcA, 2));
     assert!(matches!(edit, Decision::Grant(grant) if grant.metadata == 2));
 
-    let stage = validator.check(request("alice", Action::Stage, &["src", "a.rs"], 3));
+    let stage = validator.check(request(Actor::Alice, Action::Stage, Path::SrcA, 3));
     assert!(matches!(stage, Decision::Grant(grant) if grant.metadata == 3));
     assert_eq!(validator.history().len(), 2);
 }
@@ -60,7 +80,7 @@ fn require_rule_uses_only_committed_pre_candidate_history() {
 fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
     let action = TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Action(ComponentPattern::constant(Action::commit("ship"))),
+        AtomPattern::Action(ComponentPattern::constant(Action::commit(SHIP))),
     );
     let resource = TestExpr::atom(
         Comparison::Eq,
@@ -72,7 +92,7 @@ fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
         RuleMode::Forbid,
         Head::new(
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::commit("ship")),
+            ComponentPattern::constant(Action::commit(SHIP)),
             ComponentPattern::variable("target"),
         ),
         tail,
@@ -85,18 +105,18 @@ fn forbid_rule_denies_duplicate_commit_without_mutating_history() {
 
     assert!(
         validator
-            .check(request("alice", Action::commit("ship"), &["a"], ()))
+            .check(request(Actor::Alice, Action::commit(SHIP), Path::A, ()))
             .is_grant()
     );
-    let checkpoint = validator.checkpoint();
+    let history = validator.history().to_vec();
 
-    let denied = validator.check(request("alice", Action::commit("ship"), &["a"], ()));
+    let denied = validator.check(request(Actor::Alice, Action::commit(SHIP), Path::A, ()));
     assert!(matches!(denied, Decision::Denied(denial) if denial.mode == RuleMode::Forbid));
-    assert_eq!(validator.checkpoint(), checkpoint);
+    assert_eq!(validator.history(), history.as_slice());
 
     assert!(
         validator
-            .check(request("alice", Action::commit("ship"), &["b"], ()))
+            .check(request(Actor::Alice, Action::commit(SHIP), Path::B, ()))
             .is_grant()
     );
 }
@@ -125,16 +145,16 @@ fn complement_is_exact_over_complete_history() {
 
     assert!(
         validator
-            .check(request("alice", Action::Stage, &["a"], ()))
+            .check(request(Actor::Alice, Action::Stage, Path::A, ()))
             .is_grant()
     );
     assert!(
         validator
-            .check(request("bob", Action::Edit, &["elsewhere"], ()))
+            .check(request(Actor::Bob, Action::Edit, Path::Elsewhere, ()))
             .is_grant()
     );
     assert!(matches!(
-        validator.check(request("alice", Action::Stage, &["a"], ())),
+        validator.check(request(Actor::Alice, Action::Stage, Path::A, ())),
         Decision::Denied(_)
     ));
 }
@@ -142,7 +162,7 @@ fn complement_is_exact_over_complete_history() {
 #[test]
 fn construction_rejects_unbound_and_cross_component_variables() {
     let arena = Bump::new();
-    let mut builder = Validator::builder(&arena);
+    let mut builder = Validator::<GitEvent<Actor, Path>>::builder(&arena);
     let missing = builder.add_rule(Rule::new(
         RuleMode::Require,
         Head::new(
@@ -160,13 +180,13 @@ fn construction_rejects_unbound_and_cross_component_variables() {
         Err(CompileError::UnboundVariable { name }) if name == "missing"
     ));
 
-    let mut builder = Validator::builder(&arena);
+    let mut builder = Validator::<GitEvent<Actor, Path>>::builder(&arena);
     let conflict = builder.add_rule(Rule::new(
         RuleMode::Require,
         Head::new(
             ComponentPattern::variable("same"),
             ComponentPattern::variable("same"),
-            ComponentPattern::constant(["a"]),
+            ComponentPattern::constant(Path::A),
         ),
         RegexExpr::all(),
     ));
@@ -174,39 +194,40 @@ fn construction_rejects_unbound_and_cross_component_variables() {
         conflict,
         Err(CompileError::VariableComponentConflict { name }) if name == "same"
     ));
-}
 
-#[test]
-fn source_expressions_are_revalidated_and_reusable_across_rules() {
-    let shared_tail = RegexExpr::test(TestExpr::atom(
-        Comparison::Eq,
-        AtomPattern::Principal(ComponentPattern::variable("actor")),
+    // Principal and resource share one Rust type; coordinates must still stay distinct.
+    let mut builder = Validator::<GitEvent<Actor, Actor>>::builder(&arena);
+    let head_conflict = builder.add_rule(Rule::new(
+        RuleMode::Require,
+        Head::new(
+            ComponentPattern::variable("same"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::variable("same"),
+        ),
+        RegexExpr::all(),
+    ));
+    assert!(matches!(
+        head_conflict,
+        Err(CompileError::VariableComponentConflict { name }) if name == "same"
     ));
 
-    let arena = Bump::new();
-    let mut builder = Validator::builder(&arena);
-    builder
-        .add_rule(Rule::new(
-            RuleMode::Require,
-            Head::new(
-                ComponentPattern::variable("actor"),
-                ComponentPattern::constant(Action::Read),
-                ComponentPattern::constant(["a"]),
-            ),
-            shared_tail.clone(),
-        ))
-        .unwrap();
-    builder
-        .add_rule(Rule::new(
-            RuleMode::Require,
-            Head::new(
-                ComponentPattern::variable("actor"),
-                ComponentPattern::constant(Action::Diff),
-                ComponentPattern::constant(["b"]),
-            ),
-            shared_tail,
-        ))
-        .unwrap();
+    let mut builder = Validator::<GitEvent<Actor, Actor>>::builder(&arena);
+    let tail_conflict = builder.add_rule(Rule::new(
+        RuleMode::Require,
+        Head::new(
+            ComponentPattern::variable("same"),
+            ComponentPattern::constant(Action::Stage),
+            ComponentPattern::constant(Actor::Bob),
+        ),
+        RegexExpr::test(TestExpr::atom(
+            Comparison::Eq,
+            AtomPattern::Resource(ComponentPattern::variable("same")),
+        )),
+    ));
+    assert!(matches!(
+        tail_conflict,
+        Err(CompileError::VariableComponentConflict { name }) if name == "same"
+    ));
 }
 
 #[test]
@@ -215,15 +236,18 @@ fn checkpoint_restores_append_only_history() {
     let mut validator = Validator::builder(&arena).finish();
     assert!(
         validator
-            .check(request("alice", Action::Read, &["a"], ()))
+            .check(request(Actor::Alice, Action::Read, Path::A, ()))
             .is_grant()
     );
     let checkpoint = validator.checkpoint();
     assert!(
         validator
-            .check(request("bob", Action::Diff, &["b"], ()))
+            .check(request(Actor::Bob, Action::Diff, Path::B, ()))
             .is_grant()
     );
     validator.rollback(checkpoint);
-    assert_eq!(validator.history(), &[event("alice", Action::Read, &["a"])]);
+    assert_eq!(
+        validator.history(),
+        &[git_event(Actor::Alice, Action::Read, Path::A)]
+    );
 }

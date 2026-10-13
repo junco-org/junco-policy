@@ -12,8 +12,10 @@ path = "src/lib.rs"
 
 [dependencies]
 bumpalo = "3.16"
+frunk_core = { version = "=0.5.0", default-features = false }
 hashconsing = { git = "https://github.com/elefthei/hashconsing", rev = "6d79a7e287adbb9a8e43ddf96a956b80a156dfd0", features = ["bumpalo"] }
 hashbrown = { version = "0.16", features = ["raw-entry"] }
+lru = "=0.18.4"
 smallbitvec = "2.6"
 smallvec = "1.15"
 string-interner = "0.20.0"
@@ -24,4 +26,8 @@ criterion = "0.5"
 
 [[bench]]
 name = "validator"
+harness = false
+
+[[bench]]
+name = "progress"
 harness = false

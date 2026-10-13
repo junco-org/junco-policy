@@ -1,7 +1,21 @@
 use junco_policy::{
-    Action, AtomPattern, Bump, Comparison, ComponentPattern, Event, Head, RegexExpr, Request, Rule,
-    RuleMode, TestExpr, Validator,
+    Action, AtomPattern, Bump, Comparison, ComponentPattern, Event, GitEvent, Head, RegexExpr,
+    Request, Rule, RuleMode, TestExpr, Validator, git_event,
 };
+
+/// Principal of committed history events versus the rule-probing candidate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Actor {
+    History,
+    Probe,
+}
+
+/// Resource of committed history events versus the rule-probing candidate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Path {
+    History,
+    Probe,
+}
 
 #[derive(Clone, Debug)]
 enum RefTest {
@@ -25,22 +39,23 @@ enum RefRegex {
     Not(Box<RefRegex>),
 }
 
-fn event(action: Action) -> Event {
-    Event::new("history", action, ["history"])
+/// A committed event that never matches the probe-only rule head.
+fn event(action: Action) -> GitEvent<Actor, Path> {
+    git_event(Actor::History, action, Path::History)
 }
 
-fn eval_test(test: &RefTest, event: &Event) -> bool {
+fn eval_test(test: &RefTest, event: &GitEvent<Actor, Path>) -> bool {
     match test {
         RefTest::True => true,
         RefTest::False => false,
-        RefTest::Action(Comparison::Eq, expected) => &event.action == expected,
-        RefTest::Action(Comparison::Neq, expected) => &event.action != expected,
+        RefTest::Action(Comparison::Eq, expected) => event.action() == *expected,
+        RefTest::Action(Comparison::Neq, expected) => event.action() != *expected,
         RefTest::And(children) => children.iter().all(|child| eval_test(child, event)),
         RefTest::Or(children) => children.iter().any(|child| eval_test(child, event)),
     }
 }
 
-fn accepts(regex: &RefRegex, history: &[Event]) -> bool {
+fn accepts(regex: &RefRegex, history: &[GitEvent<Actor, Path>]) -> bool {
     match regex {
         RefRegex::Empty => false,
         RefRegex::All => true,
@@ -59,7 +74,7 @@ fn accepts(regex: &RefRegex, history: &[Event]) -> bool {
     }
 }
 
-fn accepts_concat(factors: &[RefRegex], history: &[Event]) -> bool {
+fn accepts_concat(factors: &[RefRegex], history: &[GitEvent<Actor, Path>]) -> bool {
     match factors {
         [] => history.is_empty(),
         [only] => accepts(only, history),
@@ -69,20 +84,20 @@ fn accepts_concat(factors: &[RefRegex], history: &[Event]) -> bool {
     }
 }
 
-fn source_test(source: &RefTest) -> TestExpr {
+fn source_test(source: &RefTest) -> TestExpr<GitEvent<Actor, Path>> {
     match source {
         RefTest::True => TestExpr::true_test(),
         RefTest::False => TestExpr::false_test(),
         RefTest::Action(comparison, action) => TestExpr::atom(
             *comparison,
-            AtomPattern::Action(ComponentPattern::constant(action.clone())),
+            AtomPattern::Action(ComponentPattern::constant(*action)),
         ),
         RefTest::And(children) => TestExpr::and(children.iter().map(source_test)),
         RefTest::Or(children) => TestExpr::or(children.iter().map(source_test)),
     }
 }
 
-fn source_regex(source: &RefRegex) -> RegexExpr {
+fn source_regex(source: &RefRegex) -> RegexExpr<GitEvent<Actor, Path>> {
     match source {
         RefRegex::Empty => RegexExpr::empty(),
         RefRegex::All => RegexExpr::all(),
@@ -158,44 +173,60 @@ impl Generator {
     }
 }
 
-fn implementation_accepts(regex: &RefRegex, history: &[Event]) -> bool {
+/// Drives every prefix of `word` through one retained validator for `regex`.
+///
+/// At each prefix the probe is checked twice with `permits` (cold or suffix-resumed, then warm)
+/// against the reference interpreter; the next word event is then appended through `check`.
+fn assert_prefixes_match_reference(regex: &RefRegex, word: &[GitEvent<Actor, Path>]) {
     let arena = Bump::new();
-    let probe = Event::new("probe", Action::History, ["probe"]);
+    let probe = git_event(Actor::Probe, Action::History, Path::Probe);
     let mut builder = Validator::builder(&arena);
     builder
         .add_rule(Rule::new(
             RuleMode::Require,
             Head::new(
-                ComponentPattern::constant("probe"),
+                ComponentPattern::constant(Actor::Probe),
                 ComponentPattern::constant(Action::History),
-                ComponentPattern::constant(["probe"]),
+                ComponentPattern::constant(Path::Probe),
             ),
             source_regex(regex),
         ))
         .unwrap();
     let mut validator = builder.finish();
-    for event in history {
-        assert!(validator.check(Request::new(event.clone(), ())).is_grant());
+    for split in 0..=word.len() {
+        let prefix = &word[..split];
+        let expected = accepts(regex, prefix);
+        for pass in ["first", "repeat"] {
+            assert_eq!(
+                validator.permits(&probe),
+                expected,
+                "{pass} permits: {regex:?} over {prefix:?}"
+            );
+        }
+        if let Some(next) = word.get(split) {
+            assert!(validator.check(Request::new(*next, ())).is_grant());
+        }
     }
-    validator.check(Request::new(probe, ())).is_grant()
 }
 
 #[test]
 fn derivatives_match_an_independent_language_interpreter() {
     let mut generator = Generator(0x5eed_cafe_f00d_beef);
-    for case in 0..500 {
+    for _ in 0..500 {
         let regex = generator.regex(3);
-        let history: Vec<Event> = (0..generator.next(5))
+        let word: Vec<_> = (0..generator.next(5))
             .map(|_| event(generator.action()))
             .collect();
-        let expected = accepts(&regex, &history);
-        let actual = implementation_accepts(&regex, &history);
-        assert_eq!(actual, expected, "case {case}: {regex:?} over {history:?}");
+        assert_prefixes_match_reference(&regex, &word);
     }
 }
 
-fn histories(max_len: usize) -> Vec<Vec<Event>> {
-    fn extend(prefix: &mut Vec<Event>, remaining: usize, output: &mut Vec<Vec<Event>>) {
+fn histories(max_len: usize) -> Vec<Vec<GitEvent<Actor, Path>>> {
+    fn extend(
+        prefix: &mut Vec<GitEvent<Actor, Path>>,
+        remaining: usize,
+        output: &mut Vec<Vec<GitEvent<Actor, Path>>>,
+    ) {
         output.push(prefix.clone());
         if remaining == 0 {
             return;
@@ -237,15 +268,9 @@ fn every_short_word_matches_the_reference_for_boundary_expressions() {
         RefRegex::Union(vec![stage, RefRegex::Not(Box::new(read_or_edit))]),
     ];
 
-    for (expression, history) in corpus.into_iter().flat_map(|expression| {
-        histories(4)
-            .into_iter()
-            .map(move |history| (expression.clone(), history))
-    }) {
-        assert_eq!(
-            implementation_accepts(&expression, &history),
-            accepts(&expression, &history),
-            "{expression:?} over {history:?}"
-        );
+    for expression in &corpus {
+        for word in histories(4) {
+            assert_prefixes_match_reference(expression, &word);
+        }
     }
 }

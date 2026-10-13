@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 
 use crate::model::Event;
 
-use super::component::{CandidateSubstitution, ComponentResolver};
+use super::component::CandidateSubstitution;
 #[cfg(test)]
 use super::node::{RegexId, RegexKind};
 use super::node::{TestId, TestNode};
@@ -25,11 +25,11 @@ use super::store::CanonicalStore;
 
 /// Concrete complete-history evaluator retained for symbolic differential tests.
 #[cfg(test)]
-pub(super) fn accepts_direct<'arena, 'event>(
-    store: &mut CanonicalStore<'arena>,
-    root: RegexId<'arena>,
-    history: impl IntoIterator<Item = &'event Event>,
-    substitution: &CandidateSubstitution<'arena>,
+pub(super) fn accepts_direct<'arena, 'event, E: Event + 'arena + 'event>(
+    store: &mut CanonicalStore<'arena, E>,
+    root: RegexId<'arena, E>,
+    history: impl IntoIterator<Item = &'event E>,
+    substitution: &CandidateSubstitution<E>,
 ) -> bool {
     let mut state = root;
     let mut derivatives = DerivativeCache::new();
@@ -41,12 +41,12 @@ pub(super) fn accepts_direct<'arena, 'event>(
 
 #[cfg(test)]
 /// Computes one exact derivative and normalizes every constructed residual through `store`.
-pub(super) fn derive<'arena>(
-    store: &mut CanonicalStore<'arena>,
-    regex: RegexId<'arena>,
-    event: &Event,
-    substitution: &CandidateSubstitution<'arena>,
-) -> RegexId<'arena> {
+pub(super) fn derive<'arena, E: Event + 'arena>(
+    store: &mut CanonicalStore<'arena, E>,
+    regex: RegexId<'arena, E>,
+    event: &E,
+    substitution: &CandidateSubstitution<E>,
+) -> RegexId<'arena, E> {
     derive_cached(
         store,
         regex,
@@ -57,11 +57,11 @@ pub(super) fn derive<'arena>(
 }
 
 #[cfg(test)]
-pub(super) type DerivativeCache<'arena, 'event> =
-    HashMap<(RegexId<'arena>, &'event Event), RegexId<'arena>>;
+pub(super) type DerivativeCache<'arena, 'event, E> =
+    HashMap<(RegexId<'arena, E>, &'event E), RegexId<'arena, E>>;
 
 #[cfg(test)]
-fn cache_hash<Key>(cache: &DerivativeCache<'_, '_>, key: &Key) -> u64
+fn cache_hash<E: Event, Key>(cache: &DerivativeCache<'_, '_, E>, key: &Key) -> u64
 where
     Key: Hash,
 {
@@ -70,16 +70,16 @@ where
 
 /// Reuses exact concrete derivatives for one fixed candidate substitution.
 ///
-/// Scoping this cache to one [`accepts`] call makes `(state, event)` a complete key while avoiding
-/// persistent growth over the unbounded event and substitution domains.
+/// Scoping this cache to one [`accepts_direct`] call makes `(state, event)` a complete key while
+/// avoiding persistent growth over the unbounded event and substitution domains.
 #[cfg(test)]
-pub(super) fn derive_cached<'arena, 'event>(
-    store: &mut CanonicalStore<'arena>,
-    regex: RegexId<'arena>,
-    event: &'event Event,
-    substitution: &CandidateSubstitution<'arena>,
-    derivatives: &mut DerivativeCache<'arena, 'event>,
-) -> RegexId<'arena> {
+pub(super) fn derive_cached<'arena, 'event, E: Event + 'arena + 'event>(
+    store: &mut CanonicalStore<'arena, E>,
+    regex: RegexId<'arena, E>,
+    event: &'event E,
+    substitution: &CandidateSubstitution<E>,
+    derivatives: &mut DerivativeCache<'arena, 'event, E>,
+) -> RegexId<'arena, E> {
     let key = (regex, event);
     let hash = cache_hash(derivatives, &key);
     if let Some((_, derivative)) = derivatives.raw_entry().from_key_hashed_nocheck(hash, &key) {
@@ -90,7 +90,7 @@ pub(super) fn derive_cached<'arena, 'event>(
         RegexKind::Empty | RegexKind::Epsilon => store.empty,
         RegexKind::All => store.all,
         RegexKind::Test(test) => {
-            if eval_test(test, event, substitution, &mut store.resolver) {
+            if eval_test(test, event, substitution) {
                 store.epsilon
             } else {
                 store.empty
@@ -100,14 +100,14 @@ pub(super) fn derive_cached<'arena, 'event>(
             let children = children
                 .iter()
                 .map(|child| derive_cached(store, *child, event, substitution, derivatives))
-                .collect::<SmallVec<[RegexId<'arena>; 4]>>();
+                .collect::<SmallVec<[RegexId<'arena, E>; 4]>>();
             store.regex_union(children)
         }
         RegexKind::Intersect(children) => {
             let children = children
                 .iter()
                 .map(|child| derive_cached(store, *child, event, substitution, derivatives))
-                .collect::<SmallVec<[RegexId<'arena>; 4]>>();
+                .collect::<SmallVec<[RegexId<'arena, E>; 4]>>();
             store.regex_intersect(children)
         }
         RegexKind::Not(inner) => {
@@ -115,11 +115,11 @@ pub(super) fn derive_cached<'arena, 'event>(
             store.regex_not(inner)
         }
         RegexKind::Concat(factors) => {
-            let mut alternatives = SmallVec::<[RegexId<'arena>; 4]>::new();
+            let mut alternatives = SmallVec::<[RegexId<'arena, E>; 4]>::new();
             let mut remaining = factors;
             while let Some((factor, suffix)) = remaining.split_first() {
                 let derivative = derive_cached(store, *factor, event, substitution, derivatives);
-                let mut product = SmallVec::<[RegexId<'arena>; 4]>::new();
+                let mut product = SmallVec::<[RegexId<'arena, E>; 4]>::new();
                 product.push(derivative);
                 product.extend_from_slice(suffix);
                 alternatives.push(store.regex_concat(product));
@@ -149,11 +149,10 @@ pub(super) fn derive_cached<'arena, 'event>(
 }
 
 /// Evaluates one canonical boolean test against an event and candidate substitution.
-pub(super) fn eval_test<'arena>(
-    test: TestId<'arena>,
-    event: &Event,
-    substitution: &CandidateSubstitution<'arena>,
-    resolver: &mut ComponentResolver<'arena>,
+pub(super) fn eval_test<'arena, E: Event + 'arena>(
+    test: TestId<'arena, E>,
+    event: &E,
+    substitution: &CandidateSubstitution<E>,
 ) -> bool {
     match *test.get() {
         TestNode::True => true,
@@ -164,7 +163,7 @@ pub(super) fn eval_test<'arena>(
         } => {
             let equal = pattern
                 .subst(substitution)
-                .is_some_and(|resolved| resolved.matches(resolver, event));
+                .is_some_and(|resolved| resolved.matches(event));
             match comparison {
                 Comparison::Eq => equal,
                 Comparison::Neq => !equal,
@@ -172,9 +171,9 @@ pub(super) fn eval_test<'arena>(
         }
         TestNode::And(children) => children
             .iter()
-            .all(|child| eval_test(*child, event, substitution, resolver)),
+            .all(|child| eval_test(*child, event, substitution)),
         TestNode::Or(children) => children
             .iter()
-            .any(|child| eval_test(*child, event, substitution, resolver)),
+            .any(|child| eval_test(*child, event, substitution)),
     }
 }

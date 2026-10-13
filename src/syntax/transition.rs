@@ -6,10 +6,12 @@
 
 use smallvec::SmallVec;
 
+use crate::model::Event;
+
 use super::node::{RegexId, RegexKind, TransitionId, TransitionNode};
 use super::store::CanonicalStore;
 
-impl<'arena> CanonicalStore<'arena> {
+impl<'arena, E: Event + 'arena> CanonicalStore<'arena, E> {
     /// Lifts one normalized regex state into a constant transition.
     ///
     /// The three distinguished regex constants reuse preallocated transition constants. Every other
@@ -17,7 +19,10 @@ impl<'arena> CanonicalStore<'arena> {
     ///
     /// # Preconditions
     /// `regex` must be a canonical normalized regex from `self`.
-    pub(super) fn transition_const(&mut self, regex: RegexId<'arena>) -> TransitionId<'arena> {
+    pub(super) fn transition_const(
+        &mut self,
+        regex: RegexId<'arena, E>,
+    ) -> TransitionId<'arena, E> {
         if regex == self.empty {
             self.transition_empty
         } else if regex == self.all {
@@ -40,10 +45,10 @@ impl<'arena> CanonicalStore<'arena> {
     /// already be normalized under the caller's current path condition.
     fn intern_transition_if(
         &mut self,
-        test: super::node::TestId<'arena>,
-        then_transition: TransitionId<'arena>,
-        else_transition: TransitionId<'arena>,
-    ) -> TransitionId<'arena> {
+        test: super::node::TestId<'arena, E>,
+        then_transition: TransitionId<'arena, E>,
+        else_transition: TransitionId<'arena, E>,
+    ) -> TransitionId<'arena, E> {
         if test == self.test_true {
             then_transition
         } else if test == self.test_false {
@@ -69,9 +74,9 @@ impl<'arena> CanonicalStore<'arena> {
     /// `transition` and `path` must be canonical values from `self`; `path` must be normalized.
     fn clean_transition_path(
         &mut self,
-        transition: TransitionId<'arena>,
-        path: super::node::TestId<'arena>,
-    ) -> TransitionId<'arena> {
+        transition: TransitionId<'arena, E>,
+        path: super::node::TestId<'arena, E>,
+    ) -> TransitionId<'arena, E> {
         match *transition.get() {
             TransitionNode::Const(_) => transition,
             TransitionNode::If {
@@ -83,14 +88,14 @@ impl<'arena> CanonicalStore<'arena> {
                 let children = children
                     .iter()
                     .map(|child| self.clean_transition_path(*child, path))
-                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
+                    .collect::<SmallVec<[TransitionId<'arena, E>; 4]>>();
                 self.transition_union(children)
             }
             TransitionNode::Intersect(children) => {
                 let children = children
                     .iter()
                     .map(|child| self.clean_transition_path(*child, path))
-                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
+                    .collect::<SmallVec<[TransitionId<'arena, E>; 4]>>();
                 self.transition_intersect(children)
             }
             TransitionNode::Not(inner) => {
@@ -116,11 +121,11 @@ impl<'arena> CanonicalStore<'arena> {
     /// normalized; each branch must already satisfy the transition smart-constructor invariants.
     fn clean_conditional_path(
         &mut self,
-        test: super::node::TestId<'arena>,
-        then_transition: TransitionId<'arena>,
-        else_transition: TransitionId<'arena>,
-        path: super::node::TestId<'arena>,
-    ) -> TransitionId<'arena> {
+        test: super::node::TestId<'arena, E>,
+        then_transition: TransitionId<'arena, E>,
+        else_transition: TransitionId<'arena, E>,
+        path: super::node::TestId<'arena, E>,
+    ) -> TransitionId<'arena, E> {
         if test == self.test_true {
             return self.clean_transition_path(then_transition, path);
         }
@@ -156,10 +161,10 @@ impl<'arena> CanonicalStore<'arena> {
     /// path-infeasible descendants; this constructor removes them.
     pub(super) fn transition_if(
         &mut self,
-        test: super::node::TestId<'arena>,
-        then_transition: TransitionId<'arena>,
-        else_transition: TransitionId<'arena>,
-    ) -> TransitionId<'arena> {
+        test: super::node::TestId<'arena, E>,
+        then_transition: TransitionId<'arena, E>,
+        else_transition: TransitionId<'arena, E>,
+    ) -> TransitionId<'arena, E> {
         self.clean_conditional_path(test, then_transition, else_transition, self.test_true)
     }
 
@@ -175,9 +180,9 @@ impl<'arena> CanonicalStore<'arena> {
     /// same-connective nesting, and duplicates are unrestricted.
     pub(super) fn transition_union(
         &mut self,
-        children: impl IntoIterator<Item = TransitionId<'arena>>,
-    ) -> TransitionId<'arena> {
-        let mut flat = SmallVec::<[TransitionId<'arena>; 4]>::new();
+        children: impl IntoIterator<Item = TransitionId<'arena, E>>,
+    ) -> TransitionId<'arena, E> {
+        let mut flat = SmallVec::<[TransitionId<'arena, E>; 4]>::new();
         for child in children {
             match *child.get() {
                 TransitionNode::Const(regex) if regex == self.all => return self.transition_all,
@@ -187,7 +192,7 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
-        let mut constants = SmallVec::<[RegexId<'arena>; 4]>::new();
+        let mut constants = SmallVec::<[RegexId<'arena, E>; 4]>::new();
         flat.retain(|child| match *child.get() {
             TransitionNode::Const(regex) => {
                 constants.push(regex);
@@ -231,9 +236,9 @@ impl<'arena> CanonicalStore<'arena> {
     /// commutative child slices reachable from them must be sorted and deduplicated.
     fn transition_intersect_pair(
         &mut self,
-        left: TransitionId<'arena>,
-        right: TransitionId<'arena>,
-    ) -> TransitionId<'arena> {
+        left: TransitionId<'arena, E>,
+        right: TransitionId<'arena, E>,
+    ) -> TransitionId<'arena, E> {
         if left == right {
             return left;
         }
@@ -307,14 +312,14 @@ impl<'arena> CanonicalStore<'arena> {
                 let intersections = children
                     .iter()
                     .map(|child| self.transition_intersect([*child, right]))
-                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
+                    .collect::<SmallVec<[TransitionId<'arena, E>; 4]>>();
                 return self.transition_union(intersections);
             }
             (_, TransitionNode::Union(children)) => {
                 let intersections = children
                     .iter()
                     .map(|child| self.transition_intersect([left, *child]))
-                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
+                    .collect::<SmallVec<[TransitionId<'arena, E>; 4]>>();
                 return self.transition_union(intersections);
             }
             (
@@ -344,7 +349,7 @@ impl<'arena> CanonicalStore<'arena> {
             _ => {}
         }
 
-        let mut children = SmallVec::<[TransitionId<'arena>; 4]>::from_slice(&[left, right]);
+        let mut children = SmallVec::<[TransitionId<'arena, E>; 4]>::from_slice(&[left, right]);
         children.sort_unstable();
         let values = self.transitions.arena().alloc_slice_copy(&children);
         self.transitions.mk(TransitionNode::Intersect(values))
@@ -363,9 +368,9 @@ impl<'arena> CanonicalStore<'arena> {
     /// same-connective nesting, and duplicates are unrestricted.
     pub(super) fn transition_intersect(
         &mut self,
-        children: impl IntoIterator<Item = TransitionId<'arena>>,
-    ) -> TransitionId<'arena> {
-        let mut flat = SmallVec::<[TransitionId<'arena>; 4]>::new();
+        children: impl IntoIterator<Item = TransitionId<'arena, E>>,
+    ) -> TransitionId<'arena, E> {
+        let mut flat = SmallVec::<[TransitionId<'arena, E>; 4]>::new();
         for child in children {
             match *child.get() {
                 TransitionNode::Const(regex) if regex == self.empty => {
@@ -377,7 +382,7 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
-        let mut constants = SmallVec::<[RegexId<'arena>; 4]>::new();
+        let mut constants = SmallVec::<[RegexId<'arena, E>; 4]>::new();
         flat.retain(|child| match *child.get() {
             TransitionNode::Const(regex) => {
                 constants.push(regex);
@@ -418,8 +423,8 @@ impl<'arena> CanonicalStore<'arena> {
     /// `transition` must be a canonical normalized transition from `self`.
     pub(super) fn transition_not(
         &mut self,
-        transition: TransitionId<'arena>,
-    ) -> TransitionId<'arena> {
+        transition: TransitionId<'arena, E>,
+    ) -> TransitionId<'arena, E> {
         match *transition.get() {
             TransitionNode::Const(regex) => {
                 let regex = self.regex_not(regex);
@@ -448,14 +453,14 @@ impl<'arena> CanonicalStore<'arena> {
                 let complements = children
                     .iter()
                     .map(|child| self.transition_not(*child))
-                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
+                    .collect::<SmallVec<[TransitionId<'arena, E>; 4]>>();
                 self.transition_intersect(complements)
             }
             TransitionNode::Intersect(children) => {
                 let complements = children
                     .iter()
                     .map(|child| self.transition_not(*child))
-                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
+                    .collect::<SmallVec<[TransitionId<'arena, E>; 4]>>();
                 self.transition_union(complements)
             }
             TransitionNode::Not(inner) => inner,
@@ -475,9 +480,9 @@ impl<'arena> CanonicalStore<'arena> {
     /// Suffix order is semantic; duplicates are permitted.
     pub(super) fn transition_append(
         &mut self,
-        transition: TransitionId<'arena>,
-        suffix: &[RegexId<'arena>],
-    ) -> TransitionId<'arena> {
+        transition: TransitionId<'arena, E>,
+        suffix: &[RegexId<'arena, E>],
+    ) -> TransitionId<'arena, E> {
         if suffix.is_empty() {
             return transition;
         }
@@ -488,14 +493,14 @@ impl<'arena> CanonicalStore<'arena> {
         if normalized == self.empty {
             return self.transition_empty;
         }
-        let suffix: SmallVec<[RegexId<'arena>; 4]> = match normalized.get().kind {
+        let suffix: SmallVec<[RegexId<'arena, E>; 4]> = match normalized.get().kind {
             RegexKind::Concat(factors) => SmallVec::from_slice(factors),
             _ => SmallVec::from_slice(&[normalized]),
         };
 
         match *transition.get() {
             TransitionNode::Const(regex) => {
-                let mut factors = SmallVec::<[RegexId<'arena>; 4]>::new();
+                let mut factors = SmallVec::<[RegexId<'arena, E>; 4]>::new();
                 factors.push(regex);
                 factors.extend_from_slice(&suffix);
                 let regex = self.regex_concat(factors);
@@ -505,7 +510,7 @@ impl<'arena> CanonicalStore<'arena> {
                 let appended = children
                     .iter()
                     .map(|child| self.transition_append(*child, &suffix))
-                    .collect::<SmallVec<[TransitionId<'arena>; 4]>>();
+                    .collect::<SmallVec<[TransitionId<'arena, E>; 4]>>();
                 self.transition_union(appended)
             }
             TransitionNode::If {
@@ -521,7 +526,7 @@ impl<'arena> CanonicalStore<'arena> {
                 transition,
                 suffix: existing,
             } => {
-                let mut combined = SmallVec::<[RegexId<'arena>; 4]>::new();
+                let mut combined = SmallVec::<[RegexId<'arena, E>; 4]>::new();
                 combined.extend_from_slice(existing);
                 combined.extend_from_slice(&suffix);
                 self.transition_append(transition, &combined)

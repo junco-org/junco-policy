@@ -8,6 +8,8 @@
 
 use smallvec::SmallVec;
 
+use crate::model::Event;
+
 use super::component::CompiledAtomPattern;
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode};
 use super::source::{Comparison, ComponentPattern};
@@ -47,7 +49,10 @@ fn pair_satisfies<T: Copy>(values: &[T], mut predicate: impl FnMut(T, T) -> bool
 ///
 /// # Preconditions
 /// Both IDs must be canonical tests from the same [`CanonicalStore`].
-fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bool {
+fn complementary_test<'arena, E: Event + 'arena>(
+    left: TestId<'arena, E>,
+    right: TestId<'arena, E>,
+) -> bool {
     matches!(
         (*left.get(), *right.get()),
         (
@@ -66,22 +71,24 @@ fn complementary_test<'arena>(left: TestId<'arena>, right: TestId<'arena>) -> bo
 /// Recognizes unequal constants selected from the same product coordinate.
 ///
 /// Constants from different coordinates are incomparable: `principal == alice` and
-/// `action == Read` are not a distinct-constant pair. Variables are also excluded because their
-/// values are not known during normalization.
+/// `action == Read` are not a distinct-constant pair, nor are a principal and a resource constant
+/// that share a Rust type and value. Variables are also excluded because their values are not known
+/// during normalization.
 ///
 /// Examples:
 ///
 /// ```text
-/// distinct(Principal("alice"), Principal("bob")) = true
-/// distinct(Principal("alice"), Action(Read)) = false
-/// distinct(Principal($p), Principal("alice")) = false
+/// distinct(Principal(alice), Principal(bob)) = true
+/// distinct(Principal(alice), Action(Read)) = false
+/// distinct(Principal(1), Resource(2)) = false
+/// distinct(Principal($p), Principal(alice)) = false
 /// ```
 ///
 /// # Preconditions
 /// Both patterns must have been compiled by the same [`CanonicalStore`].
-fn distinct_constant_patterns(
-    left: CompiledAtomPattern<'_>,
-    right: CompiledAtomPattern<'_>,
+fn distinct_constant_patterns<E: Event>(
+    left: CompiledAtomPattern<E>,
+    right: CompiledAtomPattern<E>,
 ) -> bool {
     match (left, right) {
         (
@@ -115,7 +122,11 @@ fn distinct_constant_patterns(
 ///
 /// # Preconditions
 /// Both IDs must be canonical tests from the same [`CanonicalStore`].
-fn distinct_constant_atoms(left: TestId<'_>, right: TestId<'_>, comparison: Comparison) -> bool {
+fn distinct_constant_atoms<E: Event>(
+    left: TestId<'_, E>,
+    right: TestId<'_, E>,
+    comparison: Comparison,
+) -> bool {
     matches!(
         (*left.get(), *right.get()),
         (
@@ -152,9 +163,9 @@ fn distinct_constant_atoms(left: TestId<'_>, right: TestId<'_>, comparison: Comp
 /// # Preconditions
 /// `candidate` and every ID in `siblings` must be canonical tests from the same store. The sibling
 /// slice need not be sorted.
-fn redundant_constant_atom(
-    candidate: TestId<'_>,
-    siblings: &[TestId<'_>],
+fn redundant_constant_atom<E: Event>(
+    candidate: TestId<'_, E>,
+    siblings: &[TestId<'_, E>],
     candidate_comparison: Comparison,
 ) -> bool {
     let TestNode::Atom {
@@ -203,7 +214,10 @@ fn redundant_constant_atom(
 /// # Preconditions
 /// `siblings` must be sorted and deduplicated. Every opposite-connective child slice must also be
 /// sorted and deduplicated. All IDs must belong to the same [`CanonicalStore`].
-fn absorbed_by_sibling<'arena>(candidate: TestId<'arena>, siblings: &[TestId<'arena>]) -> bool {
+fn absorbed_by_sibling<'arena, E: Event + 'arena>(
+    candidate: TestId<'arena, E>,
+    siblings: &[TestId<'arena, E>],
+) -> bool {
     siblings.iter().copied().any(|sibling| {
         // Do not remove the sole representative left by the caller's idempotence reduction.
         if sibling == candidate {
@@ -238,7 +252,10 @@ fn absorbed_by_sibling<'arena>(candidate: TestId<'arena>, siblings: &[TestId<'ar
 ///
 /// # Preconditions
 /// Both IDs must be canonical regexes from the same [`CanonicalStore`].
-fn complementary_regex<'arena>(left: RegexId<'arena>, right: RegexId<'arena>) -> bool {
+fn complementary_regex<'arena, E: Event + 'arena>(
+    left: RegexId<'arena, E>,
+    right: RegexId<'arena, E>,
+) -> bool {
     matches!(left.get().kind, RegexKind::Not(inner) if inner == right)
         || matches!(right.get().kind, RegexKind::Not(inner) if inner == left)
 }
@@ -256,7 +273,7 @@ fn complementary_regex<'arena>(left: RegexId<'arena>, right: RegexId<'arena>) ->
 ///
 /// # Preconditions
 /// `regex` must be a canonical regex from the current [`CanonicalStore`].
-fn is_epsilon_complement(regex: RegexId<'_>) -> bool {
+fn is_epsilon_complement<E: Event>(regex: RegexId<'_, E>) -> bool {
     matches!(regex.get().kind, RegexKind::Not(inner) if matches!(inner.get().kind, RegexKind::Epsilon))
 }
 
@@ -283,9 +300,9 @@ fn is_epsilon_complement(regex: RegexId<'_>) -> bool {
 /// # Preconditions
 /// `siblings` must be sorted and deduplicated. Every opposite-connective child slice must also be
 /// sorted and deduplicated. All IDs must belong to the same [`CanonicalStore`].
-fn regex_absorbed_by_sibling<'arena>(
-    candidate: RegexId<'arena>,
-    siblings: &[RegexId<'arena>],
+fn regex_absorbed_by_sibling<'arena, E: Event + 'arena>(
+    candidate: RegexId<'arena, E>,
+    siblings: &[RegexId<'arena, E>],
 ) -> bool {
     siblings.iter().copied().any(|sibling| {
         // Do not remove the sole representative left by the caller's idempotence reduction.
@@ -332,7 +349,10 @@ impl TestConnective {
     /// Identity element removed from this connective: `true` for `And`, `false` for `Or`.
     ///
     /// Example reductions: `x ∧ true → x`; `x ∨ false → x`.
-    fn identity<'arena>(self, store: &CanonicalStore<'arena>) -> TestId<'arena> {
+    fn identity<'arena, E: Event + 'arena>(
+        self,
+        store: &CanonicalStore<'arena, E>,
+    ) -> TestId<'arena, E> {
         match self {
             Self::And => store.test_true,
             Self::Or => store.test_false,
@@ -342,7 +362,10 @@ impl TestConnective {
     /// Absorbing element that determines the whole result: `false` for `And`, `true` for `Or`.
     ///
     /// Example reductions: `x ∧ false → false`; `x ∨ true → true`.
-    fn absorber<'arena>(self, store: &CanonicalStore<'arena>) -> TestId<'arena> {
+    fn absorber<'arena, E: Event + 'arena>(
+        self,
+        store: &CanonicalStore<'arena, E>,
+    ) -> TestId<'arena, E> {
         match self {
             Self::And => store.test_false,
             Self::Or => store.test_true,
@@ -353,7 +376,10 @@ impl TestConnective {
     ///
     /// Example reductions: `(x ∧ y) ∧ z → x ∧ y ∧ z`; `(x ∨ y) ∨ z → x ∨ y ∨ z`.
     /// `And.children(Or([x, y]))` and its dual return `None`.
-    fn children<'arena>(self, node: TestNode<'arena>) -> Option<&'arena [TestId<'arena>]> {
+    fn children<'arena, E: Event + 'arena>(
+        self,
+        node: TestNode<'arena, E>,
+    ) -> Option<&'arena [TestId<'arena, E>]> {
         match (self, node) {
             (Self::And, TestNode::And(children)) | (Self::Or, TestNode::Or(children)) => {
                 Some(children)
@@ -385,7 +411,10 @@ impl TestConnective {
     ///
     /// Example mappings: `And.node([x, y]) = And([x, y])` and
     /// `Or.node([x, y]) = Or([x, y])`.
-    fn node<'arena>(self, children: &'arena [TestId<'arena>]) -> TestNode<'arena> {
+    fn node<'arena, E: Event + 'arena>(
+        self,
+        children: &'arena [TestId<'arena, E>],
+    ) -> TestNode<'arena, E> {
         match self {
             Self::And => TestNode::And(children),
             Self::Or => TestNode::Or(children),
@@ -393,7 +422,7 @@ impl TestConnective {
     }
 }
 
-impl<'arena> CanonicalStore<'arena> {
+impl<'arena, E: Event + 'arena> CanonicalStore<'arena, E> {
     /// Returns whether normalized siblings make their outer connective constant by complementation.
     ///
     /// `connective` identifies the outer operation:
@@ -429,7 +458,7 @@ impl<'arena> CanonicalStore<'arena> {
     /// required by the binary searches for the child complements.
     fn tests_have_complements(
         &mut self,
-        tests: &[TestId<'arena>],
+        tests: &[TestId<'arena, E>],
         connective: TestConnective,
     ) -> bool {
         // Direct atomic complementation: Eq(p) and Neq(p).
@@ -478,9 +507,9 @@ impl<'arena> CanonicalStore<'arena> {
     /// deduplicated.
     fn test_connective(
         &mut self,
-        children: impl IntoIterator<Item = TestId<'arena>>,
+        children: impl IntoIterator<Item = TestId<'arena, E>>,
         connective: TestConnective,
-    ) -> TestId<'arena> {
+    ) -> TestId<'arena, E> {
         // Resolve the two constants once. For conjunction these are identity=true and
         // absorber=false; for disjunction they are identity=false and absorber=true.
         let identity = connective.identity(self);
@@ -490,7 +519,7 @@ impl<'arena> CanonicalStore<'arena> {
         // result immediately. Identities contribute nothing. Pulling children out of a nested node
         // with the same connective establishes associativity without rebuilding an intermediate
         // canonical node.
-        let mut flat = SmallVec::<[TestId<'arena>; 4]>::new();
+        let mut flat = SmallVec::<[TestId<'arena, E>; 4]>::new();
         for child in children {
             // x ∧ false = false; x ∨ true = true.
             if child == absorber {
@@ -583,8 +612,8 @@ impl<'arena> CanonicalStore<'arena> {
     /// unrestricted.
     pub(super) fn test_and(
         &mut self,
-        children: impl IntoIterator<Item = TestId<'arena>>,
-    ) -> TestId<'arena> {
+        children: impl IntoIterator<Item = TestId<'arena, E>>,
+    ) -> TestId<'arena, E> {
         self.test_connective(children, TestConnective::And)
     }
 
@@ -608,8 +637,8 @@ impl<'arena> CanonicalStore<'arena> {
     /// unrestricted.
     pub(super) fn test_or(
         &mut self,
-        children: impl IntoIterator<Item = TestId<'arena>>,
-    ) -> TestId<'arena> {
+        children: impl IntoIterator<Item = TestId<'arena, E>>,
+    ) -> TestId<'arena, E> {
         self.test_connective(children, TestConnective::Or)
     }
 
@@ -631,7 +660,7 @@ impl<'arena> CanonicalStore<'arena> {
     ///
     /// # Preconditions
     /// `test` must be a canonical normalized test from `self`.
-    pub(super) fn test_not(&mut self, test: TestId<'arena>) -> TestId<'arena> {
+    pub(super) fn test_not(&mut self, test: TestId<'arena, E>) -> TestId<'arena, E> {
         match *test.get() {
             TestNode::True => self.test_false,
             TestNode::False => self.test_true,
@@ -646,14 +675,14 @@ impl<'arena> CanonicalStore<'arena> {
                 let complements = children
                     .iter()
                     .map(|child| self.test_not(*child))
-                    .collect::<SmallVec<[TestId<'arena>; 4]>>();
+                    .collect::<SmallVec<[TestId<'arena, E>; 4]>>();
                 self.test_or(complements)
             }
             TestNode::Or(children) => {
                 let complements = children
                     .iter()
                     .map(|child| self.test_not(*child))
-                    .collect::<SmallVec<[TestId<'arena>; 4]>>();
+                    .collect::<SmallVec<[TestId<'arena, E>; 4]>>();
                 self.test_and(complements)
             }
         }
@@ -675,7 +704,7 @@ impl<'arena> CanonicalStore<'arena> {
     /// # Preconditions
     /// `kind` must already satisfy the flattened-normal-form invariants, all child IDs must belong
     /// to `self`, and `nullable` must equal the semantic nullability of `kind`.
-    fn intern_regex(&mut self, kind: RegexKind<'arena>, nullable: bool) -> RegexId<'arena> {
+    fn intern_regex(&mut self, kind: RegexKind<'arena, E>, nullable: bool) -> RegexId<'arena, E> {
         let (id, is_new) = self.regexes.mk_is_new(RegexNode::new(kind, nullable));
         if !is_new {
             assert_eq!(
@@ -701,7 +730,7 @@ impl<'arena> CanonicalStore<'arena> {
     ///
     /// # Preconditions
     /// `test` must be a canonical normalized test from `self`.
-    pub(super) fn regex_test(&mut self, test: TestId<'arena>) -> RegexId<'arena> {
+    pub(super) fn regex_test(&mut self, test: TestId<'arena, E>) -> RegexId<'arena, E> {
         if test == self.test_false {
             self.empty
         } else {
@@ -734,9 +763,9 @@ impl<'arena> CanonicalStore<'arena> {
     /// nesting, and duplicates are unrestricted.
     pub(super) fn regex_union(
         &mut self,
-        children: impl IntoIterator<Item = RegexId<'arena>>,
-    ) -> RegexId<'arena> {
-        let mut flat = SmallVec::<[RegexId<'arena>; 4]>::new();
+        children: impl IntoIterator<Item = RegexId<'arena, E>>,
+    ) -> RegexId<'arena, E> {
+        let mut flat = SmallVec::<[RegexId<'arena, E>; 4]>::new();
         for child in children {
             match child.get().kind {
                 RegexKind::All => return self.all,
@@ -746,7 +775,7 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
-        let mut tests = SmallVec::<[TestId<'arena>; 4]>::new();
+        let mut tests = SmallVec::<[TestId<'arena, E>; 4]>::new();
         flat.retain(|child| match child.get().kind {
             RegexKind::Test(test) => {
                 tests.push(test);
@@ -821,9 +850,9 @@ impl<'arena> CanonicalStore<'arena> {
     /// nesting, and duplicates are unrestricted.
     pub(super) fn regex_intersect(
         &mut self,
-        children: impl IntoIterator<Item = RegexId<'arena>>,
-    ) -> RegexId<'arena> {
-        let mut flat = SmallVec::<[RegexId<'arena>; 4]>::new();
+        children: impl IntoIterator<Item = RegexId<'arena, E>>,
+    ) -> RegexId<'arena, E> {
+        let mut flat = SmallVec::<[RegexId<'arena, E>; 4]>::new();
         for child in children {
             match child.get().kind {
                 RegexKind::Empty => return self.empty,
@@ -833,7 +862,7 @@ impl<'arena> CanonicalStore<'arena> {
             }
         }
 
-        let mut tests = SmallVec::<[TestId<'arena>; 4]>::new();
+        let mut tests = SmallVec::<[TestId<'arena, E>; 4]>::new();
         flat.retain(|child| match child.get().kind {
             RegexKind::Test(test) => {
                 tests.push(test);
@@ -905,9 +934,9 @@ impl<'arena> CanonicalStore<'arena> {
     /// duplicates are permitted.
     pub(super) fn regex_concat(
         &mut self,
-        children: impl IntoIterator<Item = RegexId<'arena>>,
-    ) -> RegexId<'arena> {
-        let mut flat = SmallVec::<[RegexId<'arena>; 4]>::new();
+        children: impl IntoIterator<Item = RegexId<'arena, E>>,
+    ) -> RegexId<'arena, E> {
+        let mut flat = SmallVec::<[RegexId<'arena, E>; 4]>::new();
         for child in children {
             match child.get().kind {
                 RegexKind::Empty => return self.empty,
@@ -944,7 +973,7 @@ impl<'arena> CanonicalStore<'arena> {
     ///
     /// # Preconditions
     /// `inner` must be a canonical normalized regex from `self`.
-    pub(super) fn regex_star(&mut self, inner: RegexId<'arena>) -> RegexId<'arena> {
+    pub(super) fn regex_star(&mut self, inner: RegexId<'arena, E>) -> RegexId<'arena, E> {
         match inner.get().kind {
             RegexKind::Empty | RegexKind::Epsilon => self.epsilon,
             RegexKind::All => self.all,
@@ -969,7 +998,7 @@ impl<'arena> CanonicalStore<'arena> {
     ///
     /// # Preconditions
     /// `inner` must be a canonical normalized regex from `self`.
-    pub(super) fn regex_not(&mut self, inner: RegexId<'arena>) -> RegexId<'arena> {
+    pub(super) fn regex_not(&mut self, inner: RegexId<'arena, E>) -> RegexId<'arena, E> {
         match inner.get().kind {
             RegexKind::Empty => self.all,
             RegexKind::All => self.empty,
@@ -994,7 +1023,7 @@ impl<'arena> CanonicalStore<'arena> {
     ///
     /// # Preconditions
     /// `regex` must be a canonical regex from `self`.
-    pub(super) fn nullable(&self, regex: RegexId<'arena>) -> bool {
+    pub(super) fn nullable(&self, regex: RegexId<'arena, E>) -> bool {
         regex.get().nullable()
     }
 }

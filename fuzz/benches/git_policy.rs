@@ -1,14 +1,17 @@
 //! How long one git policy check takes, as a function of committed trace length.
 //!
 //! The traces come from the same generator the cargo-fuzz target drives
-//! (`git_policy_harness`), so the benchmark and the fuzzer never diverge.
+//! (`git_policy_harness`), so the benchmark and the fuzzer never diverge. Each measured length is
+//! its own tracked [`History`] owner built from the immutable prefix, decided repeatedly by one
+//! retained policy: after the first call every rule resumes its cached residual, so these numbers
+//! are warm-progress decisions rather than full-history replays.
 
 use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, PlottingBackend, criterion_group, criterion_main};
 use git_policy_harness::{BYTES_PER_EVENT, check, entropy, granted_history, probe_candidates};
-use junco_policy::{Bump, GitPolicy};
+use junco_policy::{Bump, GitPolicy, History};
 
 /// Committed history lengths measured; geometric, so the growth rate reads off directly.
 const LENGTHS: [usize; 6] = [0, 4, 16, 64, 256, 1024];
@@ -18,6 +21,8 @@ const SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 fn git_decision_scaling(criterion: &mut Criterion) {
     let longest = LENGTHS[LENGTHS.len() - 1];
     let history = granted_history(&entropy(SEED, longest * BYTES_PER_EVENT), longest);
+    let prefixes =
+        LENGTHS.map(|length| History::from_events(history.as_slice()[..length].iter().copied()));
     let probes = probe_candidates();
     let verdict_arena = Bump::new();
     let mut verdict_policy = GitPolicy::new(&verdict_arena);
@@ -25,8 +30,8 @@ fn git_decision_scaling(criterion: &mut Criterion) {
     // The verdict decides how much work a check does — a denial returns from the compiled policy
     // early — so print it once per measured point; timings are uninterpretable without it.
     for (name, candidate) in &probes {
-        for length in LENGTHS {
-            let verdict = if check(&mut verdict_policy, &history[..length], candidate) {
+        for (length, prefix) in LENGTHS.iter().zip(&prefixes) {
+            let verdict = if check(&mut verdict_policy, prefix, candidate) {
                 "grant"
             } else {
                 "deny"
@@ -40,16 +45,12 @@ fn git_decision_scaling(criterion: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     group.sample_size(50);
     for (name, candidate) in &probes {
-        for length in LENGTHS {
+        for (length, prefix) in LENGTHS.iter().zip(&prefixes) {
             let arena = Bump::new();
             let mut policy = GitPolicy::new(&arena);
-            group.bench_with_input(
-                BenchmarkId::new(*name, length),
-                &history[..length],
-                |bencher, trace| {
-                    bencher.iter(|| check(&mut policy, black_box(trace), black_box(candidate)))
-                },
-            );
+            group.bench_with_input(BenchmarkId::new(*name, length), prefix, |bencher, trace| {
+                bencher.iter(|| check(&mut policy, black_box(trace), black_box(candidate)))
+            });
         }
     }
     group.finish();

@@ -11,7 +11,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use junco_policy::{Action, Event, Principal, Resource};
+use junco_policy::{Action, Event, GitEvent};
+
+use crate::{Agent, PooledPath};
 
 /// A working-tree blob. `0` is the seed commit's content and every `edit` at history index `i`
 /// stamps `i + 1`, so no write can reproduce an earlier blob.
@@ -33,7 +35,7 @@ impl FileState {
     };
 
     /// Applies the event at `index` and returns the state after it.
-    fn apply(self, action: &Action, index: usize) -> Self {
+    fn apply(self, action: Action, index: usize) -> Self {
         match action {
             Action::Edit => Self {
                 worktree: Some(index as Version + 1),
@@ -71,7 +73,7 @@ pub struct Surprise {
     pub principal: String,
     /// The content-changing action, rendered by `Action`'s `Display`.
     pub action: String,
-    /// `/`-joined resource path.
+    /// Resource path, rendered by [`PooledPath`]'s `Display`.
     pub resource: String,
     /// Principal whose remembered content the change falsified.
     pub surprised: String,
@@ -95,34 +97,33 @@ impl fmt::Display for Surprise {
 ///
 /// `BTreeMap`, not `HashMap`: with several surprised principals the reported one must be
 /// deterministic.
-fn replay(history: &[Event]) -> (Option<Surprise>, usize) {
-    let mut files: BTreeMap<&Resource, FileState> = BTreeMap::new();
-    let mut views: BTreeMap<(&Principal, &Resource), (Option<Version>, usize)> = BTreeMap::new();
+fn replay(history: &[GitEvent<Agent, PooledPath>]) -> (Option<Surprise>, usize) {
+    let mut files: BTreeMap<PooledPath, FileState> = BTreeMap::new();
+    let mut views: BTreeMap<(Agent, PooledPath), (Option<Version>, usize)> = BTreeMap::new();
     let mut first: Option<Surprise> = None;
     let mut contended = 0usize;
 
     for (index, event) in history.iter().enumerate() {
-        let before = *files.get(&event.resource).unwrap_or(&FileState::SEEDED);
-        let after = before.apply(&event.action, index);
+        let (principal, action, resource) = (event.principal(), event.action(), event.resource());
+        let before = *files.get(&resource).unwrap_or(&FileState::SEEDED);
+        let after = before.apply(action, index);
 
-        if views.keys().any(|&(principal, resource)| {
-            resource == &event.resource && principal != &event.principal
-        }) {
+        if views
+            .keys()
+            .any(|&(viewer, viewed)| viewed == resource && viewer != principal)
+        {
             contended += 1;
         }
 
         if after.worktree != before.worktree && first.is_none() {
-            for (&(principal, resource), &(remembered, learned_at)) in &views {
-                if resource == &event.resource
-                    && principal != &event.principal
-                    && remembered == before.worktree
-                {
+            for (&(viewer, viewed), &(remembered, learned_at)) in &views {
+                if viewed == resource && viewer != principal && remembered == before.worktree {
                     first = Some(Surprise {
                         index,
-                        principal: event.principal.as_str().to_string(),
-                        action: event.action.to_string(),
-                        resource: event.resource.to_string(),
-                        surprised: principal.as_str().to_string(),
+                        principal: principal.to_string(),
+                        action: action.to_string(),
+                        resource: resource.to_string(),
+                        surprised: viewer.to_string(),
                         learned_at,
                     });
                     break;
@@ -131,56 +132,62 @@ fn replay(history: &[Event]) -> (Option<Surprise>, usize) {
         }
 
         // A read hands the resource over: every other principal's view of it is superseded.
-        if matches!(event.action, Action::Read) {
-            views.retain(|&(_, resource), _| resource != &event.resource);
+        if action == Action::Read {
+            views.retain(|&(_, viewed), _| viewed != resource);
         }
-        match &event.action {
+        match action {
             Action::Read | Action::Edit => {
-                views.insert((&event.principal, &event.resource), (after.worktree, index));
+                views.insert((principal, resource), (after.worktree, index));
             }
             Action::Stage
             | Action::Delete
             | Action::Commit { .. }
             | Action::Checkout
             | Action::Stash => {
-                views.remove(&(&event.principal, &event.resource));
+                views.remove(&(principal, resource));
             }
             Action::Unstage | Action::Diff | Action::History | Action::Clean => {}
         }
-        files.insert(&event.resource, after);
+        files.insert(resource, after);
     }
     (first, contended)
 }
 
 /// The first no-surprise violation in `history`, or `None` when the trace has the property.
-pub fn no_surprise_violation(history: &[Event]) -> Option<Surprise> {
+pub fn no_surprise_violation(history: &[GitEvent<Agent, PooledPath>]) -> Option<Surprise> {
     replay(history).0
 }
 
 /// How many events in `history` acted on a resource another principal held an outstanding view of —
 /// the interleavings the property is about. A deterministic sweep whose total is zero would pass
 /// [`no_surprise_violation`] vacuously.
-pub fn contended_events(history: &[Event]) -> usize {
+pub fn contended_events(history: &[GitEvent<Agent, PooledPath>]) -> usize {
     replay(history).1
 }
 
 #[cfg(test)]
 mod tests {
+    use junco_policy::{History, MessageId, git_event};
+
     use super::*;
     use crate::{
         BYTES_PER_EVENT, BYTES_PER_TRACE, DETERMINISTIC_SEED, SEEDED_TRACE_COUNT, entropy,
         granted_history, validate_trace,
     };
 
-    /// The path every hand-written trace below acts on.
-    fn resource() -> [&'static str; 2] {
-        ["src", "x"]
+    /// The first two simulated agents every hand-written trace below uses.
+    const A: Agent = Agent(0);
+    const B: Agent = Agent(1);
+
+    /// One event on the pooled path every hand-written trace below acts on.
+    fn event(agent: Agent, action: Action) -> GitEvent<Agent, PooledPath> {
+        git_event(agent, action, PooledPath(0))
     }
 
     /// Every trace the fixed seeded stream produces, each paired with the source name a failure
     /// message names. The randomized set the replay oracle adds is not replayed here: this test
     /// must fail identically on every machine and every run.
-    fn deterministic_traces() -> Vec<(String, Vec<Event>)> {
+    fn deterministic_traces() -> Vec<(String, History<GitEvent<Agent, PooledPath>>)> {
         let seeded = entropy(DETERMINISTIC_SEED, SEEDED_TRACE_COUNT * BYTES_PER_TRACE);
         seeded
             .chunks(BYTES_PER_TRACE)
@@ -195,11 +202,11 @@ mod tests {
         let mut contended = 0usize;
         for (source, history) in &traces {
             assert_eq!(
-                no_surprise_violation(history),
+                no_surprise_violation(history.as_slice()),
                 None,
                 "{source} surprised a principal",
             );
-            contended += contended_events(history);
+            contended += contended_events(history.as_slice());
         }
         assert!(
             contended > 0,
@@ -209,20 +216,19 @@ mod tests {
 
     #[test]
     fn the_oracle_reports_a_destroyed_view() {
-        let r = resource();
-        let history = vec![
-            Event::new("a", Action::Edit, r),
-            Event::new("b", Action::Read, r),
-            Event::new("a", Action::Checkout, r),
+        let history = [
+            event(A, Action::Edit),
+            event(B, Action::Read),
+            event(A, Action::Checkout),
         ];
         assert_eq!(
             no_surprise_violation(&history),
             Some(Surprise {
                 index: 2,
-                principal: "a".to_string(),
+                principal: "agent0".to_string(),
                 action: "checkout".to_string(),
-                resource: "src/x".to_string(),
-                surprised: "b".to_string(),
+                resource: "src/file0.txt".to_string(),
+                surprised: "agent1".to_string(),
                 learned_at: 1,
             }),
         );
@@ -230,11 +236,10 @@ mod tests {
 
     #[test]
     fn a_checkout_of_a_pristine_resource_changes_nothing() {
-        let r = resource();
-        let history = vec![
-            Event::new("b", Action::Read, r),
-            Event::new("a", Action::Checkout, r),
-            Event::new("a", Action::Edit, r),
+        let history = [
+            event(B, Action::Read),
+            event(A, Action::Checkout),
+            event(A, Action::Edit),
         ];
         // The checkout at index 1 restores content identical to the working tree, which the oracle
         // derives rather than assumes; only the edit at index 2 changes anything.
@@ -246,23 +251,21 @@ mod tests {
 
     #[test]
     fn a_read_takes_the_resource_over() {
-        let r = resource();
-        let history = vec![
-            Event::new("a", Action::Read, r),
-            Event::new("b", Action::Read, r),
-            Event::new("b", Action::Edit, r),
+        let history = [
+            event(A, Action::Read),
+            event(B, Action::Read),
+            event(B, Action::Edit),
         ];
         assert_eq!(no_surprise_violation(&history), None);
     }
 
     #[test]
     fn a_principal_is_never_surprised_by_its_own_change() {
-        let r = resource();
-        let history = vec![
-            Event::new("a", Action::Read, r),
-            Event::new("a", Action::Edit, r),
-            Event::new("a", Action::Stage, r),
-            Event::new("a", Action::commit("m"), r),
+        let history = [
+            event(A, Action::Read),
+            event(A, Action::Edit),
+            event(A, Action::Stage),
+            event(A, Action::commit(MessageId(1))),
         ];
         assert_eq!(no_surprise_violation(&history), None);
     }
@@ -290,11 +293,11 @@ mod tests {
                 );
                 let history = granted_history(&data, length);
                 assert_eq!(
-                    no_surprise_violation(&history),
+                    no_surprise_violation(history.as_slice()),
                     None,
                     "length {length} seed {seed} surprised a principal",
                 );
-                contended += contended_events(&history);
+                contended += contended_events(history.as_slice());
             }
         }
         assert!(contended > 0, "the sweep never contended a resource");

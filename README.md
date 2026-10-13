@@ -3,6 +3,19 @@
 Capability validation for Junco, written in Rust. It owns the git trace policy: the rule table, its
 no-surprise oracle, and the harness that both the fuzzer and the benchmark drive.
 
+## Events and history
+
+Rules and validators are generic over a caller-chosen `Event`: a compact `Copy` value projecting
+to principal, action, and resource. Callers use their own enums or finite Frunk `Coprod!` unions of
+payload structs; `GitEvent<P, R>` (built with `git_event`) is the built-in Git representation.
+Identities are caller IDs with `Display` labels kept outside the evaluator, and equality is the
+event's full value equality, commit `MessageId` included.
+
+Committed history is a tracked `History` owner. Each runtime rule keeps an LRU of 16 evaluated
+residuals keyed by history owner and candidate bindings, so a decision over an unchanged or
+append-extended history folds only the new suffix; any truncation or rollback invalidates that
+owner's cursors. `Validator::permits` evaluates without appending.
+
 ## Fuzzing
 
 Linux and macOS only. libFuzzer generates git traces and checks the policy for panics and
@@ -21,7 +34,7 @@ Requires the nightly toolchain and `cargo-fuzz` (`rustup toolchain install night
 `cargo install cargo-fuzz`). Windows is not supported: its linker needs an `/include:main`
 workaround to find libFuzzer's entry point, and this repository does not carry one.
 
-The same generator feeds two deterministic checks that need only stable Rust and a C compiler
+The same generator feeds two checks that need only stable Rust and a C compiler
 (libgit2 is built from source):
 
 ```sh
@@ -38,12 +51,15 @@ CI (`.github/workflows/ci.yml`) runs both plus a 60-second libFuzzer smoke on Ub
 
 ## Benchmarking
 
-Criterion covers ordinary history scaling plus two adversarial precompilation workloads. The static
-rule table is compiled once per evaluation case, outside the timed check loop, matching the retained
-policy a long-lived validator reuses across checks:
+Criterion covers ordinary history scaling, cold replay versus warm residual progress, and two
+adversarial precompilation workloads. The static rule table is compiled once per evaluation case,
+outside the timed check loop, matching the retained policy a long-lived validator reuses across
+checks. The `git_policy` bench decides repeatedly over unchanged per-length histories, so it reports
+warm-progress latency:
 
 ```sh
 cargo bench --manifest-path fuzz/Cargo.toml --bench git_policy
+cargo bench --bench progress -- --noplot
 cargo bench --bench validator -- stress_growing_residual --noplot
 cargo bench --bench validator -- stress_many_rules --noplot
 ```
@@ -51,8 +67,7 @@ cargo bench --bench validator -- stress_many_rules --noplot
 ### Growing-residual stress
 
 The policy language is $\Sigma^* \cdot Read \cdot \Sigma^{w+1}$. On an all-read history shorter
-than the required suffix, every derivative adds another candidate suffix to the residual DAG. The
-white-box test asserts that its structural node count increases after every measured event and that
+than the required suffix, every derivative adds another candidate suffix to the residual DAG, and
 precompilation stops at the 64-state per-rule budget. This is also a DFA-state-explosion family:
 the complete automaton grows exponentially with $w$.
 

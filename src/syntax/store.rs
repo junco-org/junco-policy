@@ -1,48 +1,50 @@
-//! Canonical storage for resolved values, tests, regexes, and symbolic transitions.
+//! Canonical storage for variable names, tests, regexes, and symbolic transitions.
 //!
-//! The store owns component resolution and syntax interners while borrowing only the caller's
-//! arena. It has no active-rule, environment, candidate, event, substitution, history, or validator
+//! The store owns the variable-name interner and syntax interners while borrowing only the caller's
+//! arena. Event component values are copied into syntax nodes, never interned or allocated by the
+//! store. It has no active-rule, environment, candidate, event, substitution, history, or validator
 //! backreferences. Compiler and evaluator functions receive the store explicitly.
 
 use bumpalo::Bump;
 use hashconsing::BHConsign;
-use string_interner::DefaultSymbol;
+use string_interner::{DefaultStringInterner, DefaultSymbol};
 
-use super::component::ComponentResolver;
+use crate::model::Event;
+
 use super::node::{RegexId, RegexKind, RegexNode, TestId, TestNode, TransitionId, TransitionNode};
 
-/// Shared resolver and canonical-node store used by all rules in one validator.
-pub(crate) struct CanonicalStore<'arena> {
-    /// String interner plus arena allocation used to resolve component values.
-    pub(super) resolver: ComponentResolver<'arena>,
+/// Shared variable interner and canonical-node store used by all rules in one validator.
+pub(crate) struct CanonicalStore<'arena, E: Event + 'arena> {
+    /// Interner for source variable names.
+    pub(super) variables: DefaultStringInterner,
     /// Canonical table for boolean event tests.
-    pub(super) tests: BHConsign<'arena, TestNode<'arena>>,
+    pub(super) tests: BHConsign<'arena, TestNode<'arena, E>>,
     /// Canonical table for normalized regular-expression nodes.
-    pub(super) regexes: BHConsign<'arena, RegexNode<'arena>>,
+    pub(super) regexes: BHConsign<'arena, RegexNode<'arena, E>>,
     /// Canonical table for normalized symbolic-transition nodes.
-    pub(super) transitions: BHConsign<'arena, TransitionNode<'arena>>,
+    pub(super) transitions: BHConsign<'arena, TransitionNode<'arena, E>>,
     /// Canonical true test.
-    pub(super) test_true: TestId<'arena>,
+    pub(super) test_true: TestId<'arena, E>,
     /// Canonical false test.
-    pub(super) test_false: TestId<'arena>,
+    pub(super) test_false: TestId<'arena, E>,
     /// Canonical empty language.
-    pub(super) empty: RegexId<'arena>,
+    pub(super) empty: RegexId<'arena, E>,
     /// Canonical universal language.
-    pub(super) all: RegexId<'arena>,
+    pub(super) all: RegexId<'arena, E>,
     /// Canonical language containing only the empty history.
-    pub(super) epsilon: RegexId<'arena>,
+    pub(super) epsilon: RegexId<'arena, E>,
     /// Constant transition to the empty language.
-    pub(super) transition_empty: TransitionId<'arena>,
+    pub(super) transition_empty: TransitionId<'arena, E>,
     /// Constant transition to the universal language.
-    pub(super) transition_all: TransitionId<'arena>,
+    pub(super) transition_all: TransitionId<'arena, E>,
     /// Constant transition to epsilon.
-    pub(super) transition_epsilon: TransitionId<'arena>,
+    pub(super) transition_epsilon: TransitionId<'arena, E>,
 }
 
-impl<'arena> CanonicalStore<'arena> {
-    /// Creates a resolver, empty node tables, and algebraic constants.
+impl<'arena, E: Event + 'arena> CanonicalStore<'arena, E> {
+    /// Creates a variable interner, empty node tables, and algebraic constants.
     pub(crate) fn new(arena: &'arena Bump) -> Self {
-        let resolver = ComponentResolver::new(arena);
+        let variables = DefaultStringInterner::with_capacity(128);
 
         let mut tests = BHConsign::with_capacity(arena, 128);
         let test_true = tests.mk(TestNode::True);
@@ -59,7 +61,7 @@ impl<'arena> CanonicalStore<'arena> {
         let transition_epsilon = transitions.mk(TransitionNode::Const(epsilon));
 
         Self {
-            resolver,
+            variables,
             tests,
             regexes,
             transitions,
@@ -76,7 +78,7 @@ impl<'arena> CanonicalStore<'arena> {
 
     /// Interns a variable spelling through the black-box string interner.
     pub(super) fn intern_variable(&mut self, name: &str) -> DefaultSymbol {
-        self.resolver.intern_string(name)
+        self.variables.get_or_intern(name)
     }
 
     /// Number of canonical regex nodes, used to assert that derivative cycles stabilize.
