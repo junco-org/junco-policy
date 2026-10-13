@@ -21,12 +21,21 @@ pub(crate) struct HistoryId(u64);
 impl HistoryId {
     /// Allocates a fresh identity, panicking rather than wrapping on exhaustion.
     fn fresh() -> Self {
-        let id = NEXT_HISTORY_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-                next.checked_add(1)
-            })
-            .expect("history identity space exhausted");
-        Self(id)
+        // Explicit CAS: `fetch_update` is deprecated for `try_update`, which is unstable at the
+        // declared 1.91 MSRV.
+        let mut id = NEXT_HISTORY_ID.load(Ordering::Relaxed);
+        loop {
+            let next = id.checked_add(1).expect("history identity space exhausted");
+            match NEXT_HISTORY_ID.compare_exchange_weak(
+                id,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Self(id),
+                Err(current) => id = current,
+            }
+        }
     }
 }
 
