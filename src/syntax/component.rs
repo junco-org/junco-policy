@@ -80,7 +80,7 @@ pub(super) enum ResolvedValue<'arena> {
 }
 
 /// Resolved candidate values assigned to variables during one rule evaluation.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct CandidateSubstitution<'arena> {
     values: HashMap<DefaultSymbol, ResolvedValue<'arena>>,
 }

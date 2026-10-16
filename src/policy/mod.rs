@@ -21,7 +21,7 @@ mod trace;
 pub mod git;
 
 pub use decision::PolicyDecision;
-pub use trace::{TraceDiagnostic, TracePolicy, TraceRule};
+pub use trace::{TraceCursor, TraceDiagnostic, TracePolicy, TraceRule};
 
 #[cfg(test)]
 mod tests;

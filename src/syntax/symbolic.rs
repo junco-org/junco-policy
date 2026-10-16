@@ -391,6 +391,20 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
         regex
     }
 
+    /// Advances `state` by one history event; saturated `all`/`empty` states need no work.
+    pub(super) fn step(
+        &mut self,
+        state: RegexId<'arena>,
+        substitution: &CandidateSubstitution<'arena>,
+        event: &'event Event,
+    ) -> RegexId<'arena> {
+        if state == self.store.all || state == self.store.empty {
+            return state;
+        }
+        let transition = self.derivative(state);
+        self.instantiate(transition, substitution, event)
+    }
+
     /// Evaluates complete history using precompiled symbolic derivatives and minterm successors.
     pub(super) fn accepts(
         &mut self,

@@ -7,7 +7,7 @@
 
 use super::decision::PolicyDecision;
 use super::rule::{Diagnostic, PolicyRule};
-use crate::syntax::{CanonicalStore, RuntimeRule, compile_rule};
+use crate::syntax::{CandidateSubstitution, CanonicalStore, RegexId, RuntimeRule, compile_rule};
 use crate::{Bump, CompileError, Event, RuleMode};
 
 /// One compiled runtime rule paired with the diagnostic rendered when it is violated.
@@ -58,27 +58,81 @@ impl<'arena, C> CompiledPolicy<'arena, C> {
         probe: &Event,
         context: impl FnOnce() -> C,
     ) -> PolicyDecision {
-        for rule in &mut self.rules {
-            let Some(inside) = rule
-                .runtime
-                .accepts_history(&mut self.store, history.iter(), probe)
-            else {
-                continue;
-            };
-            let violated = match rule.runtime.mode {
-                RuleMode::Forbid => inside,
-                RuleMode::Require => !inside,
-            };
-            if violated {
-                let (failed_precondition, allowed_fixes) = (rule.diagnostic)(&context());
-                return PolicyDecision::Deny {
-                    failed_precondition,
-                    allowed_fixes,
-                };
+        let store = &mut self.store;
+        first_violation(
+            self.rules.iter_mut().map(|rule| {
+                let inside = rule.runtime.accepts_history(store, history.iter(), probe);
+                (&*rule, inside)
+            }),
+            context,
+        )
+    }
+
+    /// Matches every rule head against `probe` once; `None` marks a rule that stays inert.
+    pub(super) fn start(
+        &mut self,
+        probe: &Event,
+    ) -> Vec<Option<(RegexId<'arena>, CandidateSubstitution<'arena>)>> {
+        self.rules
+            .iter()
+            .map(|rule| rule.runtime.start(&mut self.store, probe))
+            .collect()
+    }
+
+    /// Advances every active rule's state by one history event, one derivative step each.
+    pub(super) fn advance(
+        &mut self,
+        substitutions: &[Option<CandidateSubstitution<'arena>>],
+        states: &mut [Option<RegexId<'arena>>],
+        event: &Event,
+    ) {
+        for ((rule, substitution), state) in self.rules.iter_mut().zip(substitutions).zip(states) {
+            if let (Some(substitution), Some(state)) = (substitution, state) {
+                *state = rule
+                    .runtime
+                    .step(&mut self.store, *state, substitution, event);
             }
         }
-        PolicyDecision::Grant
     }
+
+    /// [`CompiledPolicy::decide`] for the history already consumed into `states`.
+    pub(super) fn verdict(
+        &self,
+        states: &[Option<RegexId<'arena>>],
+        context: impl FnOnce() -> C,
+    ) -> PolicyDecision {
+        first_violation(
+            self.rules.iter().zip(states).map(|(rule, state)| {
+                let inside = state.map(|state| RuntimeRule::accepts_state(&self.store, state));
+                (rule, inside)
+            }),
+            context,
+        )
+    }
+}
+
+/// Returns the first violated rule's rendered denial; `None` marks a rule whose head did not match.
+fn first_violation<'rule, 'arena: 'rule, C: 'rule>(
+    rules: impl IntoIterator<Item = (&'rule CompiledPolicyRule<'arena, C>, Option<bool>)>,
+    context: impl FnOnce() -> C,
+) -> PolicyDecision {
+    for (rule, inside) in rules {
+        let Some(inside) = inside else {
+            continue;
+        };
+        let violated = match rule.runtime.mode {
+            RuleMode::Forbid => inside,
+            RuleMode::Require => !inside,
+        };
+        if violated {
+            let (failed_precondition, allowed_fixes) = (rule.diagnostic)(&context());
+            return PolicyDecision::Deny {
+                failed_precondition,
+                allowed_fixes,
+            };
+        }
+    }
+    PolicyDecision::Grant
 }
 
 /// Compiles and evaluates one policy table once.

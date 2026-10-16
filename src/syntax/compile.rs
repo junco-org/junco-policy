@@ -8,7 +8,9 @@
 use crate::model::{Action, Event, Principal, Resource};
 use crate::validator::CompileError;
 
-use super::component::{CompiledAtomPattern, CompiledPattern, ComponentDomain};
+use super::component::{
+    CandidateSubstitution, CompiledAtomPattern, CompiledPattern, ComponentDomain,
+};
 use super::environment::{CompiledHead, ResolveError, VariableEnvironment};
 use super::node::{RegexId, TestId, TestNode};
 use super::source::{AtomPattern, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr};
@@ -34,6 +36,33 @@ impl<'arena> RuntimeRule<'arena> {
         let substitution = self.head.match_candidate(store, candidate)?;
         let mut matcher = SymbolicMatcher::new(store, &mut self.derivatives);
         Some(matcher.accepts(self.tail, history, &substitution))
+    }
+
+    /// Matches the candidate head, yielding the tail as the empty-history state and the bindings
+    /// every later [`RuntimeRule::step`] instantiates under. `None` means the rule is inert.
+    pub(crate) fn start(
+        &self,
+        store: &mut CanonicalStore<'arena>,
+        candidate: &Event,
+    ) -> Option<(RegexId<'arena>, CandidateSubstitution<'arena>)> {
+        let substitution = self.head.match_candidate(store, candidate)?;
+        Some((self.tail, substitution))
+    }
+
+    /// Advances `state` by one history event: at most one derivative step.
+    pub(crate) fn step(
+        &mut self,
+        store: &mut CanonicalStore<'arena>,
+        state: RegexId<'arena>,
+        substitution: &CandidateSubstitution<'arena>,
+        event: &Event,
+    ) -> RegexId<'arena> {
+        SymbolicMatcher::new(store, &mut self.derivatives).step(state, substitution, event)
+    }
+
+    /// Whether the history consumed into `state` lies in the tail language.
+    pub(crate) fn accepts_state(store: &CanonicalStore<'arena>, state: RegexId<'arena>) -> bool {
+        store.nullable(state)
     }
 
     /// Number of event-independent symbolic derivatives retained by this rule.

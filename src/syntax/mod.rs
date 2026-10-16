@@ -21,6 +21,8 @@ pub use source::{
 };
 
 pub(crate) use compile::{RuntimeRule, compile_rule};
+pub(crate) use component::CandidateSubstitution;
+pub(crate) use node::RegexId;
 pub(crate) use store::CanonicalStore;
 
 #[cfg(test)]
