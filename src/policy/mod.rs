@@ -9,7 +9,8 @@
 //! returns.
 //!
 //! [`lock`] is the built-in policy: multi-agent file ownership. [`TracePolicy`] opens the same
-//! compile-once table to caller-assembled rules.
+//! compile-once table to caller-assembled rules, and [`agent`] builds rules over classified
+//! observations on it.
 
 mod atoms;
 mod decision;
@@ -18,6 +19,7 @@ mod language;
 mod rule;
 mod trace;
 
+pub mod agent;
 pub mod lock;
 
 pub use decision::PolicyDecision;

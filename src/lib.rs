@@ -84,6 +84,7 @@ pub use history::{Checkpoint, History};
 pub use model::{Action, Event, Grant, LockEvent, Request};
 pub use policy::{
     PolicyDecision, TraceDiagnostic, TracePolicy, TraceRule,
+    agent::{AgentAction, AgentDenial, AgentEvent, AgentPolicy, AgentRule, AgentRuleSet, Label},
     lock::{LockPolicy, lock_decision},
 };
 pub use syntax::{
