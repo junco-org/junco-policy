@@ -23,6 +23,34 @@ residuals keyed by history owner and candidate bindings, so a decision over an u
 append-extended history folds only the new suffix; any truncation or rollback invalidates that
 owner's cursors. `Validator::permits` evaluates without appending.
 
+## Trace policies
+
+`TracePolicy` compiles caller-assembled `TraceRule`s (a rule plus the diagnostic its violation
+renders) once and decides candidates against a `History` the caller owns, without appending.
+
+## Agent policies
+
+Agent policies are rules over *classes* of resources rather than resources. A `Classifier` is a
+first-match table from concrete resources to class labels, with an optional fallback; `Glob`
+matches paths and `Network` matches IP addresses in CIDR form. The caller classifies what each
+principal did and logs an `AgentEvent`: it read, created, edited or removed a resource of a class,
+ran a program of a class, contacted a peer of a class, received data of a propagated class from
+another principal, or an operator approved a label or declassified a class for the principal.
+
+`AgentRule` presets cover no contact with peer classes after reading a secret class, approval
+before changing a class, a class locked once the same principal changed another, classes locked
+after running a downloader, append-only classes and removal budgets; `AgentRule::custom` takes any
+`TraceRule` over `AgentEvent`. `AgentPolicy::check` decides a batch atomically against the
+caller's log, and `AgentPolicy::decide` judges one candidate as it happens; both compile only the
+rules whose head can match the candidate. An auditing policy reports would-be denials without
+enforcing them.
+
+`TaintState` tracks the classes a rule set propagates across principals: a principal that reads a
+propagated class holds it, every carrier it then writes carries it, and a principal that reads the
+carrier receives it. Carriers are any caller identity (a path, an inode, a socket). Receipts are
+logged as `AgentAction::Receive`, which `no_contact_after_read` treats like a read, until an
+operator declassifies the class for the receiver.
+
 ## Fuzzing
 
 Linux and macOS only. libFuzzer generates lock traces and checks the policy for panics and
