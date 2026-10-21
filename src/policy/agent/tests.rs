@@ -227,3 +227,62 @@ fn deciding_judges_only_the_candidate() {
         None
     );
 }
+
+fn declassify(holder: &'static str, class: &'static str) -> Event {
+    event(holder, AgentAction::Declassify, class)
+}
+
+#[test]
+fn no_contact_after_read_propagates_its_secret_class() {
+    let policy = coding().rule(AgentRule::no_network("internal").propagating("ci"));
+    assert_eq!(policy.propagated().collect::<Vec<_>>(), ["secret", "ci"]);
+    assert!(policy.propagates("secret"));
+    assert!(!policy.propagates("src"));
+}
+
+#[test]
+fn received_data_counts_as_reading_the_class() {
+    let policy = coding();
+    let received = event("b", AgentAction::Receive, "secret");
+    assert!(verdict(&policy, &[received], &[contact("b", "external")]).is_some());
+    assert_eq!(
+        verdict(&policy, &[received], &[contact("a", "external")]),
+        None
+    );
+    let other = event("b", AgentAction::Receive, "ci");
+    assert_eq!(
+        verdict(&policy, &[other], &[contact("b", "external")]),
+        None
+    );
+}
+
+#[test]
+fn declassifying_a_holder_lifts_contact_until_it_reads_again() {
+    let policy = coding();
+    let (secret, egress) = (read("a", "secret"), contact("a", "external"));
+    assert_eq!(
+        verdict(&policy, &[secret, declassify("a", "secret")], &[egress]),
+        None
+    );
+    // Only the holder's own declassification, and only of the class it read, counts.
+    for other in [declassify("b", "secret"), declassify("a", "ci")] {
+        assert!(verdict(&policy, &[secret, other], &[egress]).is_some());
+    }
+    assert!(
+        verdict(
+            &policy,
+            &[secret, declassify("a", "secret"), secret],
+            &[egress]
+        )
+        .is_some()
+    );
+    let received = event("b", AgentAction::Receive, "secret");
+    assert_eq!(
+        verdict(
+            &policy,
+            &[received, declassify("b", "secret")],
+            &[contact("b", "external")]
+        ),
+        None
+    );
+}

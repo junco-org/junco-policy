@@ -86,6 +86,7 @@ pub use policy::{
     PolicyDecision, TraceDiagnostic, TracePolicy, TraceRule,
     agent::{AgentAction, AgentDenial, AgentEvent, AgentPolicy, AgentRule, AgentRuleSet, Label},
     lock::{LockPolicy, lock_decision},
+    taint::{Access, Taint, TaintState},
 };
 pub use syntax::{
     AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,

@@ -15,10 +15,18 @@
 //! | program run | [`AgentAction::Run`] | its class (for example its basename) |
 //! | peer contacted | [`AgentAction::Contact`] | the peer's class |
 //! | operator approval | [`AgentAction::Approve`] | the approved label |
+//! | data of a propagated class received from another principal | [`AgentAction::Receive`] | the class |
+//! | operator declassification of what the principal holds | [`AgentAction::Declassify`] | the class |
 //!
 //! [`AgentPolicy::check`] decides a batch of candidates atomically against a log the caller owns;
 //! [`AgentPolicy::decide`] decides one candidate as it happens. Both compile only the rules whose
 //! head can match a candidate.
+//!
+//! Rules follow the principal that read a class. A principal can hand the data to another one, so
+//! a rule set may name classes that *propagate* ([`AgentRuleSet::propagating`]): a
+//! [`crate::TaintState`] tracks which principals hold them and which carriers they wrote them to,
+//! and a principal that receives one is logged with [`AgentAction::Receive`], which
+//! [`AgentRule::no_contact_after_read`] treats like reading the class itself.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -56,13 +64,10 @@ pub enum AgentAction {
     Contact,
     /// An operator approved a label.
     Approve,
-}
-
-impl AgentAction {
-    /// Whether this action changes a resource: creates, modifies or removes it.
-    pub const fn changes(self) -> bool {
-        matches!(self, Self::Create | Self::Edit | Self::Remove)
-    }
+    /// Received data of a propagated class from another principal.
+    Receive,
+    /// An operator declassified a class the principal holds.
+    Declassify,
 }
 
 impl Display for AgentAction {
@@ -75,6 +80,8 @@ impl Display for AgentAction {
             Self::Run => "run",
             Self::Contact => "contact",
             Self::Approve => "approve",
+            Self::Receive => "receive",
+            Self::Declassify => "declassify",
         })
     }
 }
@@ -157,6 +164,8 @@ impl<P: Display, C: Display> Display for AgentDenial<P, C> {
 /// Rules over classified observations, and how their verdicts are applied.
 pub struct AgentPolicy<P: Label, C: Label> {
     rules: Vec<AgentRule<P, C>>,
+    /// Classes whose data taints whoever receives it from a principal holding it.
+    propagated: Vec<C>,
     audit: bool,
 }
 
@@ -164,6 +173,7 @@ impl<P: Label, C: Label> Default for AgentPolicy<P, C> {
     fn default() -> Self {
         Self {
             rules: Vec::new(),
+            propagated: Vec::new(),
             audit: false,
         }
     }
@@ -173,6 +183,7 @@ impl<P: Label, C: Label> Clone for AgentPolicy<P, C> {
     fn clone(&self) -> Self {
         Self {
             rules: self.rules.clone(),
+            propagated: self.propagated.clone(),
             audit: self.audit,
         }
     }
@@ -183,6 +194,7 @@ impl<P: Label, C: Label> Debug for AgentPolicy<P, C> {
         formatter
             .debug_struct("AgentPolicy")
             .field("rules", &self.rules)
+            .field("propagated", &self.propagated)
             .field("audit", &self.audit)
             .finish()
     }
@@ -194,11 +206,17 @@ impl<P: Label, C: Label> AgentPolicy<P, C> {
         Self::default()
     }
 
-    /// Appends a rule or a constructor's rule set. Rules apply in order and the first violation
-    /// is reported.
+    /// Appends a rule or a constructor's rule set, and the classes the set propagates. Rules
+    /// apply in order and the first violation is reported.
     #[must_use]
     pub fn rule(mut self, rules: impl Into<AgentRuleSet<P, C>>) -> Self {
-        self.rules.extend(rules.into());
+        let AgentRuleSet { rules, propagated } = rules.into();
+        for class in propagated {
+            if !self.propagated.contains(&class) {
+                self.propagated.push(class);
+            }
+        }
+        self.rules.extend(rules);
         self
     }
 
@@ -218,6 +236,16 @@ impl<P: Label, C: Label> AgentPolicy<P, C> {
     /// Every rule, in order.
     pub fn rules(&self) -> impl Iterator<Item = &AgentRule<P, C>> {
         self.rules.iter()
+    }
+
+    /// Whether a principal that receives data of `class` from another one holds it too.
+    pub fn propagates(&self, class: C) -> bool {
+        self.propagated.contains(&class)
+    }
+
+    /// The classes that propagate, in the order their rules were added.
+    pub fn propagated(&self) -> impl Iterator<Item = C> + '_ {
+        self.propagated.iter().copied()
     }
 
     /// Whether any rule's head can match `event`; when none can, every decision grants it.
@@ -407,6 +435,21 @@ fn since_unapproved<P: Label, C: Label>(trigger: Test<P, C>, label: C) -> Regex<
     last_state_change(trigger, not_approval(label))
 }
 
+/// Any event that is not an operator's declassification of `class` for the acting principal.
+fn not_declassified<P: Label, C: Label>(class: C) -> Test<P, C> {
+    TestExpr::or([
+        principal_is(Comparison::Neq),
+        action_is(AgentAction::Declassify, Comparison::Neq),
+        class_is(class, Comparison::Neq),
+    ])
+}
+
+/// Histories with no declassification of `class` for the acting principal after their last
+/// `trigger`.
+fn since_undeclassified<P: Label, C: Label>(trigger: Test<P, C>, class: C) -> Regex<P, C> {
+    last_state_change(trigger, not_declassified(class))
+}
+
 /// Histories that contain `event` somewhere.
 fn ever<P: Label, C: Label>(event: Test<P, C>) -> Regex<P, C> {
     RegexExpr::concat([RegexExpr::all(), RegexExpr::test(event), RegexExpr::all()])
@@ -464,14 +507,19 @@ impl<P: Label, C: Label> AgentRule<P, C> {
         )
     }
 
-    /// No peer of any of `peers` once the same principal has read a resource of `secret`.
+    /// No peer of any of `peers` once the same principal has read a resource of `secret`, or
+    /// received its data from another principal, unless an operator has since declassified
+    /// `secret` for that principal. The set propagates `secret`.
     pub fn no_contact_after_read(secret: C, peers: &[C]) -> AgentRuleSet<P, C> {
         let read = TestExpr::and([
             principal_is(Comparison::Eq),
-            action_is(AgentAction::Read, Comparison::Eq),
+            TestExpr::or([
+                action_is(AgentAction::Read, Comparison::Eq),
+                action_is(AgentAction::Receive, Comparison::Eq),
+            ]),
             class_is(secret, Comparison::Eq),
         ]);
-        let tail = ever(read);
+        let tail = since_undeclassified(read, secret);
         AgentRuleSet::new(
             peers
                 .iter()
@@ -493,6 +541,7 @@ impl<P: Label, C: Label> AgentRule<P, C> {
                 })
                 .collect(),
         )
+        .propagating(secret)
     }
 
     /// No peer of class `peer` at all.
@@ -567,7 +616,7 @@ impl<P: Label, C: Label> AgentRule<P, C> {
             let tail = since_unapproved(ran.clone(), class);
             let names = names.clone();
             rules
-                .0
+                .rules
                 .extend(Self::per_action(CHANGES, class, &tail, move |event| {
                     (
                         format!(
@@ -637,25 +686,46 @@ impl<P: Label, C: Label> AgentRule<P, C> {
 }
 
 /// The rules one [`AgentRule`] constructor produces; [`AgentPolicy::rule`] adds them all.
-pub struct AgentRuleSet<P: Label, C: Label>(Vec<AgentRule<P, C>>);
+///
+/// A set may also name classes that propagate: a principal that receives data of such a class
+/// from another one holding it is judged as if it had read the class.
+/// [`AgentRule::no_contact_after_read`] propagates its secret class.
+pub struct AgentRuleSet<P: Label, C: Label> {
+    rules: Vec<AgentRule<P, C>>,
+    propagated: Vec<C>,
+}
 
 impl<P: Label, C: Label> AgentRuleSet<P, C> {
     const fn new(rules: Vec<AgentRule<P, C>>) -> Self {
-        Self(rules)
+        Self {
+            rules,
+            propagated: Vec::new(),
+        }
+    }
+
+    /// Also propagates `class`.
+    #[must_use]
+    pub fn propagating(mut self, class: C) -> Self {
+        self.propagated.push(class);
+        self
     }
 }
 
 impl<P: Label, C: Label> Clone for AgentRuleSet<P, C> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self {
+            rules: self.rules.clone(),
+            propagated: self.propagated.clone(),
+        }
     }
 }
 
 impl<P: Label, C: Label> Debug for AgentRuleSet<P, C> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_tuple("AgentRuleSet")
-            .field(&self.0)
+            .debug_struct("AgentRuleSet")
+            .field("rules", &self.rules)
+            .field("propagated", &self.propagated)
             .finish()
     }
 }
@@ -671,7 +741,7 @@ impl<P: Label, C: Label> IntoIterator for AgentRuleSet<P, C> {
     type IntoIter = std::vec::IntoIter<AgentRule<P, C>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+        self.rules.into_iter()
     }
 }
 
