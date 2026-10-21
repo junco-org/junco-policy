@@ -69,6 +69,7 @@
 //! # Ok::<(), junco_policy::CompileError>(())
 //! ```
 
+mod classify;
 mod history;
 mod model;
 mod policy;
@@ -76,6 +77,7 @@ mod syntax;
 mod validator;
 
 pub use bumpalo::Bump;
+pub use classify::{Classifier, Glob, InvalidPattern, Matcher, Network};
 pub use frunk_core::Coprod;
 pub use frunk_core::coproduct::{CNil, Coproduct};
 pub use history::{Checkpoint, History};
