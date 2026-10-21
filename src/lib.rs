@@ -81,7 +81,7 @@ pub use frunk_core::coproduct::{CNil, Coproduct};
 pub use history::{Checkpoint, History};
 pub use model::{Action, Event, Grant, LockEvent, Request};
 pub use policy::{
-    PolicyDecision,
+    PolicyDecision, TraceDiagnostic, TracePolicy, TraceRule,
     lock::{LockPolicy, lock_decision},
 };
 pub use syntax::{

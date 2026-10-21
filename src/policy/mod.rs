@@ -8,17 +8,20 @@
 //! per-policy context, [`evaluate`] the loop that walks a table, and [`decision`] the verdict it
 //! returns.
 //!
-//! [`lock`] is the one policy built on it today: multi-agent file ownership.
+//! [`lock`] is the built-in policy: multi-agent file ownership. [`TracePolicy`] opens the same
+//! compile-once table to caller-assembled rules.
 
 mod atoms;
 mod decision;
 mod evaluate;
 mod language;
 mod rule;
+mod trace;
 
 pub mod lock;
 
 pub use decision::PolicyDecision;
+pub use trace::{TraceDiagnostic, TracePolicy, TraceRule};
 
 #[cfg(test)]
 mod tests;
