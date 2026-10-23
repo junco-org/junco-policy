@@ -322,6 +322,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "hashconsing",
  "lru",
+ "serde_json",
  "smallbitvec",
  "smallvec",
  "string-interner",
