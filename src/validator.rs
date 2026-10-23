@@ -9,6 +9,7 @@ use thiserror::Error;
 
 use crate::history::{Checkpoint, History};
 use crate::model::{Event, Grant, Request};
+use crate::policy::agent::{AgentAction, AgentEvent, Label};
 use crate::syntax::{CanonicalStore, Rule, RuleMode, RuntimeRule, compile_rule};
 
 /// Rule-compilation failure detected before a validator can execute.
@@ -192,5 +193,19 @@ where
     /// history; history is unchanged in that case.
     pub fn rollback(&mut self, checkpoint: Checkpoint) {
         self.history.rollback(checkpoint);
+    }
+}
+
+impl<'arena, P: Label, C: Label> Validator<'arena, AgentEvent<P, C>> {
+    /// Appends an operator's declassification of `class` for `principal` and returns the
+    /// checkpoint taken before it, so [`Validator::rollback`] undoes the declassification.
+    /// Returns `None`, with history unchanged, when a rule refuses it (see
+    /// [`crate::AgentRule::undeclassifiable`]).
+    pub fn declassify(&mut self, principal: P, class: C) -> Option<Checkpoint> {
+        let before = self.checkpoint();
+        let declassify = AgentEvent::new(principal, AgentAction::Declassify, class);
+        self.check(Request::new(declassify, ()))
+            .is_grant()
+            .then_some(before)
     }
 }
