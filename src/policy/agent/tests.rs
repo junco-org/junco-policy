@@ -1,4 +1,5 @@
 use super::*;
+use crate::{Bump, Request, Validator};
 
 type Event = AgentEvent<&'static str, &'static str>;
 
@@ -131,6 +132,19 @@ fn peer_classes_can_be_forbidden_outright() {
     let policy = AgentPolicy::new().rule(AgentRule::no_network("external"));
     assert!(verdict(&policy, &[], &[contact("a", "external")]).is_some());
     assert_eq!(verdict(&policy, &[], &[contact("a", "internal")]), None);
+}
+
+#[test]
+fn undeclassifiable_classes_refuse_every_declassification() {
+    let policy = coding().rule(AgentRule::undeclassifiable("secret"));
+    assert_eq!(
+        verdict(&policy, &[], &[declassify("a", "secret")]).unwrap(),
+        "secret cannot be declassified for a"
+    );
+    assert_eq!(
+        verdict(&policy, &[read("a", "secret")], &[declassify("a", "ci")]),
+        None
+    );
 }
 
 #[test]
@@ -285,4 +299,28 @@ fn declassifying_a_holder_lifts_contact_until_it_reads_again() {
         ),
         None
     );
+}
+
+#[test]
+fn a_validator_declassifies_through_its_rules_and_checkpoints_before_it() {
+    let arena = Bump::new();
+    let mut builder = Validator::<Event>::builder(&arena);
+    for rule in coding().rule(AgentRule::undeclassifiable("ci")).rules() {
+        builder.add_rule(rule.trace_rule().rule.clone()).unwrap();
+    }
+    let mut validator = builder.finish();
+    let (secret, egress) = (read("a", "secret"), contact("a", "external"));
+    assert!(validator.check(Request::new(secret, ())).is_grant());
+    assert!(!validator.permits(&egress));
+
+    let before = validator.declassify("a", "secret").unwrap();
+    assert_eq!(validator.history(), [secret, declassify("a", "secret")]);
+    assert!(validator.permits(&egress));
+
+    validator.rollback(before);
+    assert_eq!(validator.history(), [secret]);
+    assert!(!validator.permits(&egress));
+
+    assert_eq!(validator.declassify("a", "ci"), None);
+    assert_eq!(validator.history(), [secret]);
 }

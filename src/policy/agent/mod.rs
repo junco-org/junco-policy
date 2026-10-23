@@ -559,6 +559,22 @@ impl<P: Label, C: Label> AgentRule<P, C> {
         )
     }
 
+    /// `class` can never be declassified: an operator's declassification of it for any principal
+    /// is refused.
+    pub fn undeclassifiable(class: C) -> AgentRuleSet<P, C> {
+        Self::per_action(
+            [AgentAction::Declassify],
+            class,
+            &RegexExpr::all(),
+            move |event| {
+                (
+                    format!("{class} cannot be declassified for {}", event.principal),
+                    Vec::new(),
+                )
+            },
+        )
+    }
+
     /// Changing (creating, modifying or removing) a resource of `class` requires an earlier
     /// operator approval of `class`.
     pub fn requires_approval(class: C) -> AgentRuleSet<P, C> {
