@@ -11,6 +11,12 @@ claim. `edit` acquires ownership; `release` relinquishes it and keeps the reader
 principal owns the resource or last read it; `release` is denied only while another principal owns
 it. Releasing an unowned resource grants.
 
+A foreign `edit` makes an agent's view stale even after the writer releases ownership. Before
+`edit` or `remove`, the agent must read the resource again; otherwise the denial explains that
+another principal modified it and supplies a `read` fix. Other agents' reads and any `release`
+do not restore freshness. An agent's own edits keep its view current, and `remove` resets freshness
+so recreating an absent resource needs no read.
+
 ## Events and history
 
 Rules and validators are generic over a caller-chosen `Event`: a compact `Copy` value projecting

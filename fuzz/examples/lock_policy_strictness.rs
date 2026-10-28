@@ -1,5 +1,5 @@
-//! Classifies every policy denial as ownership or read-claim contention, and asks the
-//! no-surprise oracle whether each claim denial prevented a real surprise or was over-strict.
+//! Classifies policy denials as ownership, stale-view, or read-claim contention, and asks the
+//! no-surprise oracle whether each read-claim denial prevented a real surprise or was over-strict.
 
 use lock_policy_harness::{
     BYTES_PER_TRACE, DETERMINISTIC_SEED, SEEDED_TRACE_COUNT, entropy, no_surprise_violation,
@@ -13,6 +13,7 @@ const SAMPLED_TRACES: u64 = 20_000;
 struct Tally {
     granted: usize,
     legality_denials: usize,
+    stale_denials: usize,
     claim_denials: usize,
     prevented_surprise: usize,
     over_strict: usize,
@@ -26,6 +27,13 @@ fn analyse(data: &[u8], tally: &mut Tally) {
         tally.surprises_among_grants += 1;
     }
     for denial in &trace.denials {
+        if denial
+            .failed_precondition
+            .contains(" was modified by another principal;")
+        {
+            tally.stale_denials += 1;
+            continue;
+        }
         if !denial.failed_precondition.contains(" was last read by ") {
             tally.legality_denials += 1;
             continue;
@@ -42,7 +50,7 @@ fn analyse(data: &[u8], tally: &mut Tally) {
 }
 
 fn report(label: &str, tally: &Tally) {
-    let denied = tally.legality_denials + tally.claim_denials;
+    let denied = tally.legality_denials + tally.stale_denials + tally.claim_denials;
     let pct = |part: usize, whole: usize| {
         if whole == 0 {
             0.0
@@ -54,6 +62,7 @@ fn report(label: &str, tally: &Tally) {
     println!("granted events:            {}", tally.granted);
     println!("denied candidates:         {denied}");
     println!("  ownership denials:       {}", tally.legality_denials);
+    println!("  stale-view denials:      {}", tally.stale_denials);
     println!("  read-claim denials:      {}", tally.claim_denials);
     println!(
         "    prevented a surprise:  {} ({:.1}% of claim denials)",

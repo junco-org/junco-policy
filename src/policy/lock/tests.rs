@@ -152,6 +152,55 @@ fn release_clears_only_ownership_and_remove_clears_both_claims() {
 }
 
 #[test]
+fn foreign_edits_require_a_fresh_read_even_after_release() {
+    for prefix in [
+        vec![
+            on_x(Who::Me, Action::Read),
+            on_x(Who::Other, Action::Edit),
+            on_x(Who::Other, Action::Release),
+        ],
+        // A policy-legal interleaving: self reads while other owns the file,
+        // then other edits again before releasing it.
+        vec![
+            on_x(Who::Other, Action::Edit),
+            on_x(Who::Me, Action::Read),
+            on_x(Who::Other, Action::Read),
+            on_x(Who::Other, Action::Edit),
+            on_x(Who::Other, Action::Release),
+            on_x(Who::Me, Action::Release),
+        ],
+    ] {
+        let arena = Bump::new();
+        let mut policy = LockPolicy::new(&arena);
+        let mut history = History::from_events(prefix);
+        for action in [Action::Edit, Action::Remove] {
+            let PolicyDecision::Deny { allowed_fixes, .. } =
+                policy.decide(&history, &on_x(Who::Me, action))
+            else {
+                panic!("stale {action} granted over {history:?}");
+            };
+            assert_eq!(allowed_fixes, vec!["self read src/x"]);
+        }
+
+        let read = on_x(Who::Me, Action::Read);
+        assert_eq!(policy.decide(&history, &read), PolicyDecision::Grant);
+        history.push(read);
+        for action in [Action::Edit, Action::Remove] {
+            assert_eq!(
+                policy.decide(&history, &on_x(Who::Me, action)),
+                PolicyDecision::Grant,
+            );
+        }
+        history.push(on_x(Who::Me, Action::Edit));
+        history.push(on_x(Who::Me, Action::Release));
+        assert_eq!(
+            policy.decide(&history, &on_x(Who::Me, Action::Edit)),
+            PolicyDecision::Grant,
+        );
+    }
+}
+
+#[test]
 fn retained_policy_matches_one_shot_decisions_across_history_updates() {
     let arena = Bump::new();
     let mut policy = LockPolicy::new(&arena);
