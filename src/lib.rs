@@ -69,6 +69,7 @@
 //! # Ok::<(), junco_policy::CompileError>(())
 //! ```
 
+mod classify;
 mod history;
 mod model;
 mod policy;
@@ -76,13 +77,16 @@ mod syntax;
 mod validator;
 
 pub use bumpalo::Bump;
+pub use classify::{Classifier, Glob, InvalidPattern, Matcher, Network};
 pub use frunk_core::Coprod;
 pub use frunk_core::coproduct::{CNil, Coproduct};
 pub use history::{Checkpoint, History};
 pub use model::{Action, Event, Grant, LockEvent, Request};
 pub use policy::{
-    PolicyDecision,
+    PolicyDecision, TraceDiagnostic, TracePolicy, TraceRule,
+    agent::{AgentAction, AgentDenial, AgentEvent, AgentPolicy, AgentRule, AgentRuleSet, Label},
     lock::{LockPolicy, lock_decision},
+    taint::{Access, Taint, TaintState},
 };
 pub use syntax::{
     AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
