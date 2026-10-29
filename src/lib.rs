@@ -1,26 +1,19 @@
 #![deny(missing_docs)]
-//! Exact capability policy validation with finite-product past regular expressions.
+//! Ownership-lock policies backed by the shared `junco-core` history-policy engine.
 //!
-//! Policies are assembled from owned, context-free [`Rule`], [`TestExpr`], and [`RegexExpr`]
-//! values over a caller-chosen [`Event`] type. Events are compact `Copy` values: caller-owned
-//! enums, or finite Frunk [`Coproduct`] unions of payload structs whose principal, action, and
-//! resource projections share component types. [`LockEvent`] is the built-in ownership-lock event.
-//! Labels for diagnostics live outside the evaluator; equality is the event's full value equality.
-//!
-//! `ValidatorBuilder` compiles each complete rule by passing a shared canonical store and a
-//! temporary variable environment explicitly. Boolean tests and normalized regex nodes are
-//! hashconsed in a caller-owned [`Bump`] arena, giving structurally equal expressions one
-//! reference-like canonical handle. The executable [`Validator`] retains only the canonical store,
-//! runtime rules, and a tracked committed [`History`]; each runtime rule keeps a small bounded
-//! cache of evaluated residuals so unchanged or append-extended histories fold only new events.
+//! [`LockEvent`] carries the caller's compact principal and resource identities. [`LockPolicy`]
+//! retains the compiled five-rule ownership-lock table; [`lock_decision`] evaluates it once.
+//! Generic DSL, history, store, and validator APIs are imported directly from `junco_core`.
 //!
 //! # Example
 //!
 //! ```rust
-//! use junco_policy::{
-//!     Action, AtomPattern, Bump, Comparison, ComponentPattern, Decision, Head, LockEvent,
-//!     RegexExpr, Request, Rule, RuleMode, TestExpr, Validator,
+//! use std::sync::Arc;
+//! use junco_core::{
+//!     AtomPattern, Comparison, ComponentPattern, Decision, Head, RegexExpr, Request,
+//!     Rule, RuleMode, Store, TestExpr, Validator,
 //! };
+//! use junco_policy::{Action, LockEvent};
 //!
 //! /// Caller-assigned actor identity; its label lives outside the evaluator.
 //! #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -56,39 +49,21 @@
 //!     tail,
 //! );
 //!
-//! let arena = Bump::new();
-//! let mut builder = Validator::builder(&arena);
+//! let store = Arc::new(Store::new()?);
+//! let mut builder = Validator::builder(store);
 //! builder.add_rule(rule)?;
-//! let mut validator = builder.finish();
+//! let mut validator = builder.finish()?;
 //!
 //! let release = LockEvent::new(alice, Action::Release, src_a);
-//! assert!(!validator.permits(&release));
+//! assert!(!validator.permits(&release)?);
 //! let edit = Request::new(LockEvent::new(alice, Action::Edit, src_a), ());
-//! assert!(validator.check(edit).is_grant());
-//! assert!(matches!(validator.check(Request::new(release, ())), Decision::Grant(_)));
-//! # Ok::<(), junco_policy::CompileError>(())
+//! assert!(validator.check(edit)?.is_grant());
+//! assert!(matches!(validator.check(Request::new(release, ()))?, Decision::Grant(_)));
+//! # Ok::<(), junco_core::PolicyError>(())
 //! ```
 
-mod classify;
-mod history;
 mod model;
 mod policy;
-mod syntax;
-mod validator;
 
-pub use bumpalo::Bump;
-pub use classify::{Classifier, Glob, InvalidPattern, Matcher, Network};
-pub use frunk_core::Coprod;
-pub use frunk_core::coproduct::{CNil, Coproduct};
-pub use history::{Checkpoint, History};
-pub use model::{Action, Event, Grant, LockEvent, Request};
-pub use policy::{
-    PolicyDecision, TraceDiagnostic, TracePolicy, TraceRule,
-    agent::{AgentAction, AgentDenial, AgentEvent, AgentPolicy, AgentRule, AgentRuleSet, Label},
-    lock::{LockPolicy, lock_decision},
-    taint::{Access, Taint, TaintState},
-};
-pub use syntax::{
-    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
-};
-pub use validator::{CompileError, Decision, Denial, Validator, ValidatorBuilder};
+pub use model::{Action, LockEvent};
+pub use policy::lock::{LockPolicy, lock_decision};

@@ -1,7 +1,9 @@
-use junco_policy::{
-    Action, AtomPattern, Bump, Comparison, CompileError, ComponentPattern, Decision, Head,
-    LockEvent, RegexExpr, Request, Rule, RuleMode, TestExpr, Validator,
+use junco_core::{
+    AtomPattern, Comparison, CompileError, ComponentPattern, Decision, Head, RegexExpr, Request,
+    Rule, RuleMode, Store, TestExpr, Validator,
 };
+use junco_policy::{Action, LockEvent};
+use std::sync::Arc;
 
 /// Caller-owned principal identities.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -56,19 +58,25 @@ fn same_actor_edit_before_release() -> Rule<LockEvent<Actor, Path>> {
 
 #[test]
 fn require_rule_uses_only_committed_pre_candidate_history() {
-    let arena = Bump::new();
-    let mut builder = Validator::builder(&arena);
+    let store = Arc::new(Store::new().unwrap());
+    let mut builder = Validator::builder(Arc::clone(&store));
     builder.add_rule(same_actor_edit_before_release()).unwrap();
-    let mut validator = builder.finish();
+    let mut validator = builder.finish().unwrap();
 
-    let denied = validator.check(request(Actor::Alice, Action::Release, Path::SrcA, 1));
+    let denied = validator
+        .check(request(Actor::Alice, Action::Release, Path::SrcA, 1))
+        .unwrap();
     assert!(matches!(denied, Decision::Denied(_)));
     assert!(validator.history().is_empty());
 
-    let edit = validator.check(request(Actor::Alice, Action::Edit, Path::SrcA, 2));
+    let edit = validator
+        .check(request(Actor::Alice, Action::Edit, Path::SrcA, 2))
+        .unwrap();
     assert!(matches!(edit, Decision::Grant(grant) if grant.metadata == 2));
 
-    let release = validator.check(request(Actor::Alice, Action::Release, Path::SrcA, 3));
+    let release = validator
+        .check(request(Actor::Alice, Action::Release, Path::SrcA, 3))
+        .unwrap();
     assert!(matches!(release, Decision::Grant(grant) if grant.metadata == 3));
     assert_eq!(validator.history().len(), 2);
 }
@@ -95,25 +103,29 @@ fn forbid_rule_denies_duplicate_remove_without_mutating_history() {
         tail,
     );
 
-    let arena = Bump::new();
-    let mut builder = Validator::builder(&arena);
+    let store = Arc::new(Store::new().unwrap());
+    let mut builder = Validator::builder(Arc::clone(&store));
     builder.add_rule(rule).unwrap();
-    let mut validator = builder.finish();
+    let mut validator = builder.finish().unwrap();
 
     assert!(
         validator
             .check(request(Actor::Alice, Action::Remove, Path::A, ()))
+            .unwrap()
             .is_grant()
     );
     let history = validator.history().to_vec();
 
-    let denied = validator.check(request(Actor::Alice, Action::Remove, Path::A, ()));
+    let denied = validator
+        .check(request(Actor::Alice, Action::Remove, Path::A, ()))
+        .unwrap();
     assert!(matches!(denied, Decision::Denied(denial) if denial.mode == RuleMode::Forbid));
     assert_eq!(validator.history(), history.as_slice());
 
     assert!(
         validator
             .check(request(Actor::Alice, Action::Remove, Path::B, ()))
+            .unwrap()
             .is_grant()
     );
 }
@@ -135,31 +147,35 @@ fn complement_is_exact_over_complete_history() {
         RegexExpr::complement(contains_edit),
     );
 
-    let arena = Bump::new();
-    let mut builder = Validator::builder(&arena);
+    let store = Arc::new(Store::new().unwrap());
+    let mut builder = Validator::builder(Arc::clone(&store));
     builder.add_rule(rule).unwrap();
-    let mut validator = builder.finish();
+    let mut validator = builder.finish().unwrap();
 
     assert!(
         validator
             .check(request(Actor::Alice, Action::Release, Path::A, ()))
+            .unwrap()
             .is_grant()
     );
     assert!(
         validator
             .check(request(Actor::Bob, Action::Edit, Path::Elsewhere, ()))
+            .unwrap()
             .is_grant()
     );
     assert!(matches!(
-        validator.check(request(Actor::Alice, Action::Release, Path::A, ())),
+        validator
+            .check(request(Actor::Alice, Action::Release, Path::A, ()))
+            .unwrap(),
         Decision::Denied(_)
     ));
 }
 
 #[test]
 fn construction_rejects_unbound_and_cross_component_variables() {
-    let arena = Bump::new();
-    let mut builder = Validator::<LockEvent<Actor, Path>>::builder(&arena);
+    let store = Arc::new(Store::new().unwrap());
+    let mut builder = Validator::<LockEvent<Actor, Path>>::builder(Arc::clone(&store));
     let missing = builder.add_rule(Rule::new(
         RuleMode::Require,
         Head::new(
@@ -177,7 +193,7 @@ fn construction_rejects_unbound_and_cross_component_variables() {
         Err(CompileError::UnboundVariable { name }) if name == "missing"
     ));
 
-    let mut builder = Validator::<LockEvent<Actor, Path>>::builder(&arena);
+    let mut builder = Validator::<LockEvent<Actor, Path>>::builder(Arc::clone(&store));
     let conflict = builder.add_rule(Rule::new(
         RuleMode::Require,
         Head::new(
@@ -193,7 +209,8 @@ fn construction_rejects_unbound_and_cross_component_variables() {
     ));
 
     // Principal and resource share one Rust type; coordinates must still stay distinct.
-    let mut builder = Validator::<LockEvent<Actor, Actor>>::builder(&arena);
+    let mut builder =
+        Validator::<LockEvent<Actor, Actor>>::builder(Arc::new(Store::new().unwrap()));
     let head_conflict = builder.add_rule(Rule::new(
         RuleMode::Require,
         Head::new(
@@ -208,7 +225,8 @@ fn construction_rejects_unbound_and_cross_component_variables() {
         Err(CompileError::VariableComponentConflict { name }) if name == "same"
     ));
 
-    let mut builder = Validator::<LockEvent<Actor, Actor>>::builder(&arena);
+    let mut builder =
+        Validator::<LockEvent<Actor, Actor>>::builder(Arc::new(Store::new().unwrap()));
     let tail_conflict = builder.add_rule(Rule::new(
         RuleMode::Require,
         Head::new(
@@ -229,20 +247,22 @@ fn construction_rejects_unbound_and_cross_component_variables() {
 
 #[test]
 fn checkpoint_restores_append_only_history() {
-    let arena = Bump::new();
-    let mut validator = Validator::builder(&arena).finish();
+    let store = Arc::new(Store::new().unwrap());
+    let mut validator = Validator::builder(Arc::clone(&store)).finish().unwrap();
     assert!(
         validator
             .check(request(Actor::Alice, Action::Read, Path::A, ()))
+            .unwrap()
             .is_grant()
     );
     let checkpoint = validator.checkpoint();
     assert!(
         validator
             .check(request(Actor::Bob, Action::Remove, Path::B, ()))
+            .unwrap()
             .is_grant()
     );
-    validator.rollback(checkpoint);
+    validator.rollback(checkpoint).unwrap();
     assert_eq!(
         validator.history(),
         &[LockEvent::new(Actor::Alice, Action::Read, Path::A)]

@@ -1,31 +1,3 @@
-//! A policy kernel: the pieces every trace policy is built from, and the policies built on them.
-//!
-//! A policy is a table of declarative [`crate::Rule`] values whose tails are past-regexes over
-//! committed history, each deny cell paired with a diagnostic that renders the exact
-//! precondition/fix strings the consumer boundary surfaces. The kernel is policy-agnostic:
-//! [`atoms`] are the one-event tests over the head-bound principal and resource, [`language`] the
-//! tail shape that classifies a resource's history, [`rule`] the rule/diagnostic pairing over a
-//! per-policy context, [`evaluate`] the loop that walks a table, and [`decision`] the verdict it
-//! returns.
-//!
-//! [`lock`] is the built-in policy: multi-agent file ownership. [`TracePolicy`] opens the same
-//! compile-once table to caller-assembled rules, [`agent`] builds rules over classified
-//! observations on it, and [`taint`] tracks which principals hold the classes those rules
-//! propagate.
+//! Ownership-lock policy built on the shared `junco-core` engine.
 
-mod atoms;
-mod decision;
-mod evaluate;
-mod language;
-mod rule;
-mod trace;
-
-pub mod agent;
 pub mod lock;
-pub mod taint;
-
-pub use decision::PolicyDecision;
-pub use trace::{TraceDiagnostic, TracePolicy, TraceRule};
-
-#[cfg(test)]
-mod tests;

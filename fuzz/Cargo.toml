@@ -3,7 +3,7 @@ name = "junco-policy-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.98.1"
 
 [package.metadata]
 cargo-fuzz = true
@@ -20,6 +20,7 @@ path = "src/lib.rs"
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = "1.4"
+junco-core = { path = "../crates/junco-core", default-features = false, features = ["runtime", "std", "cache"] }
 
 [dependencies.junco-policy]
 path = ".."

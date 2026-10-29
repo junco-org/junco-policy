@@ -16,9 +16,11 @@
 //! generation and can never diverge.
 
 use std::fmt;
+use std::sync::Arc;
 
 use arbitrary::Unstructured;
-use junco_policy::{Action, Bump, History, LockEvent, LockPolicy, PolicyDecision};
+use junco_core::{History, HistoryError, PolicyDecision, PolicyError, Store};
+use junco_policy::{Action, LockEvent, LockPolicy};
 
 mod oracle;
 
@@ -69,11 +71,13 @@ impl fmt::Display for PooledPath {
 ///
 /// This is the single operation the benchmark times and the trace validator gates history on.
 pub fn check(
-    policy: &mut LockPolicy<'_, Agent, PooledPath>,
+    policy: &mut LockPolicy<Agent, PooledPath>,
     history: &History<LockEvent<Agent, PooledPath>>,
     candidate: &LockEvent<Agent, PooledPath>,
-) -> bool {
-    matches!(policy.decide(history, candidate), PolicyDecision::Grant)
+) -> Result<bool, HistoryError> {
+    policy
+        .decide(history, candidate)
+        .map(|decision| matches!(decision, PolicyDecision::Grant))
 }
 
 /// Deterministic pseudo-random bytes: the entropy source wherever libFuzzer is not driving
@@ -97,11 +101,14 @@ pub fn entropy(seed: u64, length: usize) -> Vec<u8> {
 /// # Panics
 ///
 /// Panics if `data` is exhausted before `length` events are granted; supply more bytes.
-pub fn granted_history(data: &[u8], length: usize) -> History<LockEvent<Agent, PooledPath>> {
+pub fn granted_history(
+    data: &[u8],
+    length: usize,
+) -> Result<History<LockEvent<Agent, PooledPath>>, PolicyError> {
     let mut generator = TraceGenerator::new(data);
-    let arena = Bump::new();
-    let mut policy = LockPolicy::new(&arena);
-    let mut history = History::new();
+    let store = Arc::new(Store::new()?);
+    let mut policy = LockPolicy::new(Arc::clone(&store))?;
+    let mut history = History::new(store)?;
     while history.len() < length {
         let Some(candidate) = generator.next_candidate() else {
             panic!(
@@ -109,12 +116,12 @@ pub fn granted_history(data: &[u8], length: usize) -> History<LockEvent<Agent, P
                 history.len()
             );
         };
-        if check(&mut policy, &history, &candidate.event) {
+        if check(&mut policy, &history, &candidate.event)? {
+            history.push(candidate.event)?;
             generator.record_grant(&candidate);
-            history.push(candidate.event);
         }
     }
-    history
+    Ok(history)
 }
 
 /// One probe candidate per [`Action`] variant, each by `agent0` on the first pooled path
@@ -131,21 +138,22 @@ pub fn probe_candidates() -> [(&'static str, LockEvent<Agent, PooledPath>); 4] {
 
 /// Generates one trace from `data` and reduces it to the events the policy granted.
 ///
-/// Empty or exhausted input yields a [`ValidatedTrace::default`]. Denied candidates are recorded
-/// only as denials: they leave the history and working-tree model untouched.
-pub fn validate_trace(data: &[u8]) -> ValidatedTrace {
+/// Empty or exhausted input yields an empty or partial trace after successful setup. Denied
+/// candidates are recorded only as denials: they leave history and the working-tree model untouched.
+/// Construction, evaluation and append failures are returned, never recorded as denials.
+pub fn validate_trace(data: &[u8]) -> Result<ValidatedTrace, PolicyError> {
     let mut generator = TraceGenerator::new(data);
-    let arena = Bump::new();
-    let mut policy = LockPolicy::new(&arena);
-    let mut trace = ValidatedTrace::default();
+    let store = Arc::new(Store::new()?);
+    let mut policy = LockPolicy::new(Arc::clone(&store))?;
+    let mut trace = ValidatedTrace::new(store)?;
     for _ in 0..generator.step_budget() {
         let Some(candidate) = generator.next_candidate() else {
             break;
         };
-        match policy.decide(&trace.history, &candidate.event) {
+        match policy.decide(&trace.history, &candidate.event)? {
             PolicyDecision::Grant => {
+                trace.history.push(candidate.event)?;
                 generator.record_grant(&candidate);
-                trace.history.push(candidate.event);
             }
             PolicyDecision::Deny {
                 failed_precondition,
@@ -157,7 +165,7 @@ pub fn validate_trace(data: &[u8]) -> ValidatedTrace {
             }),
         }
     }
-    trace
+    Ok(trace)
 }
 
 /// One concrete generated operation; edit-like filesystem effects stay distinct for the model.
@@ -207,7 +215,7 @@ impl GeneratedOperation {
 
 /// One candidate the policy denied, kept so a trace can be asked what a denial cost.
 ///
-/// Named `DeniedCandidate`, not `Denial`: `junco_policy::Denial` is a different, exported type.
+/// Named `DeniedCandidate`, not `Denial`: `junco_core::Denial` is a different type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeniedCandidate {
     /// Length of the granted history when the denial happened; the prefix that produced it is
@@ -220,13 +228,22 @@ pub struct DeniedCandidate {
 }
 
 /// A generated trace reduced to its policy-granted history plus every denial.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ValidatedTrace {
     /// The granted events in order, for trace-level property checks such as
     /// [`no_surprise_violation`].
     pub history: History<LockEvent<Agent, PooledPath>>,
     /// Every denied candidate in generation order, for strictness analysis.
     pub denials: Vec<DeniedCandidate>,
+}
+
+impl ValidatedTrace {
+    fn new(store: Arc<Store<LockEvent<Agent, PooledPath>>>) -> Result<Self, HistoryError> {
+        Ok(Self {
+            history: History::new(store)?,
+            denials: Vec::new(),
+        })
+    }
 }
 
 /// One generated candidate operation; its event's resource is the path the model applies it to.

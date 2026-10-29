@@ -20,7 +20,7 @@ struct Tally {
 }
 
 fn analyse(data: &[u8], tally: &mut Tally) {
-    let trace = validate_trace(data);
+    let trace = validate_trace(data).expect("strictness trace validation failed");
     tally.granted += trace.history.len();
     if no_surprise_violation(trace.history.as_slice()).is_some() {
         tally.surprises_among_grants += 1;

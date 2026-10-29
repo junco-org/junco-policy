@@ -7,10 +7,12 @@
 //! are warm-progress decisions rather than full-history replays.
 
 use std::hint::black_box;
+use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, PlottingBackend, criterion_group, criterion_main};
-use junco_policy::{Bump, History, LockPolicy};
+use junco_core::History;
+use junco_policy::LockPolicy;
 use lock_policy_harness::{BYTES_PER_EVENT, check, entropy, granted_history, probe_candidates};
 
 /// Committed history lengths measured; geometric, so the growth rate reads off directly.
@@ -20,18 +22,27 @@ const SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 fn lock_decision_scaling(criterion: &mut Criterion) {
     let longest = LENGTHS[LENGTHS.len() - 1];
-    let history = granted_history(&entropy(SEED, longest * BYTES_PER_EVENT), longest);
-    let prefixes =
-        LENGTHS.map(|length| History::from_events(history.as_slice()[..length].iter().copied()));
+    let history = granted_history(&entropy(SEED, longest * BYTES_PER_EVENT), longest)
+        .expect("benchmark history generation failed");
+    let store = history.store();
+    let prefixes = LENGTHS.map(|length| {
+        History::from_events(
+            Arc::clone(store),
+            history.as_slice()[..length].iter().copied(),
+        )
+        .expect("benchmark prefix construction failed")
+    });
     let probes = probe_candidates();
-    let verdict_arena = Bump::new();
-    let mut verdict_policy = LockPolicy::new(&verdict_arena);
+    let mut verdict_policy =
+        LockPolicy::new(Arc::clone(store)).expect("benchmark policy compilation failed");
 
     // The verdict decides how much work a check does — a denial returns from the compiled policy
     // early — so print it once per measured point; timings are uninterpretable without it.
     for (name, candidate) in &probes {
         for (length, prefix) in LENGTHS.iter().zip(&prefixes) {
-            let verdict = if check(&mut verdict_policy, prefix, candidate) {
+            let verdict = if check(&mut verdict_policy, prefix, candidate)
+                .expect("benchmark preflight decision failed")
+            {
                 "grant"
             } else {
                 "deny"
@@ -46,10 +57,13 @@ fn lock_decision_scaling(criterion: &mut Criterion) {
     group.sample_size(50);
     for (name, candidate) in &probes {
         for (length, prefix) in LENGTHS.iter().zip(&prefixes) {
-            let arena = Bump::new();
-            let mut policy = LockPolicy::new(&arena);
+            let mut policy =
+                LockPolicy::new(Arc::clone(store)).expect("benchmark policy compilation failed");
             group.bench_with_input(BenchmarkId::new(*name, length), prefix, |bencher, trace| {
-                bencher.iter(|| check(&mut policy, black_box(trace), black_box(candidate)))
+                bencher.iter(|| {
+                    check(&mut policy, black_box(trace), black_box(candidate))
+                        .expect("benchmark decision failed")
+                })
             });
         }
     }

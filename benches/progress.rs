@@ -14,10 +14,12 @@ use std::mem::size_of;
 use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use junco_policy::{
-    Action, AtomPattern, Bump, Checkpoint, Comparison, ComponentPattern, Event, Head, LockEvent,
-    RegexExpr, Request, Rule, RuleMode, TestExpr, Validator,
+use junco_core::{
+    AtomPattern, Checkpoint, Comparison, ComponentPattern, Event, Head, RegexExpr, Request, Rule,
+    RuleMode, Store, TestExpr, Validator,
 };
+use junco_policy::{Action, LockEvent};
+use std::sync::Arc;
 
 const HISTORY_LENGTHS: [usize; 4] = [16, 4096, 8192, 16384];
 
@@ -175,27 +177,27 @@ fn release_event(case: ReleaseCase, index: usize, history_len: usize) -> LockEve
 }
 
 /// A seeded validator plus the checkpoint immediately before its final committed event.
-struct Scenario<'arena> {
-    validator: Validator<'arena, LockEvent<Actor, Path>>,
+struct Scenario {
+    validator: Validator<LockEvent<Actor, Path>>,
     before_final: Checkpoint,
     final_event: LockEvent<Actor, Path>,
 }
 
-fn seed<'arena>(
-    arena: &'arena Bump,
+fn seed(
+    store: Arc<Store<LockEvent<Actor, Path>>>,
     rule: Rule<LockEvent<Actor, Path>>,
     history_len: usize,
     event: impl Fn(usize) -> LockEvent<Actor, Path>,
-) -> Scenario<'arena> {
-    let mut builder = Validator::builder(arena);
+) -> Scenario {
+    let mut builder = Validator::builder(store);
     builder.add_rule(rule).expect("benchmark rule compiles");
-    let mut validator = builder.finish();
+    let mut validator = builder.finish().unwrap();
     let mut before_final = validator.checkpoint();
     for index in 0..history_len {
         if index + 1 == history_len {
             before_final = validator.checkpoint();
         }
-        let decision = validator.check(Request::new(event(index), ()));
+        let decision = validator.check(Request::new(event(index), ())).unwrap();
         assert!(decision.is_grant(), "seed history must be accepted");
     }
     assert_eq!(validator.history().len(), history_len);
@@ -215,31 +217,34 @@ fn candidate() -> LockEvent<Actor, Path> {
 }
 
 /// Seeds the prior-edit scenario and checks its grant outside timing.
-fn prior_edit_scenario(arena: &Bump, history_len: usize) -> Scenario<'_> {
-    let mut scenario = seed(arena, prior_edit_rule(), history_len, |index| {
+fn prior_edit_scenario(store: Arc<Store<LockEvent<Actor, Path>>>, history_len: usize) -> Scenario {
+    let mut scenario = seed(store, prior_edit_rule(), history_len, |index| {
         prior_edit_event(index, history_len)
     });
-    assert!(scenario.validator.permits(&candidate()));
+    assert!(scenario.validator.permits(&candidate()).unwrap());
     scenario
 }
 
 /// Seeds the approved release scenario after preflighting every release verdict outside timing.
-fn release_approval_scenario(arena: &Bump, history_len: usize) -> Scenario<'_> {
+fn release_approval_scenario(
+    store: Arc<Store<LockEvent<Actor, Path>>>,
+    history_len: usize,
+) -> Scenario {
     for (case, expected) in RELEASE_CASES {
-        let case_arena = Bump::new();
-        let mut scenario = seed(&case_arena, release_approval_rule(), history_len, |index| {
+        let case_store = Arc::new(Store::new().unwrap());
+        let mut scenario = seed(case_store, release_approval_rule(), history_len, |index| {
             release_event(case, index, history_len)
         });
         assert_eq!(
-            scenario.validator.permits(&candidate()),
+            scenario.validator.permits(&candidate()).unwrap(),
             expected,
             "{case:?}/{history_len}"
         );
     }
-    let mut scenario = seed(arena, release_approval_rule(), history_len, |index| {
+    let mut scenario = seed(store, release_approval_rule(), history_len, |index| {
         release_event(ReleaseCase::Approved, index, history_len)
     });
-    assert!(scenario.validator.permits(&candidate()));
+    assert!(scenario.validator.permits(&candidate()).unwrap());
     scenario
 }
 
@@ -260,10 +265,10 @@ impl Workload {
         }
     }
 
-    fn scenario(self, arena: &Bump, history_len: usize) -> Scenario<'_> {
+    fn scenario(self, store: Arc<Store<LockEvent<Actor, Path>>>, history_len: usize) -> Scenario {
         match self {
-            Self::PriorEdit => prior_edit_scenario(arena, history_len),
-            Self::ReleaseApproval => release_approval_scenario(arena, history_len),
+            Self::PriorEdit => prior_edit_scenario(store, history_len),
+            Self::ReleaseApproval => release_approval_scenario(store, history_len),
         }
     }
 }
@@ -288,21 +293,22 @@ fn tagged_replay(criterion: &mut Criterion) {
     let mut group = configure(criterion, "tagged_replay");
     for workload in Workload::ALL {
         for history_len in HISTORY_LENGTHS {
-            let arena = Bump::new();
-            let mut scenario = workload.scenario(&arena, history_len);
+            let store = Arc::new(Store::new().unwrap());
+            let mut scenario = workload.scenario(store, history_len);
             assert_eq!(scenario.final_event.action(), Action::Read);
             let candidate = candidate();
             group.bench_function(BenchmarkId::new(workload.name(), history_len), |bencher| {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        scenario.validator.rollback(scenario.before_final);
+                        scenario.validator.rollback(scenario.before_final).unwrap();
                         let reappended = scenario
                             .validator
-                            .check(Request::new(scenario.final_event, ()));
+                            .check(Request::new(scenario.final_event, ()))
+                            .unwrap();
                         assert!(reappended.is_grant());
                         let start = Instant::now();
-                        let permitted = scenario.validator.permits(black_box(&candidate));
+                        let permitted = scenario.validator.permits(black_box(&candidate)).unwrap();
                         elapsed += start.elapsed();
                         assert!(permitted);
                     }
@@ -318,15 +324,15 @@ fn progress_warm(criterion: &mut Criterion) {
     let mut group = configure(criterion, "progress_warm");
     for workload in Workload::ALL {
         for history_len in HISTORY_LENGTHS {
-            let arena = Bump::new();
-            let mut scenario = workload.scenario(&arena, history_len);
+            let store = Arc::new(Store::new().unwrap());
+            let mut scenario = workload.scenario(store, history_len);
             let candidate = candidate();
             group.bench_function(BenchmarkId::new(workload.name(), history_len), |bencher| {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
                         let start = Instant::now();
-                        let permitted = scenario.validator.permits(black_box(&candidate));
+                        let permitted = scenario.validator.permits(black_box(&candidate)).unwrap();
                         elapsed += start.elapsed();
                         assert!(permitted);
                     }

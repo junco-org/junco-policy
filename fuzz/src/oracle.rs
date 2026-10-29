@@ -146,7 +146,7 @@ pub fn contended_events(history: &[LockEvent<Agent, PooledPath>]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use junco_policy::History;
+    use junco_core::History;
 
     use super::*;
     use crate::{
@@ -170,8 +170,31 @@ mod tests {
         seeded
             .chunks(BYTES_PER_TRACE)
             .enumerate()
-            .map(|(index, bytes)| (format!("seed/{index}"), validate_trace(bytes).history))
+            .map(|(index, bytes)| {
+                (
+                    format!("seed/{index}"),
+                    validate_trace(bytes)
+                        .expect("seeded trace validation failed")
+                        .history,
+                )
+            })
             .collect()
+    }
+
+    #[test]
+    fn empty_input_produces_an_empty_trace() {
+        let trace = validate_trace(&[]).expect("empty trace setup failed");
+        assert!(trace.history.is_empty());
+        assert!(trace.denials.is_empty());
+    }
+
+    #[test]
+    fn fixed_seed_generation_is_deterministic() {
+        let bytes = entropy(DETERMINISTIC_SEED, BYTES_PER_TRACE);
+        assert_eq!(
+            validate_trace(&bytes).expect("first seeded trace validation failed"),
+            validate_trace(&bytes).expect("second seeded trace validation failed"),
+        );
     }
 
     #[test]
@@ -268,7 +291,8 @@ mod tests {
                     seed.wrapping_mul(0x9e37_79b9_7f4a_7c15),
                     length * BYTES_PER_EVENT + 1,
                 );
-                let history = granted_history(&data, length);
+                let history =
+                    granted_history(&data, length).expect("sweep history generation failed");
                 assert_eq!(
                     no_surprise_violation(history.as_slice()),
                     None,
