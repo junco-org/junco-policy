@@ -274,6 +274,7 @@ dependencies = [
 [[package]]
 name = "hashconsius"
 version = "0.1.0"
+source = "git+https://github.com/elefthei/hashconsius?rev=d7c17483a46b42a9e179cbfa0fdae9b7e8043dbf#d7c17483a46b42a9e179cbfa0fdae9b7e8043dbf"
 dependencies = [
  "verus-bumpalo",
  "vstd",
@@ -745,6 +746,7 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 [[package]]
 name = "verus-bumpalo"
 version = "0.1.0"
+source = "git+https://github.com/elefthei/bumpus?rev=888a6983370524cf1686d82e5814dd17a2dd14e5#888a6983370524cf1686d82e5814dd17a2dd14e5"
 dependencies = [
  "vstd",
 ]

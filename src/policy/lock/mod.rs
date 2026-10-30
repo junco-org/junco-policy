@@ -6,8 +6,10 @@
 //! - its **last reader**: the principal of the last `read`, cleared only by `remove`.
 //!
 //! `edit` and `remove` are denied while another principal owns the resource or last read it;
-//! `release` is denied only while another principal owns it. `read` always grants. Owner denials
-//! precede reader denials. [`LockPolicy`] compiles this five-rule table once and retains its
+//! `release` is denied only while another principal owns it. `read` always grants. A foreign
+//! `edit` also blocks `edit` and `remove` until the acting principal reads the resource again;
+//! `release` does not restore freshness, and `remove` resets it. Owner denials precede freshness
+//! and reader denials. [`LockPolicy`] compiles this seven-rule table once and retains its
 //! evaluator caches across decisions.
 
 use std::fmt::{Debug, Display};
@@ -54,6 +56,21 @@ fn read_by_other<E: Event<Action = Action>>() -> RegexExpr<E> {
     last_state_change(foreign_on_r(Action::Read), stable(&changes))
 }
 
+/// Another principal edited `r` after the acting principal last read or edited it.
+fn stale_view<E: Event<Action = Action>>() -> RegexExpr<E> {
+    last_state_change(
+        foreign_on_r(Action::Edit),
+        TestExpr::and([
+            stable(&[Action::Edit, Action::Remove]),
+            TestExpr::or([
+                resource_is(Comparison::Neq),
+                action_is(Action::Read, Comparison::Neq),
+                principal_is(Comparison::Neq),
+            ]),
+        ]),
+    )
+}
+
 /// An event that is off `r` or is none of `changes`.
 fn stable<E: Event<Action = Action>>(changes: &[Action]) -> TestExpr<E> {
     TestExpr::or([
@@ -94,12 +111,29 @@ fn reader_denial(context: &LockContext) -> (String, Vec<String>) {
     )
 }
 
-/// The five-rule lock table: owner cells first, so the owner diagnostic wins.
+fn stale_denial(context: &LockContext) -> (String, Vec<String>) {
+    let LockContext {
+        principal: p,
+        resource: r,
+        action,
+        ..
+    } = context;
+    (
+        format!(
+            "{r} was modified by another principal; {p} must read it again before it may {action} it"
+        ),
+        vec![format!("{p} read {r}")],
+    )
+}
+
+/// The lock table: owner cells first, so the owner diagnostic wins.
 fn lock_rules<E: Event<Action = Action>>() -> Vec<PolicyRule<E, LockContext>> {
     vec![
         forbid(Action::Edit, owned_by_other(), Box::new(owner_denial)),
         forbid(Action::Release, owned_by_other(), Box::new(owner_denial)),
         forbid(Action::Remove, owned_by_other(), Box::new(owner_denial)),
+        forbid(Action::Edit, stale_view(), Box::new(stale_denial)),
+        forbid(Action::Remove, stale_view(), Box::new(stale_denial)),
         forbid(Action::Edit, read_by_other(), Box::new(reader_denial)),
         forbid(Action::Remove, read_by_other(), Box::new(reader_denial)),
     ]

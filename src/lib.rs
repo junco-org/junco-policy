@@ -2,7 +2,7 @@
 //! Ownership-lock policies backed by the shared `history-semantics` engine.
 //!
 //! [`LockEvent`] carries the caller's compact principal and resource identities. [`LockPolicy`]
-//! retains the compiled five-rule ownership-lock table; [`lock_decision`] evaluates it once.
+//! retains the compiled seven-rule ownership-lock table; [`lock_decision`] evaluates it once.
 //! Generic DSL APIs come from `history_syntax`, histories from `history_store`, and validators from `history_semantics`.
 //!
 //! # Example

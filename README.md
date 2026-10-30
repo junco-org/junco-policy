@@ -49,8 +49,15 @@ claim. `edit` acquires ownership; `release` relinquishes it and keeps the reader
 principal owns the resource or last read it; `release` is denied only while another principal owns
 it. Releasing an unowned resource grants.
 
-The five Forbid rules keep this order: foreign-owner Edit, Release, Remove, then
-foreign-last-reader Edit, Remove. Owner diagnostics therefore win over reader diagnostics.
+A foreign `edit` makes an agent's view stale even after the writer releases ownership. Before
+`edit` or `remove`, the agent must read the resource again; otherwise the denial explains that
+another principal modified it and supplies a `read` fix. Other agents' reads and any `release`
+do not restore freshness. An agent's own edits keep its view current, and `remove` resets freshness
+so recreating an absent resource needs no read.
+
+The seven Forbid rules keep this order: foreign-owner Edit, Release, Remove, then stale-view
+Edit, Remove, then foreign-last-reader Edit, Remove. Owner diagnostics therefore win over
+freshness diagnostics, which win over reader diagnostics.
 The diagnostic history fold only renders the selected denial; it does not decide access.
 Neither retained `LockPolicy::decide` nor one-shot `lock_decision` appends implicitly:
 
@@ -93,11 +100,23 @@ locking, allocation, diagnostic callbacks and native facade packaging remain exp
 boundaries; root `LockEvent` is a native projection adapter.
 
 Verification uses Rust `1.98.1`, Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0`, and matched
-`vstd = 0.0.0-2026-10-04-0306`. The local `crates/vendor` helper snapshots retain
-upstream executable sources/contracts from verus-bumpalo
-`36c8e8723d767934a502fc1d9cea0ba49cff54ab` and hashconsius
-`58ab05c67c34201fa25f27c443cb5b45bc3a6c00`, with dependency/provenance adjustments for
-the matched vstd. This is local source delivery, not publication of a new remote revision.
+`vstd = 0.0.0-2026-10-04-0306`. The verified helpers are pinned Git dependencies:
+[bumpus](https://github.com/elefthei/bumpus) (`verus-bumpalo`)
+`888a6983370524cf1686d82e5814dd17a2dd14e5` and
+[hashconsius](https://github.com/elefthei/hashconsius)
+`d7c17483a46b42a9e179cbfa0fdae9b7e8043dbf`.
+
+## Updating Regorus
+
+`scripts/update_regorus.sh` (no arguments) mirrors the four library crates under `crates/` into
+the sibling `../regorus/src/`, deleting stale files inside those four directories, then runs
+`cargo fetch`, the eight per-package and three full-consumer `cargo verus verify --locked` gates,
+and the `history_table` benchmark with `history-cached`/`history-uncached` Criterion baselines.
+It validates every path (no symlinks, existing Regorus crates) before writing, needs `rsync`,
+Rust `1.98.1`, `verus`, `cargo-verus` and Z3 (`VERUS_Z3_PATH` or `z3`) on `PATH`, and never
+rolls back: a failed check leaves the copied files for inspection.
+`scripts/test_update_regorus.sh` checks that an unsafe destination aborts before any crate is
+touched.
 
 
 ## Fuzzing
