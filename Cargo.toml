@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/junco-core"]
+members = [".", "crates/junco-core", "crates/history-syntax", "crates/history-store", "crates/history-semantics"]
 exclude = ["fuzz"]
 resolver = "3"
 
@@ -16,11 +16,14 @@ name = "junco_policy"
 path = "src/lib.rs"
 
 [dependencies]
-junco-core = { path = "crates/junco-core", default-features = false, features = ["runtime", "std", "cache"] }
+junco-core = { path = "crates/junco-core", default-features = false, features = ["std"] }
+history-store = { path = "crates/history-store", default-features = false, features = ["runtime", "std"] }
+history-semantics = { path = "crates/history-semantics", default-features = false, features = ["runtime", "std", "cache"] }
+history-syntax = { path = "crates/history-syntax", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 criterion = "0.5"
-junco-core = { path = "crates/junco-core", default-features = false, features = ["test-util"] }
+history-semantics = { path = "crates/history-semantics", default-features = false, features = ["test-util"] }
 
 [[bench]]
 name = "validator"

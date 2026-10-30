@@ -1,3 +1,3 @@
-//! Ownership-lock policy built on the shared `junco-core` engine.
+//! Ownership-lock policy built on the shared `history-semantics` engine.
 
 pub mod lock;

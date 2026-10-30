@@ -14,10 +14,12 @@ use std::mem::size_of;
 use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use junco_core::{
-    AtomPattern, Checkpoint, Comparison, ComponentPattern, Event, Head, RegexExpr, Request, Rule,
-    RuleMode, Store, TestExpr, Validator,
+use history_semantics::Validator;
+use history_store::{Checkpoint, Store};
+use history_syntax::{
+    AtomPattern, Comparison, ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
+use junco_core::Request;
 use junco_policy::{Action, LockEvent};
 use std::sync::Arc;
 

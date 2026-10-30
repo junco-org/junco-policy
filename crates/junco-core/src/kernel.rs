@@ -2,10 +2,8 @@
 // Licensed under the MIT License.
 
 use super::error::HistoryError;
-#[cfg(verus_keep_ghost)]
-use crate::store::Event;
-use crate::syntax::Component;
 use alloc::vec::Vec;
+use history_syntax::syntax::Component;
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
@@ -15,10 +13,11 @@ use verify::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
 
-pub(crate) type KernelResult<T> = core::result::Result<T, HistoryError>;
-pub(crate) use crate::limits::MAX_GRAPH_BYTES;
+pub type KernelResult<T> = core::result::Result<T, HistoryError>;
+pub use crate::limits::MAX_GRAPH_BYTES;
 
 // Keep a loop-body error in a local, stop the loop, and propagate it after the loop.
+#[macro_export]
 macro_rules! loop_try {
     ($expression:expr, $failure:ident) => {{
         let outcome = $expression;
@@ -31,10 +30,10 @@ macro_rules! loop_try {
         }
     }};
 }
-pub(crate) use loop_try;
 
 // A checked iteration is one function call. No partially reborrowed store is
 // carried by an early loop exit; success and failure meet at the loop condition.
+#[macro_export]
 macro_rules! scan {
     ($state:ident,$index:ident,$count:expr,$condition:expr,$value:ident=>$step:expr) => {{
         let mut $index = 0;
@@ -58,7 +57,6 @@ macro_rules! scan {
         }
     }};
 }
-pub(crate) use scan;
 
 macro_rules! id {
     ($name:ident) => {
@@ -66,7 +64,7 @@ macro_rules! id {
         #[verus_verify(external_derive)]
         #[cfg_attr(verus_keep_ghost, derive(Structural))]
         #[derive(Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub(crate) struct $name(pub(crate) u32);
+        pub struct $name(pub(crate) u32);
         #[verus_verify]
         impl Clone for $name {
             #[verus_spec(result => ensures result == *self)]
@@ -76,13 +74,22 @@ macro_rules! id {
         }
         #[verus_verify]
         impl $name {
+            verus! {
+                pub closed const ZERO: Self = Self(0);
+            }
+
+            #[verus_spec(result => ensures result as nat == self@)]
+            pub const fn get(self) -> u32 {
+                self.0
+            }
+
             #[verus_spec(result => ensures
                                                 match result {
-                                                    Ok(index) => index as nat == self.0 as nat,
-                                                    Err(error) => self.0 as nat > usize::MAX as nat && error is Invariant,
+                                                    Ok(index) => index as nat == self@,
+                                                    Err(error) => self@ > usize::MAX as nat && error is Invariant,
                                                 },
                                             )]
-            pub(crate) fn index(self) -> KernelResult<usize> {
+            pub fn index(self) -> KernelResult<usize> {
                 match usize::try_from(self.0) {
                     Ok(index) => Ok(index),
                     Err(_) => Err(HistoryError::graph_id_overflow()),
@@ -90,11 +97,11 @@ macro_rules! id {
             }
             #[verus_spec(result => ensures
                                                 match result {
-                                                    Ok(id) => id.0 as nat == index as nat,
+                                                    Ok(id) => id@ == index as nat,
                                                     Err(error) => index as nat > u32::MAX as nat && error is GraphLimit,
                                                 },
                                             )]
-            pub(crate) fn from_index(index: usize) -> KernelResult<Self> {
+            pub fn from_index(index: usize) -> KernelResult<Self> {
                 match u32::try_from(index) {
                     Ok(value) => Ok(Self(value)),
                     Err(_) => Err(HistoryError::graph_index_overflow()),
@@ -112,7 +119,7 @@ id!(TransitionId);
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, Hash)]
-pub(crate) enum Term {
+pub enum Term {
     Constant(u64),
     Variable(Component),
 }
@@ -120,7 +127,7 @@ pub(crate) enum Term {
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, Hash)]
-pub(crate) enum Primitive {
+pub enum Primitive {
     Eq { field: Component, term: Term },
 }
 
@@ -128,10 +135,27 @@ pub(crate) enum Primitive {
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Bindings(pub(crate) [u64; 3]);
+
+#[verus_verify]
+impl Bindings {
+    #[verus_spec(result => ensures result@ == (crate::verify::history_specs::EventView {
+        principal: values@[0] as nat, action: values@[1] as nat, resource: values@[2] as nat,
+    }))]
+    pub const fn new(values: [u64; 3]) -> Self {
+        Self(values)
+    }
+
+    #[verus_spec(result => ensures result@[0] as nat == self@.principal,
+        result@[1] as nat == self@.action, result@[2] as nat == self@.resource)]
+    pub const fn values(&self) -> &[u64; 3] {
+        &self.0
+    }
+}
+
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy, Debug, Hash)]
-pub(crate) enum TestView<'a> {
+pub enum TestView<'a> {
     True,
     False,
     Atom {
@@ -144,7 +168,7 @@ pub(crate) enum TestView<'a> {
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy, Debug, Hash)]
-pub(crate) enum RegexKindView<'a> {
+pub enum RegexKindView<'a> {
     Empty,
     All,
     Epsilon,
@@ -158,14 +182,14 @@ pub(crate) enum RegexKindView<'a> {
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy, Debug, Eq, Hash)]
-pub(crate) struct RegexView<'a> {
-    pub(crate) kind: RegexKindView<'a>,
-    pub(crate) nullable: bool,
+pub struct RegexView<'a> {
+    pub kind: RegexKindView<'a>,
+    pub nullable: bool,
 }
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy, Debug, Hash)]
-pub(crate) enum TransitionView<'a> {
+pub enum TransitionView<'a> {
     Const(RegexId),
     If {
         test: TestId,
@@ -190,7 +214,7 @@ pub(crate) enum TransitionView<'a> {
         forall|a: T, b: T| a.eq_spec(&b) == (a == b),
     ensures result == (left@ == right@),
 )]
-pub(super) fn id_slice_eq<T: Copy + Eq>(left: &[T], right: &[T]) -> bool {
+pub fn id_slice_eq<T: Copy + Eq>(left: &[T], right: &[T]) -> bool {
     let mut equal = left.len() == right.len();
     let mut index = 0;
     #[cfg_attr(verus_keep_ghost, verus_spec(
@@ -341,17 +365,17 @@ impl Eq for TransitionView<'_> {}
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Constants {
-    pub(crate) test_true: TestId,
-    pub(crate) test_false: TestId,
-    pub(crate) empty: RegexId,
-    pub(crate) all: RegexId,
-    pub(crate) epsilon: RegexId,
-    pub(crate) transition_empty: TransitionId,
-    pub(crate) transition_all: TransitionId,
-    pub(crate) transition_epsilon: TransitionId,
+pub struct Constants {
+    pub test_true: TestId,
+    pub test_false: TestId,
+    pub empty: RegexId,
+    pub all: RegexId,
+    pub epsilon: RegexId,
+    pub transition_empty: TransitionId,
+    pub transition_all: TransitionId,
+    pub transition_epsilon: TransitionId,
 }
-pub(crate) trait KernelStore {
+pub trait KernelStore {
     fn checkpoint(&mut self) -> KernelResult<()>;
     fn charge_aux(&mut self, bytes: usize) -> KernelResult<()>;
     fn reserve_derivatives(
@@ -372,13 +396,13 @@ pub(crate) trait KernelStore {
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Debug)]
-pub(crate) struct AtomSet {
+pub struct AtomSet {
     ids: Vec<TestId>,
 }
 #[verus_verify]
 impl AtomSet {
     #[verus_spec(result => ensures result@ == self@)]
-    pub(crate) const fn ids(&self) -> &[TestId] {
+    pub const fn ids(&self) -> &[TestId] {
         self.ids.as_slice()
     }
     #[allow(
@@ -427,7 +451,7 @@ impl AtomSet {
         final(store).restoration() == old(store).restoration(),
         match result { Ok(atoms) => atoms@ == ids@ && atom_ids_wf(final(store).graph(), atoms@), Err(_) => true },
     )]
-    pub(crate) fn new<G: KernelStore>(store: &mut G, ids: Vec<TestId>) -> KernelResult<Self> {
+    pub fn new<G: KernelStore>(store: &mut G, ids: Vec<TestId>) -> KernelResult<Self> {
         let mut state = Ok(None);
         scan!(state,index,ids.len(),state.is_ok(),previous=>Self::validate_id(store,&ids,index,previous);
             invariant
@@ -451,7 +475,7 @@ impl AtomSet {
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy)]
-pub(crate) enum TestHead {
+pub enum TestHead {
     True,
     False,
     Atom(Primitive, bool),
@@ -461,7 +485,7 @@ pub(crate) enum TestHead {
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy)]
-pub(crate) enum RegexHead {
+pub enum RegexHead {
     Empty,
     All,
     Epsilon,
@@ -475,7 +499,7 @@ pub(crate) enum RegexHead {
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy)]
-pub(crate) enum TransitionHead {
+pub enum TransitionHead {
     Const(RegexId),
     If(TestId, TransitionId, TransitionId),
     Union(usize),
@@ -489,7 +513,7 @@ impl TestId {
         Ok(head) => self@ < store.graph().tests.len() && head@ == test_node_head(store.graph().tests[self@ as int]),
         Err(_) => true,
     })]
-    pub(crate) fn head<G: KernelStore>(self, store: &G) -> KernelResult<TestHead> {
+    pub fn head<G: KernelStore>(self, store: &G) -> KernelResult<TestHead> {
         Ok(match store.test(self)? {
             TestView::True => TestHead::True,
             TestView::False => TestHead::False,
@@ -509,7 +533,7 @@ impl RegexId {
         Ok(head) => self@ < store.graph().regexes.len() && head@ == regex_node_head(store.graph().regexes[self@ as int].kind),
         Err(_) => true,
     })]
-    pub(crate) fn head<G: KernelStore>(self, store: &G) -> KernelResult<RegexHead> {
+    pub fn head<G: KernelStore>(self, store: &G) -> KernelResult<RegexHead> {
         Ok(match store.regex(self)?.kind {
             RegexKindView::Empty => RegexHead::Empty,
             RegexKindView::All => RegexHead::All,
@@ -530,7 +554,7 @@ impl TransitionId {
         Ok(head) => self@ < store.graph().transitions.len() && head@ == transition_node_head(store.graph().transitions[self@ as int]),
         Err(_) => true,
     })]
-    pub(crate) fn head<G: KernelStore>(self, store: &G) -> KernelResult<TransitionHead> {
+    pub fn head<G: KernelStore>(self, store: &G) -> KernelResult<TransitionHead> {
         Ok(match store.transition(self)? {
             TransitionView::Const(r) => TransitionHead::Const(r),
             TransitionView::If {
@@ -558,7 +582,7 @@ impl TestId {
         Ok(child) => self@ < store.graph().tests.len() && test_node_child(store.graph().tests[self@ as int], index as nat) == Some(child@),
         Err(_) => true,
     })]
-    pub(crate) fn child<G: KernelStore>(self, store: &G, index: usize) -> KernelResult<Self> {
+    pub fn child<G: KernelStore>(self, store: &G, index: usize) -> KernelResult<Self> {
         match store.test(self)? {
             TestView::And(xs) | TestView::Or(xs) => match xs.get(index) {
                 Some(value) => Ok(*value),
@@ -579,7 +603,7 @@ impl RegexId {
         Ok(child) => self@ < store.graph().regexes.len() && regex_node_child(store.graph().regexes[self@ as int].kind, index as nat) == Some(child@),
         Err(_) => true,
     })]
-    pub(crate) fn child<G: KernelStore>(self, store: &G, index: usize) -> KernelResult<Self> {
+    pub fn child<G: KernelStore>(self, store: &G, index: usize) -> KernelResult<Self> {
         match store.regex(self)?.kind {
             RegexKindView::Union(xs) | RegexKindView::Concat(xs) | RegexKindView::Intersect(xs) => {
                 match xs.get(index) {
@@ -602,7 +626,7 @@ impl TransitionId {
         Ok(child) => self@ < store.graph().transitions.len() && transition_node_child(store.graph().transitions[self@ as int], index as nat) == Some(child@),
         Err(_) => true,
     })]
-    pub(crate) fn child<G: KernelStore>(self, store: &G, index: usize) -> KernelResult<Self> {
+    pub fn child<G: KernelStore>(self, store: &G, index: usize) -> KernelResult<Self> {
         match store.transition(self)? {
             TransitionView::Union(xs) | TransitionView::Intersect(xs) => match xs.get(index) {
                 Some(value) => Ok(*value),
@@ -623,11 +647,7 @@ impl TransitionId {
         Ok(child) => self@ < store.graph().transitions.len() && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) == Some(child@),
         Err(_) => true,
     })]
-    pub(crate) fn suffix_child<G: KernelStore>(
-        self,
-        store: &G,
-        index: usize,
-    ) -> KernelResult<RegexId> {
+    pub fn suffix_child<G: KernelStore>(self, store: &G, index: usize) -> KernelResult<RegexId> {
         match store.transition(self)? {
             TransitionView::Append { suffix, .. } => match suffix.get(index) {
                 Some(value) => Ok(*value),
@@ -639,7 +659,7 @@ impl TransitionId {
 }
 
 #[cfg(verus_keep_ghost)]
-pub(crate) mod verify {
+pub mod verify {
     use super::*;
     use crate::verify::history_specs::{self as language, Regex, Transition};
     use crate::verify::history_specs::{EventView, Subst};
@@ -654,19 +674,34 @@ pub(crate) mod verify {
             }
             impl PartialEqSpecImpl for $id {
                 open spec fn obeys_eq_spec() -> bool { true }
-                open(crate) spec fn eq_spec(&self, other: &Self) -> bool { self.0 == other.0 }
+                open spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
             }
             impl OrdSpecImpl for $id {
                 open spec fn obeys_cmp_spec() -> bool { true }
-                open(crate) spec fn cmp_spec(&self, other: &Self) -> core::cmp::Ordering {
-                    vstd::std_specs::cmp::OrdSpec::cmp_spec(&self.0, &other.0)
+                open spec fn cmp_spec(&self, other: &Self) -> core::cmp::Ordering {
+                    if self@ < other@ { core::cmp::Ordering::Less }
+                    else if self@ == other@ { core::cmp::Ordering::Equal }
+                    else { core::cmp::Ordering::Greater }
                 }
             }
             impl PartialOrdSpecImpl for $id {
                 open spec fn obeys_partial_cmp_spec() -> bool { true }
-                open(crate) spec fn partial_cmp_spec(&self, other: &Self) -> Option<core::cmp::Ordering> {
-                    Some(vstd::std_specs::cmp::OrdSpec::cmp_spec(&self.0, &other.0))
+                open spec fn partial_cmp_spec(&self, other: &Self) -> Option<core::cmp::Ordering> {
+                    Some(if self@ < other@ { core::cmp::Ordering::Less }
+                        else if self@ == other@ { core::cmp::Ordering::Equal }
+                        else { core::cmp::Ordering::Greater })
                 }
+            }
+            impl $id {
+                /// Proof-only ID with an exact view; the payload itself stays crate-private.
+                pub closed spec fn from_view(value: u32) -> Self { Self(value) }
+                pub broadcast proof fn lemma_from_view(value: u32)
+                    ensures #[trigger] Self::from_view(value)@ == value as nat,
+                {}
+                /// The payload bound and injectivity that crate-local proofs read off `self.0`.
+                pub broadcast proof fn lemma_view(id: Self)
+                    ensures (#[trigger] id@) <= u32::MAX, id == Self::from_view(id@ as u32),
+                {}
             }
         }};
     }
@@ -706,45 +741,39 @@ pub(crate) mod verify {
 
     impl PartialEqSpecImpl for super::Term {
         open spec fn obeys_eq_spec() -> bool { true }
-        open(crate) spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
+        open spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
     }
     impl PartialEqSpecImpl for super::Primitive {
         open spec fn obeys_eq_spec() -> bool { true }
-        open(crate) spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
+        open spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
     }
     impl PartialEqSpecImpl for TestView<'_> {
         open spec fn obeys_eq_spec() -> bool { true }
-        open(crate) spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
+        open spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
     }
     impl PartialEqSpecImpl for RegexKindView<'_> {
         open spec fn obeys_eq_spec() -> bool { true }
-        open(crate) spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
+        open spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
     }
     impl PartialEqSpecImpl for RegexView<'_> {
         open spec fn obeys_eq_spec() -> bool { true }
-        open(crate) spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
+        open spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
     }
     impl PartialEqSpecImpl for TransitionView<'_> {
         open spec fn obeys_eq_spec() -> bool { true }
-        open(crate) spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
+        open spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
     }
 
     impl View for super::Term {
         type V = GTerm;
-        open(crate) spec fn view(&self) -> GTerm {
+        open spec fn view(&self) -> GTerm {
             match self { super::Term::Constant(c) => GTerm::Constant(*c as nat), super::Term::Variable(v) => GTerm::Variable(*v) }
         }
     }
     impl View for super::Primitive {
         type V = Primitive;
-        open(crate) spec fn view(&self) -> Primitive {
+        open spec fn view(&self) -> Primitive {
             match self { super::Primitive::Eq { field, term } => Primitive::Eq(*field, term@) }
-        }
-    }
-    impl View for Event {
-        type V = EventView;
-        open(crate) spec fn view(&self) -> EventView {
-            EventView { principal: self.principal@, action: self.action@, resource: self.resource@ }
         }
     }
     impl View for Bindings {
@@ -753,9 +782,32 @@ pub(crate) mod verify {
             EventView { principal: self.0@[0] as nat, action: self.0@[1] as nat, resource: self.0@[2] as nat }
         }
     }
-    pub open spec fn events_view(events: Seq<Event>) -> Seq<EventView> {
-        Seq::new(events.len(), |i: int| events[i]@)
+    impl PartialEqSpecImpl for Bindings {
+        open spec fn obeys_eq_spec() -> bool { true }
+        open spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
     }
+    pub proof fn lemma_bindings_eq(left: Bindings, right: Bindings)
+        ensures (left == right) == (left@ == right@),
+    {
+        broadcast use vstd::array::group_array_axioms;
+        if left@ == right@ {
+            assert(left.0@ =~= right.0@);
+            assert(left.0 =~= right.0);
+        }
+    }
+    /// Each binding is a `u64`, so foreign proofs keep the bound crate-local proofs read off `self.0`.
+    pub broadcast proof fn lemma_bindings_view_wf(bindings: Bindings)
+        ensures language::event_wf(#[trigger] bindings@),
+    {}
+
+    /// Representation facts restored for proofs outside this crate, where the payload views are opaque.
+    pub broadcast group group_kernel_views {
+        TestId::lemma_from_view, TestId::lemma_view,
+        RegexId::lemma_from_view, RegexId::lemma_view,
+        TransitionId::lemma_from_view, TransitionId::lemma_view,
+        lemma_bindings_view_wf,
+    }
+
     pub open spec fn test_ids(ids: Seq<TestId>) -> Seq<nat> { Seq::new(ids.len(), |i: int| ids[i]@) }
     pub open spec fn regex_ids(ids: Seq<RegexId>) -> Seq<nat> { Seq::new(ids.len(), |i: int| ids[i]@) }
     pub open spec fn transition_ids(ids: Seq<TransitionId>) -> Seq<nat> { Seq::new(ids.len(), |i: int| ids[i]@) }
@@ -803,7 +855,7 @@ pub(crate) mod verify {
     }
     impl View for TestView<'_> {
         type V = TestNode;
-        open(crate) spec fn view(&self) -> TestNode {
+        open spec fn view(&self) -> TestNode {
             match self {
                 TestView::True => TestNode::True, TestView::False => TestNode::False,
                 TestView::Atom { primitive, positive } => TestNode::Atom(primitive@, *positive),
@@ -813,7 +865,7 @@ pub(crate) mod verify {
     }
     impl View for RegexKindView<'_> {
         type V = RegexKindNode;
-        open(crate) spec fn view(&self) -> RegexKindNode {
+        open spec fn view(&self) -> RegexKindNode {
             match self {
                 RegexKindView::Empty => RegexKindNode::Empty, RegexKindView::All => RegexKindNode::All,
                 RegexKindView::Epsilon => RegexKindNode::Epsilon, RegexKindView::Test(t) => RegexKindNode::Test(t@),
@@ -827,11 +879,11 @@ pub(crate) mod verify {
     }
     impl View for RegexView<'_> {
         type V = RegexNode;
-        open(crate) spec fn view(&self) -> RegexNode { RegexNode { kind: self.kind@, nullable: self.nullable } }
+        open spec fn view(&self) -> RegexNode { RegexNode { kind: self.kind@, nullable: self.nullable } }
     }
     impl View for TransitionView<'_> {
         type V = TransitionNode;
-        open(crate) spec fn view(&self) -> TransitionNode {
+        open spec fn view(&self) -> TransitionNode {
             match self {
                 TransitionView::Const(r) => TransitionNode::Const(r@),
                 TransitionView::If { test, then_transition, else_transition } => TransitionNode::If(test@, then_transition@, else_transition@),
@@ -844,7 +896,7 @@ pub(crate) mod verify {
     }
     impl View for Constants {
         type V = ConstantsModel;
-        open(crate) spec fn view(&self) -> ConstantsModel {
+        open spec fn view(&self) -> ConstantsModel {
             ConstantsModel { test_true: self.test_true@, test_false: self.test_false@,
                 empty: self.empty@, all: self.all@, epsilon: self.epsilon@,
                 transition_empty: self.transition_empty@, transition_all: self.transition_all@,
@@ -857,7 +909,7 @@ pub(crate) mod verify {
     }
     impl View for TestHead {
         type V = TestHeadNode;
-        open(crate) spec fn view(&self) -> TestHeadNode {
+        open spec fn view(&self) -> TestHeadNode {
             match self {
                 TestHead::True => TestHeadNode::True, TestHead::False => TestHeadNode::False,
                 TestHead::Atom(p, b) => TestHeadNode::Atom(p@, *b),
@@ -867,7 +919,7 @@ pub(crate) mod verify {
     }
     impl View for RegexHead {
         type V = RegexHeadNode;
-        open(crate) spec fn view(&self) -> RegexHeadNode {
+        open spec fn view(&self) -> RegexHeadNode {
             match self {
                 RegexHead::Empty => RegexHeadNode::Empty, RegexHead::All => RegexHeadNode::All,
                 RegexHead::Epsilon => RegexHeadNode::Epsilon, RegexHead::Test(t) => RegexHeadNode::Test(t@),
@@ -879,7 +931,7 @@ pub(crate) mod verify {
     }
     impl View for TransitionHead {
         type V = TransitionHeadNode;
-        open(crate) spec fn view(&self) -> TransitionHeadNode {
+        open spec fn view(&self) -> TransitionHeadNode {
             match self {
                 TransitionHead::Const(r) => TransitionHeadNode::Const(r@),
                 TransitionHead::If(t, a, b) => TransitionHeadNode::If(t@, a@, b@),

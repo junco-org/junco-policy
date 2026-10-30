@@ -55,7 +55,7 @@ impl HistoryError {
         Self::InvalidPolicy { path: owned, message: actual } => owned@ == path@ && actual == message,
         _ => false,
     })]
-    pub(crate) fn invalid_policy(path: &str, message: &'static str) -> Self {
+    pub fn invalid_policy(path: &str, message: &'static str) -> Self {
         Self::InvalidPolicy {
             path: path.to_owned(),
             message,
@@ -63,14 +63,14 @@ impl HistoryError {
     }
     #[verus_verify]
     #[verus_spec(result => ensures result == (HistoryError::Invariant { message }))]
-    pub(crate) const fn invariant(message: &'static str) -> HistoryError {
+    pub const fn invariant(message: &'static str) -> HistoryError {
         HistoryError::Invariant { message }
     }
 
     #[cfg(feature = "runtime")]
     #[verus_verify]
     #[inline]
-    pub(crate) const fn normalization_invariant() -> HistoryError {
+    pub const fn normalization_invariant() -> HistoryError {
         HistoryError::Invariant {
             message: "invalid normalization work stack",
         }
@@ -78,7 +78,7 @@ impl HistoryError {
     #[cfg(feature = "runtime")]
     #[verus_verify]
     #[inline]
-    pub(crate) const fn symbolic_invariant() -> HistoryError {
+    pub const fn symbolic_invariant() -> HistoryError {
         HistoryError::Invariant {
             message: "invalid symbolic work stack",
         }
@@ -86,7 +86,7 @@ impl HistoryError {
     #[cfg(feature = "runtime")]
     #[verus_verify]
     #[inline]
-    pub(crate) const fn invalid_truth_assignment() -> HistoryError {
+    pub const fn invalid_truth_assignment() -> HistoryError {
         HistoryError::Invariant {
             message: "invalid truth assignment",
         }
@@ -95,7 +95,7 @@ impl HistoryError {
     #[verus_verify]
     #[verus_spec(result => ensures result is Invariant)]
     #[inline]
-    pub(crate) const fn graph_id_overflow() -> HistoryError {
+    pub const fn graph_id_overflow() -> HistoryError {
         HistoryError::Invariant {
             message: "graph ID does not fit usize",
         }
@@ -103,7 +103,7 @@ impl HistoryError {
     #[verus_verify]
     #[verus_spec(result => ensures result is GraphLimit)]
     #[inline]
-    pub(crate) const fn graph_index_overflow() -> HistoryError {
+    pub const fn graph_index_overflow() -> HistoryError {
         HistoryError::GraphLimit {
             limit: crate::limits::MAX_GRAPH_BYTES,
         }
@@ -111,7 +111,7 @@ impl HistoryError {
     #[cfg(feature = "runtime")]
     #[verus_verify]
     #[inline]
-    pub(crate) const fn invalid_atom_set() -> HistoryError {
+    pub const fn invalid_atom_set() -> HistoryError {
         HistoryError::Invariant {
             message: "invalid primitive atom set",
         }
@@ -119,7 +119,7 @@ impl HistoryError {
     #[cfg(feature = "runtime")]
     #[verus_verify]
     #[inline]
-    pub(crate) const fn missing_transition_atom() -> HistoryError {
+    pub const fn missing_transition_atom() -> HistoryError {
         HistoryError::Invariant {
             message: "transition primitive missing from atom set",
         }
@@ -149,38 +149,6 @@ impl From<HistoryError> for CompileError {
     }
 }
 
-/// Compilation or execution failure from a one-shot policy decision.
-#[cfg(feature = "runtime")]
-#[verus_verify]
-#[verus_verify(external_derive)]
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum PolicyError {
-    /// The policy source could not be compiled.
-    #[error(transparent)]
-    Compile(CompileError),
-    /// The compiled policy could not complete its decision.
-    #[error(transparent)]
-    Runtime(HistoryError),
-}
-
-#[cfg(feature = "runtime")]
-#[verus_verify]
-impl From<CompileError> for PolicyError {
-    #[verus_spec(result => ensures result == Self::Compile(error))]
-    fn from(error: CompileError) -> Self {
-        Self::Compile(error)
-    }
-}
-
-#[cfg(feature = "runtime")]
-#[verus_verify]
-impl From<HistoryError> for PolicyError {
-    #[verus_spec(result => ensures result == Self::Runtime(error))]
-    fn from(error: HistoryError) -> Self {
-        Self::Runtime(error)
-    }
-}
-
 #[cfg(verus_keep_ghost)]
 verus! {
 impl vstd::std_specs::convert::FromSpecImpl<LimitError> for HistoryError {
@@ -193,15 +161,4 @@ impl vstd::std_specs::convert::FromSpecImpl<HistoryError> for CompileError {
     open spec fn from_spec(error: HistoryError) -> Self { Self::Runtime(error) }
 }
 
-#[cfg(feature = "runtime")]
-impl vstd::std_specs::convert::FromSpecImpl<CompileError> for PolicyError {
-    open spec fn obeys_from_spec() -> bool { true }
-    open spec fn from_spec(error: CompileError) -> Self { Self::Compile(error) }
-}
-
-#[cfg(feature = "runtime")]
-impl vstd::std_specs::convert::FromSpecImpl<HistoryError> for PolicyError {
-    open spec fn obeys_from_spec() -> bool { true }
-    open spec fn from_spec(error: HistoryError) -> Self { Self::Runtime(error) }
-}
 }

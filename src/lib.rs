@@ -1,18 +1,20 @@
 #![deny(missing_docs)]
-//! Ownership-lock policies backed by the shared `junco-core` history-policy engine.
+//! Ownership-lock policies backed by the shared `history-semantics` engine.
 //!
 //! [`LockEvent`] carries the caller's compact principal and resource identities. [`LockPolicy`]
 //! retains the compiled five-rule ownership-lock table; [`lock_decision`] evaluates it once.
-//! Generic DSL, history, store, and validator APIs are imported directly from `junco_core`.
+//! Generic DSL APIs come from `history_syntax`, histories from `history_store`, and validators from `history_semantics`.
 //!
 //! # Example
 //!
 //! ```rust
 //! use std::sync::Arc;
-//! use junco_core::{
-//!     AtomPattern, Comparison, ComponentPattern, Decision, Head, RegexExpr, Request,
-//!     Rule, RuleMode, Store, TestExpr, Validator,
+//! use history_syntax::{
+//!     AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 //! };
+//! use junco_core::Request;
+//! use history_store::Store;
+//! use history_semantics::{Decision, Validator};
 //! use junco_policy::{Action, LockEvent};
 //!
 //! /// Caller-assigned actor identity; its label lives outside the evaluator.
@@ -59,7 +61,7 @@
 //! let edit = Request::new(LockEvent::new(alice, Action::Edit, src_a), ());
 //! assert!(validator.check(edit)?.is_grant());
 //! assert!(matches!(validator.check(Request::new(release, ()))?, Decision::Grant(_)));
-//! # Ok::<(), junco_core::PolicyError>(())
+//! # Ok::<(), history_semantics::PolicyError>(())
 //! ```
 
 mod model;

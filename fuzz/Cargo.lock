@@ -280,6 +280,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "history-semantics"
+version = "0.1.0"
+dependencies = [
+ "history-store",
+ "history-syntax",
+ "junco-core",
+ "smallvec",
+ "thiserror",
+ "vstd",
+]
+
+[[package]]
+name = "history-store"
+version = "0.1.0"
+dependencies = [
+ "hashbrown",
+ "hashconsius",
+ "history-syntax",
+ "junco-core",
+ "lru",
+ "parking_lot",
+ "smallvec",
+ "spin",
+ "verus-bumpalo",
+ "vstd",
+]
+
+[[package]]
+name = "history-syntax"
+version = "0.1.0"
+dependencies = [
+ "frunk_core",
+ "vstd",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -329,15 +365,9 @@ dependencies = [
 name = "junco-core"
 version = "0.1.0"
 dependencies = [
- "frunk_core",
- "hashbrown",
- "hashconsius",
- "lru",
- "parking_lot",
+ "history-syntax",
  "smallvec",
- "spin",
  "thiserror",
- "verus-bumpalo",
  "vstd",
 ]
 
@@ -345,6 +375,9 @@ dependencies = [
 name = "junco-policy"
 version = "0.1.0"
 dependencies = [
+ "history-semantics",
+ "history-store",
+ "history-syntax",
  "junco-core",
 ]
 
@@ -354,6 +387,9 @@ version = "0.0.0"
 dependencies = [
  "arbitrary",
  "criterion",
+ "history-semantics",
+ "history-store",
+ "history-syntax",
  "junco-core",
  "junco-policy",
  "libfuzzer-sys",

@@ -2,10 +2,13 @@
 
 use std::fmt;
 
-use junco_core::{
-    AtomPattern, Comparison, ComponentPattern, Coprod, Coproduct, Decision, Event, Head, History,
-    HistoryError, PolicyDecision, RegexExpr, Request, Rule, RuleMode, Store, TestExpr, Validator,
+use history_semantics::{Decision, PolicyDecision, Validator};
+use history_store::{History, Store};
+use history_syntax::{
+    AtomPattern, Comparison, ComponentPattern, Coprod, Coproduct, Event, Head, RegexExpr, Rule,
+    RuleMode, TestExpr,
 };
+use junco_core::{HistoryError, Request};
 use junco_policy::{Action, LockEvent, LockPolicy, lock_decision};
 use std::sync::Arc;
 

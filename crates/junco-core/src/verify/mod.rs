@@ -2,11 +2,5 @@ pub mod dsl;
 pub mod encoding;
 pub mod flatten;
 #[cfg(feature = "runtime")]
-pub mod history_algebra;
-#[cfg(feature = "runtime")]
 pub mod history_assumptions;
-#[cfg(feature = "runtime")]
-pub mod history_examples;
 pub mod history_specs;
-#[cfg(feature = "runtime")]
-pub mod typed_decision;

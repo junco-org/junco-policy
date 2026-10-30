@@ -1,16 +1,18 @@
 //! Structural and semantic clients of the actual iterative owned-source lowering.
 
 use crate::error::CompileError;
-use crate::event::Event;
 use crate::flat::verify as flat;
 use crate::flat::{FlatHead, FlatRegex, FlatRule, FlatTerm, FlatTest};
 use crate::flatten::{ComponentValue, Work};
 use crate::limits::Limits;
 use crate::observation::ObservationWorld;
-use crate::syntax::{
-    Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr, VariableScope,
+use crate::scope::VariableScope;
+use crate::verify::dsl::{self, EventView};
+use history_syntax::Event;
+use history_syntax::syntax::{
+    Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
-use crate::verify::dsl::{self, AtomView, EventView, HeadView, PatternView, RegexView, TestView};
+use history_syntax::verify::dsl::{AtomView, HeadView, PatternView, RegexView, TestView};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -795,12 +797,12 @@ pub fn named_variable_client<E: Event, L: Limits>(name: alloc::string::String, a
 {
     let source = Rule::new(RuleMode::Require,
         Head::new(ComponentPattern::Variable(name.clone()), ComponentPattern::Constant(action), ComponentPattern::Constant(resource)),
-        RegexExpr::test(TestExpr::atom(crate::syntax::Comparison::Eq,
-            crate::syntax::AtomPattern::Principal(ComponentPattern::Variable(name)))));
+        RegexExpr::test(TestExpr::atom(history_syntax::syntax::Comparison::Eq,
+            history_syntax::syntax::AtomPattern::Principal(ComponentPattern::Variable(name)))));
     let result = crate::flatten::flatten_rule(&source, limits, world);
     proof {
-        reveal_with_fuel(dsl::regex_view, 2);
-        reveal_with_fuel(dsl::test_view, 2);
+        reveal_with_fuel(history_syntax::verify::dsl::regex_view, 2);
+        reveal_with_fuel(history_syntax::verify::dsl::test_view, 2);
         reveal_with_fuel(regex_represents, 2);
         reveal_with_fuel(test_represents, 2);
     }

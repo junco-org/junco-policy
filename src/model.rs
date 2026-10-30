@@ -1,9 +1,9 @@
-//! Compact ownership-lock events for the shared [`Event`](junco_core::Event) interface.
+//! Compact ownership-lock events for the shared [`Event`](history_syntax::Event) interface.
 
 use core::fmt::{self, Debug};
 use core::hash::Hash;
 
-use junco_core::Event;
+use history_syntax::Event;
 
 /// Ownership-lock capability action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

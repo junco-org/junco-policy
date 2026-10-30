@@ -1,7 +1,8 @@
+use history_syntax::{Component, RuleMode};
+use junco_core::HistoryError;
 use junco_core::flat::{FlatBuilder, FlatHead, FlatPair, FlatRegex, FlatRule, FlatTerm, FlatTest};
 use junco_core::limits::{LimitError, Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
-use junco_core::{Component, HistoryError, RuleMode};
 
 fn pair<C>() -> FlatPair<C> {
     FlatPair {

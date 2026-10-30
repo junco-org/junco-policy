@@ -1,15 +1,15 @@
 //! Fallible, iterative lowering of the owned DSL into the canonical portable tables.
 
 use crate::error::{CompileError, HistoryError};
-use crate::event::Event;
 use crate::flat::{FlatBuilder, FlatHead, FlatPair, FlatRegex, FlatRule, FlatTerm, FlatTest};
 use crate::limits::Limits;
 use crate::observation::ObservationWorld;
-use crate::syntax::{
-    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, TestExpr,
-    VariableScope,
-};
+use crate::scope::VariableScope;
 use alloc::vec::Vec;
+use history_syntax::Event;
+use history_syntax::syntax::{
+    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, TestExpr,
+};
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
@@ -380,8 +380,8 @@ pub fn flatten_rule<E: Event, L: Limits>(
             assert(old_work.drop_last() =~= work@);
             reveal_with_fuel(run_work, 2);
             reveal_with_fuel(work_cost, 2);
-            reveal_with_fuel(crate::verify::dsl::regex_view, 2);
-            reveal_with_fuel(crate::verify::dsl::test_view, 2);
+            reveal_with_fuel(history_syntax::verify::dsl::regex_view, 2);
+            reveal_with_fuel(history_syntax::verify::dsl::test_view, 2);
             reveal(regex_cost);
             reveal(test_cost);
         }
@@ -444,8 +444,8 @@ pub fn flatten_rule<E: Event, L: Limits>(
                 | RegexExpr::Union(children)
                 | RegexExpr::Intersect(children) => {
                     proof! { match regex@ {
-                        crate::verify::dsl::RegexView::Concat(items) | crate::verify::dsl::RegexView::Union(items)
-                            | crate::verify::dsl::RegexView::Intersect(items) => assert(items =~= regex_views::<E>(children@)),
+                        history_syntax::verify::dsl::RegexView::Concat(items) | history_syntax::verify::dsl::RegexView::Union(items)
+                            | history_syntax::verify::dsl::RegexView::Intersect(items) => assert(items =~= regex_views::<E>(children@)),
                         _ => {},
                     } }
                     proof! {
@@ -497,13 +497,13 @@ pub fn flatten_rule<E: Event, L: Limits>(
                 }
                 TestExpr::And(children) | TestExpr::Or(children) => {
                     proof! { match test@ {
-                        crate::verify::dsl::TestView::And(items) | crate::verify::dsl::TestView::Or(items) =>
+                        history_syntax::verify::dsl::TestView::And(items) | history_syntax::verify::dsl::TestView::Or(items) =>
                             assert(items =~= test_views::<E>(children@)),
                         _ => {},
                     } }
                     proof! {
-                        assert(test@ == crate::verify::dsl::TestView::And(test_views::<E>(children@))
-                            || test@ == crate::verify::dsl::TestView::Or(test_views::<E>(children@)));
+                        assert(test@ == history_syntax::verify::dsl::TestView::And(test_views::<E>(children@))
+                            || test@ == history_syntax::verify::dsl::TestView::Or(test_views::<E>(children@)));
                         lemma_finish_test::<E>(work@, test, tests.len(), test_sources, regex_sources, test_views::<E>(children@));
                         assert(test_cost::<E>(test@) == 2 + test_forest_cost::<E>(test_views::<E>(children@)));
                     }
@@ -547,7 +547,7 @@ pub fn flatten_rule<E: Event, L: Limits>(
                     lemma_stack_extension::<E>(old_tests, builder.tests_view(), old_regexes, builder.regexes_view(),
                         old_test_ids, old_regex_ids, old_test_sources, old_regex_sources, rule.head@);
                     let sources = match test@ {
-                        crate::verify::dsl::TestView::And(items) | crate::verify::dsl::TestView::Or(items) => items,
+                        history_syntax::verify::dsl::TestView::And(items) | history_syntax::verify::dsl::TestView::Or(items) => items,
                         _ => arbitrary(),
                     };
                     assert(old_test_sources.subrange(start as int, old_test_sources.len() as int) == sources);
@@ -619,16 +619,16 @@ pub fn flatten_rule<E: Event, L: Limits>(
                     lemma_stack_extension::<E>(old_tests, builder.tests_view(), old_regexes, builder.regexes_view(),
                         old_test_ids, old_regex_ids, old_test_sources, old_regex_sources, rule.head@);
                     match regex@ {
-                        crate::verify::dsl::RegexView::Test(source) => {
+                        history_syntax::verify::dsl::RegexView::Test(source) => {
                             let child = match finished { FlatRegex::Test(id) => id, _ => arbitrary() };
                             assert(test_represents::<E>(builder.tests_view(), child as nat, source, rule.head@));
                         },
-                        crate::verify::dsl::RegexView::Star(source) | crate::verify::dsl::RegexView::Not(source) => {
+                        history_syntax::verify::dsl::RegexView::Star(source) | history_syntax::verify::dsl::RegexView::Not(source) => {
                             let child = match finished { FlatRegex::Star(id) | FlatRegex::Complement(id) => id, _ => arbitrary() };
                             assert(regex_represents::<E>(builder.tests_view(), builder.regexes_view(), child as nat, *source, rule.head@));
                         },
-                        crate::verify::dsl::RegexView::Concat(sources) | crate::verify::dsl::RegexView::Union(sources)
-                            | crate::verify::dsl::RegexView::Intersect(sources) => {
+                        history_syntax::verify::dsl::RegexView::Concat(sources) | history_syntax::verify::dsl::RegexView::Union(sources)
+                            | history_syntax::verify::dsl::RegexView::Intersect(sources) => {
                             let ids = match finished {
                                 FlatRegex::Concat(ids) | FlatRegex::Union(ids) | FlatRegex::Intersect(ids) => ids@,
                                 _ => arbitrary(),

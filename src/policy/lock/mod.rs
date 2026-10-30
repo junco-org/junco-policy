@@ -1,4 +1,4 @@
-//! Ownership locks expressed as a native trace policy over `junco-core`.
+//! Ownership locks expressed as a native trace policy over `history-semantics`.
 //!
 //! A resource has two independent claims, each folded from committed history:
 //!
@@ -14,13 +14,13 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use junco_core::policy::{
+use history_semantics::policy::{
     CompiledPolicy, PolicyRule, action_is, forbid, last_state_change, principal_is, resource_is,
 };
-use junco_core::{
-    Comparison, CompileError, Event, History, HistoryError, PolicyDecision, PolicyError, RegexExpr,
-    Store, TestExpr,
-};
+use history_semantics::{PolicyDecision, PolicyError};
+use history_store::{History, Store};
+use history_syntax::{Comparison, Event, RegexExpr, TestExpr};
+use junco_core::{CompileError, HistoryError};
 
 use crate::{Action, LockEvent};
 

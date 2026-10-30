@@ -4,8 +4,8 @@
 //! Independent pair-language semantics: request is the head, followed by history
 //! in oldest-to-newest order. Runtime errors carry no Boolean interpretation.
 
-use crate::syntax::Component;
 use alloc::boxed::Box;
+use history_syntax::syntax::Component;
 use vstd::prelude::*;
 
 verus! {

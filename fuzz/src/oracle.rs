@@ -146,7 +146,7 @@ pub fn contended_events(history: &[LockEvent<Agent, PooledPath>]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use junco_core::History;
+    use history_store::History;
 
     use super::*;
     use crate::{

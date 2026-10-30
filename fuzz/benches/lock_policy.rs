@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, PlottingBackend, criterion_group, criterion_main};
-use junco_core::History;
+use history_store::History;
 use junco_policy::LockPolicy;
 use lock_policy_harness::{BYTES_PER_EVENT, check, entropy, granted_history, probe_candidates};
 

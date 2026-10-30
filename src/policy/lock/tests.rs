@@ -3,7 +3,9 @@
 use std::fmt;
 use std::sync::Arc;
 
-use junco_core::{History, HistoryError, PolicyDecision, Store};
+use history_semantics::PolicyDecision;
+use history_store::{History, Store};
+use junco_core::HistoryError;
 
 use super::{LockPolicy, lock_decision};
 use crate::{Action, LockEvent};

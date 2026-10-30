@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use junco_core::{
-    AtomPattern, Comparison, ComponentPattern, Head, History, PolicyDecision, RegexExpr, Rule,
-    RuleMode, Store, TestExpr, TracePolicy, TraceRule,
+use history_semantics::{PolicyDecision, TracePolicy, TraceRule};
+use history_store::{History, Store};
+use history_syntax::{
+    AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
 use junco_policy::{Action, LockEvent};
 

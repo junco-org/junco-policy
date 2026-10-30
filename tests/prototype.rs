@@ -1,7 +1,9 @@
-use junco_core::{
-    AtomPattern, Comparison, CompileError, ComponentPattern, Decision, Head, RegexExpr, Request,
-    Rule, RuleMode, Store, TestExpr, Validator,
+use history_semantics::{Decision, Validator};
+use history_store::Store;
+use history_syntax::{
+    AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
+use junco_core::{CompileError, Request};
 use junco_policy::{Action, LockEvent};
 use std::sync::Arc;
 

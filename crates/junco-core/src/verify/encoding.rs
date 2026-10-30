@@ -5,12 +5,27 @@
 
 use crate::flat::verify::field_index;
 use crate::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
-use crate::syntax::Component;
+use crate::verify::history_specs::EventView;
+use history_syntax::syntax::Component;
 use vstd::prelude::*;
 
 verus! {
 
 broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
+
+/// Fixed coordinates are a representation, not a second source grammar.
+pub open spec fn event_representation(event: Seq<u64>, numeric: EventView) -> bool {
+    event.len() == 3 && numeric.principal == event[0] as nat
+        && numeric.action == event[1] as nat && numeric.resource == event[2] as nat
+}
+
+pub open spec fn event_relation() -> spec_fn(Seq<u64>, EventView) -> bool {
+    |event: Seq<u64>, numeric: EventView| event_representation(event, numeric)
+}
+
+pub open spec fn word_representation(word: Seq<Seq<u64>>, numeric: Seq<EventView>) -> bool {
+    pointwise(word, numeric, event_relation())
+}
 
 pub type Equality<C> = spec_fn(Component, C, C) -> bool;
 pub type Domain<C> = spec_fn(Component, C) -> bool;
@@ -477,8 +492,8 @@ pub proof fn lemma_later_maps_preservation<C>(source: FlatPair<C>, target: FlatP
 
 /// Composition leaves only native component equality/projection and codebook
 /// correspondence conditional; neither lowering's semantic equation is assumed.
-pub proof fn lemma_dsl_later_maps_preservation<E: crate::event::Event>(
-    rule: crate::syntax::Rule<E>,
+pub proof fn lemma_dsl_later_maps_preservation<E: history_syntax::Event>(
+    rule: history_syntax::syntax::Rule<E>,
     flattened_rule: crate::flat::FlatRule<crate::flatten::ComponentValue<E>>,
     numeric: FlatPair<u64>,
     compiled_maps: Codebook<crate::flatten::ComponentValue<E>>,

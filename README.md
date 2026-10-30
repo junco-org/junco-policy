@@ -1,15 +1,17 @@
 # junco-policy
 
-The workspace has two library packages: `junco-core` owns the generic Rust policy DSL,
-compiler, evaluator, histories, and policy facades; `junco-policy` is its ownership-lock
-consumer. Import generic APIs directly from `junco_core`. The root package exports only
-`Action`, `LockEvent`, `LockPolicy`, and `lock_decision`; there are no generic compatibility
-re-exports. The fuzz harness retains an independent no-surprise oracle, not another
-production evaluator.
+The workspace has five library packages: `history-syntax` owns the generic Rust policy
+DSL and event projections; `junco-core` owns shared IR, encoding, errors, and contracts;
+`history-store` owns histories, interning, graph storage, and cache containers;
+`history-semantics` owns compilation, evaluation, and generic policy facades;
+`junco-policy` is their ownership-lock consumer. Import APIs directly from their owners.
+The root package exports only `Action`, `LockEvent`, `LockPolicy`, and `lock_decision`;
+there are no generic compatibility re-exports. The fuzz harness retains an independent
+no-surprise oracle, not another production evaluator.
 
 ## Shared core and histories
 
-`junco_core` provides `Rule`, `Head`, `TestExpr`, and `RegexExpr` over a caller-chosen
+`history_syntax` provides `Rule`, `Head`, `TestExpr`, and `RegexExpr` over a caller-chosen
 `Event`: a compact `Copy` value projecting to principal, action, and resource. Finite Frunk
 `Coprod!` unions and generic approval-payload workloads remain supported. Component
 equality determines policy matching, while history preserves each original event and
@@ -54,7 +56,8 @@ Neither retained `LockPolicy::decide` nor one-shot `lock_decision` appends impli
 
 ```rust
 use std::sync::Arc;
-use junco_core::{History, PolicyDecision, Store};
+use history_store::{History, Store};
+use history_semantics::PolicyDecision;
 use junco_policy::{Action, LockEvent, LockPolicy};
 
 fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -75,11 +78,12 @@ fn example() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Features and verification boundary
 
-Core defaults are empty. `runtime` enables evaluation and generic facades; `serde` enables
-portable source serialization. `std` selects native locks and `cache` enables optional
-precompilation; neither implies `runtime`. Runtime also supports native no_std + alloc.
-The root lock consumer enables `runtime,std,cache`. `test-util` is a dev-only integration
-probe feature, not a production dependency or a retained-prefix-cache switch.
+Library defaults are empty. Store and Semantics `runtime` enable their concrete runtime
+implementations; core `serde` enables portable source serialization. Store `std` selects
+native locks and Semantics `cache` enables optional precompilation; neither implies
+`runtime`. Runtime also supports no_std + alloc. The root lock consumer selects core/Syntax
+`std`, Store `runtime,std`, and Semantics `runtime,std,cache`. Semantics `test-util` is a
+dev-only integration probe feature, not a production dependency or a retained-prefix-cache switch.
 
 Body proofs cover DSL structure/lowering, constant encoding under later codebook extensions,
 the numeric compiler/evaluator, raw-to-numeric history correspondence, and cached lifecycle
@@ -89,7 +93,7 @@ locking, allocation, diagnostic callbacks and native facade packaging remain exp
 boundaries; root `LockEvent` is a native projection adapter.
 
 Verification uses Rust `1.98.1`, Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0`, and matched
-`vstd = 0.0.0-2026-10-04-0306`. The local `crates/junco-core/vendor` helper snapshots retain
+`vstd = 0.0.0-2026-10-04-0306`. The local `crates/vendor` helper snapshots retain
 upstream executable sources/contracts from verus-bumpalo
 `36c8e8723d767934a502fc1d9cea0ba49cff54ab` and hashconsius
 `58ab05c67c34201fa25f27c443cb5b45bc3a6c00`, with dependency/provenance adjustments for

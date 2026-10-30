@@ -3,9 +3,9 @@
 use crate::error::HistoryError;
 use crate::limits::Limits;
 use crate::observation::ObservationWorld;
-use crate::syntax::{Component, RuleMode};
 use alloc::string::String;
 use alloc::vec::Vec;
+use history_syntax::syntax::{Component, RuleMode};
 use vstd::prelude::*;
 
 #[verus_verify]
@@ -85,6 +85,17 @@ pub mod verify {
     use super::*;
 
     verus! {
+    impl View for FlatHead<u64> {
+        type V = crate::verify::history_specs::HeadField;
+        open spec fn view(&self) -> crate::verify::history_specs::HeadField {
+            match self {
+                FlatHead::Any => crate::verify::history_specs::HeadField::Any,
+                FlatHead::Constant(value) => crate::verify::history_specs::HeadField::Constant(*value as nat),
+                FlatHead::Bind => crate::verify::history_specs::HeadField::Bind,
+            }
+        }
+    }
+
     broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
 
     pub open spec fn field_index(field: Component) -> int {

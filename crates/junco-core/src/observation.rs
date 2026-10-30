@@ -6,32 +6,32 @@ use alloc::vec::Vec;
 use smallvec::SmallVec;
 use vstd::prelude::*;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 std::thread_local! {
     static RESERVATION_FAILURE_AFTER: core::cell::Cell<Option<usize>> = const {
         core::cell::Cell::new(None)
     };
 }
 
-#[cfg(test)]
-pub(crate) struct ReservationFailureGuard(Option<usize>);
+#[cfg(any(test, feature = "test-util"))]
+pub struct ReservationFailureGuard(Option<usize>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 impl Drop for ReservationFailureGuard {
     fn drop(&mut self) {
         RESERVATION_FAILURE_AFTER.with(|remaining| remaining.set(self.0));
     }
 }
 
-#[cfg(test)]
-pub(crate) fn fail_reservations_after(successful: usize) -> ReservationFailureGuard {
+#[cfg(any(test, feature = "test-util"))]
+pub fn fail_reservations_after(successful: usize) -> ReservationFailureGuard {
     ReservationFailureGuard(
         RESERVATION_FAILURE_AFTER.with(|remaining| remaining.replace(Some(successful))),
     )
 }
 
-#[cfg(test)]
-pub(crate) fn reservation_checkpoint() -> Result<(), alloc::collections::TryReserveError> {
+#[cfg(any(test, feature = "test-util"))]
+pub fn reservation_checkpoint() -> Result<(), alloc::collections::TryReserveError> {
     let fail = RESERVATION_FAILURE_AFTER.with(|remaining| match remaining.get() {
         None => false,
         Some(0) => true,
@@ -88,7 +88,7 @@ impl ObservationWorld {
         values: &mut Vec<T>,
         additional: usize,
     ) -> Result<(), alloc::collections::TryReserveError> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         reservation_checkpoint()?;
         values.try_reserve(additional)
     }
@@ -102,7 +102,7 @@ impl ObservationWorld {
         values: &mut Vec<T>,
         additional: usize,
     ) -> Result<(), alloc::collections::TryReserveError> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         reservation_checkpoint()?;
         values.try_reserve_exact(additional)
     }
@@ -116,7 +116,7 @@ impl ObservationWorld {
         values: &mut SmallVec<[u64; 2]>,
         additional: usize,
     ) -> Result<(), smallvec::CollectionAllocErr> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-util"))]
         if reservation_checkpoint().is_err() {
             return values.try_reserve_exact(usize::MAX);
         }

@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+use history_syntax::{Component, Event};
+use junco_core::HistoryError;
 use junco_core::compile::{FlatEncoder, lower_flat, validate_component};
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
 use junco_core::flatten::ComponentValue;
 use junco_core::limits::{LimitError, Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
-use junco_core::{Component, Event, HistoryError};
 
 // Deliberately neither Copy nor Clone: lowering must borrow stored constants.
 #[derive(Debug)]

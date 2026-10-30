@@ -19,7 +19,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use arbitrary::Unstructured;
-use junco_core::{History, HistoryError, PolicyDecision, PolicyError, Store};
+use history_semantics::{PolicyDecision, PolicyError};
+use history_store::{History, Store};
+use junco_core::HistoryError;
 use junco_policy::{Action, LockEvent, LockPolicy};
 
 mod oracle;
@@ -215,7 +217,7 @@ impl GeneratedOperation {
 
 /// One candidate the policy denied, kept so a trace can be asked what a denial cost.
 ///
-/// Named `DeniedCandidate`, not `Denial`: `junco_core::Denial` is a different type.
+/// Named `DeniedCandidate`, not `Denial`: `history_semantics::Denial` is a different type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeniedCandidate {
     /// Length of the granted history when the denial happened; the prefix that produced it is

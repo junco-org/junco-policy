@@ -28,8 +28,6 @@
 //! not trusted implementations. No compiler, normalizer, derivative, interpreter,
 //! matcher, replay, or evaluator may be external_body or assume_specification.
 
-use crate::error::HistoryError;
-use crate::graph::verify::{graph_weight, regex_weight, test_weight, transition_weight};
 use crate::kernel::verify::{
     Graph, RegexNode, graph_extends, graph_wf, regex_node_wf, tables_wf, test_node_wf,
     transition_node_wf,
@@ -41,7 +39,6 @@ use crate::kernel::{
 use crate::observation::{ObservationWorld, SmallVecSpecFns};
 use alloc::vec::Vec;
 use core::{alloc::Allocator, ops::Deref};
-use lru::LruCache;
 use smallvec::SmallVec;
 use vstd::prelude::*;
 use vstd::std_specs::cmp::{OrdSpec, PartialEqSpec};
@@ -53,10 +50,6 @@ pub assume_specification[ alloc::string::String::try_reserve ](
 ) -> Result<(), alloc::collections::TryReserveError>
     ensures final(value)@ == old(value)@;
 
-// LruCache's default generic parameter remains opaque; graph consing does not use it.
-#[verifier::external_type_specification]
-#[verifier::external_body]
-pub struct ExSuccessorHasher(lru::DefaultHasher);
 
 
 
@@ -146,12 +139,6 @@ pub assume_specification<A: smallvec::Array>[ SmallVec::<A>::as_mut_slice ](
 ) -> (s: &mut [A::Item])
     ensures s@ == old(v).view(), final(s)@ == final(v).view();
 
-#[verifier::external_type_specification]
-#[verifier::external_body]
-#[verifier::accept_recursive_types(K)]
-#[verifier::accept_recursive_types(V)]
-#[verifier::reject_recursive_types(S)]
-pub struct ExLruCache<K, V, S>(LruCache<K, V, S>);
 
 
 
@@ -207,92 +194,6 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::into_boxed_slice ](
 
 pub assume_specification<T>[ core::mem::drop ](value: T);
 
-#[verifier::external_trait_specification]
-#[verifier::external_trait_extension(StorageSpec via StorageSpecImpl)]
-pub trait ExStorage {
-    type ExternalTraitSpecificationFor: crate::graph::Storage;
-
-    spec fn graph(&self) -> Graph;
-    /// Bytes each backing arena can hold (0 for growable storage).
-    spec fn capacity(&self) -> int;
-    /// `graph_weight(graph) - bytes actually resident`; never decreases on a successful push.
-    spec fn slack(&self) -> int;
-
-    fn test(&self, id: TestId) -> (r: KernelResult<TestView<'_>>)
-        ensures r matches Ok(v) ==> id.0 < self.graph().tests.len()
-            && v@ == self.graph().tests[id.0 as int],
-            r matches Err(error) ==> !(error is ArenaExhausted);
-    fn regex(&self, id: RegexId) -> (r: KernelResult<RegexView<'_>>)
-        ensures r matches Ok(v) ==> id.0 < self.graph().regexes.len()
-            && v@ == self.graph().regexes[id.0 as int],
-            r matches Err(error) ==> !(error is ArenaExhausted);
-    fn transition(&self, id: TransitionId) -> (r: KernelResult<TransitionView<'_>>)
-        ensures r matches Ok(v) ==> id.0 < self.graph().transitions.len()
-            && v@ == self.graph().transitions[id.0 as int],
-            r matches Err(error) ==> !(error is ArenaExhausted);
-
-    fn find_test(&self, view: TestView<'_>) -> (r: KernelResult<Option<TestId>>)
-        ensures r matches Ok(Some(id)) ==> id.0 < self.graph().tests.len()
-            && self.graph().tests[id.0 as int] == view@,
-            r matches Ok(None) ==> !self.graph().tests.contains(view@),
-            r matches Err(error) ==> !(error is ArenaExhausted);
-    fn find_regex(&self, view: RegexView<'_>) -> (r: KernelResult<Option<RegexId>>)
-        ensures r matches Ok(Some(id)) ==> id.0 < self.graph().regexes.len()
-            && self.graph().regexes[id.0 as int] == view@,
-            r matches Ok(None) ==> !self.graph().regexes.contains(view@),
-            r matches Err(error) ==> !(error is ArenaExhausted);
-    fn find_transition(&self, view: TransitionView<'_>) -> (r: KernelResult<Option<TransitionId>>)
-        ensures r matches Ok(Some(id)) ==> id.0 < self.graph().transitions.len()
-            && self.graph().transitions[id.0 as int] == view@,
-            r matches Ok(None) ==> !self.graph().transitions.contains(view@),
-            r matches Err(error) ==> !(error is ArenaExhausted);
-
-    fn push_test(&mut self, view: TestView<'_>, world: &mut ObservationWorld)
-        -> (r: KernelResult<TestId>)
-        requires !old(self).graph().tests.contains(view@),
-        ensures
-            final(self).graph().constants == old(self).graph().constants,
-            final(self).graph().regexes == old(self).graph().regexes,
-            final(self).graph().transitions == old(self).graph().transitions,
-            r is Err ==> final(self).graph() == old(self).graph(),
-            r matches Ok(id) ==> id.0 == old(self).graph().tests.len()
-                && final(self).graph().tests == old(self).graph().tests.push(view@),
-            final(self).capacity() == old(self).capacity(),
-            r is Ok ==> final(self).slack() >= old(self).slack(),
-            r matches Err(error) ==> error is ArenaExhausted ==>
-                graph_weight(old(self).graph()) + test_weight(view@) - old(self).slack()
-                    > old(self).capacity();
-    fn push_regex(&mut self, view: RegexView<'_>, world: &mut ObservationWorld)
-        -> (r: KernelResult<RegexId>)
-        requires !old(self).graph().regexes.contains(view@),
-        ensures
-            final(self).graph().constants == old(self).graph().constants,
-            final(self).graph().tests == old(self).graph().tests,
-            final(self).graph().transitions == old(self).graph().transitions,
-            r is Err ==> final(self).graph() == old(self).graph(),
-            r matches Ok(id) ==> id.0 == old(self).graph().regexes.len()
-                && final(self).graph().regexes == old(self).graph().regexes.push(view@),
-            final(self).capacity() == old(self).capacity(),
-            r is Ok ==> final(self).slack() >= old(self).slack(),
-            r matches Err(error) ==> error is ArenaExhausted ==>
-                graph_weight(old(self).graph()) + regex_weight(view@) - old(self).slack()
-                    > old(self).capacity();
-    fn push_transition(&mut self, view: TransitionView<'_>, world: &mut ObservationWorld)
-        -> (r: KernelResult<TransitionId>)
-        requires !old(self).graph().transitions.contains(view@),
-        ensures
-            final(self).graph().constants == old(self).graph().constants,
-            final(self).graph().tests == old(self).graph().tests,
-            final(self).graph().regexes == old(self).graph().regexes,
-            r is Err ==> final(self).graph() == old(self).graph(),
-            r matches Ok(id) ==> id.0 == old(self).graph().transitions.len()
-                && final(self).graph().transitions == old(self).graph().transitions.push(view@),
-            final(self).capacity() == old(self).capacity(),
-            r is Ok ==> final(self).slack() >= old(self).slack(),
-            r matches Err(error) ==> error is ArenaExhausted ==>
-                graph_weight(old(self).graph()) + transition_weight(view@) - old(self).slack()
-                    > old(self).capacity();
-}
 
 #[verifier::external_trait_specification]
 #[verifier::external_trait_extension(KernelStoreSpec via KernelStoreSpecImpl)]
@@ -323,14 +224,14 @@ pub trait ExKernelStore {
     fn constants(&self) -> (r: Constants)
         ensures r@ == self.graph().constants;
     fn test(&self, id: TestId) -> (r: KernelResult<TestView<'_>>)
-        ensures r matches Ok(v) ==> id.0 < self.graph().tests.len()
-            && v@ == self.graph().tests[id.0 as int];
+        ensures r matches Ok(v) ==> id@ < self.graph().tests.len()
+            && v@ == self.graph().tests[id@ as int];
     fn regex(&self, id: RegexId) -> (r: KernelResult<RegexView<'_>>)
-        ensures r matches Ok(v) ==> id.0 < self.graph().regexes.len()
-            && v@ == self.graph().regexes[id.0 as int];
+        ensures r matches Ok(v) ==> id@ < self.graph().regexes.len()
+            && v@ == self.graph().regexes[id@ as int];
     fn transition(&self, id: TransitionId) -> (r: KernelResult<TransitionView<'_>>)
-        ensures r matches Ok(v) ==> id.0 < self.graph().transitions.len()
-            && v@ == self.graph().transitions[id.0 as int];
+        ensures r matches Ok(v) ==> id@ < self.graph().transitions.len()
+            && v@ == self.graph().transitions[id@ as int];
 
     fn intern_test(&mut self, node: TestView<'_>) -> (r: KernelResult<TestId>)
         requires old(self).valid_store(), test_node_wf(old(self).graph(), node@),
@@ -340,8 +241,8 @@ pub trait ExKernelStore {
             graph_extends(old(self).graph(), final(self).graph()),
             tables_wf(old(self).graph()) ==> tables_wf(final(self).graph()),
             graph_wf(old(self).graph()) ==> graph_wf(final(self).graph()),
-            r matches Ok(id) ==> id.0 < final(self).graph().tests.len()
-                && final(self).graph().tests[id.0 as int] == node@;
+            r matches Ok(id) ==> id@ < final(self).graph().tests.len()
+                && final(self).graph().tests[id@ as int] == node@;
     fn intern_regex(&mut self, kind: RegexKindView<'_>, nullable: bool)
         -> (r: KernelResult<RegexId>)
         requires old(self).valid_store(), regex_node_wf(old(self).graph(), RegexNode { kind: kind@, nullable }),
@@ -351,8 +252,8 @@ pub trait ExKernelStore {
             graph_extends(old(self).graph(), final(self).graph()),
             tables_wf(old(self).graph()) ==> tables_wf(final(self).graph()),
             graph_wf(old(self).graph()) ==> graph_wf(final(self).graph()),
-            r matches Ok(id) ==> id.0 < final(self).graph().regexes.len()
-                && final(self).graph().regexes[id.0 as int] == (RegexNode { kind: kind@, nullable });
+            r matches Ok(id) ==> id@ < final(self).graph().regexes.len()
+                && final(self).graph().regexes[id@ as int] == (RegexNode { kind: kind@, nullable });
     fn intern_transition(&mut self, node: TransitionView<'_>) -> (r: KernelResult<TransitionId>)
         requires old(self).valid_store(), transition_node_wf(old(self).graph(), node@),
         ensures
@@ -361,8 +262,8 @@ pub trait ExKernelStore {
             graph_extends(old(self).graph(), final(self).graph()),
             tables_wf(old(self).graph()) ==> tables_wf(final(self).graph()),
             graph_wf(old(self).graph()) ==> graph_wf(final(self).graph()),
-            r matches Ok(id) ==> id.0 < final(self).graph().transitions.len()
-                && final(self).graph().transitions[id.0 as int] == node@;
+            r matches Ok(id) ==> id@ < final(self).graph().transitions.len()
+                && final(self).graph().transitions[id@ as int] == node@;
 }
 
 // The pinned vstd release does not specify this primitive integer method.

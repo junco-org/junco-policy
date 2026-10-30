@@ -11,24 +11,17 @@ verify = true
 
 [features]
 default = []
-serde = ["dep:serde"]
-runtime = ["dep:verus-bumpalo", "dep:hashconsius", "dep:smallvec", "dep:lru", "dep:hashbrown", "dep:spin"]
-std = ["dep:parking_lot", "vstd/std"]
-cache = []
+serde = ["dep:serde", "history-syntax/serde"]
+runtime = ["dep:smallvec"]
+std = ["vstd/std", "history-syntax/std"]
 test-util = ["runtime"]
 
 [dependencies]
 vstd = { version = "=0.0.0-2026-10-04-0306", default-features = false, features = ["alloc"] }
 thiserror = { version = "2", default-features = false }
-frunk_core = { version = "=0.5.0", default-features = false }
+history-syntax = { path = "../history-syntax", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
-parking_lot = { version = "0.12", optional = true }
 smallvec = { version = "=1.16.2", default-features = false, optional = true }
-verus-bumpalo = { path = "vendor/verus-bumpalo", optional = true }
-hashconsius = { path = "vendor/hashconsius", default-features = false, optional = true }
-lru = { version = "0.18.2", default-features = false, features = ["hashbrown"], optional = true }
-hashbrown = { version = "0.17", default-features = false, features = ["default-hasher"], optional = true }
-spin = { version = "0.12.0", default-features = false, features = ["mutex", "spin_mutex", "rwlock"], optional = true }
 
 [dev-dependencies]
 serde_json = { version = "1", default-features = false, features = ["alloc"] }

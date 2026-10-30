@@ -20,7 +20,10 @@ path = "src/lib.rs"
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = "1.4"
-junco-core = { path = "../crates/junco-core", default-features = false, features = ["runtime", "std", "cache"] }
+junco-core = { path = "../crates/junco-core", default-features = false, features = ["std"] }
+history-store = { path = "../crates/history-store", default-features = false, features = ["runtime", "std"] }
+history-semantics = { path = "../crates/history-semantics", default-features = false, features = ["runtime", "std", "cache"] }
+history-syntax = { path = "../crates/history-syntax", default-features = false, features = ["std"] }
 
 [dependencies.junco-policy]
 path = ".."
