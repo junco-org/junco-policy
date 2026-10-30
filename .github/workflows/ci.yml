@@ -104,7 +104,7 @@ jobs:
           print(toolchain.split()[0])
           PY
           )"
-          test "$required_toolchain" = 1.98.1
+          test "$required_toolchain" = 1.98.1-x86_64-unknown-linux-gnu
           rustup toolchain install "$required_toolchain" --profile minimal \
             --component rustc-dev --component llvm-tools --component rustfmt
           export RUSTUP_TOOLCHAIN="$required_toolchain"
