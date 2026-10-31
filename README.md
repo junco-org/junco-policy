@@ -66,17 +66,29 @@ freshness diagnostics, which win over reader diagnostics.
 The diagnostic history fold only renders the selected denial; it does not decide access.
 Neither retained `LockPolicy::decide` nor one-shot `lock_decision` appends implicitly:
 
+`HistoryStore` keeps separate principal and resource path caches. This example uses
+`::`-separated principal names and `/`-separated resource paths. Interning preserves
+the exact full string; it does not parse delimiters or canonicalize filesystem paths.
+
 ```rust
 use std::sync::Arc;
+use junco_core::{limits::Unmetered, observation::ObservationWorld};
+use history_store::store::HistoryStore;
 use history_store::{History, Store};
 use history_semantics::PolicyDecision;
 use junco_policy::{Action, LockEvent, LockPolicy};
 
 fn example() -> Result<(), Box<dyn std::error::Error>> {
-    let store = Arc::new(Store::<LockEvent<u32, u32>>::new()?);
+    let paths = HistoryStore::global();
+    let mut limits = Unmetered;
+    let mut world = ObservationWorld;
+    let alice = paths.intern_principal("::Users::research::Alice", &mut limits, &mut world)?;
+    let library = paths.intern_resource("/usr/lib/lclang.so", &mut limits, &mut world)?;
+
+    let store = Arc::new(Store::<LockEvent<u64, u64>>::new()?);
     let mut history = History::new(store.clone())?;
     let mut policy = LockPolicy::new(store)?;
-    let event = LockEvent::new(1, Action::Edit, 7);
+    let event = LockEvent::new(alice.get(), Action::Edit, library.get());
     if matches!(policy.decide(&history, &event)?, PolicyDecision::Grant) {
         history.push(event)?; // Record only after the operation succeeds.
     }
