@@ -26,7 +26,6 @@ verus! {
 broadcast use junco_core::kernel::verify::group_kernel_views;
 }
 
-
 #[cfg(verus_keep_ghost)]
 verus! {
     pub closed spec fn bindings_match(template: FlatPair<u64>, request: NumericEvent, bindings: Bindings) -> bool {
@@ -85,7 +84,6 @@ impl RuleRuntime {
 
 #[verus_verify]
 impl CompiledPair {
-
     #[verus_verify]
     #[verus_spec(result => ensures result matches Ok(value)
         ==> (id as nat) < values@.len() && value == values@[id as int])]

@@ -886,10 +886,7 @@ impl ArenaTables {
         result matches Err(error) ==> error is ArenaExhausted ==>
             verify::graph_weight(verify::tables_graph(old(self))) + verify::test_weight(view@)
                 - verify::tables_slack(old(self)) > verify::tables_capacity(old(self)))]
-    fn push_test(
-        &mut self,
-        view: TestView<'_>,
-    ) -> KernelResult<TestId> {
+    fn push_test(&mut self, view: TestView<'_>) -> KernelResult<TestId> {
         vstd::layout::layout_for_type_is_valid::<TestNode>();
         proof_decl! { let ghost before = *self; }
         let id = TestId::from_index(self.tests.len())?;
@@ -968,10 +965,7 @@ impl ArenaTables {
         result matches Err(error) ==> error is ArenaExhausted ==>
             verify::graph_weight(verify::tables_graph(old(self))) + verify::regex_weight(view@)
                 - verify::tables_slack(old(self)) > verify::tables_capacity(old(self)))]
-    fn push_regex(
-        &mut self,
-        view: RegexView<'_>,
-    ) -> KernelResult<RegexId> {
+    fn push_regex(&mut self, view: RegexView<'_>) -> KernelResult<RegexId> {
         vstd::layout::layout_for_type_is_valid::<RegexNode>();
         proof_decl! { let ghost before = *self; }
         let id = RegexId::from_index(self.regexes.len())?;
@@ -1060,10 +1054,7 @@ impl ArenaTables {
         result matches Err(error) ==> error is ArenaExhausted ==>
             verify::graph_weight(verify::tables_graph(old(self))) + verify::transition_weight(view@)
                 - verify::tables_slack(old(self)) > verify::tables_capacity(old(self)))]
-    fn push_transition(
-        &mut self,
-        view: TransitionView<'_>,
-    ) -> KernelResult<TransitionId> {
+    fn push_transition(&mut self, view: TransitionView<'_>) -> KernelResult<TransitionId> {
         vstd::layout::layout_for_type_is_valid::<TransitionNode>();
         proof_decl! { let ghost before = *self; }
         let id = TransitionId::from_index(self.transitions.len())?;
@@ -1246,10 +1237,7 @@ impl ArenaStorage {
                 verify::graph_weight(old(self).graph()) + verify::test_weight(view@) - old(self).slack()
                     > old(self).capacity()
     )]
-    fn push_test(
-        &mut self,
-        view: TestView<'_>,
-    ) -> KernelResult<TestId> {
+    fn push_test(&mut self, view: TestView<'_>) -> KernelResult<TestId> {
         proof! { use_type_invariant(&*self); }
         // Restore table ownership before propagating either success or failure.
         let Some(mut tables) = self.tables.take() else {
@@ -1284,10 +1272,7 @@ impl ArenaStorage {
                 verify::graph_weight(old(self).graph()) + verify::regex_weight(view@) - old(self).slack()
                     > old(self).capacity()
     )]
-    fn push_regex(
-        &mut self,
-        view: RegexView<'_>,
-    ) -> KernelResult<RegexId> {
+    fn push_regex(&mut self, view: RegexView<'_>) -> KernelResult<RegexId> {
         proof! { use_type_invariant(&*self); }
         let Some(mut tables) = self.tables.take() else {
             return Err(HistoryError::invariant("arena released"));
@@ -1321,10 +1306,7 @@ impl ArenaStorage {
                 verify::graph_weight(old(self).graph()) + verify::transition_weight(view@) - old(self).slack()
                     > old(self).capacity()
     )]
-    fn push_transition(
-        &mut self,
-        view: TransitionView<'_>,
-    ) -> KernelResult<TransitionId> {
+    fn push_transition(&mut self, view: TransitionView<'_>) -> KernelResult<TransitionId> {
         proof! { use_type_invariant(&*self); }
         let Some(mut tables) = self.tables.take() else {
             return Err(HistoryError::invariant("arena released"));
@@ -1508,10 +1490,7 @@ impl CanonicalStore {
             result matches Err(error) ==> error is ArenaExhausted ==>
                 old(self).storage.slack() < MAX_GRAPH_BYTES - old(self).storage.capacity(),
     )]
-    pub(crate) fn intern_test(
-        &mut self,
-        node: TestView<'_>,
-    ) -> KernelResult<TestId> {
+    pub(crate) fn intern_test(&mut self, node: TestView<'_>) -> KernelResult<TestId> {
         proof_decl! { let ghost original = self.graph(); }
         if let Some(id) = self.storage.find_test(node)? {
             return Ok(id);
@@ -1843,15 +1822,13 @@ mod storage_tests {
         assert_eq!(store.bytes, MAX_GRAPH_BYTES);
         assert_eq!(store.intern_test(node)?, id);
         let rows = store.storage.lengths();
-        let failed = store.intern_test(
-            TestView::Atom {
-                primitive: Primitive::Eq {
-                    field: history_syntax::syntax::Component::Principal,
-                    term: Term::Constant(1),
-                },
-                positive: true,
+        let failed = store.intern_test(TestView::Atom {
+            primitive: Primitive::Eq {
+                field: history_syntax::syntax::Component::Principal,
+                term: Term::Constant(1),
             },
-        );
+            positive: true,
+        });
         assert!(matches!(
             failed,
             Err(HistoryError::GraphLimit {
@@ -1868,15 +1845,13 @@ mod storage_tests {
         let mut store = CanonicalStore::from_storage(ArenaStorage::with_capacity(512)?)?;
         for path in 0_u32..u32::MAX {
             let before = (store.bytes, store.storage.lengths());
-            match store.intern_test(
-                TestView::Atom {
-                    primitive: Primitive::Eq {
-                        field: history_syntax::syntax::Component::Principal,
-                        term: Term::Constant(u64::from(path)),
-                    },
-                    positive: true,
+            match store.intern_test(TestView::Atom {
+                primitive: Primitive::Eq {
+                    field: history_syntax::syntax::Component::Principal,
+                    term: Term::Constant(u64::from(path)),
                 },
-            ) {
+                positive: true,
+            }) {
                 Ok(_) => {}
                 Err(HistoryError::ArenaExhausted) => {
                     assert_eq!((store.bytes, store.storage.lengths()), before);
@@ -1895,29 +1870,24 @@ mod storage_tests {
     fn arena_round_trips_child_slices() -> KernelResult<()> {
         let mut store = CanonicalStore::new()?;
         let outcome = (|| -> KernelResult<_> {
-            let a = store.intern_test(
-                TestView::Atom {
-                    primitive: Primitive::Eq {
-                        field: history_syntax::syntax::Component::Principal,
-                        term: Term::Constant(1),
-                    },
-                    positive: true,
+            let a = store.intern_test(TestView::Atom {
+                primitive: Primitive::Eq {
+                    field: history_syntax::syntax::Component::Principal,
+                    term: Term::Constant(1),
                 },
-            )?;
-            let b = store.intern_test(
-                TestView::Atom {
-                    primitive: Primitive::Eq {
-                        field: history_syntax::syntax::Component::Principal,
-                        term: Term::Constant(2),
-                    },
-                    positive: true,
+                positive: true,
+            })?;
+            let b = store.intern_test(TestView::Atom {
+                primitive: Primitive::Eq {
+                    field: history_syntax::syntax::Component::Principal,
+                    term: Term::Constant(2),
                 },
-            )?;
+                positive: true,
+            })?;
             let and = store.intern_test(TestView::And(&[a, b]))?;
             let r = store.intern_regex(RegexKindView::Test(a), false)?;
             let epsilon = store.constants().epsilon;
-            let union =
-                store.intern_regex(RegexKindView::Union(&[r, epsilon]), true)?;
+            let union = store.intern_regex(RegexKindView::Union(&[r, epsilon]), true)?;
             let transition_epsilon = store.constants().transition_epsilon;
             let append = TransitionView::Append {
                 transition: transition_epsilon,

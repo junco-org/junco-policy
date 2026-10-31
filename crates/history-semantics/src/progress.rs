@@ -14,9 +14,7 @@ use history_store::cache::SUCCESSOR_CAPACITY;
 #[cfg(verus_keep_ghost)]
 use history_store::cache::verify::*;
 use history_store::cache::{EventClass, GraphCaches, Guard};
-use history_store::graph::{
-    CanonicalStore, RuntimeKernel, allocation, sequence_bytes,
-};
+use history_store::graph::{CanonicalStore, RuntimeKernel, allocation, sequence_bytes};
 use history_store::store::Event;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
@@ -1076,7 +1074,10 @@ impl CompiledPair {
             final(store).restoration() == old(store).restoration(),
             result matches Ok(atoms) ==> atoms_wf(final(store).graph(), root@, atoms@),
     )]
-    pub(crate) fn collect_atoms<G: KernelStore>(store: &mut G, root: TransitionId) -> KernelResult<AtomSet> {
+    pub(crate) fn collect_atoms<G: KernelStore>(
+        store: &mut G,
+        root: TransitionId,
+    ) -> KernelResult<AtomSet> {
         proof_decl! { let ghost base = store.graph(); }
         proof! { lemma_graph_ids_obey_cmp(); }
         let mut work: WorkVec<Walk> = WorkVec::new();
@@ -2367,7 +2368,8 @@ mod tests {
     #[test]
     fn fixed_bindings_share_classes_only_when_truth_words_match() {
         let source = template(vec![FlatRegex::Test(0), FlatRegex::Star(0)]);
-        let mut pair = CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut pair =
+            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
         pair.work.skip_guards = true;
         let (alice, bob) = events();
         let alice_bindings = crate::runtime::RuleRuntime::bindings(&source, &alice).unwrap();
@@ -2416,8 +2418,10 @@ mod tests {
             FlatRegex::Star(1),
             FlatRegex::Concat(vec![0, 1, 2]),
         ]);
-        let mut eager = CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
-        let mut lazy = CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut eager =
+            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut lazy =
+            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
         eager
             .precompile(&mut Unmetered, &mut ObservationWorld)
             .unwrap();
@@ -2440,7 +2444,8 @@ mod tests {
     #[test]
     fn answer_checkpoint_failure_is_not_a_verdict() {
         let source = template(vec![FlatRegex::Epsilon]);
-        let mut pair = CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut pair =
+            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
         let root = pair.root;
         pair.set_answer_checkpoint_failure(true);
         assert!(matches!(

@@ -474,7 +474,8 @@ impl TestMode {
         a: TestId,
         siblings: &[TestId],
     ) -> KernelResult<bool> {
-        #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)] // Verus-verified match.
+        #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
+        // Verus-verified match.
         let count = match self.dual_count(a.head(store)?) {
             Some(n) => n,
             None => 0,
@@ -1315,39 +1316,43 @@ impl TestNormalize for TestId {
             id_at(&kept, 0)
         } else {
             {
-            proof_decl! { let ghost before = store.graph(); }
-            match store.intern_test(if and { TestView::And(&kept) } else { TestView::Or(&kept) }) {
-                Ok(id) => {
-                    proof! {
-                        test_lemma_combo_extends(before, store.graph(), children@);
-                        assert forall|ids: Seq<TestId>, theta: Subst, event: EventView, mode: bool|
-                            test_ids_valid(before, ids) implies test_combo(before, theta, ids, event, mode)
-                                == test_combo(store.graph(), theta, ids, event, mode) by {
-                            test_lemma_combo_extends(before, store.graph(), ids);
+                proof_decl! { let ghost before = store.graph(); }
+                match store.intern_test(if and {
+                    TestView::And(&kept)
+                } else {
+                    TestView::Or(&kept)
+                }) {
+                    Ok(id) => {
+                        proof! {
+                            test_lemma_combo_extends(before, store.graph(), children@);
+                            assert forall|ids: Seq<TestId>, theta: Subst, event: EventView, mode: bool|
+                                test_ids_valid(before, ids) implies test_combo(before, theta, ids, event, mode)
+                                    == test_combo(store.graph(), theta, ids, event, mode) by {
+                                test_lemma_combo_extends(before, store.graph(), ids);
+                            }
+                            assert forall|i: nat| i < before.tests.len()
+                                implies model::lift_test(before, i) == model::lift_test(store.graph(), i) by {
+                                model::lemma_lift_test_stable(before, store.graph(), i);
+                            }
+                            assert forall|theta: Subst, event: EventView|
+                                test_truth(store.graph(), theta, id@, event)
+                                    == test_combo(store.graph(), theta, kept.view(), event, and) by {
+                                test_lemma_compound_semantics(store.graph(), theta, event, id, kept.view(), and);
+                            }
+                            assert forall|theta: Subst, event: EventView| language::event_wf(theta)
+                                implies test_truth(store.graph(), theta, id@, event)
+                                    == test_combo(store.graph(), theta, children@, event, and) by {
+                                assert(test_combo(before, theta, kept.view(), event, and)
+                                    == test_combo(before, theta, children@, event, and));
+                                assert(test_combo(before, theta, kept.view(), event, and)
+                                    == test_combo(store.graph(), theta, kept.view(), event, and));
+                            }
                         }
-                        assert forall|i: nat| i < before.tests.len()
-                            implies model::lift_test(before, i) == model::lift_test(store.graph(), i) by {
-                            model::lemma_lift_test_stable(before, store.graph(), i);
-                        }
-                        assert forall|theta: Subst, event: EventView|
-                            test_truth(store.graph(), theta, id@, event)
-                                == test_combo(store.graph(), theta, kept.view(), event, and) by {
-                            test_lemma_compound_semantics(store.graph(), theta, event, id, kept.view(), and);
-                        }
-                        assert forall|theta: Subst, event: EventView| language::event_wf(theta)
-                            implies test_truth(store.graph(), theta, id@, event)
-                                == test_combo(store.graph(), theta, children@, event, and) by {
-                            assert(test_combo(before, theta, kept.view(), event, and)
-                                == test_combo(before, theta, children@, event, and));
-                            assert(test_combo(before, theta, kept.view(), event, and)
-                                == test_combo(store.graph(), theta, kept.view(), event, and));
-                        }
+                        Ok(id)
                     }
-                    Ok(id)
+                    Err(error) => Err(error),
                 }
-                Err(error) => Err(error),
             }
-        }
         }
     }
 }
@@ -1504,26 +1509,26 @@ impl RegexMode {
             proof! { regex_ids_contains(siblings@, inner); }
             let mut state = Ok(false);
             scan!(state,index,siblings.len(),state.is_ok(),prior=>{
-            proof! { regex_contains_prefix(siblings@, index as int, inner); }
-            match store.checkpoint() {
-                Ok(()) => {
-                    match id_at(siblings, index) {
-                        Ok(id) => {
-                            Ok(prior || id == inner)
+                proof! { regex_contains_prefix(siblings@, index as int, inner); }
+                match store.checkpoint() {
+                    Ok(()) => {
+                        match id_at(siblings, index) {
+                            Ok(id) => {
+                                Ok(prior || id == inner)
+                            }
+                            Err(error) => Err(error),
                         }
-                        Err(error) => Err(error),
                     }
+                    Err(error) => Err(error),
                 }
-                Err(error) => Err(error),
-            }
-        };
-                invariant store.graph() == old(store).graph(), index <= siblings.len(),
-                    store.restoration() == old(store).restoration(),
-                    store.valid_store(), model::graph_wf(store.graph()), regex_ids_valid(store.graph(), siblings@),
-                    inner@ < store.graph().regexes.len(),
-                    match state { Ok(found) => found == siblings@.subrange(0, index as int).contains(inner), Err(_) => true },
-                decreases siblings.len() - index,
-            );
+            };
+                    invariant store.graph() == old(store).graph(), index <= siblings.len(),
+                        store.restoration() == old(store).restoration(),
+                        store.valid_store(), model::graph_wf(store.graph()), regex_ids_valid(store.graph(), siblings@),
+                        inner@ < store.graph().regexes.len(),
+                        match state { Ok(found) => found == siblings@.subrange(0, index as int).contains(inner), Err(_) => true },
+                    decreases siblings.len() - index,
+                );
             proof! { assert(siblings@.subrange(0, siblings.len() as int) =~= siblings@); }
             state
         } else {
@@ -2182,22 +2187,22 @@ impl RegexNormalize for RegexId {
         }
         if !tests.is_empty() {
             let r = {
-            match TestId::connective(store, &tests, intersect) {
-                Ok(test) => {
-                    proof_decl! { let ghost test_graph = store.graph(); }
-                    proof! {
-                        assert forall|next: model::Graph| model::graph_extends(test_graph, next)
-                            implies forall|theta: Subst, event: EventView| language::event_wf(theta)
-                                ==> model::test_holds(theta, model::lift_test(next, test@), event)
-                                    == test_combo(next, theta, tests.view(), event, intersect) by {
-                            regex_test_connective_extends(test_graph, next, tests.view(), test, intersect);
+                match TestId::connective(store, &tests, intersect) {
+                    Ok(test) => {
+                        proof_decl! { let ghost test_graph = store.graph(); }
+                        proof! {
+                            assert forall|next: model::Graph| model::graph_extends(test_graph, next)
+                                implies forall|theta: Subst, event: EventView| language::event_wf(theta)
+                                    ==> model::test_holds(theta, model::lift_test(next, test@), event)
+                                        == test_combo(next, theta, tests.view(), event, intersect) by {
+                                regex_test_connective_extends(test_graph, next, tests.view(), test, intersect);
+                            }
                         }
+                        RegexId::from_test(store, test)
                     }
-                    RegexId::from_test(store, test)
+                    Err(error) => Err(error),
                 }
-                Err(error) => Err(error),
-            }
-        }?;
+            }?;
             proof! {
                 regex_constants(store.graph());
                 assert(model::graph_extends(grouped_graph, store.graph()));
@@ -2313,33 +2318,36 @@ impl RegexNormalize for RegexId {
         ))]
         while index < others.len() {
             proof_decl! { let ghost previous = others.view(); }
-            let removed = loop_try!({
-            proof_decl! { let ghost prior_ids = others.view(); let ghost retention_graph = store.graph(); }
-            match store.checkpoint() {
-                Ok(()) => {
-                    match id_at(&others, index) {
-                        Ok(id) => {
-                            let epsilon = store.constants().epsilon;
-                            let mut stats = Ok(RegexStats {
-                                all_nullable: true,
-                                any_nullable: false,
-                                epsilon: false,
-                                complement: false,
-                                has_nonnullable: false,
-                            });
-                            scan!(stats,scan_index,others.len(),stats.is_ok(),prior=>prior.update(store,&others,scan_index,epsilon,false);
-                                invariant store.graph() == retention_graph, store.valid_store(), model::graph_wf(store.graph()),
-                                    store.restoration() == old(store).restoration(),
-                                    others.view() == prior_ids, regex_ids_valid(store.graph(), others.view()), scan_index <= others.len(),
-                                    match stats { Ok(value) => regex_stats_prefix(store.graph(), others.view(), scan_index as nat, epsilon, value@, false), Err(_) => true },
-                                decreases others.len() - scan_index,
-                            );
-                            match stats {
-                                Ok(stats) => {
-                                    match id.head(store) {
+            let removed = loop_try!(
+                {
+                    proof_decl! { let ghost prior_ids = others.view(); let ghost retention_graph = store.graph(); }
+                    match store.checkpoint() {
+                        Ok(()) => match id_at(&others, index) {
+                            Ok(id) => {
+                                let epsilon = store.constants().epsilon;
+                                let mut stats = Ok(RegexStats {
+                                    all_nullable: true,
+                                    any_nullable: false,
+                                    epsilon: false,
+                                    complement: false,
+                                    has_nonnullable: false,
+                                });
+                                scan!(stats,scan_index,others.len(),stats.is_ok(),prior=>prior.update(store,&others,scan_index,epsilon,false);
+                                    invariant store.graph() == retention_graph, store.valid_store(), model::graph_wf(store.graph()),
+                                        store.restoration() == old(store).restoration(),
+                                        others.view() == prior_ids, regex_ids_valid(store.graph(), others.view()), scan_index <= others.len(),
+                                        match stats { Ok(value) => regex_stats_prefix(store.graph(), others.view(), scan_index as nat, epsilon, value@, false), Err(_) => true },
+                                    decreases others.len() - scan_index,
+                                );
+                                match stats {
+                                    Ok(stats) => match id.head(store) {
                                         Ok(head) => {
-                                            let redundant = (!mode.intersect && id == epsilon && stats.any_nullable)
-                                                || (mode.intersect && stats.has_nonnullable && matches!(head,RegexHead::Not(inner) if inner==epsilon));
+                                            let redundant = (!mode.intersect
+                                                && id == epsilon
+                                                && stats.any_nullable)
+                                                || (mode.intersect
+                                                    && stats.has_nonnullable
+                                                    && matches!(head,RegexHead::Not(inner) if inner==epsilon));
                                             match mode.absorbed(store, id, &others) {
                                                 Ok(absorbed) => {
                                                     if redundant || absorbed {
@@ -2354,23 +2362,25 @@ impl RegexNormalize for RegexId {
                                                         }
                                                         others.remove(index);
                                                         Ok(true)
-                                                    } else { Ok(false) }
+                                                    } else {
+                                                        Ok(false)
+                                                    }
                                                 }
                                                 Err(error) => Err(error),
                                             }
                                         }
                                         Err(error) => Err(error),
-                                    }
+                                    },
+                                    Err(error) => Err(error),
                                 }
-                                Err(error) => Err(error),
                             }
-                        }
+                            Err(error) => Err(error),
+                        },
                         Err(error) => Err(error),
                     }
-                }
-                Err(error) => Err(error),
-            }
-        }, failure);
+                },
+                failure
+            );
             proof! {
                 assert forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
                     implies regex_combo(store.graph(), theta, others.view(), word, intersect)
@@ -2527,99 +2537,108 @@ impl TransitionMode {
                     let ghost f0 = flat.view();
                     let ghost rs0 = constants.view();
                 }
-                match match pending.pop() { Some(id) => Ok(id), None => Err(HistoryError::normalization_invariant()) } {
-                    Ok(id) => {
-                        match store.checkpoint() {
-                            Ok(()) => {
-                                proof_decl! { let ghost prefix = pending.view(); }
-                                proof! {
-                                    transition_lemma_identities(store.graph(), self@);
-                                    model::lemma_graph_transition_wf(store.graph(), id@);
-                                    assert(p0 =~= prefix.push(id));
-                                }
-                                if id == self.absorber {
-                                    proof! { transition_lemma_collect_absorber(store.graph(), self@, p0, f0, rs0); }
-                                    Ok(true)
-                                } else {
-                                    match if id != self.identity {
-                                        match id.head(store) {
-                                            Ok(head) => {
-                                                match head {
-                                                    TransitionHead::Union(n) if !self.intersect => match TransitionId::collect_children(store, id, n, pending) {
+                match match pending.pop() {
+                    Some(id) => Ok(id),
+                    None => Err(HistoryError::normalization_invariant()),
+                } {
+                    Ok(id) => match store.checkpoint() {
+                        Ok(()) => {
+                            proof_decl! { let ghost prefix = pending.view(); }
+                            proof! {
+                                transition_lemma_identities(store.graph(), self@);
+                                model::lemma_graph_transition_wf(store.graph(), id@);
+                                assert(p0 =~= prefix.push(id));
+                            }
+                            if id == self.absorber {
+                                proof! { transition_lemma_collect_absorber(store.graph(), self@, p0, f0, rs0); }
+                                Ok(true)
+                            } else {
+                                match if id != self.identity {
+                                    match id.head(store) {
+                                        Ok(head) => match head {
+                                            TransitionHead::Union(n) if !self.intersect => {
+                                                match TransitionId::collect_children(
+                                                    store, id, n, pending,
+                                                ) {
                                                     Ok(()) => {
                                                         proof! {
-                                                                        let children = pending.view().subrange(prefix.len() as int, pending.view().len() as int);
-                                                                        assert(prefix + children =~= pending.view());
-                                                                        assert(model::transition_ids(prefix + children)
-                                                                            =~= model::transition_ids(prefix) + model::transition_ids(children));
-                                                                        transition_lemma_image_suffix(prefix, pending.view(), transition_children(store.graph(), id@));
-                                                                        assert(model::transition_ids(children) =~= transition_children(store.graph(), id@));
-                                                                        reveal(transition_children);
-                                                                        transition_lemma_collect_expand(store.graph(), self@, p0, f0, rs0, children);
-                                                                        collect_lemma_expand(store.graph(), prefix, id, children, f0, rs0, self.intersect);
-                                                                    }
+                                                            let children = pending.view().subrange(prefix.len() as int, pending.view().len() as int);
+                                                            assert(prefix + children =~= pending.view());
+                                                            assert(model::transition_ids(prefix + children)
+                                                                =~= model::transition_ids(prefix) + model::transition_ids(children));
+                                                            transition_lemma_image_suffix(prefix, pending.view(), transition_children(store.graph(), id@));
+                                                            assert(model::transition_ids(children) =~= transition_children(store.graph(), id@));
+                                                            reveal(transition_children);
+                                                            transition_lemma_collect_expand(store.graph(), self@, p0, f0, rs0, children);
+                                                            collect_lemma_expand(store.graph(), prefix, id, children, f0, rs0, self.intersect);
+                                                        }
 
                                                         Ok(())
                                                     }
                                                     Err(error) => Err(error),
-                                                },
-                                                    TransitionHead::Intersect(n) if self.intersect => match TransitionId::collect_children(store, id, n, pending) {
+                                                }
+                                            }
+                                            TransitionHead::Intersect(n) if self.intersect => {
+                                                match TransitionId::collect_children(
+                                                    store, id, n, pending,
+                                                ) {
                                                     Ok(()) => {
                                                         proof! {
-                                                                        let children = pending.view().subrange(prefix.len() as int, pending.view().len() as int);
-                                                                        assert(prefix + children =~= pending.view());
-                                                                        assert(model::transition_ids(prefix + children)
-                                                                            =~= model::transition_ids(prefix) + model::transition_ids(children));
-                                                                        transition_lemma_image_suffix(prefix, pending.view(), transition_children(store.graph(), id@));
-                                                                        assert(model::transition_ids(children) =~= transition_children(store.graph(), id@));
-                                                                        reveal(transition_children);
-                                                                        transition_lemma_collect_expand(store.graph(), self@, p0, f0, rs0, children);
-                                                                        collect_lemma_expand(store.graph(), prefix, id, children, f0, rs0, self.intersect);
-                                                                    }
+                                                            let children = pending.view().subrange(prefix.len() as int, pending.view().len() as int);
+                                                            assert(prefix + children =~= pending.view());
+                                                            assert(model::transition_ids(prefix + children)
+                                                                =~= model::transition_ids(prefix) + model::transition_ids(children));
+                                                            transition_lemma_image_suffix(prefix, pending.view(), transition_children(store.graph(), id@));
+                                                            assert(model::transition_ids(children) =~= transition_children(store.graph(), id@));
+                                                            reveal(transition_children);
+                                                            transition_lemma_collect_expand(store.graph(), self@, p0, f0, rs0, children);
+                                                            collect_lemma_expand(store.graph(), prefix, id, children, f0, rs0, self.intersect);
+                                                        }
 
                                                         Ok(())
                                                     }
                                                     Err(error) => Err(error),
-                                                },
-                                                    TransitionHead::Const(r) => {
-                                                        constants.push(r);
-                                                        proof! {
-                                                                        transition_lemma_collect_constant(store.graph(), self@, p0, f0, rs0, r);
-                                                                        collect_lemma_constant(store.graph(), prefix, id, f0, rs0, r, self.intersect);
-                                                                    }
-
-                                                        Ok(())
-                                                    },
-                                                    _ => {
-                                                        flat.push(id);
-                                                        proof! {
-                                                                        transition_lemma_collect_leaf(store.graph(), self@, p0, f0, rs0);
-                                                                        collect_lemma_leaf(store.graph(), prefix, id, f0, rs0, self.intersect);
-                                                                    }
-
-                                                        Ok(())
-                                                    },
                                                 }
                                             }
-                                            Err(error) => Err(error),
-                                        }
-                                    } else { Ok(()) } {
-                                        Ok(()) => {
-                                            proof! {
-                                                if id == self.identity {
-                                                    transition_lemma_collect_identity(store.graph(), self@, p0, f0, rs0);
-                                                    collect_lemma_drop(store.graph(), prefix, id, f0, rs0, self.intersect);
+                                            TransitionHead::Const(r) => {
+                                                constants.push(r);
+                                                proof! {
+                                                    transition_lemma_collect_constant(store.graph(), self@, p0, f0, rs0, r);
+                                                    collect_lemma_constant(store.graph(), prefix, id, f0, rs0, r, self.intersect);
                                                 }
+
+                                                Ok(())
                                             }
-                                            Ok(false)
-                                        }
+                                            _ => {
+                                                flat.push(id);
+                                                proof! {
+                                                    transition_lemma_collect_leaf(store.graph(), self@, p0, f0, rs0);
+                                                    collect_lemma_leaf(store.graph(), prefix, id, f0, rs0, self.intersect);
+                                                }
+
+                                                Ok(())
+                                            }
+                                        },
                                         Err(error) => Err(error),
                                     }
+                                } else {
+                                    Ok(())
+                                } {
+                                    Ok(()) => {
+                                        proof! {
+                                            if id == self.identity {
+                                                transition_lemma_collect_identity(store.graph(), self@, p0, f0, rs0);
+                                                collect_lemma_drop(store.graph(), prefix, id, f0, rs0, self.intersect);
+                                            }
+                                        }
+                                        Ok(false)
+                                    }
+                                    Err(error) => Err(error),
                                 }
                             }
-                            Err(error) => Err(error),
                         }
-                    }
+                        Err(error) => Err(error),
+                    },
                     Err(error) => Err(error),
                 }
             };
@@ -3176,10 +3195,8 @@ impl ChildAction {
     }
 }
 
-
 #[verus_verify]
 impl Action {
-
     #[verus_verify]
     #[verus_spec(result => ensures match result {
         Ok(taken) => count <= old(values).view().len()

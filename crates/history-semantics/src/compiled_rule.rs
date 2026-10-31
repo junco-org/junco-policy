@@ -224,7 +224,6 @@ pub(crate) mod verify {
     }
 }
 
-
 verus! {
 pub(crate) type LoweredRule<E> = (RuleMode, FlatPair<u64>, Ghost<history_store::typed::ComponentMaps<E>>);
 
@@ -402,13 +401,9 @@ impl<E: Event> CompiledRule<E> {
         );
         let request = encoded?;
         proof_decl! { let ghost observed = self.runtime.snapshots@; }
-        let first = self.runtime.accepts(
-            &self.template,
-            &request,
-            history.numeric(),
-            limits,
-            world,
-        );
+        let first =
+            self.runtime
+                .accepts(&self.template, &request, history.numeric(), limits, world);
         proof! {
             let key = (history.id(), history.numeric().revision());
             let events = history_store::store::verify::events_view(raw::stored_events(history.numeric()));
@@ -475,7 +470,6 @@ impl<E: Event> CompiledRule<E> {
         result
     }
 }
-
 
 #[cfg(any(test, feature = "test-util"))]
 impl<E: Event> CompiledRule<E> {

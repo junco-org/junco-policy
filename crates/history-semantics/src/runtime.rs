@@ -3,17 +3,17 @@
 
 //! Revision-bound retained cursors and failure-atomic numeric batch evaluation.
 
+#[cfg(verus_keep_ghost)]
+use crate::compiled_rule::verify::numeric_result;
 use crate::progress::CompiledPair;
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::progress::WorkCounters;
 #[cfg(verus_keep_ghost)]
 use crate::progress::verify as progress;
 #[cfg(verus_keep_ghost)]
-use crate::compiled_rule::verify::numeric_result;
+use crate::verify::history_algebra;
 #[cfg(verus_keep_ghost)]
 use crate::verify::typed_decision as decision;
-#[cfg(verus_keep_ghost)]
-use crate::verify::history_algebra;
 use alloc::sync::Arc;
 #[cfg(any(test, feature = "test-util"))]
 use alloc::vec::Vec;
@@ -349,7 +349,6 @@ impl core::fmt::Debug for RuleRuntime {
 
 #[verus_verify]
 impl RuleRuntime {
-
     #[cfg(verus_keep_ghost)]
     verus! {
         pub open(crate) spec fn spec_store(&self) -> Arc<HistoryStore> { self.store }
