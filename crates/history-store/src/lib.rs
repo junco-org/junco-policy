@@ -22,8 +22,6 @@ pub mod store;
 #[cfg(feature = "runtime")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime")))]
 pub mod typed;
-#[cfg(verus_keep_ghost)]
-pub mod verify;
 #[cfg(feature = "runtime")]
 pub use history::{Checkpoint, History};
 #[cfg(feature = "runtime")]

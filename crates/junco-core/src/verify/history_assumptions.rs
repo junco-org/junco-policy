@@ -24,9 +24,9 @@
 //! allocator freshness/provenance in narrow native adapters. Mutex linearization
 //! and the global counter invariant are trusted; allocation arithmetic, interner
 //! insertion/rollback, and locked history append/truncate carry executable contracts.
-//! Storage and KernelStore trait contracts are implemented by verified bodies,
-//! not trusted implementations. No compiler, normalizer, derivative, interpreter,
-//! matcher, replay, or evaluator may be external_body or assume_specification.
+//! ArenaStorage inherent operation and KernelStore trait contracts are implemented
+//! by verified bodies, not trusted implementations. No compiler, normalizer, derivative,
+//! interpreter, matcher, replay, or evaluator may be external_body or assume_specification.
 
 use crate::kernel::verify::{
     Graph, RegexNode, graph_extends, graph_wf, regex_node_wf, tables_wf, test_node_wf,

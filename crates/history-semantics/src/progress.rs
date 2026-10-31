@@ -6,9 +6,6 @@ use super::normalize::verify as norm;
 #[cfg(verus_keep_ghost)]
 use super::symbolic;
 use crate::WorkVec;
-#[cfg(test)]
-use crate::compile::NumericCompile;
-use crate::compile::PrimitiveClassify;
 use crate::normalize::RegexNormalize;
 use crate::symbolic::{AtomTruth, RegexDerivative, TransitionInterpret};
 use alloc::{collections::BTreeSet, vec::Vec};
@@ -18,11 +15,9 @@ use history_store::cache::SUCCESSOR_CAPACITY;
 use history_store::cache::verify::*;
 use history_store::cache::{EventClass, GraphCaches, Guard};
 use history_store::graph::{
-    ArenaStorage, CanonicalStore, RuntimeKernel, allocation, sequence_bytes,
+    CanonicalStore, RuntimeKernel, allocation, sequence_bytes,
 };
 use history_store::store::Event;
-#[cfg(verus_keep_ghost)]
-use history_store::verify::storage::*;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
 use junco_core::limits::Limits;
@@ -75,7 +70,7 @@ const PRECOMPILE_STATES: usize = 64;
 #[verus_verify(external_derive)]
 #[derive(Debug)]
 pub(crate) struct CompiledPair {
-    pub(crate) store: CanonicalStore<ArenaStorage>,
+    pub(crate) store: CanonicalStore,
     pub(crate) root: RegexId,
     pub(crate) caches: GraphCaches,
     #[cfg(any(test, feature = "test-util"))]
@@ -100,7 +95,7 @@ impl CompiledPair {
         requires model::graph_wf(store.graph()), store.valid_store(), root@ < store.graph().regexes.len(),
         ensures pair_wf(result), result.store.graph() == store.graph(), result.root == root,
     )]
-    pub(crate) const fn new(store: CanonicalStore<ArenaStorage>, root: RegexId) -> Self {
+    pub(crate) const fn new(store: CanonicalStore, root: RegexId) -> Self {
         let pair = Self {
             store,
             root,
@@ -302,7 +297,7 @@ impl CompiledPair {
                 limits,
                 world,
             };
-            AtomSet::from_transition(&mut kernel, transition)
+            Self::collect_atoms(&mut kernel, transition)
         };
         proof! {
             symbolic::verify::derivative_extends(entry.store.graph(), self.store.graph());
@@ -426,7 +421,14 @@ impl CompiledPair {
                 Ok(_) => Ok(false),
                 Err(error) => Err(error),
             }
-        }?;
+        };
+        proof! {
+            assert(self.store.graph() == entry.store.graph());
+            assert(self.store.valid_store());
+            assert(pair_frame(entry, *self));
+            lemma_pair_symbolic_frame(entry, *self);
+        }
+        let constant = constant?;
         let mask = if constant {
             0
         } else {
@@ -676,7 +678,7 @@ impl CompiledPair {
                     }
                 };
                 let primitive = loop_try!(primitive, failure);
-                let classified = Primitive::classify(primitive, event, bindings, limits, world);
+                let classified = Self::classify(primitive, event, bindings, limits, world);
                 if !loop_try!(classified, failure) {
                     proof! {
                         let g = self.store.graph();
@@ -798,7 +800,7 @@ impl CompiledPair {
                 }
             };
             let primitive = loop_try!(primitive, failure);
-            let classified = Primitive::classify(primitive, event, bindings, limits, world);
+            let classified = Self::classify(primitive, event, bindings, limits, world);
             if loop_try!(classified, failure) {
                 let word_index = loop_try!(
                     index
@@ -1055,20 +1057,9 @@ enum Walk {
     Test(TestId),
     TestChildren(TestId, usize),
 }
-#[verus_verify]
-pub(crate) trait TransitionAtoms: Sized {
-    #[verus_spec(result =>
-    requires old(store).valid_store(), model::graph_wf(old(store).graph()), root@ < old(store).graph().transitions.len(),
-    ensures final(store).valid_store(), model::graph_wf(final(store).graph()),
-        model::graph_extends(old(store).graph(), final(store).graph()),
-        final(store).restoration() == old(store).restoration(),
-        result matches Ok(atoms) ==> atoms_wf(final(store).graph(), root@, atoms@),
-)]
-    fn from_transition<G: KernelStore>(store: &mut G, root: TransitionId) -> KernelResult<AtomSet>;
-}
 
 #[verus_verify]
-impl TransitionAtoms for AtomSet {
+impl CompiledPair {
     /// Collect every unsigned base primitive read anywhere in the transition DAG.
     /// Branches are deliberately not pruned using an event or request substitution.
     #[allow(
@@ -1078,7 +1069,14 @@ impl TransitionAtoms for AtomSet {
     #[verus_verify]
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
-    fn from_transition<G: KernelStore>(store: &mut G, root: TransitionId) -> KernelResult<AtomSet> {
+    #[verus_spec(result =>
+        requires old(store).valid_store(), model::graph_wf(old(store).graph()), root@ < old(store).graph().transitions.len(),
+        ensures final(store).valid_store(), model::graph_wf(final(store).graph()),
+            model::graph_extends(old(store).graph(), final(store).graph()),
+            final(store).restoration() == old(store).restoration(),
+            result matches Ok(atoms) ==> atoms_wf(final(store).graph(), root@, atoms@),
+    )]
+    pub(crate) fn collect_atoms<G: KernelStore>(store: &mut G, root: TransitionId) -> KernelResult<AtomSet> {
         proof_decl! { let ghost base = store.graph(); }
         proof! { lemma_graph_ids_obey_cmp(); }
         let mut work: WorkVec<Walk> = WorkVec::new();
@@ -1289,7 +1287,7 @@ impl TransitionAtoms for AtomSet {
             }
         }
         store.checkpoint()?;
-        Self::new(store, primitives)
+        AtomSet::new(store, primitives)
     }
 }
 
@@ -1529,7 +1527,7 @@ pub(crate) mod verify {
             }
         }
 
-        // Termination measure for `AtomSet::from_transition`: the tree-unfolded size of the walk
+        // Termination measure for `CompiledPair::collect_atoms`: the tree-unfolded size of the walk
         // over `base`. A children frame pays 1 for each continuation that pops it.
         pub open spec fn test_walk_node_work(g: model::Graph, id: nat) -> nat
             decreases id, 1nat,
@@ -2369,11 +2367,11 @@ mod tests {
     #[test]
     fn fixed_bindings_share_classes_only_when_truth_words_match() {
         let source = template(vec![FlatRegex::Test(0), FlatRegex::Star(0)]);
-        let mut pair = FlatPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut pair = CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
         pair.work.skip_guards = true;
         let (alice, bob) = events();
-        let alice_bindings = crate::compile::bindings(&source, &alice).unwrap();
-        let bob_bindings = crate::compile::bindings(&source, &bob).unwrap();
+        let alice_bindings = CompiledPair::bindings(&source, &alice).unwrap();
+        let bob_bindings = CompiledPair::bindings(&source, &bob).unwrap();
         assert!(decide(&mut pair, &[alice, alice], &alice_bindings));
         assert_eq!(pair.work.successor_misses, 1);
         assert_eq!(pair.work.successor_hits, 1);
@@ -2395,10 +2393,10 @@ mod tests {
             FlatRegex::Concat(vec![0, 1]),
         ]);
         let (alice, bob) = events();
-        let bindings = crate::compile::bindings(&source, &alice).unwrap();
+        let bindings = CompiledPair::bindings(&source, &alice).unwrap();
         for (skip_guards, hits, classes) in [(false, 3, 1), (true, 0, 4)] {
             let mut pair =
-                FlatPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+                CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
             pair.work.skip_guards = skip_guards;
             assert!(decide(&mut pair, &[bob, bob, bob, alice], &bindings));
             assert_eq!(pair.work.guard_hits, hits);
@@ -2418,14 +2416,14 @@ mod tests {
             FlatRegex::Star(1),
             FlatRegex::Concat(vec![0, 1, 2]),
         ]);
-        let mut eager = FlatPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
-        let mut lazy = FlatPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut eager = CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut lazy = CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
         eager
             .precompile(&mut Unmetered, &mut ObservationWorld)
             .unwrap();
         eager.reset_work_counters();
         let (alice, bob) = events();
-        let bindings = crate::compile::bindings(&source, &alice).unwrap();
+        let bindings = CompiledPair::bindings(&source, &alice).unwrap();
         for (word, expected) in [
             (&[][..], false),
             (&[alice][..], true),
@@ -2442,7 +2440,7 @@ mod tests {
     #[test]
     fn answer_checkpoint_failure_is_not_a_verdict() {
         let source = template(vec![FlatRegex::Epsilon]);
-        let mut pair = FlatPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut pair = CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
         let root = pair.root;
         pair.set_answer_checkpoint_failure(true);
         assert!(matches!(

@@ -322,7 +322,7 @@ pub mod verify {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{ArenaStorage, CanonicalStore};
+    use crate::graph::CanonicalStore;
     use crate::store::HistoryStore;
     use junco_core::kernel::Bindings;
     use junco_core::limits::Unmetered;
@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn publication_evicts_replaces_and_retains_longer_prefix() -> Result<(), HistoryError> {
         let store = HistoryStore::global();
-        let graph = CanonicalStore::new(ArenaStorage::new()?, &mut ObservationWorld)?;
+        let graph = CanonicalStore::new()?;
         let mut cache = CursorCache::new(&mut Unmetered, &mut ObservationWorld)?;
         let mut handles = Vec::new();
         for _ in 0..=HISTORY_CACHE_CAPACITY {

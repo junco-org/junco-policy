@@ -1,6 +1,10 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+//! Exact numeric symbolic derivatives and iterative transition-DAG interpretation.
+//! Existing ID extension traits own cache lookup and branch execution; finish tasks
+//! precede reverse child scheduling so each LIFO traversal preserves source order.
+
 use crate::WorkVec;
 #[cfg(verus_keep_ghost)]
 use crate::normalize::verify as norm;
@@ -31,62 +35,6 @@ verus! {
 broadcast use junco_core::kernel::verify::group_kernel_views;
 }
 
-#[verus_verify]
-#[verus_spec(result => ensures match result {
-    Ok(out) => id@ < cache@.len() && cache@[id@ as int] == Some(out), Err(_) => true,
-})]
-fn cached(cache: &[Option<TransitionId>], id: RegexId) -> KernelResult<TransitionId> {
-    match cache.get(id.index()?) {
-        Some(Some(value)) => Ok(*value),
-        _ => Err(HistoryError::symbolic_invariant()),
-    }
-}
-#[verus_verify]
-#[verus_spec(result =>
-    requires model::graph_wf(old(store).graph()), old(store).valid_store(),
-        derivative_cache_wf(old(store).graph(), old(cache)@),
-    ensures final(store).graph() == old(store).graph(), final(store).valid_store(),
-        final(store).restoration() == old(store).restoration(),
-        model::graph_wf(final(store).graph()), derivative_cache_wf(final(store).graph(), final(cache)@),
-        old(cache)@.is_prefix_of(final(cache)@),
-        forall|i: int| old(cache)@.len() <= i < final(cache)@.len() ==> final(cache)@[i] is None,
-        result is Err ==> final(cache)@ == old(cache)@,
-        result is Ok ==> id@ < final(cache)@.len()
-            && final(cache)@.len() == if old(cache)@.len() > id@ { old(cache)@.len() } else { id@ + 1 },
-)]
-fn grow_cache<G: KernelStore>(
-    store: &mut G,
-    cache: &mut Vec<Option<TransitionId>>,
-    id: RegexId,
-) -> KernelResult<()> {
-    let required = match id.index()?.checked_add(1) {
-        Some(v) => v,
-        None => return Err(HistoryError::symbolic_invariant()),
-    };
-    if required > cache.len() {
-        let extra = match required.checked_sub(cache.len()) {
-            Some(v) => v,
-            None => return Err(HistoryError::symbolic_invariant()),
-        };
-        let bytes = match extra.checked_mul(core::mem::size_of::<Option<TransitionId>>()) {
-            Some(v) => v,
-            None => return Err(HistoryError::symbolic_invariant()),
-        };
-        // Reservations preserve logical cache contents; publish monotone charge before resizing.
-        store.reserve_derivatives(cache, extra)?;
-        store.charge_aux(bytes)?;
-        cache.resize(required, None);
-        proof! {
-            assert forall|i: int| 0 <= i < cache@.len() implies match #[trigger] cache@[i] {
-                Some(out) => derivative_correct(store.graph(), i as nat, out), None => true,
-            } by {
-                if i >= old(cache)@.len() { assert(cache@[i] is None); }
-                else { assert(cache@[i] == old(cache)@[i]); }
-            }
-        }
-    }
-    Ok(())
-}
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy)]
@@ -226,7 +174,7 @@ impl DerivativeFactors {
         store.checkpoint()?;
         let child = self.root.child(store, index)?;
         if !self.concat || prefix {
-            let d = cached(cache, child)?;
+            let d = RegexId::cached(cache, child)?;
             if self.concat {
                 let start = match index.checked_add(1) {
                     Some(v) => v,
@@ -338,9 +286,26 @@ impl DerivativeFactors {
         }
     }
 }
-#[verus_verify]
+verus! {
 pub(crate) trait RegexDerivative: Sized {
-    #[verus_spec(result =>
+    fn cached(cache: &[Option<TransitionId>], id: RegexId) -> (result: KernelResult<TransitionId>)
+        ensures match result {
+            Ok(out) => id@ < cache@.len() && cache@[id@ as int] == Some(out), Err(_) => true,
+        },
+    {
+        match cache.get(id.index()?) {
+            Some(Some(value)) => Ok(*value),
+            _ => Err(HistoryError::symbolic_invariant()),
+        }
+    }
+
+    fn derivative_step<G: KernelStore>(
+        this: RegexId,
+        store: &mut G,
+        cache: &mut Vec<Option<TransitionId>>,
+        finish: bool,
+        tasks: &mut WorkVec<(RegexId, bool)>,
+    ) -> (result: KernelResult<()>)
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), this@ < old(store).graph().regexes.len(),
             derivative_cache_wf(old(store).graph(), old(cache)@), derivative_tasks_wf(old(store).graph(), old(tasks).view()),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
@@ -348,30 +313,21 @@ pub(crate) trait RegexDerivative: Sized {
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), final(cache)@), derivative_tasks_wf(final(store).graph(), final(tasks).view()),
             result is Ok ==> derivative_work(final(store).graph(), final(tasks).view())
-                < derivative_work(old(store).graph(), old(tasks).view().push((this, finish))),
-    )]
-    fn derivative_step<G: KernelStore>(
+                < derivative_work(old(store).graph(), old(tasks).view().push((this, finish)));
+
+    fn derivative<G: KernelStore>(
         this: RegexId,
         store: &mut G,
         cache: &mut Vec<Option<TransitionId>>,
-        finish: bool,
-        tasks: &mut WorkVec<(RegexId, bool)>,
-    ) -> KernelResult<()>;
-
-    #[verus_spec(result =>
+    ) -> (result: KernelResult<TransitionId>)
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), this@ < old(store).graph().regexes.len(),
             derivative_cache_wf(old(store).graph(), old(cache)@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), final(cache)@),
-            match result { Ok(out) => derivative_correct(final(store).graph(), this@, out), Err(_) => true },
-    )]
-    fn derivative<G: KernelStore>(
-        this: RegexId,
-        store: &mut G,
-        cache: &mut Vec<Option<TransitionId>>,
-    ) -> KernelResult<TransitionId>;
+            match result { Ok(out) => derivative_correct(final(store).graph(), this@, out), Err(_) => true };
+}
 }
 
 #[verus_verify]
@@ -388,7 +344,40 @@ impl RegexDerivative for RegexId {
         proof_decl! { let ghost before = store.graph(); let ghost prior_tasks = tasks.view(); }
         proof! { derivative_frame(store.graph()); model::lemma_graph_regex_wf(store.graph(), this@); derivative_constants(store.graph()); }
         store.checkpoint()?;
-        grow_cache(store, cache, this)?;
+        proof_decl! { let ghost cache_before = cache@; let ghost growth_graph = store.graph(); }
+        let required = match this.index()?.checked_add(1) {
+            Some(v) => v,
+            None => return Err(HistoryError::symbolic_invariant()),
+        };
+        if required > cache.len() {
+            let extra = match required.checked_sub(cache.len()) {
+                Some(v) => v,
+                None => return Err(HistoryError::symbolic_invariant()),
+            };
+            let bytes = match extra.checked_mul(core::mem::size_of::<Option<TransitionId>>()) {
+                Some(v) => v,
+                None => return Err(HistoryError::symbolic_invariant()),
+            };
+            // Reservations preserve logical cache contents; publish monotone charge before resizing.
+            store.reserve_derivatives(cache, extra)?;
+            store.charge_aux(bytes)?;
+            cache.resize(required, None);
+            proof! {
+                assert forall|i: int| 0 <= i < cache@.len() implies match #[trigger] cache@[i] {
+                    Some(out) => derivative_correct(store.graph(), i as nat, out), None => true,
+                } by {
+                    if i >= cache_before.len() { assert(cache@[i] is None); }
+                    else { assert(cache@[i] == cache_before[i]); }
+                }
+            }
+        }
+        proof! {
+            assert(store.graph() == growth_graph);
+            assert(cache_before.is_prefix_of(cache@));
+            assert forall|i: int| cache_before.len() <= i < cache@.len() implies cache@[i] is None by {}
+            assert(this@ < cache@.len());
+            assert(cache@.len() == if cache_before.len() > this@ { cache_before.len() } else { this@ + 1 });
+        }
         let index = this.index()?;
         let pending = match cache.get(index) {
             Some(None) => true,
@@ -409,7 +398,7 @@ impl RegexDerivative for RegexId {
                 )?),
                 RegexHead::Star(inner) => {
                     if finish {
-                        let d = cached(cache, inner)?;
+                        let d = Self::cached(cache, inner)?;
                         Some(TransitionId::append(d, store, &[this])?)
                     } else {
                         tasks.push((this, true));
@@ -420,7 +409,7 @@ impl RegexDerivative for RegexId {
                 }
                 RegexHead::Not(inner) => {
                     if finish {
-                        let d = cached(cache, inner)?;
+                        let d = Self::cached(cache, inner)?;
                         Some(TransitionId::not(d, store)?)
                     } else {
                         tasks.push((this, true));
@@ -499,7 +488,7 @@ impl RegexDerivative for RegexId {
             };
         }
         state?;
-        cached(cache, this)
+        Self::cached(cache, this)
     }
 }
 #[verus_verify]
@@ -674,157 +663,134 @@ impl AtomTruth for AtomSet {
         Ok(shifted & 1 != 0)
     }
 }
-#[allow(
-    clippy::option_if_let_else,
-    reason = "Explicit matches preserve the Verus proof structure."
-)]
-#[verus_verify]
-#[verus_spec(result =>
-    requires model::graph_wf(store.graph()), id@ < store.graph().tests.len(),
-        count == test_children(store.graph(), id).len(), test_tasks_wf(store.graph(), old(tasks).view()),
-    ensures test_tasks_wf(store.graph(), final(tasks).view()),
-        result.is_ok() ==> final(tasks).view() == old(tasks).view() + child_test_tasks(store.graph(), id, 0),
-)]
-fn schedule_test_children<G: KernelStore>(
-    store: &G,
-    id: TestId,
-    count: usize,
-    tasks: &mut WorkVec<(TestId, bool)>,
-) -> KernelResult<()> {
-    proof! { model::lemma_graph_test_wf(store.graph(), id@); }
-    let mut failure = None;
-    let mut remaining = count;
-    #[cfg_attr(verus_keep_ghost, verus_spec(
-        invariant remaining <= count, model::graph_wf(store.graph()), id@ < store.graph().tests.len(),
-            count == test_children(store.graph(), id).len(), test_tasks_wf(store.graph(), old(tasks).view()),
-            test_tasks_wf(store.graph(), tasks.view()),
-            failure.is_none() ==> tasks.view() == old(tasks).view() + child_test_tasks(store.graph(), id, remaining as nat),
-        ensures failure.is_none() ==> remaining == 0,
-        decreases remaining,
-    ))]
-    // Reverse pushes preserve source order when the LIFO task stack executes children.
-    while remaining != 0 {
-        let i = loop_try!(
-            match remaining.checked_sub(1) {
-                Some(value) => Ok(value),
-                None => Err(HistoryError::symbolic_invariant()),
-            },
-            failure
-        );
-        remaining = i;
-        let child = loop_try!(id.child(store, i), failure);
-        proof! {
-            assert(child@ == test_children(store.graph(), id)[i as int]);
-            model::lemma_graph_test_wf(store.graph(), id@);
-            assert(child@ < store.graph().tests.len());
-            assert(child_test_tasks(store.graph(), id, i as nat)
-                =~= child_test_tasks(store.graph(), id, i as nat + 1).push((child, false)));
-        }
-        tasks.push((child, false));
-    }
-    if let Some(error) = failure {
-        return Err(error);
-    }
-    Ok(())
-}
-#[allow(
-    clippy::option_if_let_else,
-    clippy::semicolon_if_nothing_returned,
-    reason = "Preserve the existing Verus-verified matches and mutation branches."
-)]
-#[verus_verify]
-#[verus_spec(result => ensures match result {
-    Ok(out) => count <= old(values).view().len()
-        && final(values).view() == old(values).view().take(old(values).view().len() - count)
-        && out == bool_fold(old(values).view().skip(old(values).view().len() - count), and),
-    Err(_) => true,
-})]
-fn fold_test_values(values: &mut WorkVec<bool>, count: usize, and: bool) -> KernelResult<bool> {
-    let mut out = and;
-    let mut failure = None;
-    let mut i = 0;
-    #[cfg_attr(verus_keep_ghost, verus_spec(
-        invariant i <= count, i <= old(values).view().len(),
-            values.view() == old(values).view().take(old(values).view().len() - i),
-            out == bool_fold(old(values).view().skip(old(values).view().len() - i), and),
-        ensures failure.is_none() ==> i == count,
-        decreases count - i,
-    ))]
-    while i < count {
-        let value = loop_try!(
-            match values.pop() {
-                Some(v) => Ok(v),
-                None => Err(HistoryError::symbolic_invariant()),
-            },
-            failure
-        );
-        proof! {
-            let suffix = old(values).view().skip(old(values).view().len() - i);
-            bool_fold_prepend(value, suffix, and);
-            assert(old(values).view().skip(old(values).view().len() - i - 1) =~= seq![value] + suffix);
-        }
-        if and {
-            out &= value
-        } else {
-            out |= value
-        }
-        i = i.saturating_add(1);
-    }
-    if let Some(error) = failure {
-        return Err(error);
-    }
-    Ok(out)
-}
-#[verus_verify]
-#[verus_spec(result =>
-    requires model::graph_wf(store.graph()), id@ < store.graph().tests.len(),
-        store.graph().tests[id@ as int] == (if and { model::TestNode::And(test_children(store.graph(), id)) } else { model::TestNode::Or(test_children(store.graph(), id)) }),
-        count == test_children(store.graph(), id).len(), test_tasks_wf(store.graph(), old(tasks).view()),
-    ensures test_tasks_wf(store.graph(), final(tasks).view()),
-        result.is_ok() ==> forall|theta: Subst, event: EventView|
-            test_run(store.graph(), old(tasks).view().push((id, finish)), old(values).view(), theta, event)
-                == test_run(store.graph(), final(tasks).view(), final(values).view(), theta, event),
-        result.is_ok() ==> final(tasks).view() == old(tasks).view()
-            || norm::test_not_work(store.graph(), final(tasks).view())
-                < norm::test_not_work(store.graph(), old(tasks).view().push((id, finish))),
-)]
-fn evaluate_test_branch<G: KernelStore>(
-    store: &G,
-    id: TestId,
-    count: usize,
-    and: bool,
-    finish: bool,
-    tasks: &mut WorkVec<(TestId, bool)>,
-    values: &mut WorkVec<bool>,
-) -> KernelResult<()> {
-    if finish {
-        let out = fold_test_values(values, count, and)?;
-        values.push(out);
-        proof! {
-            assert(old(tasks).view().push((id, finish)).drop_last() =~= old(tasks).view());
-            assert forall|theta: Subst, event: EventView|
-                test_run(store.graph(), old(tasks).view().push((id, finish)), old(values).view(), theta, event)
-                    == test_run(store.graph(), tasks.view(), values.view(), theta, event) by {
-                test_run_unfold(store.graph(), old(tasks).view().push((id, finish)), old(values).view(), theta, event);
-            }
-        }
-    } else {
-        tasks.push((id, true));
-        schedule_test_children(store, id, count, tasks)?;
-        proof! {
-            assert forall|theta: Subst, event: EventView|
-                test_run(store.graph(), old(tasks).view().push((id, finish)), old(values).view(), theta, event)
-                    == test_run(store.graph(), tasks.view(), values.view(), theta, event) by {
-                test_expand(store.graph(), id, old(tasks).view(), old(values).view(), theta, event);
-            }
-            test_lemma_eval_branch_work(store.graph(), id, old(tasks).view());
-        }
-    }
-    Ok(())
-}
-#[verus_verify]
+verus! {
 pub(crate) trait TestEvaluate: Sized {
-    #[verus_spec(result =>
+    #[allow(
+        clippy::option_if_let_else,
+        clippy::semicolon_if_nothing_returned,
+        reason = "Preserve the existing Verus-verified matches and mutation branches."
+    )]
+    fn evaluate_branch<G: KernelStore>(
+        store: &G,
+        id: TestId,
+        count: usize,
+        and: bool,
+        finish: bool,
+        tasks: &mut WorkVec<(TestId, bool)>,
+        values: &mut WorkVec<bool>,
+    ) -> (result: KernelResult<()>)
+        requires model::graph_wf(store.graph()), id@ < store.graph().tests.len(),
+            store.graph().tests[id@ as int] == (if and { model::TestNode::And(test_children(store.graph(), id)) } else { model::TestNode::Or(test_children(store.graph(), id)) }),
+            count == test_children(store.graph(), id).len(), test_tasks_wf(store.graph(), old(tasks).view()),
+        ensures test_tasks_wf(store.graph(), final(tasks).view()),
+            result.is_ok() ==> forall|theta: Subst, event: EventView|
+                test_run(store.graph(), old(tasks).view().push((id, finish)), old(values).view(), theta, event)
+                    == test_run(store.graph(), final(tasks).view(), final(values).view(), theta, event),
+            result.is_ok() ==> final(tasks).view() == old(tasks).view()
+                || norm::test_not_work(store.graph(), final(tasks).view())
+                    < norm::test_not_work(store.graph(), old(tasks).view().push((id, finish))),
+    {
+        if finish {
+            let mut out = and;
+            let mut failure = None;
+            let mut i = 0;
+            #[cfg_attr(verus_keep_ghost, verus_spec(
+                invariant i <= count, i <= old(values).view().len(),
+                    values.view() == old(values).view().take(old(values).view().len() - i),
+                    out == bool_fold(old(values).view().skip(old(values).view().len() - i), and),
+                ensures failure.is_none() ==> i == count,
+                decreases count - i,
+            ))]
+            while i < count {
+                let value = loop_try!(
+                    match values.pop() {
+                        Some(v) => Ok(v),
+                        None => Err(HistoryError::symbolic_invariant()),
+                    },
+                    failure
+                );
+                proof! {
+                    let suffix = old(values).view().skip(old(values).view().len() - i);
+                    bool_fold_prepend(value, suffix, and);
+                    assert(old(values).view().skip(old(values).view().len() - i - 1) =~= seq![value] + suffix);
+                }
+                if and {
+                    out &= value
+                } else {
+                    out |= value
+                }
+                i = i.saturating_add(1);
+            }
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            values.push(out);
+            proof! {
+                assert(old(tasks).view().push((id, finish)).drop_last() =~= old(tasks).view());
+                assert forall|theta: Subst, event: EventView|
+                    test_run(store.graph(), old(tasks).view().push((id, finish)), old(values).view(), theta, event)
+                        == test_run(store.graph(), tasks.view(), values.view(), theta, event) by {
+                    test_run_unfold(store.graph(), old(tasks).view().push((id, finish)), old(values).view(), theta, event);
+                }
+            }
+        } else {
+            tasks.push((id, true));
+            proof_decl! { let ghost scheduled_base = tasks.view(); }
+            proof! { model::lemma_graph_test_wf(store.graph(), id@); }
+            let mut failure = None;
+            let mut remaining = count;
+            #[cfg_attr(verus_keep_ghost, verus_spec(
+                invariant remaining <= count, model::graph_wf(store.graph()), id@ < store.graph().tests.len(),
+                    count == test_children(store.graph(), id).len(), test_tasks_wf(store.graph(), scheduled_base),
+                    test_tasks_wf(store.graph(), tasks.view()),
+                    failure.is_none() ==> tasks.view() == scheduled_base + child_test_tasks(store.graph(), id, remaining as nat),
+                ensures failure.is_none() ==> remaining == 0,
+                decreases remaining,
+            ))]
+            // Reverse pushes preserve source order when the LIFO task stack executes children.
+            while remaining != 0 {
+                let i = loop_try!(
+                    match remaining.checked_sub(1) {
+                        Some(value) => Ok(value),
+                        None => Err(HistoryError::symbolic_invariant()),
+                    },
+                    failure
+                );
+                remaining = i;
+                let child = loop_try!(id.child(store, i), failure);
+                proof! {
+                    assert(child@ == test_children(store.graph(), id)[i as int]);
+                    model::lemma_graph_test_wf(store.graph(), id@);
+                    assert(child@ < store.graph().tests.len());
+                    assert(child_test_tasks(store.graph(), id, i as nat)
+                        =~= child_test_tasks(store.graph(), id, i as nat + 1).push((child, false)));
+                }
+                tasks.push((child, false));
+            }
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            proof! {
+                assert forall|theta: Subst, event: EventView|
+                    test_run(store.graph(), old(tasks).view().push((id, finish)), old(values).view(), theta, event)
+                        == test_run(store.graph(), tasks.view(), values.view(), theta, event) by {
+                    test_expand(store.graph(), id, old(tasks).view(), old(values).view(), theta, event);
+                }
+                test_lemma_eval_branch_work(store.graph(), id, old(tasks).view());
+            }
+        }
+        Ok(())
+    }
+
+    fn evaluate_step<G: KernelStore>(
+        this: TestId,
+        store: &mut G,
+        finish: bool,
+        atoms: &AtomSet,
+        words: &[u64],
+        tasks: &mut WorkVec<(TestId, bool)>,
+        values: &mut WorkVec<bool>,
+    ) -> (result: KernelResult<()>)
         requires model::graph_wf(old(store).graph()), this@ < old(store).graph().tests.len(),
             model::atom_ids_wf(old(store).graph(), atoms@), test_tasks_wf(old(store).graph(), old(tasks).view()),
         ensures final(store).graph() == old(store).graph(), final(store).valid_store() == old(store).valid_store(),
@@ -835,33 +801,22 @@ pub(crate) trait TestEvaluate: Sized {
                     test_run(final(store).graph(), old(tasks).view().push((this, finish)), old(values).view(), theta, event)
                         == test_run(final(store).graph(), final(tasks).view(), final(values).view(), theta, event),
             result.is_ok() ==> norm::test_not_work(final(store).graph(), final(tasks).view())
-                < norm::test_not_work(old(store).graph(), old(tasks).view().push((this, finish))),
-    )]
-    fn evaluate_step<G: KernelStore>(
+                < norm::test_not_work(old(store).graph(), old(tasks).view().push((this, finish)));
+
+    fn evaluate<G: KernelStore>(
         this: TestId,
         store: &mut G,
-        finish: bool,
         atoms: &AtomSet,
         words: &[u64],
-        tasks: &mut WorkVec<(TestId, bool)>,
-        values: &mut WorkVec<bool>,
-    ) -> KernelResult<()>;
-
-    #[verus_spec(result =>
+    ) -> (result: KernelResult<bool>)
         requires model::graph_wf(old(store).graph()), this@ < old(store).graph().tests.len(),
             model::atom_ids_wf(old(store).graph(), atoms@),
         ensures final(store).graph() == old(store).graph(), final(store).valid_store() == old(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
             result matches Ok(value) ==> forall|theta: Subst, event: EventView|
                 truth_words_realize(final(store).graph(), atoms@, words@, theta, event) ==>
-                    value == model::test_holds(theta, model::lift_test(final(store).graph(), this@), event),
-    )]
-    fn evaluate<G: KernelStore>(
-        this: TestId,
-        store: &mut G,
-        atoms: &AtomSet,
-        words: &[u64],
-    ) -> KernelResult<bool>;
+                    value == model::test_holds(theta, model::lift_test(final(store).graph(), this@), event);
+}
 }
 
 #[verus_verify]
@@ -889,8 +844,8 @@ impl TestEvaluate for TestId {
                     realized_atom_value(store.graph(), atoms@, words@, this, primitive@, positive, index, value);
                 }
             }
-            TestHead::And(n) => evaluate_test_branch(store, this, n, true, finish, tasks, values)?,
-            TestHead::Or(n) => evaluate_test_branch(store, this, n, false, finish, tasks, values)?,
+            TestHead::And(n) => Self::evaluate_branch(store, this, n, true, finish, tasks, values)?,
+            TestHead::Or(n) => Self::evaluate_branch(store, this, n, false, finish, tasks, values)?,
         }
         proof! {
             assert(old(tasks).view().push((this, finish)).drop_last() =~= old(tasks).view());
@@ -956,234 +911,144 @@ impl TestEvaluate for TestId {
         }
     }
 }
-#[allow(
-    clippy::option_if_let_else,
-    reason = "Explicit matches preserve the Verus proof structure."
-)]
-#[verus_verify]
-#[verus_spec(result =>
-    requires model::graph_wf(store.graph()), id@ < store.graph().transitions.len(),
-        count == transition_children(store.graph(), id).len(), interp_tasks_wf(store.graph(), old(tasks).view()),
-    ensures interp_tasks_wf(store.graph(), final(tasks).view()),
-        result.is_ok() ==> final(tasks).view() == old(tasks).view() + child_interp_tasks(store.graph(), id, 0),
-)]
-fn schedule_transition_children<G: KernelStore>(
-    store: &G,
-    id: TransitionId,
-    count: usize,
-    tasks: &mut WorkVec<(TransitionId, bool)>,
-) -> KernelResult<()> {
-    proof! { model::lemma_graph_transition_wf(store.graph(), id@); }
-    let mut failure = None;
-    let mut remaining = count;
-    #[cfg_attr(verus_keep_ghost, verus_spec(
-        invariant remaining <= count, model::graph_wf(store.graph()), id@ < store.graph().transitions.len(),
-            count == transition_children(store.graph(), id).len(), interp_tasks_wf(store.graph(), old(tasks).view()),
-            interp_tasks_wf(store.graph(), tasks.view()),
-            failure.is_none() ==> tasks.view() == old(tasks).view() + child_interp_tasks(store.graph(), id, remaining as nat),
-        ensures failure.is_none() ==> remaining == 0,
-        decreases remaining,
-    ))]
-    // Reverse pushes preserve source order when the LIFO task stack executes children.
-    while remaining != 0 {
-        let i = loop_try!(
-            match remaining.checked_sub(1) {
-                Some(value) => Ok(value),
-                None => Err(HistoryError::symbolic_invariant()),
-            },
-            failure
-        );
-        remaining = i;
-        let child = loop_try!(id.child(store, i), failure);
-        proof! {
-            model::lemma_graph_transition_wf(store.graph(), id@);
-            assert(child@ == transition_children(store.graph(), id)[i as int]);
-            assert(child@ < store.graph().transitions.len());
-            assert(child_interp_tasks(store.graph(), id, i as nat)
-                =~= child_interp_tasks(store.graph(), id, i as nat + 1).push((child, false)));
-        }
-        tasks.push((child, false));
-    }
-    if let Some(error) = failure {
-        return Err(error);
-    }
-    Ok(())
-}
-#[verus_verify]
-#[verus_spec(result =>
-    requires model::graph_wf(old(store).graph()), old(store).valid_store(), norm::regex_ids_valid(old(store).graph(), old(values).view()),
-    ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
-        final(store).restoration() == old(store).restoration(),
-        norm::regex_ids_valid(final(store).graph(), final(values).view()),
-        result.is_ok() ==> interp_set_result(final(store).graph(), old(values).view(), final(values).view(), count as nat, intersect),
-)]
-fn interpret_set<G: KernelStore>(
-    store: &mut G,
-    count: usize,
-    intersect: bool,
-    values: &mut WorkVec<RegexId>,
-) -> KernelResult<()> {
-    proof_decl! { let ghost before = store.graph(); }
-    let start = match values.len().checked_sub(count) {
-        Some(v) => v,
-        None => return Err(HistoryError::symbolic_invariant()),
-    };
-    let children = match values.get(start..) {
-        Some(xs) => xs,
-        None => return Err(HistoryError::symbolic_invariant()),
-    };
-    proof_decl! { let ghost selected = children@; }
-    let out = RegexId::set(store, children, intersect)?;
-    proof! { lifted_values_stable(before, store.graph(), old(values).view()); }
-    values.truncate(start);
-    values.push(out);
-    proof! {
-        assert forall|theta: Subst| language::event_wf(theta) implies
-            regex_stack_equiv(model::gsem(theta), lifted_values(store.graph(), values.view()),
-                lifted_values(store.graph(), old(values).view().take(old(values).view().len() - count)).push(
-                    regex_fold(lifted_values(store.graph(), old(values).view().skip(old(values).view().len() - count)), intersect))) by {
-            assert forall|word: Seq<EventView>| model::regex_lang(store.graph(), theta, out@, word)
-                == language::lang(model::gsem(theta), regex_fold(lifted_values(store.graph(), selected), intersect), word) by {
-                regex_fold_ids(store.graph(), selected, intersect, theta, word);
-            }
-            assert(lifted_values(store.graph(), values.view())
-                =~= lifted_values(store.graph(), old(values).view().take(start as int)).push(model::lift_regex(store.graph(), out@)));
-            assert(selected =~= old(values).view().skip(start as int));
-            assert forall|i: int, word: Seq<EventView>| 0 <= i < values.view().len() implies
-                language::lang(model::gsem(theta), lifted_values(store.graph(), values.view())[i], word)
-                    == language::lang(model::gsem(theta), lifted_values(store.graph(), old(values).view().take(start as int)).push(
-                        regex_fold(lifted_values(store.graph(), selected), intersect))[i], word) by {
-                if i == start {
-                    assert(model::regex_lang(store.graph(), theta, out@, word)
-                        == language::lang(model::gsem(theta), regex_fold(lifted_values(store.graph(), selected), intersect), word));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-#[verus_verify]
-#[verus_spec(result =>
-    requires model::graph_wf(old(store).graph()), old(store).valid_store(), id@ < old(store).graph().transitions.len(),
-        old(store).graph().transitions[id@ as int] == (if intersect { model::TransitionNode::Intersect(transition_children(old(store).graph(), id)) } else { model::TransitionNode::Union(transition_children(old(store).graph(), id)) }),
-        count == transition_children(old(store).graph(), id).len(), interp_tasks_wf(old(store).graph(), old(tasks).view()),
-        norm::regex_ids_valid(old(store).graph(), old(values).view()),
-    ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
-        final(store).restoration() == old(store).restoration(),
-        interp_tasks_wf(final(store).graph(), final(tasks).view()), norm::regex_ids_valid(final(store).graph(), final(values).view()),
-        result.is_ok() ==> forall|theta: Subst, event: EventView| language::event_wf(theta) ==>
-            interp_results_equiv(model::gsem(theta),
-                interp_run(old(store).graph(), old(tasks).view().push((id, finish)), lifted_values(old(store).graph(), old(values).view()), theta, event),
-                interp_run(final(store).graph(), final(tasks).view(), lifted_values(final(store).graph(), final(values).view()), theta, event)),
-        result.is_ok() ==> final(tasks).view() == old(tasks).view()
-            || (interp_tasks_wf(old(store).graph(), final(tasks).view())
-                && interp_work(old(store).graph(), final(tasks).view())
-                    < interp_work(old(store).graph(), old(tasks).view().push((id, finish)))),
-)]
-fn interpret_branch<G: KernelStore>(
-    store: &mut G,
-    id: TransitionId,
-    count: usize,
-    intersect: bool,
-    finish: bool,
-    tasks: &mut WorkVec<(TransitionId, bool)>,
-    values: &mut WorkVec<RegexId>,
-) -> KernelResult<()> {
-    proof_decl! { let ghost before = store.graph(); }
-    if finish {
-        interpret_set(store, count, intersect, values)?;
-        proof! {
-            assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
-                interp_results_equiv(model::gsem(theta),
-                    interp_run(before, old(tasks).view().push((id, finish)), lifted_values(before, old(values).view()), theta, event),
-                    interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
-                let pending = old(tasks).view().push((id, finish));
-                interp_same_configuration_extends(before, store.graph(), pending, old(values).view(), theta, event);
-                assert(pending.drop_last() =~= old(tasks).view());
-                interp_run_unfold(store.graph(), pending, lifted_values(store.graph(), old(values).view()), theta, event);
-                let reduced = lifted_values(store.graph(), old(values).view()).take(old(values).view().len() - count).push(
-                    regex_fold(lifted_values(store.graph(), old(values).view()).skip(old(values).view().len() - count), intersect));
-                assert(lifted_values(store.graph(), old(values).view().take(old(values).view().len() - count))
-                    =~= lifted_values(store.graph(), old(values).view()).take(old(values).view().len() - count));
-                assert(lifted_values(store.graph(), old(values).view().skip(old(values).view().len() - count))
-                    =~= lifted_values(store.graph(), old(values).view()).skip(old(values).view().len() - count));
-                interp_run_congruent(store.graph(), tasks.view(), reduced, lifted_values(store.graph(), values.view()), theta, event);
-            }
-        }
-    } else {
-        tasks.push((id, true));
-        schedule_transition_children(store, id, count, tasks)?;
-        proof! {
-            assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
-                interp_results_equiv(model::gsem(theta),
-                    interp_run(before, old(tasks).view().push((id, finish)), lifted_values(before, old(values).view()), theta, event),
-                    interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
-                interp_expand_set(store.graph(), id, old(tasks).view(), lifted_values(store.graph(), old(values).view()), theta, event);
-            }
-            interp_lemma_work_branch(store.graph(), id, old(tasks).view());
-        }
-    }
-    Ok(())
-}
-#[verus_verify]
-#[verus_spec(result =>
-    requires model::graph_wf(store.graph()), id@ < store.graph().transitions.len(), head@ < store.graph().regexes.len(),
-        count == transition_suffix(store.graph(), id).len(),
-    ensures result matches Ok(xs) ==> norm::regex_ids_valid(store.graph(), xs.view())
-        && model::regex_ids(xs.view()) == seq![head@] + transition_suffix(store.graph(), id),
-)]
-fn append_values<G: KernelStore>(
-    store: &G,
-    id: TransitionId,
-    count: usize,
-    head: RegexId,
-) -> KernelResult<WorkVec<RegexId>> {
-    proof! { model::lemma_graph_transition_wf(store.graph(), id@); }
-    let mut xs = WorkVec::new();
-    xs.push(head);
-    let mut failure = None;
-    let mut i = 0;
-    #[cfg_attr(verus_keep_ghost, verus_spec(
-        invariant i <= count, model::graph_wf(store.graph()), id@ < store.graph().transitions.len(), head@ < store.graph().regexes.len(),
-            count == transition_suffix(store.graph(), id).len(), norm::regex_ids_valid(store.graph(), xs.view()),
-            model::regex_ids(xs.view()) == seq![head@] + transition_suffix(store.graph(), id).take(i as int),
-        ensures failure.is_none() ==> i == count,
-        decreases count - i,
-    ))]
-    while i < count {
-        let child = loop_try!(id.suffix_child(store, i), failure);
-        proof! {
-            model::lemma_graph_transition_wf(store.graph(), id@);
-            assert(child@ == transition_suffix(store.graph(), id)[i as int]);
-            assert(child@ < store.graph().regexes.len());
-        }
-        proof_decl! { let ghost previous = xs.view(); }
-        xs.push(child);
-        proof! {
-            norm::regex_ids_push(previous, child);
-            assert(transition_suffix(store.graph(), id).take(i as int + 1)
-                =~= transition_suffix(store.graph(), id).take(i as int).push(child@));
-        }
-        i = i.saturating_add(1);
-    }
-    if let Some(error) = failure {
-        return Err(error);
-    }
-    Ok(xs)
-}
-#[verus_verify]
+verus! {
 pub(crate) trait TransitionInterpret: Sized {
-    #[verus_spec(result =>
-        requires model::graph_wf(old(store).graph()), old(store).valid_store(), this@ < old(store).graph().transitions.len(),
-            model::atom_ids_wf(old(store).graph(), atoms@), interp_tasks_wf(old(store).graph(), old(tasks).view()),
+    #[allow(
+        clippy::option_if_let_else,
+        reason = "Explicit matches preserve the Verus proof structure."
+    )]
+    fn interpret_branch<G: KernelStore>(
+        store: &mut G,
+        id: TransitionId,
+        count: usize,
+        intersect: bool,
+        finish: bool,
+        tasks: &mut WorkVec<(TransitionId, bool)>,
+        values: &mut WorkVec<RegexId>,
+    ) -> (result: KernelResult<()>)
+        requires model::graph_wf(old(store).graph()), old(store).valid_store(), id@ < old(store).graph().transitions.len(),
+            old(store).graph().transitions[id@ as int] == (if intersect { model::TransitionNode::Intersect(transition_children(old(store).graph(), id)) } else { model::TransitionNode::Union(transition_children(old(store).graph(), id)) }),
+            count == transition_children(old(store).graph(), id).len(), interp_tasks_wf(old(store).graph(), old(tasks).view()),
             norm::regex_ids_valid(old(store).graph(), old(values).view()),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
             interp_tasks_wf(final(store).graph(), final(tasks).view()), norm::regex_ids_valid(final(store).graph(), final(values).view()),
-            result.is_ok() ==> interp_machine_relation(old(store).graph(), final(store).graph(), old(tasks).view().push((this, finish)), final(tasks).view(), old(values).view(), final(values).view(), atoms@, words@),
-            result.is_ok() ==> interp_work(final(store).graph(), final(tasks).view())
-                < interp_work(old(store).graph(), old(tasks).view().push((this, finish))),
-    )]
+            result.is_ok() ==> forall|theta: Subst, event: EventView| language::event_wf(theta) ==>
+                interp_results_equiv(model::gsem(theta),
+                    interp_run(old(store).graph(), old(tasks).view().push((id, finish)), lifted_values(old(store).graph(), old(values).view()), theta, event),
+                    interp_run(final(store).graph(), final(tasks).view(), lifted_values(final(store).graph(), final(values).view()), theta, event)),
+            result.is_ok() ==> final(tasks).view() == old(tasks).view()
+                || (interp_tasks_wf(old(store).graph(), final(tasks).view())
+                    && interp_work(old(store).graph(), final(tasks).view())
+                        < interp_work(old(store).graph(), old(tasks).view().push((id, finish)))),
+    {
+        proof_decl! { let ghost before = store.graph(); }
+        if finish {
+            let start = match values.len().checked_sub(count) {
+                Some(v) => v,
+                None => return Err(HistoryError::symbolic_invariant()),
+            };
+            let children = match values.get(start..) {
+                Some(xs) => xs,
+                None => return Err(HistoryError::symbolic_invariant()),
+            };
+            proof_decl! { let ghost selected = children@; }
+            let out = RegexId::set(store, children, intersect)?;
+            proof! { lifted_values_stable(before, store.graph(), old(values).view()); }
+            values.truncate(start);
+            values.push(out);
+            proof! {
+                assert forall|theta: Subst| language::event_wf(theta) implies
+                    regex_stack_equiv(model::gsem(theta), lifted_values(store.graph(), values.view()),
+                        lifted_values(store.graph(), old(values).view().take(old(values).view().len() - count)).push(
+                            regex_fold(lifted_values(store.graph(), old(values).view().skip(old(values).view().len() - count)), intersect))) by {
+                    assert forall|word: Seq<EventView>| model::regex_lang(store.graph(), theta, out@, word)
+                        == language::lang(model::gsem(theta), regex_fold(lifted_values(store.graph(), selected), intersect), word) by {
+                        regex_fold_ids(store.graph(), selected, intersect, theta, word);
+                    }
+                    assert(lifted_values(store.graph(), values.view())
+                        =~= lifted_values(store.graph(), old(values).view().take(start as int)).push(model::lift_regex(store.graph(), out@)));
+                    assert(selected =~= old(values).view().skip(start as int));
+                    assert forall|i: int, word: Seq<EventView>| 0 <= i < values.view().len() implies
+                        language::lang(model::gsem(theta), lifted_values(store.graph(), values.view())[i], word)
+                            == language::lang(model::gsem(theta), lifted_values(store.graph(), old(values).view().take(start as int)).push(
+                                regex_fold(lifted_values(store.graph(), selected), intersect))[i], word) by {
+                        if i == start {
+                            assert(model::regex_lang(store.graph(), theta, out@, word)
+                                == language::lang(model::gsem(theta), regex_fold(lifted_values(store.graph(), selected), intersect), word));
+                        }
+                    }
+                }
+                assert(interp_set_result(store.graph(), old(values).view(), values.view(), count as nat, intersect));
+                assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
+                    interp_results_equiv(model::gsem(theta),
+                        interp_run(before, old(tasks).view().push((id, finish)), lifted_values(before, old(values).view()), theta, event),
+                        interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
+                    let pending = old(tasks).view().push((id, finish));
+                    interp_same_configuration_extends(before, store.graph(), pending, old(values).view(), theta, event);
+                    assert(pending.drop_last() =~= old(tasks).view());
+                    interp_run_unfold(store.graph(), pending, lifted_values(store.graph(), old(values).view()), theta, event);
+                    let reduced = lifted_values(store.graph(), old(values).view()).take(old(values).view().len() - count).push(
+                        regex_fold(lifted_values(store.graph(), old(values).view()).skip(old(values).view().len() - count), intersect));
+                    assert(lifted_values(store.graph(), old(values).view().take(old(values).view().len() - count))
+                        =~= lifted_values(store.graph(), old(values).view()).take(old(values).view().len() - count));
+                    assert(lifted_values(store.graph(), old(values).view().skip(old(values).view().len() - count))
+                        =~= lifted_values(store.graph(), old(values).view()).skip(old(values).view().len() - count));
+                    interp_run_congruent(store.graph(), tasks.view(), reduced, lifted_values(store.graph(), values.view()), theta, event);
+                }
+            }
+        } else {
+            tasks.push((id, true));
+            proof_decl! { let ghost scheduled_base = tasks.view(); }
+            proof! { model::lemma_graph_transition_wf(store.graph(), id@); }
+            let mut failure = None;
+            let mut remaining = count;
+            #[cfg_attr(verus_keep_ghost, verus_spec(
+                invariant remaining <= count, model::graph_wf(store.graph()), id@ < store.graph().transitions.len(),
+                    store.graph() == before, store.valid_store(), store.restoration() == old(store).restoration(),
+                    norm::regex_ids_valid(store.graph(), values.view()),
+                    count == transition_children(store.graph(), id).len(), interp_tasks_wf(store.graph(), scheduled_base),
+                    interp_tasks_wf(store.graph(), tasks.view()),
+                    failure.is_none() ==> tasks.view() == scheduled_base + child_interp_tasks(store.graph(), id, remaining as nat),
+                ensures failure.is_none() ==> remaining == 0,
+                decreases remaining,
+            ))]
+            // Reverse pushes preserve source order when the LIFO task stack executes children.
+            while remaining != 0 {
+                let i = loop_try!(
+                    match remaining.checked_sub(1) {
+                        Some(value) => Ok(value),
+                        None => Err(HistoryError::symbolic_invariant()),
+                    },
+                    failure
+                );
+                remaining = i;
+                let child = loop_try!(id.child(store, i), failure);
+                proof! {
+                    model::lemma_graph_transition_wf(store.graph(), id@);
+                    assert(child@ == transition_children(store.graph(), id)[i as int]);
+                    assert(child@ < store.graph().transitions.len());
+                    assert(child_interp_tasks(store.graph(), id, i as nat)
+                        =~= child_interp_tasks(store.graph(), id, i as nat + 1).push((child, false)));
+                }
+                tasks.push((child, false));
+            }
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            proof! {
+                assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
+                    interp_results_equiv(model::gsem(theta),
+                        interp_run(before, old(tasks).view().push((id, finish)), lifted_values(before, old(values).view()), theta, event),
+                        interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
+                    interp_expand_set(store.graph(), id, old(tasks).view(), lifted_values(store.graph(), old(values).view()), theta, event);
+                }
+                interp_lemma_work_branch(store.graph(), id, old(tasks).view());
+            }
+        }
+        Ok(())
+    }
+
     fn interpret_step<G: KernelStore>(
         this: TransitionId,
         store: &mut G,
@@ -1192,9 +1057,23 @@ pub(crate) trait TransitionInterpret: Sized {
         words: &[u64],
         tasks: &mut WorkVec<(TransitionId, bool)>,
         values: &mut WorkVec<RegexId>,
-    ) -> KernelResult<()>;
+    ) -> (result: KernelResult<()>)
+        requires model::graph_wf(old(store).graph()), old(store).valid_store(), this@ < old(store).graph().transitions.len(),
+            model::atom_ids_wf(old(store).graph(), atoms@), interp_tasks_wf(old(store).graph(), old(tasks).view()),
+            norm::regex_ids_valid(old(store).graph(), old(values).view()),
+        ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
+            final(store).restoration() == old(store).restoration(),
+            interp_tasks_wf(final(store).graph(), final(tasks).view()), norm::regex_ids_valid(final(store).graph(), final(values).view()),
+            result.is_ok() ==> interp_machine_relation(old(store).graph(), final(store).graph(), old(tasks).view().push((this, finish)), final(tasks).view(), old(values).view(), final(values).view(), atoms@, words@),
+            result.is_ok() ==> interp_work(final(store).graph(), final(tasks).view())
+                < interp_work(old(store).graph(), old(tasks).view().push((this, finish)));
 
-    #[verus_spec(result =>
+    fn interpret<G: KernelStore>(
+        this: TransitionId,
+        store: &mut G,
+        atoms: &AtomSet,
+        truth_words: &[u64],
+    ) -> (result: KernelResult<RegexId>)
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), this@ < old(store).graph().transitions.len(),
             model::atom_ids_wf(old(store).graph(), atoms@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
@@ -1203,14 +1082,8 @@ pub(crate) trait TransitionInterpret: Sized {
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>|
                     language::event_wf(theta) && truth_words_realize(old(store).graph(), atoms@, truth_words@, theta, event) ==>
                         model::regex_lang(final(store).graph(), theta, id@, word)
-                            == norm::transition_lang(final(store).graph(), theta, this, event, word),
-    )]
-    fn interpret<G: KernelStore>(
-        this: TransitionId,
-        store: &mut G,
-        atoms: &AtomSet,
-        truth_words: &[u64],
-    ) -> KernelResult<RegexId>;
+                            == norm::transition_lang(final(store).graph(), theta, this, event, word);
+}
 }
 
 #[verus_verify]
@@ -1266,10 +1139,10 @@ impl TransitionInterpret for TransitionId {
                 }
             }
             TransitionHead::Union(n) => {
-                interpret_branch(store, this, n, false, finish, tasks, values)?
+                Self::interpret_branch(store, this, n, false, finish, tasks, values)?
             }
             TransitionHead::Intersect(n) => {
-                interpret_branch(store, this, n, true, finish, tasks, values)?
+                Self::interpret_branch(store, this, n, true, finish, tasks, values)?
             }
             TransitionHead::Not(inner) => {
                 if finish {
@@ -1311,9 +1184,48 @@ impl TransitionInterpret for TransitionId {
                         Some(v) => v,
                         None => return Err(HistoryError::symbolic_invariant()),
                     };
-                    let xs = append_values(store, this, n, head)?;
+                    proof! { model::lemma_graph_transition_wf(store.graph(), this@); }
+                    let mut xs = WorkVec::new();
+                    xs.push(head);
+                    let mut failure = None;
+                    let mut i = 0;
+                    #[cfg_attr(verus_keep_ghost, verus_spec(
+                        invariant i <= n, model::graph_wf(store.graph()), this@ < store.graph().transitions.len(), head@ < store.graph().regexes.len(),
+                            store.graph() == before, store.valid_store(), store.restoration() == old(store).restoration(),
+                            interp_tasks_wf(store.graph(), tasks.view()), norm::regex_ids_valid(store.graph(), values.view()),
+                            tasks.view() == pending, values.view() == prior.drop_last(), prior.len() > 0, prior.last() == head,
+                            n == transition_suffix(store.graph(), this).len(), norm::regex_ids_valid(store.graph(), xs.view()),
+                            model::regex_ids(xs.view()) == seq![head@] + transition_suffix(store.graph(), this).take(i as int),
+                        ensures failure.is_none() ==> i == n,
+                        decreases n - i,
+                    ))]
+                    while i < n {
+                        let child = loop_try!(this.suffix_child(store, i), failure);
+                        proof! {
+                            model::lemma_graph_transition_wf(store.graph(), this@);
+                            assert(child@ == transition_suffix(store.graph(), this)[i as int]);
+                            assert(child@ < store.graph().regexes.len());
+                        }
+                        proof_decl! { let ghost previous = xs.view(); }
+                        xs.push(child);
+                        proof! {
+                            norm::regex_ids_push(previous, child);
+                            assert(transition_suffix(store.graph(), this).take(i as int + 1)
+                                =~= transition_suffix(store.graph(), this).take(i as int).push(child@));
+                        }
+                        i = i.saturating_add(1);
+                    }
+                    if let Some(error) = failure {
+                        return Err(error);
+                    }
+                    proof! {
+                        assert(transition_suffix(before, this).take(n as int) =~= transition_suffix(before, this));
+                        assert(model::regex_ids(xs.view()) == seq![head@] + transition_suffix(before, this));
+                    }
                     values.push(RegexId::concat(store, &xs)?);
                     proof! {
+                        assert(before.transitions[this@ as int] == store.graph().transitions[this@ as int]);
+                        assert(transition_suffix(store.graph(), this) == transition_suffix(before, this));
                         lifted_values_stable(before, store.graph(), prior);
                         interp_append_ids(store.graph(), xs.view(), head, transition_suffix(store.graph(), this));
                         regex_concat_ids(store.graph(), xs.view());

@@ -3,12 +3,15 @@
 
 //! Revision-bound retained cursors and failure-atomic numeric batch evaluation.
 
-use crate::compile::NumericCompile;
 use crate::progress::CompiledPair;
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::progress::WorkCounters;
 #[cfg(verus_keep_ghost)]
 use crate::progress::verify as progress;
+#[cfg(verus_keep_ghost)]
+use crate::compiled_rule::verify::numeric_result;
+#[cfg(verus_keep_ghost)]
+use crate::verify::typed_decision as decision;
 #[cfg(verus_keep_ghost)]
 use crate::verify::history_algebra;
 use alloc::sync::Arc;
@@ -20,8 +23,11 @@ use history_store::cache::HISTORY_CACHE_CAPACITY;
 use history_store::cache::verify::{cursor_key_eq, longer_cached_prefix};
 use history_store::cache::{CursorCache, HistoryCursor};
 use history_store::history::StoredHistory;
+#[cfg(verus_keep_ghost)]
+use history_store::history::verify as raw;
 use history_store::store::{Event, HistoryStore};
 use junco_core::error::HistoryError;
+use junco_core::flat::FlatPair;
 use junco_core::kernel::Bindings;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
@@ -374,7 +380,7 @@ impl RuleRuntime {
     ) -> Result<Self, HistoryError> {
         proof! { reveal(constructor_result); reveal(runtime_wf); }
         #[cfg_attr(not(feature = "cache"), allow(unused_mut))]
-        let mut pair = junco_core::flat::FlatPair::compile(template, limits, world)?;
+        let mut pair = CompiledPair::compile(template, limits, world)?;
         #[cfg(feature = "cache")]
         if precompile {
             proof_decl! { let ghost compiled = pair; }
@@ -383,7 +389,7 @@ impl RuleRuntime {
                     return Err(error);
                 }
                 drop(pair);
-                pair = junco_core::flat::FlatPair::compile(template, limits, world)?;
+                pair = CompiledPair::compile(template, limits, world)?;
             }
             proof! {
                 if progress::pair_frame(compiled, pair) {
@@ -404,6 +410,113 @@ impl RuleRuntime {
             snapshots: verus_exec_expr! { Ghost(Map::empty()) },
         };
         Ok(runtime)
+    }
+
+    /// Bind the candidate and commit one complete-prefix answer/publication transaction.
+    #[verus_verify]
+    #[verus_spec(result =>
+        requires decision::runtime_represents(*template, *old(self)),
+            junco_core::flat::verify::structural_wf(*template),
+            snapshot_compatible(old(self).snapshots@, stored.id(), stored.revision(),
+                history_store::store::verify::events_view(raw::stored_events(&stored))),
+        ensures decision::runtime_represents(*template, *final(self)),
+            runtime_wf(*final(self)),
+            progress::pair_frame(old(self).pair, final(self).pair),
+            final(self).spec_store() == old(self).spec_store(),
+            result is Err ==> final(self).cursors@ == old(self).cursors@,
+            final(self).snapshots@ == old(self).snapshots@
+                || final(self).snapshots@ == old(self).snapshots@.insert((stored.id(), stored.revision()),
+                    history_store::store::verify::events_view(raw::stored_events(&stored))),
+            result != Ok(None) ==> final(self).snapshots@ == old(self).snapshots@.insert(
+                (stored.id(), stored.revision()),
+                history_store::store::verify::events_view(raw::stored_events(&stored))),
+            numeric_result(*template, *request, *stored, result),
+            result matches Ok(Some(answer)) ==> exists|bindings: Bindings|
+                crate::compile::verify::bindings_match(*template, *request, bindings)
+                    && language::event_wf(bindings@)
+                    && answer == model::regex_lang(old(self).pair.store.graph(), bindings@,
+                        old(self).pair.root@,
+                        history_store::store::verify::events_view(raw::stored_events(&stored))),
+    )]
+    pub(crate) fn accepts<L: Limits>(
+        &mut self,
+        template: &FlatPair<u64>,
+        request: &Event,
+        stored: &StoredHistory,
+        limits: &mut L,
+        world: &mut ObservationWorld,
+    ) -> Result<Option<bool>, HistoryError> {
+        proof_decl! { let ghost entry = *self; }
+        let bindings = match CompiledPair::bindings(template, request) {
+            Some(bindings) => bindings,
+            None => return Ok(None),
+        };
+        proof! {
+            crate::compile::verify::lemma_bindings_match(*template, *request, bindings);
+            history_store::history::lemma_stored_history_view(*stored);
+            reveal(runtime_wf);
+            reveal(resume_requires);
+            reveal(resume_ensures);
+            reveal(advance_requires);
+            reveal(advance_ensures);
+        }
+        proof_decl! { let ghost initial_snapshots = self.snapshots@; }
+        let target = stored.len();
+        let mut cursor = self.resume_cursor(&bindings, stored, target);
+        proof! {
+            assert(self.snapshots@ == initial_snapshots.insert((stored.id(), stored.revision()),
+                history_store::store::verify::events_view(raw::stored_events(&stored))));
+        }
+        proof_decl! { let ghost start = cursor; }
+        let result = self.advance_cursor(
+            &mut cursor,
+            &bindings,
+            stored,
+            target,
+            usize::MAX,
+            limits,
+            world,
+        );
+        proof! {
+            let key = (stored.id(), stored.revision());
+            let events = history_store::store::verify::events_view(raw::stored_events(&stored));
+            assert(self.snapshots@ == initial_snapshots.insert(key, events).insert(key, events));
+            assert(initial_snapshots.insert(key, events).insert(key, events) =~= initial_snapshots.insert(key, events));
+            language::lemma_selected_end(start.consumed as nat, target as nat, usize::MAX as nat);
+            assert(history_store::store::verify::events_view(raw::stored_events(&stored)).take(target as int)
+                =~= history_store::store::verify::events_view(raw::stored_events(&stored)));
+            decision::lemma_runtime_frame(*template, entry, *self);
+        }
+        match result {
+            Err(error) => Err(error),
+            Ok(Some(answer)) => {
+                proof! {
+                    assert(exists|witness: Bindings|
+                        crate::compile::verify::bindings_match(*template, *request, witness)
+                            && language::event_wf(witness@)
+                            && answer == crate::compile::verify::source_regex(*template,
+                                template.root as nat, witness@,
+                                history_store::store::verify::events_view(raw::stored_events(&stored)))) by {
+                        assert(crate::compile::verify::bindings_match(*template, *request, bindings));
+                    }
+                    assert(exists|witness: Bindings|
+                        crate::compile::verify::bindings_match(*template, *request, witness)
+                            && language::event_wf(witness@)
+                            && answer == model::regex_lang(entry.pair.store.graph(), witness@,
+                                entry.pair.root@,
+                                history_store::store::verify::events_view(raw::stored_events(&stored)))) by {
+                        assert(crate::compile::verify::bindings_match(*template, *request, bindings));
+                    }
+                }
+                Ok(Some(answer))
+            }
+            Ok(None) => {
+                proof! { assert(false); }
+                Err(HistoryError::invariant(
+                    "complete history batch returned no answer",
+                ))
+            }
+        }
     }
 
     #[expect(

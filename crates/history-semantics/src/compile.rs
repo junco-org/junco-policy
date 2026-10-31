@@ -3,10 +3,8 @@ use crate::normalize::verify as norm;
 use crate::normalize::{RegexNormalize, TestNormalize};
 use crate::progress::CompiledPair;
 use alloc::vec::Vec;
-use history_store::graph::{ArenaStorage, CanonicalStore, RuntimeKernel, allocation};
+use history_store::graph::{CanonicalStore, RuntimeKernel, allocation};
 use history_store::store::Event as NumericEvent;
-#[cfg(verus_keep_ghost)]
-use history_store::verify::storage::StorageSpec;
 use history_syntax::syntax::Component;
 use junco_core::error::HistoryError;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
@@ -27,26 +25,6 @@ verus! {
 broadcast use junco_core::kernel::verify::group_kernel_views;
 }
 
-#[verus_verify]
-#[verus_spec(result => ensures match result {
-    Some(bindings) => bindings_match(*template, *request, bindings),
-    None => head_rejects(*template, *request),
-})]
-pub fn bindings(template: &FlatPair<u64>, request: &NumericEvent) -> Option<Bindings> {
-    proof! { reveal(bindings_match); reveal(head_rejects); }
-    let p = FlatHead::bind(&template.head[0], request.principal.get())?;
-    let a = FlatHead::bind(&template.head[1], request.action.get())?;
-    let r = FlatHead::bind(&template.head[2], request.resource.get())?;
-    Some(Bindings::new([p, a, r]))
-}
-#[verus_verify]
-#[verus_spec(result => ensures result@ == term_view(*term))]
-fn numeric_term(term: &FlatTerm<u64>) -> Term {
-    match term {
-        FlatTerm::Constant(value) => Term::Constant(*value),
-        FlatTerm::Variable(field) => Term::Variable(*field),
-    }
-}
 
 #[cfg(verus_keep_ghost)]
 verus! {
@@ -70,23 +48,30 @@ verus! {
 }
 
 #[verus_verify]
-pub(crate) trait HeadBinding: Sized {
+impl CompiledPair {
+    #[verus_verify]
     #[verus_spec(result => ensures match result {
-    Some(binding) => language::head_field_match(this@, value as nat, binding as nat),
-    None => !exists|binding: nat| language::head_field_match(this@, value as nat, binding),
-})]
-    fn bind(this: &FlatHead<u64>, value: u64) -> Option<u64>;
-}
+        Some(bindings) => bindings_match(*template, *request, bindings),
+        None => head_rejects(*template, *request),
+    })]
+    pub(crate) fn bindings(template: &FlatPair<u64>, request: &NumericEvent) -> Option<Bindings> {
+        proof! { reveal(bindings_match); reveal(head_rejects); }
+        let p = Self::bind_head(&template.head[0], request.principal.get())?;
+        let a = Self::bind_head(&template.head[1], request.action.get())?;
+        let r = Self::bind_head(&template.head[2], request.resource.get())?;
+        Some(Bindings::new([p, a, r]))
+    }
 
-#[verus_verify]
-impl HeadBinding for FlatHead<u64> {
     #[allow(
         clippy::missing_const_for_fn,
         reason = "Keep the existing operation and its Verus contract unchanged"
     )]
     #[verus_verify]
-
-    fn bind(this: &FlatHead<u64>, value: u64) -> Option<u64> {
+    #[verus_spec(result => ensures match result {
+        Some(binding) => language::head_field_match(this@, value as nat, binding as nat),
+        None => !exists|binding: nat| language::head_field_match(this@, value as nat, binding),
+    })]
+    fn bind_head(this: &FlatHead<u64>, value: u64) -> Option<u64> {
         match this {
             FlatHead::Any => Some(0),
             FlatHead::Constant(expected) if value == *expected => Some(0),
@@ -94,45 +79,14 @@ impl HeadBinding for FlatHead<u64> {
             FlatHead::Bind => Some(value),
         }
     }
-}
 
-#[verus_verify]
-pub(crate) trait NumericCompile: Sized {
+    #[verus_verify]
     #[verus_spec(result => ensures result matches Ok(value)
-    ==> (id as nat) < values@.len() && value == values@[id as int])]
-    fn lookup<T: Copy>(values: &[T], id: u32) -> KernelResult<T>;
-
-    #[verus_spec(result => ensures result matches Ok(found) ==> {
-    found@.len() == ids@.len()
-    && forall|i: int| 0 <= i < ids@.len()
-        ==> #[trigger] ids@[i] < values@.len() && found@[i] == values@[ids@[i] as int]
-})]
-    fn references<T: Copy>(
-        values: &[T],
-        ids: &[u32],
-        world: &mut ObservationWorld,
-    ) -> KernelResult<Vec<T>>;
-
-    #[verus_spec(result => ensures result matches Ok(pair) ==> {
-    crate::progress::verify::pair_wf(pair)
-    && forall|theta: language::Subst, word: Seq<language::EventView>| language::event_wf(theta)
-        ==> model::regex_lang(pair.store.graph(), theta, pair.root@, word)
-            == source_regex(*this, this.root as nat, theta, word)
-})]
-    fn compile<L: Limits>(
-        this: &FlatPair<u64>,
-        limits: &mut L,
-        world: &mut ObservationWorld,
-    ) -> KernelResult<CompiledPair>;
-}
-
-#[verus_verify]
-impl NumericCompile for FlatPair<u64> {
+        ==> (id as nat) < values@.len() && value == values@[id as int])]
     #[allow(
         clippy::option_if_let_else,
         reason = "Explicit matches preserve the Verus proof structure"
     )]
-    #[verus_verify]
 
     fn lookup<T: Copy>(values: &[T], id: u32) -> KernelResult<T> {
         let index = match usize::try_from(id) {
@@ -147,6 +101,11 @@ impl NumericCompile for FlatPair<u64> {
     }
 
     #[verus_verify]
+    #[verus_spec(result => ensures result matches Ok(found) ==> {
+        found@.len() == ids@.len()
+        && forall|i: int| 0 <= i < ids@.len()
+            ==> #[trigger] ids@[i] < values@.len() && found@[i] == values@[ids@[i] as int]
+    })]
 
     fn references<T: Copy>(
         values: &[T],
@@ -193,20 +152,26 @@ impl NumericCompile for FlatPair<u64> {
         reason = "Separate lowering loops retain their proof-local index bindings"
     )]
     #[verus_verify]
+    #[verus_spec(result => ensures result matches Ok(pair) ==> {
+        crate::progress::verify::pair_wf(pair)
+        && forall|theta: language::Subst, word: Seq<language::EventView>| language::event_wf(theta)
+            ==> model::regex_lang(pair.store.graph(), theta, pair.root@, word)
+                == source_regex(*template, template.root as nat, theta, word)
+    })]
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
 
-    fn compile<L: Limits>(
-        this: &FlatPair<u64>,
+    pub(crate) fn compile<L: Limits>(
+        template: &FlatPair<u64>,
         limits: &mut L,
         world: &mut ObservationWorld,
-    ) -> KernelResult<CompiledPair> {
+    ) -> KernelResult<Self> {
         limits.checkpoint().map_err(HistoryError::from)?;
-        let mut store = CanonicalStore::new(ArenaStorage::new()?, world)?;
+        let mut store = CanonicalStore::new()?;
         let mut tests = Vec::new();
         let mut regexes = Vec::new();
-        allocation(world.try_reserve_vec_exact(&mut tests, this.tests.len()))?;
-        allocation(world.try_reserve_vec_exact(&mut regexes, this.regexes.len()))?;
+        allocation(world.try_reserve_vec_exact(&mut tests, template.tests.len()))?;
+        allocation(world.try_reserve_vec_exact(&mut regexes, template.regexes.len()))?;
         {
             let mut kernel = RuntimeKernel {
                 store: &mut store,
@@ -216,22 +181,22 @@ impl NumericCompile for FlatPair<u64> {
             proof_decl! { let ghost restoration = kernel.restoration(); }
             let mut index = 0;
             #[cfg_attr(verus_keep_ghost, verus_spec(
-            invariant index <= this.tests@.len(), tests@.len() == index,
+            invariant index <= template.tests@.len(), tests@.len() == index,
                 kernel.valid_store(), model::graph_wf(kernel.graph()),
                 kernel.restoration() == restoration,
-                test_maps(kernel.graph(), *this, tests@),
-                regex_maps(kernel.graph(), *this, regexes@), regexes@.len() == 0,
-            decreases this.tests@.len() - index,
+                test_maps(kernel.graph(), *template, tests@),
+                regex_maps(kernel.graph(), *template, regexes@), regexes@.len() == 0,
+            decreases template.tests@.len() - index,
         ))]
-            while index < this.tests.len() {
+            while index < template.tests.len() {
                 kernel.checkpoint()?;
-                let test = match this.tests.get(index) {
+                let test = match template.tests.get(index) {
                     Some(test) => test,
                     None => return Err(HistoryError::invariant("missing numeric test node")),
                 };
                 proof_decl! { let ghost before = kernel.graph(); }
                 proof_decl! { let ghost mut selected_ids = Seq::<TestId>::empty(); }
-                proof! { assert(*test == this.tests@[index as int]); }
+                proof! { assert(*test == template.tests@[index as int]); }
                 let id = match test {
                     FlatTest::Bool(value) => {
                         if *value {
@@ -247,7 +212,10 @@ impl NumericCompile for FlatPair<u64> {
                     } => kernel.intern_test(TestView::Atom {
                         primitive: Primitive::Eq {
                             field: *field,
-                            term: numeric_term(term),
+                            term: match term {
+                                FlatTerm::Constant(value) => Term::Constant(*value),
+                                FlatTerm::Variable(field) => Term::Variable(*field),
+                            },
                         },
                         positive: *positive,
                     })?,
@@ -255,7 +223,7 @@ impl NumericCompile for FlatPair<u64> {
                         let selected = Self::references(&tests, children, kernel.world)?;
                         proof! {
                             selected_ids = selected@;
-                            selected_tests_valid(kernel.graph(), *this, tests@, children@, selected@);
+                            selected_tests_valid(kernel.graph(), *template, tests@, children@, selected@);
                         }
                         TestId::connective(&mut kernel, &selected, true)?
                     }
@@ -263,58 +231,58 @@ impl NumericCompile for FlatPair<u64> {
                         let selected = Self::references(&tests, children, kernel.world)?;
                         proof! {
                             selected_ids = selected@;
-                            selected_tests_valid(kernel.graph(), *this, tests@, children@, selected@);
+                            selected_tests_valid(kernel.graph(), *template, tests@, children@, selected@);
                         }
                         TestId::connective(&mut kernel, &selected, false)?
                     }
                 };
                 proof! {
-                    maps_extend(before, kernel.graph(), *this, tests@, regexes@);
-                    assert(test_correct(kernel.graph(), *this, index as nat, id)) by {
+                    maps_extend(before, kernel.graph(), *template, tests@, regexes@);
+                    assert(test_correct(kernel.graph(), *template, index as nat, id)) by {
                         reveal_with_fuel(source_test, 1);
                         model::lemma_graph_wf_elim(kernel.graph());
                         assert forall|theta: language::Subst, event: language::EventView|
                             language::event_wf(theta) implies
                             norm::test_truth(kernel.graph(), theta, id@, event)
-                                == source_test(*this, index as nat, theta, event) by {
+                                == source_test(*template, index as nat, theta, event) by {
                             match test {
                                 FlatTest::Bool(_) | FlatTest::Atom { .. } => {
                                     norm::test_lemma_truth(kernel.graph(), theta, id@, event);
                                 }
                                 FlatTest::And(children) => {
-                                    test_connective_transfer(kernel.graph(), *this, tests@,
+                                    test_connective_transfer(kernel.graph(), *template, tests@,
                                         children@, selected_ids, theta, event, true);
                                 }
                                 FlatTest::Or(children) => {
-                                    test_connective_transfer(kernel.graph(), *this, tests@,
+                                    test_connective_transfer(kernel.graph(), *template, tests@,
                                         children@, selected_ids, theta, event, false);
                                 }
                             }
                         }
                     }
-                    test_push(kernel.graph(), *this, tests@, id);
+                    test_push(kernel.graph(), *template, tests@, id);
                 }
                 tests.push(id);
                 index = index.saturating_add(1);
             }
             let mut index = 0;
             #[cfg_attr(verus_keep_ghost, verus_spec(
-            invariant index <= this.regexes@.len(), regexes@.len() == index,
+            invariant index <= template.regexes@.len(), regexes@.len() == index,
                 kernel.valid_store(), model::graph_wf(kernel.graph()),
                 kernel.restoration() == restoration,
-                test_maps(kernel.graph(), *this, tests@), tests@.len() == this.tests@.len(),
-                regex_maps(kernel.graph(), *this, regexes@),
-            decreases this.regexes@.len() - index,
+                test_maps(kernel.graph(), *template, tests@), tests@.len() == template.tests@.len(),
+                regex_maps(kernel.graph(), *template, regexes@),
+            decreases template.regexes@.len() - index,
         ))]
-            while index < this.regexes.len() {
+            while index < template.regexes.len() {
                 kernel.checkpoint()?;
-                let regex = match this.regexes.get(index) {
+                let regex = match template.regexes.get(index) {
                     Some(regex) => regex,
                     None => return Err(HistoryError::invariant("missing numeric regex node")),
                 };
                 proof_decl! { let ghost before = kernel.graph(); }
                 proof_decl! { let ghost mut selected_ids = Seq::<RegexId>::empty(); }
-                proof! { assert(*regex == this.regexes@[index as int]); }
+                proof! { assert(*regex == template.regexes@[index as int]); }
                 let id = match regex {
                     FlatRegex::Empty => kernel.constants().empty,
                     FlatRegex::All => kernel.constants().all,
@@ -326,7 +294,7 @@ impl NumericCompile for FlatPair<u64> {
                         let selected = Self::references(&regexes, children, kernel.world)?;
                         proof! {
                             selected_ids = selected@;
-                            selected_regexes_valid(kernel.graph(), *this, regexes@, children@, selected@);
+                            selected_regexes_valid(kernel.graph(), *template, regexes@, children@, selected@);
                         }
                         RegexId::concat(&mut kernel, &selected)?
                     }
@@ -334,7 +302,7 @@ impl NumericCompile for FlatPair<u64> {
                         let selected = Self::references(&regexes, children, kernel.world)?;
                         proof! {
                             selected_ids = selected@;
-                            selected_regexes_valid(kernel.graph(), *this, regexes@, children@, selected@);
+                            selected_regexes_valid(kernel.graph(), *template, regexes@, children@, selected@);
                         }
                         RegexId::set(&mut kernel, &selected, false)?
                     }
@@ -342,7 +310,7 @@ impl NumericCompile for FlatPair<u64> {
                         let selected = Self::references(&regexes, children, kernel.world)?;
                         proof! {
                             selected_ids = selected@;
-                            selected_regexes_valid(kernel.graph(), *this, regexes@, children@, selected@);
+                            selected_regexes_valid(kernel.graph(), *template, regexes@, children@, selected@);
                         }
                         RegexId::set(&mut kernel, &selected, true)?
                     }
@@ -354,68 +322,68 @@ impl NumericCompile for FlatPair<u64> {
                     }
                 };
                 proof! {
-                    maps_extend(before, kernel.graph(), *this, tests@, regexes@);
-                    assert(regex_correct(kernel.graph(), *this, index as nat, id)) by {
+                    maps_extend(before, kernel.graph(), *template, tests@, regexes@);
+                    assert(regex_correct(kernel.graph(), *template, index as nat, id)) by {
                         reveal_with_fuel(source_regex, 1);
                         norm::regex_constants(kernel.graph());
                         assert forall|theta: language::Subst, word: Seq<language::EventView>|
                             language::event_wf(theta) implies
                             model::regex_lang(kernel.graph(), theta, id@, word)
-                                == source_regex(*this, index as nat, theta, word) by {
+                                == source_regex(*template, index as nat, theta, word) by {
                             match regex {
                                 FlatRegex::Test(test) => {
                                     assert((*test as nat) < tests@.len());
-                                    assert(test_correct(kernel.graph(), *this, *test as nat,
+                                    assert(test_correct(kernel.graph(), *template, *test as nat,
                                         tests@[*test as int]));
                                     assert(model::regex_lang(kernel.graph(), theta, id@, word)
-                                        == source_regex(*this, index as nat, theta, word));
+                                        == source_regex(*template, index as nat, theta, word));
                                 }
                                 FlatRegex::Concat(children) => {
                                     assert(selected_ids =~= Seq::new(children@.len(),
                                         |i: int| regexes@[children@[i] as int]));
-                                    regex_concat_transfer(kernel.graph(), *this, regexes@, children@,
+                                    regex_concat_transfer(kernel.graph(), *template, regexes@, children@,
                                         index as nat, theta, word);
                                     assert(model::regex_lang(kernel.graph(), theta, id@, word)
-                                        == source_regex(*this, index as nat, theta, word));
+                                        == source_regex(*template, index as nat, theta, word));
                                 }
                                 FlatRegex::Star(child) => {
-                                    regex_star_transfer(kernel.graph(), *this, regexes@,
+                                    regex_star_transfer(kernel.graph(), *template, regexes@,
                                         *child as nat, theta, word);
                                     assert(model::regex_lang(kernel.graph(), theta, id@, word)
-                                        == source_regex(*this, index as nat, theta, word));
+                                        == source_regex(*template, index as nat, theta, word));
                                 }
                                 FlatRegex::Union(children) => {
-                                    regex_set_transfer(kernel.graph(), *this, regexes@,
+                                    regex_set_transfer(kernel.graph(), *template, regexes@,
                                         children@, selected_ids, theta, word, false);
                                     assert(model::regex_lang(kernel.graph(), theta, id@, word)
-                                        == source_regex(*this, index as nat, theta, word));
+                                        == source_regex(*template, index as nat, theta, word));
                                 }
                                 FlatRegex::Intersect(children) => {
-                                    regex_set_transfer(kernel.graph(), *this, regexes@,
+                                    regex_set_transfer(kernel.graph(), *template, regexes@,
                                         children@, selected_ids, theta, word, true);
                                     assert(model::regex_lang(kernel.graph(), theta, id@, word)
-                                        == source_regex(*this, index as nat, theta, word));
+                                        == source_regex(*template, index as nat, theta, word));
                                 }
                                 FlatRegex::Complement(child) => {
                                     assert((*child as nat) < regexes@.len());
-                                    assert(regex_correct(kernel.graph(), *this, *child as nat,
+                                    assert(regex_correct(kernel.graph(), *template, *child as nat,
                                         regexes@[*child as int]));
-                                    assert(this.regexes@[index as int] == FlatRegex::Complement(*child));
-                                    assert(source_regex(*this, index as nat, theta, word)
-                                        == ((*child as nat) < index && !source_regex(*this, *child as nat, theta, word)));
+                                    assert(template.regexes@[index as int] == FlatRegex::Complement(*child));
+                                    assert(source_regex(*template, index as nat, theta, word)
+                                        == ((*child as nat) < index && !source_regex(*template, *child as nat, theta, word)));
                                     assert(model::regex_lang(kernel.graph(), theta, id@, word)
                                         == !model::regex_lang(kernel.graph(), theta, regexes@[*child as int]@, word));
                                     assert(model::regex_lang(kernel.graph(), theta, id@, word)
-                                        == source_regex(*this, index as nat, theta, word));
+                                        == source_regex(*template, index as nat, theta, word));
                                 }
                                 FlatRegex::Empty | FlatRegex::All | FlatRegex::Epsilon => {
                                     assert(model::regex_lang(kernel.graph(), theta, id@, word)
-                                        == source_regex(*this, index as nat, theta, word));
+                                        == source_regex(*template, index as nat, theta, word));
                                 }
                             }
                         }
                     }
-                    regex_push(kernel.graph(), *this, regexes@, id);
+                    regex_push(kernel.graph(), *template, regexes@, id);
                 }
                 regexes.push(id);
                 index = index.saturating_add(1);
@@ -423,39 +391,22 @@ impl NumericCompile for FlatPair<u64> {
             proof! {
                 assert(kernel.valid_store());
                 assert(model::graph_wf(kernel.graph()));
-                assert(regex_maps(kernel.graph(), *this, regexes@));
+                assert(regex_maps(kernel.graph(), *template, regexes@));
             }
         }
         proof! {
             assert(store.valid_store());
             assert(model::graph_wf(store.graph()));
-            assert(regex_maps(store.graph(), *this, regexes@));
+            assert(regex_maps(store.graph(), *template, regexes@));
         }
-        let root = Self::lookup(&regexes, this.root)?;
+        let root = Self::lookup(&regexes, template.root)?;
         limits.checkpoint().map_err(HistoryError::from)?;
         proof! {
             assert(model::graph_wf(store.graph()));
-            assert(regex_correct(store.graph(), *this, this.root as nat, root));
+            assert(regex_correct(store.graph(), *template, template.root as nat, root));
         }
         Ok(CompiledPair::new(store, root))
     }
-}
-
-#[verus_verify]
-pub(crate) trait PrimitiveClassify: Sized {
-    #[verus_spec(result => ensures result matches Ok(answer)
-    ==> answer == model::primitive_holds(bindings@, this@, event@))]
-    fn classify<L: Limits>(
-        this: Primitive,
-        event: &NumericEvent,
-        bindings: &Bindings,
-        limits: &mut L,
-        _world: &mut ObservationWorld,
-    ) -> KernelResult<bool>;
-}
-
-#[verus_verify]
-impl PrimitiveClassify for Primitive {
     /// The hot boundary performs only fixed-coordinate u64 equality and a checkpoint.
     // Every binding index addresses one of the three fixed coordinates.
     #[allow(
@@ -467,16 +418,18 @@ impl PrimitiveClassify for Primitive {
         reason = "Term fields mirror the matched Verus model variants"
     )]
     #[verus_verify]
+    #[verus_spec(result => ensures result matches Ok(answer)
+        ==> answer == model::primitive_holds(bindings@, primitive@, event@))]
 
-    fn classify<L: Limits>(
-        this: Primitive,
+    pub(crate) fn classify<L: Limits>(
+        primitive: Primitive,
         event: &NumericEvent,
         bindings: &Bindings,
         limits: &mut L,
         _world: &mut ObservationWorld,
     ) -> KernelResult<bool> {
         limits.checkpoint().map_err(HistoryError::from)?;
-        let Primitive::Eq { field, term } = this;
+        let Primitive::Eq { field, term } = primitive;
         let left = match field {
             Component::Principal => event.principal.get(),
             Component::Action => event.action.get(),

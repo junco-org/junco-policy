@@ -2,7 +2,9 @@
 
 use crate::runtime::RuleRuntime;
 use alloc::sync::Arc;
-use history_store::history::{History, StoredHistory};
+use history_store::history::History;
+#[cfg(verus_keep_ghost)]
+use history_store::history::StoredHistory;
 use history_store::typed::Store;
 use history_syntax::Event;
 use history_syntax::syntax::{Rule, RuleMode};
@@ -222,46 +224,41 @@ pub(crate) mod verify {
     }
 }
 
-// Arc identity is a native ownership leaf; it supplies no encoding or language theorem.
-#[verus_verify]
-#[verus_verify(external_body)]
-#[verus_spec(result => ensures result ==> *left == *right)]
-fn same_owner<E: Event>(left: &Arc<Store<E>>, right: &Arc<Store<E>>) -> bool {
-    Arc::ptr_eq(left, right)
-}
 
 verus! {
 pub(crate) type LoweredRule<E> = (RuleMode, FlatPair<u64>, Ghost<history_store::typed::ComponentMaps<E>>);
 
-/// Flatten before locking; publish one finite snapshot after encoding constants.
-pub(crate) fn lower_rule<E: Event, L: Limits>(
-    store: &Store<E>, rule: &Rule<E>, limits: &mut L, world: &mut ObservationWorld,
-) -> (result: Result<LoweredRule<E>, CompileError>)
-    requires books::store_wf(*store),
-    ensures result matches Ok((mode, numeric, maps)) ==> mode == rule.mode
-        && junco_core::flat::verify::structural_wf(numeric)
-        && books::snapshot_published::<E>(books::registry_id(store), maps@)
-        && (books::native_obligations::<E>() ==> books::maps_wf::<E>(maps@)
-            && compiled_source::<E>(*rule, mode, numeric, maps@,
-                source::component_equality::<E>(), books::domain::<E>())),
-{
-    let flat = flatten_rule(rule, limits, world)?;
-    proof_decl! { let ghost flattened = flat; }
-    proof! {
-        books::lemma_empty_snapshot::<E>(store);
-        if books::native_obligations::<E>() { books::lemma_empty_maps_wf::<E>(); }
-    }
-    let (result, maps) = store.lower_with_snapshot(&flat.source, limits, world,
-        verus_exec_expr! { Ghost(books::empty_maps::<E>()) });
-    let numeric = result?;
-    proof! {
-        if books::native_obligations::<E>() {
-            assert(source::flattened::<E>(*rule, flattened));
-            assert(compiled_source::<E>(*rule, flat.mode, numeric, maps@,
-                source::component_equality::<E>(), books::domain::<E>()));
+impl<E: Event> CompiledRule<E> {
+    /// Flatten before locking; publish one finite snapshot after encoding constants.
+    fn lower<L: Limits>(
+        store: &Store<E>, rule: &Rule<E>, limits: &mut L, world: &mut ObservationWorld,
+    ) -> (result: Result<LoweredRule<E>, CompileError>)
+        requires books::store_wf(*store),
+        ensures result matches Ok((mode, numeric, maps)) ==> mode == rule.mode
+            && junco_core::flat::verify::structural_wf(numeric)
+            && books::snapshot_published::<E>(books::registry_id(store), maps@)
+            && (books::native_obligations::<E>() ==> books::maps_wf::<E>(maps@)
+                && compiled_source::<E>(*rule, mode, numeric, maps@,
+                    source::component_equality::<E>(), books::domain::<E>())),
+    {
+        let flat = flatten_rule(rule, limits, world)?;
+        proof_decl! { let ghost flattened = flat; }
+        proof! {
+            books::lemma_empty_snapshot::<E>(store);
+            if books::native_obligations::<E>() { books::lemma_empty_maps_wf::<E>(); }
         }
+        let (result, maps) = store.lower_with_snapshot(&flat.source, limits, world,
+            verus_exec_expr! { Ghost(books::empty_maps::<E>()) });
+        let numeric = result?;
+        proof! {
+            if books::native_obligations::<E>() {
+                assert(source::flattened::<E>(*rule, flattened));
+                assert(compiled_source::<E>(*rule, flat.mode, numeric, maps@,
+                    source::component_equality::<E>(), books::domain::<E>()));
+            }
+        }
+        Ok((flat.mode, numeric, maps))
     }
-    Ok((flat.mode, numeric, maps))
 }
 }
 
@@ -289,6 +286,14 @@ impl<E: Event> CompiledRule<E> {
 
 #[verus_verify]
 impl<E: Event> CompiledRule<E> {
+    // Arc identity is a native ownership leaf; it supplies no encoding or language theorem.
+    #[verus_verify]
+    #[verus_verify(external_body)]
+    #[verus_spec(result => ensures result ==> *left == *right)]
+    fn same_owner(left: &Arc<Store<E>>, right: &Arc<Store<E>>) -> bool {
+        Arc::ptr_eq(left, right)
+    }
+
     /// Consume the source on every outcome using its iterative disposal path.
     #[verus_spec(result => requires books::store_wf(*store),
         ensures result matches Ok(compiled) ==> constructed(compiled, rule, store))]
@@ -318,7 +323,7 @@ impl<E: Event> CompiledRule<E> {
     ) -> Result<Self, CompileError> {
         proof_decl! { let ghost source = rule; }
         // No `?` may bypass disposal of the caller's recursive owned source.
-        let lowered = lower_rule(&store, &rule, limits, world);
+        let lowered = Self::lower(&store, &rule, limits, world);
         rule.dispose();
         let (mode, template, _maps) = lowered?;
         let runtime =
@@ -367,7 +372,7 @@ impl<E: Event> CompiledRule<E> {
     ) -> Result<Option<bool>, HistoryError> {
         proof_decl! { let ghost entry = *self; }
         // Check before projections, codebook publication, or any residual lookup.
-        if !same_owner(&self.store, history.store()) {
+        if !Self::same_owner(&self.store, history.store()) {
             return Err(HistoryError::WrongHistoryOwner);
         }
         proof! {
@@ -397,8 +402,7 @@ impl<E: Event> CompiledRule<E> {
         );
         let request = encoded?;
         proof_decl! { let ghost observed = self.runtime.snapshots@; }
-        let first = decide_template(
-            &mut self.runtime,
+        let first = self.runtime.accepts(
             &self.template,
             &request,
             history.numeric(),
@@ -439,8 +443,7 @@ impl<E: Event> CompiledRule<E> {
                     assert(decision::runtime_represents(self.template, replacement));
                 }
                 proof_decl! { let ghost new_snapshots = replacement.snapshots@; }
-                let answer = decide_template(
-                    &mut replacement,
+                let answer = replacement.accepts(
                     &self.template,
                     &request,
                     history.numeric(),
@@ -473,132 +476,6 @@ impl<E: Event> CompiledRule<E> {
     }
 }
 
-/// Bind the candidate and evaluate against the retained graph generation.
-#[verus_verify]
-#[verus_spec(result =>
-    requires decision::runtime_represents(*template, *old(runtime)),
-        junco_core::flat::verify::structural_wf(*template),
-        crate::runtime::verify::snapshot_compatible(old(runtime).snapshots@, stored.id(),
-            stored.revision(), history_store::store::verify::events_view(raw::stored_events(&stored))),
-    ensures decision::runtime_represents(*template, *final(runtime)),
-        crate::progress::verify::pair_frame(old(runtime).pair, final(runtime).pair),
-        final(runtime).spec_store() == old(runtime).spec_store(),
-        result is Err ==> final(runtime).cursors@ == old(runtime).cursors@,
-        final(runtime).snapshots@ == old(runtime).snapshots@
-            || final(runtime).snapshots@ == old(runtime).snapshots@.insert((stored.id(), stored.revision()),
-                history_store::store::verify::events_view(raw::stored_events(&stored))),
-        numeric_result(*template, *request, *stored, result),
-)]
-pub(crate) fn decide_template<L: Limits>(
-    runtime: &mut RuleRuntime,
-    template: &FlatPair<u64>,
-    request: &history_store::store::Event,
-    stored: &StoredHistory,
-    limits: &mut L,
-    world: &mut ObservationWorld,
-) -> Result<Option<bool>, HistoryError> {
-    proof_decl! { let ghost entry = *runtime; }
-    let bindings = match crate::compile::bindings(template, request) {
-        Some(bindings) => bindings,
-        None => return Ok(None),
-    };
-    proof! {
-        crate::compile::verify::lemma_bindings_match(*template, *request, bindings);
-        reveal(crate::runtime::verify::resume_requires);
-        reveal(crate::runtime::verify::runtime_wf);
-    }
-    let result = decide_numeric(runtime, &bindings, stored, limits, world);
-    proof! {
-        decision::lemma_runtime_frame(*template, entry, *runtime);
-    }
-    match result {
-        Err(error) => Err(error),
-        Ok(answer) => {
-            proof! {
-                assert(exists|witness: junco_core::kernel::Bindings|
-                    crate::compile::verify::bindings_match(*template, *request, witness)
-                        && junco_core::verify::history_specs::event_wf(witness@)
-                        && answer == crate::compile::verify::source_regex(*template,
-                            template.root as nat, witness@,
-                            history_store::store::verify::events_view(raw::stored_events(&stored)))) by {
-                    assert(crate::compile::verify::bindings_match(*template, *request, bindings));
-                }
-            }
-            Ok(Some(answer))
-        }
-    }
-}
-
-/// One full-prefix batch makes answer/publication failures atomic for the whole call.
-#[verus_verify]
-#[verus_spec(result =>
-    requires crate::runtime::verify::runtime_wf(*old(runtime)),
-        crate::runtime::verify::snapshot_compatible(old(runtime).snapshots@, stored.id(), stored.revision(),
-            history_store::store::verify::events_view(raw::stored_events(&stored))),
-        junco_core::verify::history_specs::event_wf(bindings@),
-    ensures crate::runtime::verify::runtime_wf(*final(runtime)),
-        crate::progress::verify::pair_frame(old(runtime).pair, final(runtime).pair),
-        final(runtime).spec_store() == old(runtime).spec_store(),
-        result is Err ==> final(runtime).cursors@ == old(runtime).cursors@,
-        final(runtime).snapshots@ == old(runtime).snapshots@.insert((stored.id(), stored.revision()),
-            history_store::store::verify::events_view(raw::stored_events(&stored))),
-        result matches Ok(answer) ==> answer == junco_core::kernel::verify::regex_lang(
-            old(runtime).pair.store.graph(), bindings@, old(runtime).pair.root@,
-            history_store::store::verify::events_view(raw::stored_events(&stored))),
-)]
-pub(crate) fn decide_numeric<L: Limits>(
-    runtime: &mut RuleRuntime,
-    bindings: &junco_core::kernel::Bindings,
-    stored: &StoredHistory,
-    limits: &mut L,
-    world: &mut ObservationWorld,
-) -> Result<bool, HistoryError> {
-    proof! {
-        history_store::history::lemma_stored_history_view(*stored);
-        reveal(crate::runtime::verify::runtime_wf);
-        reveal(crate::runtime::verify::resume_requires);
-        reveal(crate::runtime::verify::resume_ensures);
-        reveal(crate::runtime::verify::advance_requires);
-        reveal(crate::runtime::verify::advance_ensures);
-    }
-    proof_decl! { let ghost initial_snapshots = runtime.snapshots@; }
-    let target = stored.len();
-    let mut cursor = runtime.resume_cursor(bindings, stored, target);
-    proof! {
-        assert(runtime.snapshots@ == initial_snapshots.insert((stored.id(), stored.revision()),
-            history_store::store::verify::events_view(raw::stored_events(&stored))));
-    }
-    proof_decl! { let ghost start = cursor; }
-    let result = runtime.advance_cursor(
-        &mut cursor,
-        bindings,
-        stored,
-        target,
-        usize::MAX,
-        limits,
-        world,
-    );
-    proof! {
-        let key = (stored.id(), stored.revision());
-        let events = history_store::store::verify::events_view(raw::stored_events(&stored));
-        assert(runtime.snapshots@ == initial_snapshots.insert(key, events).insert(key, events));
-        assert(initial_snapshots.insert(key, events).insert(key, events) =~= initial_snapshots.insert(key, events));
-        junco_core::verify::history_specs::lemma_selected_end(
-            start.consumed as nat, target as nat, usize::MAX as nat);
-        assert(history_store::store::verify::events_view(raw::stored_events(&stored)).take(target as int)
-            =~= history_store::store::verify::events_view(raw::stored_events(&stored)));
-    }
-    match result {
-        Err(error) => Err(error),
-        Ok(Some(answer)) => Ok(answer),
-        Ok(None) => {
-            proof! { assert(false); }
-            Err(HistoryError::invariant(
-                "complete history batch returned no answer",
-            ))
-        }
-    }
-}
 
 #[cfg(any(test, feature = "test-util"))]
 impl<E: Event> CompiledRule<E> {
@@ -802,8 +679,7 @@ mod tests {
             .0
             .unwrap();
         assert!(matches!(
-            decide_template(
-                &mut compiled.runtime,
+            compiled.runtime.accepts(
                 &compiled.template,
                 &request,
                 history.numeric(),

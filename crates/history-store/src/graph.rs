@@ -4,8 +4,6 @@
 // Hash-consing mixes `u32` ids, counts, and flags into `u64` digests; every cast widens.
 #![allow(clippy::as_conversions)]
 
-#[cfg(verus_keep_ghost)]
-use crate::verify::storage::StorageSpec;
 use alloc::vec::Vec;
 use core::mem::{align_of, size_of};
 use hashconsius::BHConsign;
@@ -84,15 +82,15 @@ pub(crate) const ARENA_CAPACITY: usize = MAX_GRAPH_BYTES;
 // `is_multiple_of` so Verus can reason about the same expression at runtime below.
 #[allow(clippy::manual_is_multiple_of)]
 const _: () = assert!(
-    size_of::<ArenaTest>() > 0
-        && size_of::<ArenaRegex>() > 0
-        && size_of::<ArenaTransition>() > 0
-        && align_of::<ArenaTest>() <= CHUNK_ALIGN
-        && align_of::<ArenaRegex>() <= CHUNK_ALIGN
-        && align_of::<ArenaTransition>() <= CHUNK_ALIGN
-        && ARENA_CAPACITY % align_of::<ArenaTest>() == 0
-        && ARENA_CAPACITY % align_of::<ArenaRegex>() == 0
-        && ARENA_CAPACITY % align_of::<ArenaTransition>() == 0
+    size_of::<TestNode>() > 0
+        && size_of::<RegexNode>() > 0
+        && size_of::<TransitionNode>() > 0
+        && align_of::<TestNode>() <= CHUNK_ALIGN
+        && align_of::<RegexNode>() <= CHUNK_ALIGN
+        && align_of::<TransitionNode>() <= CHUNK_ALIGN
+        && ARENA_CAPACITY % align_of::<TestNode>() == 0
+        && ARENA_CAPACITY % align_of::<RegexNode>() == 0
+        && ARENA_CAPACITY % align_of::<TransitionNode>() == 0
         && ARENA_CAPACITY % align_of::<TestId>() == 0
         && ARENA_CAPACITY % align_of::<RegexId>() == 0
         && ARENA_CAPACITY % align_of::<TransitionId>() == 0
@@ -110,34 +108,11 @@ pub fn sequence_bytes<T>(len: usize) -> KernelResult<usize> {
         })
 }
 
-pub trait Storage {
-    fn test(&self, id: TestId) -> KernelResult<TestView<'_>>;
-    fn regex(&self, id: RegexId) -> KernelResult<RegexView<'_>>;
-    fn transition(&self, id: TransitionId) -> KernelResult<TransitionView<'_>>;
-    fn find_test(&self, view: TestView<'_>) -> KernelResult<Option<TestId>>;
-    fn find_regex(&self, view: RegexView<'_>) -> KernelResult<Option<RegexId>>;
-    fn find_transition(&self, view: TransitionView<'_>) -> KernelResult<Option<TransitionId>>;
-    fn push_test(
-        &mut self,
-        view: TestView<'_>,
-        world: &mut ObservationWorld,
-    ) -> KernelResult<TestId>;
-    fn push_regex(
-        &mut self,
-        view: RegexView<'_>,
-        world: &mut ObservationWorld,
-    ) -> KernelResult<RegexId>;
-    fn push_transition(
-        &mut self,
-        view: TransitionView<'_>,
-        world: &mut ObservationWorld,
-    ) -> KernelResult<TransitionId>;
-}
 // Crate visibility lets Verus retain these payload types in the open weight specs.
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy)]
-pub(crate) enum ArenaTest {
+pub(crate) enum TestNode {
     True,
     False,
     Atom {
@@ -150,7 +125,7 @@ pub(crate) enum ArenaTest {
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy)]
-enum ArenaRegexKind {
+enum RegexKind {
     Empty,
     All,
     Epsilon,
@@ -164,14 +139,14 @@ enum ArenaRegexKind {
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy)]
-pub(crate) struct ArenaRegex {
-    kind: ArenaRegexKind,
+pub(crate) struct RegexNode {
+    kind: RegexKind,
     nullable: bool,
 }
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Copy)]
-pub(crate) enum ArenaTransition {
+pub(crate) enum TransitionNode {
     Const(RegexId),
     If {
         test: TestId,
@@ -189,15 +164,15 @@ pub(crate) enum ArenaTransition {
 
 // Identity keys keep hash-consing over arena records, not lifted graph nodes.
 vstd::prelude::verus! {
-    impl View for ArenaTest {
+    impl View for TestNode {
         type V = Self;
         open(in crate::graph) spec fn view(&self) -> Self { *self }
     }
-    impl View for ArenaRegex {
+    impl View for RegexNode {
         type V = Self;
         open(in crate::graph) spec fn view(&self) -> Self { *self }
     }
-    impl View for ArenaTransition {
+    impl View for TransitionNode {
         type V = Self;
         open(in crate::graph) spec fn view(&self) -> Self { *self }
     }
@@ -211,40 +186,40 @@ vstd::prelude::verus! {
             Primitive::Eq { field, term: Term::Variable(v) } => hashconsius::spec_mix(hashconsius::spec_mix(field_key(field), 1), field_key(v)),
         }
     }
-    impl hashconsius::HashKey for ArenaTest {
+    impl hashconsius::HashKey for TestNode {
         open(in crate::graph) spec fn spec_hash(v: Self::V) -> u64 { match v {
-                ArenaTest::True => 0,
-                ArenaTest::False => 1,
-                ArenaTest::Atom { primitive, positive } => hashconsius::spec_mix(hashconsius::spec_mix(2, primitive_key_hash(primitive)), positive as u64),
-                ArenaTest::And(s) => hashconsius::spec_mix(3, s as u64),
-                ArenaTest::Or(s) => hashconsius::spec_mix(4, s as u64),
+                TestNode::True => 0,
+                TestNode::False => 1,
+                TestNode::Atom { primitive, positive } => hashconsius::spec_mix(hashconsius::spec_mix(2, primitive_key_hash(primitive)), positive as u64),
+                TestNode::And(s) => hashconsius::spec_mix(3, s as u64),
+                TestNode::Or(s) => hashconsius::spec_mix(4, s as u64),
             } }
         fn hash(&self) -> (h: u64)
             ensures h == Self::spec_hash(self@),
         {
             let v = *self;
             match v {
-                ArenaTest::True => 0,
-                ArenaTest::False => 1,
-                ArenaTest::Atom { primitive, positive } => hashconsius::mix(hashconsius::mix(2, match primitive {
+                TestNode::True => 0,
+                TestNode::False => 1,
+                TestNode::Atom { primitive, positive } => hashconsius::mix(hashconsius::mix(2, match primitive {
                     Primitive::Eq { field, term: Term::Constant(c) } => hashconsius::mix(hashconsius::mix(field.index() as u64, 0), c),
                     Primitive::Eq { field, term: Term::Variable(variable) } => hashconsius::mix(hashconsius::mix(field.index() as u64, 1), variable.index() as u64),
                 }), positive as u64),
-                ArenaTest::And(s) => hashconsius::mix(3, s as u64),
-                ArenaTest::Or(s) => hashconsius::mix(4, s as u64),
+                TestNode::And(s) => hashconsius::mix(3, s as u64),
+                TestNode::Or(s) => hashconsius::mix(4, s as u64),
             }
         }
         fn key_eq(&self, other: &Self) -> (b: bool)
             ensures b == (self@ == other@),
         { match (*self, *other) {
-                (ArenaTest::True, ArenaTest::True) | (ArenaTest::False, ArenaTest::False) => true,
+                (TestNode::True, TestNode::True) | (TestNode::False, TestNode::False) => true,
                 // Full-field keys avoid the pinned verifier's early inherited-equality dependency; see verification/verus/inherited_ensures_order.rs.
                 (
-                    ArenaTest::Atom {
+                    TestNode::Atom {
                         primitive: Primitive::Eq { field: a, term: x },
                         positive: p,
                     },
-                    ArenaTest::Atom {
+                    TestNode::Atom {
                         primitive: Primitive::Eq { field: b, term: y },
                         positive: q,
                     },
@@ -257,78 +232,78 @@ vstd::prelude::verus! {
                             _ => false,
                         }
                 },
-                (ArenaTest::And(a), ArenaTest::And(b)) | (ArenaTest::Or(a), ArenaTest::Or(b)) => a == b,
+                (TestNode::And(a), TestNode::And(b)) | (TestNode::Or(a), TestNode::Or(b)) => a == b,
                 _ => false,
             } }
     }
-    impl hashconsius::HashKey for ArenaRegex {
+    impl hashconsius::HashKey for RegexNode {
         open(in crate::graph) spec fn spec_hash(v: Self::V) -> u64 { hashconsius::spec_mix(match v.kind {
-                ArenaRegexKind::Empty => 0,
-                ArenaRegexKind::All => 1,
-                ArenaRegexKind::Epsilon => 2,
-                ArenaRegexKind::Test(id) => hashconsius::spec_mix(3, id@ as u64),
-                ArenaRegexKind::Union(s) => hashconsius::spec_mix(4, s as u64),
-                ArenaRegexKind::Concat(s) => hashconsius::spec_mix(5, s as u64),
-                ArenaRegexKind::Star(id) => hashconsius::spec_mix(6, id@ as u64),
-                ArenaRegexKind::Intersect(s) => hashconsius::spec_mix(7, s as u64),
-                ArenaRegexKind::Not(id) => hashconsius::spec_mix(8, id@ as u64),
+                RegexKind::Empty => 0,
+                RegexKind::All => 1,
+                RegexKind::Epsilon => 2,
+                RegexKind::Test(id) => hashconsius::spec_mix(3, id@ as u64),
+                RegexKind::Union(s) => hashconsius::spec_mix(4, s as u64),
+                RegexKind::Concat(s) => hashconsius::spec_mix(5, s as u64),
+                RegexKind::Star(id) => hashconsius::spec_mix(6, id@ as u64),
+                RegexKind::Intersect(s) => hashconsius::spec_mix(7, s as u64),
+                RegexKind::Not(id) => hashconsius::spec_mix(8, id@ as u64),
             }, v.nullable as u64) }
         fn hash(&self) -> (h: u64)
             ensures h == Self::spec_hash(self@),
         {
             let v = *self;
             hashconsius::mix(match v.kind {
-                ArenaRegexKind::Empty => 0,
-                ArenaRegexKind::All => 1,
-                ArenaRegexKind::Epsilon => 2,
-                ArenaRegexKind::Test(id) => hashconsius::mix(3, id.get() as u64),
-                ArenaRegexKind::Union(s) => hashconsius::mix(4, s as u64),
-                ArenaRegexKind::Concat(s) => hashconsius::mix(5, s as u64),
-                ArenaRegexKind::Star(id) => hashconsius::mix(6, id.get() as u64),
-                ArenaRegexKind::Intersect(s) => hashconsius::mix(7, s as u64),
-                ArenaRegexKind::Not(id) => hashconsius::mix(8, id.get() as u64),
+                RegexKind::Empty => 0,
+                RegexKind::All => 1,
+                RegexKind::Epsilon => 2,
+                RegexKind::Test(id) => hashconsius::mix(3, id.get() as u64),
+                RegexKind::Union(s) => hashconsius::mix(4, s as u64),
+                RegexKind::Concat(s) => hashconsius::mix(5, s as u64),
+                RegexKind::Star(id) => hashconsius::mix(6, id.get() as u64),
+                RegexKind::Intersect(s) => hashconsius::mix(7, s as u64),
+                RegexKind::Not(id) => hashconsius::mix(8, id.get() as u64),
             }, v.nullable as u64)
         }
         fn key_eq(&self, other: &Self) -> (b: bool)
             ensures b == (self@ == other@),
         { self.nullable == other.nullable && match (self.kind, other.kind) {
-                (ArenaRegexKind::Empty, ArenaRegexKind::Empty) | (ArenaRegexKind::All, ArenaRegexKind::All) | (ArenaRegexKind::Epsilon, ArenaRegexKind::Epsilon) => true,
-                (ArenaRegexKind::Test(a), ArenaRegexKind::Test(b)) => a == b,
-                (ArenaRegexKind::Union(a), ArenaRegexKind::Union(b)) | (ArenaRegexKind::Concat(a), ArenaRegexKind::Concat(b)) | (ArenaRegexKind::Intersect(a), ArenaRegexKind::Intersect(b)) => a == b,
-                (ArenaRegexKind::Star(a), ArenaRegexKind::Star(b)) | (ArenaRegexKind::Not(a), ArenaRegexKind::Not(b)) => a == b,
+                (RegexKind::Empty, RegexKind::Empty) | (RegexKind::All, RegexKind::All) | (RegexKind::Epsilon, RegexKind::Epsilon) => true,
+                (RegexKind::Test(a), RegexKind::Test(b)) => a == b,
+                (RegexKind::Union(a), RegexKind::Union(b)) | (RegexKind::Concat(a), RegexKind::Concat(b)) | (RegexKind::Intersect(a), RegexKind::Intersect(b)) => a == b,
+                (RegexKind::Star(a), RegexKind::Star(b)) | (RegexKind::Not(a), RegexKind::Not(b)) => a == b,
                 _ => false,
             } }
     }
-    impl hashconsius::HashKey for ArenaTransition {
+    impl hashconsius::HashKey for TransitionNode {
         open(in crate::graph) spec fn spec_hash(v: Self::V) -> u64 { match v {
-                ArenaTransition::Const(id) => hashconsius::spec_mix(0, id@ as u64),
-                ArenaTransition::If { test, then_transition, else_transition } => hashconsius::spec_mix(hashconsius::spec_mix(hashconsius::spec_mix(1, test@ as u64), then_transition@ as u64), else_transition@ as u64),
-                ArenaTransition::Union(s) => hashconsius::spec_mix(2, s as u64),
-                ArenaTransition::Intersect(s) => hashconsius::spec_mix(3, s as u64),
-                ArenaTransition::Not(id) => hashconsius::spec_mix(4, id@ as u64),
-                ArenaTransition::Append { transition, suffix } => hashconsius::spec_mix(hashconsius::spec_mix(5, transition@ as u64), suffix as u64),
+                TransitionNode::Const(id) => hashconsius::spec_mix(0, id@ as u64),
+                TransitionNode::If { test, then_transition, else_transition } => hashconsius::spec_mix(hashconsius::spec_mix(hashconsius::spec_mix(1, test@ as u64), then_transition@ as u64), else_transition@ as u64),
+                TransitionNode::Union(s) => hashconsius::spec_mix(2, s as u64),
+                TransitionNode::Intersect(s) => hashconsius::spec_mix(3, s as u64),
+                TransitionNode::Not(id) => hashconsius::spec_mix(4, id@ as u64),
+                TransitionNode::Append { transition, suffix } => hashconsius::spec_mix(hashconsius::spec_mix(5, transition@ as u64), suffix as u64),
             } }
         fn hash(&self) -> (h: u64)
             ensures h == Self::spec_hash(self@),
         {
             let v = *self;
             match v {
-                ArenaTransition::Const(id) => hashconsius::mix(0, id.get() as u64),
-                ArenaTransition::If { test, then_transition, else_transition } => hashconsius::mix(hashconsius::mix(hashconsius::mix(1, test.get() as u64), then_transition.get() as u64), else_transition.get() as u64),
-                ArenaTransition::Union(s) => hashconsius::mix(2, s as u64),
-                ArenaTransition::Intersect(s) => hashconsius::mix(3, s as u64),
-                ArenaTransition::Not(id) => hashconsius::mix(4, id.get() as u64),
-                ArenaTransition::Append { transition, suffix } => hashconsius::mix(hashconsius::mix(5, transition.get() as u64), suffix as u64),
+                TransitionNode::Const(id) => hashconsius::mix(0, id.get() as u64),
+                TransitionNode::If { test, then_transition, else_transition } => hashconsius::mix(hashconsius::mix(hashconsius::mix(1, test.get() as u64), then_transition.get() as u64), else_transition.get() as u64),
+                TransitionNode::Union(s) => hashconsius::mix(2, s as u64),
+                TransitionNode::Intersect(s) => hashconsius::mix(3, s as u64),
+                TransitionNode::Not(id) => hashconsius::mix(4, id.get() as u64),
+                TransitionNode::Append { transition, suffix } => hashconsius::mix(hashconsius::mix(5, transition.get() as u64), suffix as u64),
             }
         }
         fn key_eq(&self, other: &Self) -> (b: bool)
             ensures b == (self@ == other@),
         { match (*self, *other) {
-                (ArenaTransition::Const(a), ArenaTransition::Const(b)) => a == b,
-                (ArenaTransition::If { test: a, then_transition: b, else_transition: c }, ArenaTransition::If { test: d, then_transition: e, else_transition: f }) => a == d && b == e && c == f,
-                (ArenaTransition::Union(a), ArenaTransition::Union(b)) | (ArenaTransition::Intersect(a), ArenaTransition::Intersect(b)) => a == b,
-                (ArenaTransition::Not(a), ArenaTransition::Not(b)) => a == b,
-                (ArenaTransition::Append { transition: a, suffix: b }, ArenaTransition::Append { transition: c, suffix: d }) => a == c && b == d,
+                (TransitionNode::Const(a), TransitionNode::Const(b)) => a == b,
+                (TransitionNode::If { test: a, then_transition: b, else_transition: c }, TransitionNode::If { test: d, then_transition: e, else_transition: f }) => a == d && b == e && c == f,
+                (TransitionNode::Union(a), TransitionNode::Union(b)) | (TransitionNode::Intersect(a), TransitionNode::Intersect(b)) => a == b,
+                (TransitionNode::Not(a), TransitionNode::Not(b)) => a == b,
+                (TransitionNode::Append { transition: a, suffix: b }, TransitionNode::Append { transition: c, suffix: d }) => a == c && b == d,
                 _ => false,
             } }
     }
@@ -510,17 +485,17 @@ id_lists!(TransitionIdLists, TransitionId, lemma_transition_id_eq);
 
 #[verus_verify]
 struct ArenaTables {
-    tests: BHConsign<ArenaTest>,
+    tests: BHConsign<TestNode>,
     test_ids: TestIdLists,
-    regexes: BHConsign<ArenaRegex>,
+    regexes: BHConsign<RegexNode>,
     regex_ids: RegexIdLists,
-    transitions: BHConsign<ArenaTransition>,
+    transitions: BHConsign<TransitionNode>,
     transition_ids: TransitionIdLists,
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(test)]
     lifetime_counts: Option<alloc::sync::Arc<ArenaLifetimeCounts>>,
 }
 #[verus_verify]
-pub struct ArenaStorage {
+pub(crate) struct ArenaStorage {
     tables: Option<ArenaTables>,
 }
 
@@ -534,14 +509,14 @@ impl Drop for ArenaStorage {
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
+#[cfg(test)]
 #[derive(Default)]
 pub struct ArenaLifetimeCounts {
     allocations: core::sync::atomic::AtomicUsize,
     frees: core::sync::atomic::AtomicUsize,
 }
 
-#[cfg(any(test, feature = "test-util"))]
+#[cfg(test)]
 impl ArenaLifetimeCounts {
     pub fn snapshot(&self) -> (usize, usize) {
         use core::sync::atomic::Ordering;
@@ -560,7 +535,7 @@ impl ArenaLifetimeCounts {
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
+#[cfg(test)]
 impl ArenaStorage {
     /// Observe this storage's six existing chunks and their individual frees.
     pub fn track_lifetime(
@@ -600,25 +575,25 @@ impl ArenaTables {
         && verify::tables_capacity(&t) == capacity && verify::tables_slack(&t) == 0)]
     #[allow(clippy::manual_is_multiple_of)]
     fn with_capacity(capacity: usize) -> KernelResult<Self> {
-        vstd::layout::layout_for_type_is_valid::<ArenaTest>();
-        vstd::layout::layout_for_type_is_valid::<ArenaRegex>();
-        vstd::layout::layout_for_type_is_valid::<ArenaTransition>();
+        vstd::layout::layout_for_type_is_valid::<TestNode>();
+        vstd::layout::layout_for_type_is_valid::<RegexNode>();
+        vstd::layout::layout_for_type_is_valid::<TransitionNode>();
         vstd::layout::layout_for_type_is_valid::<TestId>();
         vstd::layout::layout_for_type_is_valid::<RegexId>();
         vstd::layout::layout_for_type_is_valid::<TransitionId>();
         // Statically true (see the `const _` assert above); repeated here so Verus can use it.
-        if size_of::<ArenaTest>() == 0
-            || size_of::<ArenaRegex>() == 0
-            || size_of::<ArenaTransition>() == 0
-            || align_of::<ArenaTest>() > CHUNK_ALIGN
-            || align_of::<ArenaRegex>() > CHUNK_ALIGN
-            || align_of::<ArenaTransition>() > CHUNK_ALIGN
+        if size_of::<TestNode>() == 0
+            || size_of::<RegexNode>() == 0
+            || size_of::<TransitionNode>() == 0
+            || align_of::<TestNode>() > CHUNK_ALIGN
+            || align_of::<RegexNode>() > CHUNK_ALIGN
+            || align_of::<TransitionNode>() > CHUNK_ALIGN
             || align_of::<TestId>() > CHUNK_ALIGN
             || align_of::<RegexId>() > CHUNK_ALIGN
             || align_of::<TransitionId>() > CHUNK_ALIGN
-            || capacity % align_of::<ArenaTest>() != 0
-            || capacity % align_of::<ArenaRegex>() != 0
-            || capacity % align_of::<ArenaTransition>() != 0
+            || capacity % align_of::<TestNode>() != 0
+            || capacity % align_of::<RegexNode>() != 0
+            || capacity % align_of::<TransitionNode>() != 0
             || capacity % align_of::<TestId>() != 0
             || capacity % align_of::<RegexId>() != 0
             || capacity % align_of::<TransitionId>() != 0
@@ -678,7 +653,7 @@ impl ArenaTables {
             regex_ids,
             transitions,
             transition_ids,
-            #[cfg(any(test, feature = "test-util"))]
+            #[cfg(test)]
             lifetime_counts: None,
         };
         proof! { verify::lemma_fresh_tables(&tables, capacity); }
@@ -694,20 +669,20 @@ impl ArenaTables {
         }
         let node = self.tests.elem(index);
         Ok(match *node {
-            ArenaTest::True => TestView::True,
-            ArenaTest::False => TestView::False,
-            ArenaTest::Atom {
+            TestNode::True => TestView::True,
+            TestNode::False => TestView::False,
+            TestNode::Atom {
                 primitive,
                 positive,
             } => TestView::Atom {
                 primitive,
                 positive,
             },
-            ArenaTest::And(slot) => TestView::And(present(
+            TestNode::And(slot) => TestView::And(present(
                 self.test_ids.slices.get(slot),
                 "invalid test children",
             )?),
-            ArenaTest::Or(slot) => TestView::Or(present(
+            TestNode::Or(slot) => TestView::Or(present(
                 self.test_ids.slices.get(slot),
                 "invalid test children",
             )?),
@@ -723,24 +698,24 @@ impl ArenaTables {
         }
         let node = self.regexes.elem(index);
         let kind = match node.kind {
-            ArenaRegexKind::Empty => RegexKindView::Empty,
-            ArenaRegexKind::All => RegexKindView::All,
-            ArenaRegexKind::Epsilon => RegexKindView::Epsilon,
-            ArenaRegexKind::Test(id) => RegexKindView::Test(id),
-            ArenaRegexKind::Union(slot) => RegexKindView::Union(present(
+            RegexKind::Empty => RegexKindView::Empty,
+            RegexKind::All => RegexKindView::All,
+            RegexKind::Epsilon => RegexKindView::Epsilon,
+            RegexKind::Test(id) => RegexKindView::Test(id),
+            RegexKind::Union(slot) => RegexKindView::Union(present(
                 self.regex_ids.slices.get(slot),
                 "invalid regex children",
             )?),
-            ArenaRegexKind::Concat(slot) => RegexKindView::Concat(present(
+            RegexKind::Concat(slot) => RegexKindView::Concat(present(
                 self.regex_ids.slices.get(slot),
                 "invalid regex children",
             )?),
-            ArenaRegexKind::Star(id) => RegexKindView::Star(id),
-            ArenaRegexKind::Intersect(slot) => RegexKindView::Intersect(present(
+            RegexKind::Star(id) => RegexKindView::Star(id),
+            RegexKind::Intersect(slot) => RegexKindView::Intersect(present(
                 self.regex_ids.slices.get(slot),
                 "invalid regex children",
             )?),
-            ArenaRegexKind::Not(id) => RegexKindView::Not(id),
+            RegexKind::Not(id) => RegexKindView::Not(id),
         };
         Ok(RegexView {
             kind,
@@ -757,8 +732,8 @@ impl ArenaTables {
         }
         let node = self.transitions.elem(index);
         Ok(match *node {
-            ArenaTransition::Const(id) => TransitionView::Const(id),
-            ArenaTransition::If {
+            TransitionNode::Const(id) => TransitionView::Const(id),
+            TransitionNode::If {
                 test,
                 then_transition,
                 else_transition,
@@ -767,16 +742,16 @@ impl ArenaTables {
                 then_transition,
                 else_transition,
             },
-            ArenaTransition::Union(slot) => TransitionView::Union(present(
+            TransitionNode::Union(slot) => TransitionView::Union(present(
                 self.transition_ids.slices.get(slot),
                 "invalid transition children",
             )?),
-            ArenaTransition::Intersect(slot) => TransitionView::Intersect(present(
+            TransitionNode::Intersect(slot) => TransitionView::Intersect(present(
                 self.transition_ids.slices.get(slot),
                 "invalid transition children",
             )?),
-            ArenaTransition::Not(id) => TransitionView::Not(id),
-            ArenaTransition::Append { transition, suffix } => TransitionView::Append {
+            TransitionNode::Not(id) => TransitionView::Not(id),
+            TransitionNode::Append { transition, suffix } => TransitionView::Append {
                 transition,
                 suffix: present(self.regex_ids.slices.get(suffix), "invalid append suffix")?,
             },
@@ -789,12 +764,12 @@ impl ArenaTables {
         result matches Err(error) ==> !(error is ArenaExhausted))]
     fn find_test(&self, view: TestView<'_>) -> KernelResult<Option<TestId>> {
         let node = match view {
-            TestView::True => ArenaTest::True,
-            TestView::False => ArenaTest::False,
+            TestView::True => TestNode::True,
+            TestView::False => TestNode::False,
             TestView::Atom {
                 primitive,
                 positive,
-            } => ArenaTest::Atom {
+            } => TestNode::Atom {
                 primitive,
                 positive,
             },
@@ -804,8 +779,8 @@ impl ArenaTables {
                     return Ok(None);
                 };
                 match view {
-                    TestView::And(_) => ArenaTest::And(slot),
-                    _ => ArenaTest::Or(slot),
+                    TestView::And(_) => TestNode::And(slot),
+                    _ => TestNode::Or(slot),
                 }
             }
         };
@@ -822,12 +797,12 @@ impl ArenaTables {
         result matches Err(error) ==> !(error is ArenaExhausted))]
     fn find_regex(&self, view: RegexView<'_>) -> KernelResult<Option<RegexId>> {
         let kind = match view.kind {
-            RegexKindView::Empty => ArenaRegexKind::Empty,
-            RegexKindView::All => ArenaRegexKind::All,
-            RegexKindView::Epsilon => ArenaRegexKind::Epsilon,
-            RegexKindView::Test(id) => ArenaRegexKind::Test(id),
-            RegexKindView::Star(id) => ArenaRegexKind::Star(id),
-            RegexKindView::Not(id) => ArenaRegexKind::Not(id),
+            RegexKindView::Empty => RegexKind::Empty,
+            RegexKindView::All => RegexKind::All,
+            RegexKindView::Epsilon => RegexKind::Epsilon,
+            RegexKindView::Test(id) => RegexKind::Test(id),
+            RegexKindView::Star(id) => RegexKind::Star(id),
+            RegexKindView::Not(id) => RegexKind::Not(id),
             RegexKindView::Union(ids)
             | RegexKindView::Concat(ids)
             | RegexKindView::Intersect(ids) => {
@@ -836,13 +811,13 @@ impl ArenaTables {
                     return Ok(None);
                 };
                 match view.kind {
-                    RegexKindView::Union(_) => ArenaRegexKind::Union(slot),
-                    RegexKindView::Concat(_) => ArenaRegexKind::Concat(slot),
-                    _ => ArenaRegexKind::Intersect(slot),
+                    RegexKindView::Union(_) => RegexKind::Union(slot),
+                    RegexKindView::Concat(_) => RegexKind::Concat(slot),
+                    _ => RegexKind::Intersect(slot),
                 }
             }
         };
-        let node = ArenaRegex {
+        let node = RegexNode {
             kind,
             nullable: view.nullable,
         };
@@ -859,25 +834,25 @@ impl ArenaTables {
         result matches Err(error) ==> !(error is ArenaExhausted))]
     fn find_transition(&self, view: TransitionView<'_>) -> KernelResult<Option<TransitionId>> {
         let node = match view {
-            TransitionView::Const(id) => ArenaTransition::Const(id),
+            TransitionView::Const(id) => TransitionNode::Const(id),
             TransitionView::If {
                 test,
                 then_transition,
                 else_transition,
-            } => ArenaTransition::If {
+            } => TransitionNode::If {
                 test,
                 then_transition,
                 else_transition,
             },
-            TransitionView::Not(id) => ArenaTransition::Not(id),
+            TransitionView::Not(id) => TransitionNode::Not(id),
             TransitionView::Union(ids) | TransitionView::Intersect(ids) => {
                 let Some(slot) = self.transition_ids.find(ids) else {
                     proof! { verify::lemma_missing_transition_children(self, view@, ids@); }
                     return Ok(None);
                 };
                 match view {
-                    TransitionView::Union(_) => ArenaTransition::Union(slot),
-                    _ => ArenaTransition::Intersect(slot),
+                    TransitionView::Union(_) => TransitionNode::Union(slot),
+                    _ => TransitionNode::Intersect(slot),
                 }
             }
             TransitionView::Append { transition, suffix } => {
@@ -885,7 +860,7 @@ impl ArenaTables {
                     proof! { verify::lemma_missing_append_suffix(self, transition@, suffix@); }
                     return Ok(None);
                 };
-                ArenaTransition::Append {
+                TransitionNode::Append {
                     transition,
                     suffix: slot,
                 }
@@ -914,18 +889,17 @@ impl ArenaTables {
     fn push_test(
         &mut self,
         view: TestView<'_>,
-        _world: &mut ObservationWorld,
     ) -> KernelResult<TestId> {
-        vstd::layout::layout_for_type_is_valid::<ArenaTest>();
+        vstd::layout::layout_for_type_is_valid::<TestNode>();
         proof_decl! { let ghost before = *self; }
         let id = TestId::from_index(self.tests.len())?;
         let node = match view {
-            TestView::True => ArenaTest::True,
-            TestView::False => ArenaTest::False,
+            TestView::True => TestNode::True,
+            TestView::False => TestNode::False,
             TestView::Atom {
                 primitive,
                 positive,
-            } => ArenaTest::Atom {
+            } => TestNode::Atom {
                 primitive,
                 positive,
             },
@@ -936,7 +910,7 @@ impl ArenaTables {
                     assert(verify::pool_bytes(self.test_ids@) <= verify::pool_bytes(before.test_ids@)
                         + verify::mul_bytes(ids@.len(), vstd::layout::size_of::<TestId>()));
                 }
-                ArenaTest::And(slot)
+                TestNode::And(slot)
             }
             TestView::Or(ids) => {
                 let slot = arena(self.test_ids.intern(ids))?;
@@ -945,7 +919,7 @@ impl ArenaTables {
                     assert(verify::pool_bytes(self.test_ids@) <= verify::pool_bytes(before.test_ids@)
                         + verify::mul_bytes(ids@.len(), vstd::layout::size_of::<TestId>()));
                 }
-                ArenaTest::Or(slot)
+                TestNode::Or(slot)
             }
         };
         proof! {
@@ -970,7 +944,7 @@ impl ArenaTables {
                 if i < before.tests@.len() { assert(self.tests@[i] == before.tests@[i]); }
             }
             verify::lemma_tests_weight_push(verify::tables_graph(&before).tests, view@);
-            verify::lemma_mul_bytes_succ(before.tests@.len(), vstd::layout::size_of::<ArenaTest>());
+            verify::lemma_mul_bytes_succ(before.tests@.len(), vstd::layout::size_of::<TestNode>());
             assert(verify::tables_wf(self));
             assert(verify::arena_live(self) <= verify::arena_live(&before) + verify::test_weight(view@));
         }
@@ -997,16 +971,15 @@ impl ArenaTables {
     fn push_regex(
         &mut self,
         view: RegexView<'_>,
-        _world: &mut ObservationWorld,
     ) -> KernelResult<RegexId> {
-        vstd::layout::layout_for_type_is_valid::<ArenaRegex>();
+        vstd::layout::layout_for_type_is_valid::<RegexNode>();
         proof_decl! { let ghost before = *self; }
         let id = RegexId::from_index(self.regexes.len())?;
         let kind = match view.kind {
-            RegexKindView::Empty => ArenaRegexKind::Empty,
-            RegexKindView::All => ArenaRegexKind::All,
-            RegexKindView::Epsilon => ArenaRegexKind::Epsilon,
-            RegexKindView::Test(id) => ArenaRegexKind::Test(id),
+            RegexKindView::Empty => RegexKind::Empty,
+            RegexKindView::All => RegexKind::All,
+            RegexKindView::Epsilon => RegexKind::Epsilon,
+            RegexKindView::Test(id) => RegexKind::Test(id),
             RegexKindView::Union(ids) => {
                 let slot = arena(self.regex_ids.intern(ids))?;
                 proof! { verify::lemma_pool_bytes_push(before.regex_ids@, ids@); }
@@ -1014,7 +987,7 @@ impl ArenaTables {
                     assert(verify::pool_bytes(self.regex_ids@) <= verify::pool_bytes(before.regex_ids@)
                         + verify::mul_bytes(ids@.len(), vstd::layout::size_of::<RegexId>()));
                 }
-                ArenaRegexKind::Union(slot)
+                RegexKind::Union(slot)
             }
             RegexKindView::Concat(ids) => {
                 let slot = arena(self.regex_ids.intern(ids))?;
@@ -1023,9 +996,9 @@ impl ArenaTables {
                     assert(verify::pool_bytes(self.regex_ids@) <= verify::pool_bytes(before.regex_ids@)
                         + verify::mul_bytes(ids@.len(), vstd::layout::size_of::<RegexId>()));
                 }
-                ArenaRegexKind::Concat(slot)
+                RegexKind::Concat(slot)
             }
-            RegexKindView::Star(id) => ArenaRegexKind::Star(id),
+            RegexKindView::Star(id) => RegexKind::Star(id),
             RegexKindView::Intersect(ids) => {
                 let slot = arena(self.regex_ids.intern(ids))?;
                 proof! { verify::lemma_pool_bytes_push(before.regex_ids@, ids@); }
@@ -1033,11 +1006,11 @@ impl ArenaTables {
                     assert(verify::pool_bytes(self.regex_ids@) <= verify::pool_bytes(before.regex_ids@)
                         + verify::mul_bytes(ids@.len(), vstd::layout::size_of::<RegexId>()));
                 }
-                ArenaRegexKind::Intersect(slot)
+                RegexKind::Intersect(slot)
             }
-            RegexKindView::Not(id) => ArenaRegexKind::Not(id),
+            RegexKindView::Not(id) => RegexKind::Not(id),
         };
-        let node = ArenaRegex {
+        let node = RegexNode {
             kind,
             nullable: view.nullable,
         };
@@ -1063,7 +1036,7 @@ impl ArenaTables {
                 if i < before.regexes@.len() { assert(self.regexes@[i] == before.regexes@[i]); }
             }
             verify::lemma_regexes_weight_push(verify::tables_graph(&before).regexes, view@);
-            verify::lemma_mul_bytes_succ(before.regexes@.len(), vstd::layout::size_of::<ArenaRegex>());
+            verify::lemma_mul_bytes_succ(before.regexes@.len(), vstd::layout::size_of::<RegexNode>());
             assert(verify::tables_wf(self));
             assert(verify::arena_live(self) <= verify::arena_live(&before) + verify::regex_weight(view@));
         }
@@ -1090,18 +1063,17 @@ impl ArenaTables {
     fn push_transition(
         &mut self,
         view: TransitionView<'_>,
-        _world: &mut ObservationWorld,
     ) -> KernelResult<TransitionId> {
-        vstd::layout::layout_for_type_is_valid::<ArenaTransition>();
+        vstd::layout::layout_for_type_is_valid::<TransitionNode>();
         proof_decl! { let ghost before = *self; }
         let id = TransitionId::from_index(self.transitions.len())?;
         let node = match view {
-            TransitionView::Const(id) => ArenaTransition::Const(id),
+            TransitionView::Const(id) => TransitionNode::Const(id),
             TransitionView::If {
                 test,
                 then_transition,
                 else_transition,
-            } => ArenaTransition::If {
+            } => TransitionNode::If {
                 test,
                 then_transition,
                 else_transition,
@@ -1113,7 +1085,7 @@ impl ArenaTables {
                     assert(verify::pool_bytes(self.transition_ids@) <= verify::pool_bytes(before.transition_ids@)
                         + verify::mul_bytes(ids@.len(), vstd::layout::size_of::<TransitionId>()));
                 }
-                ArenaTransition::Union(slot)
+                TransitionNode::Union(slot)
             }
             TransitionView::Intersect(ids) => {
                 let slot = arena(self.transition_ids.intern(ids))?;
@@ -1122,9 +1094,9 @@ impl ArenaTables {
                     assert(verify::pool_bytes(self.transition_ids@) <= verify::pool_bytes(before.transition_ids@)
                         + verify::mul_bytes(ids@.len(), vstd::layout::size_of::<TransitionId>()));
                 }
-                ArenaTransition::Intersect(slot)
+                TransitionNode::Intersect(slot)
             }
-            TransitionView::Not(id) => ArenaTransition::Not(id),
+            TransitionView::Not(id) => TransitionNode::Not(id),
             TransitionView::Append { transition, suffix } => {
                 let slot = arena(self.regex_ids.intern(suffix))?;
                 proof! { verify::lemma_pool_bytes_push(before.regex_ids@, suffix@); }
@@ -1132,7 +1104,7 @@ impl ArenaTables {
                     assert(verify::pool_bytes(self.regex_ids@) <= verify::pool_bytes(before.regex_ids@)
                         + verify::mul_bytes(suffix@.len(), vstd::layout::size_of::<RegexId>()));
                 }
-                ArenaTransition::Append {
+                TransitionNode::Append {
                     transition,
                     suffix: slot,
                 }
@@ -1160,7 +1132,7 @@ impl ArenaTables {
                 if i < before.transitions@.len() { assert(self.transitions@[i] == before.transitions@[i]); }
             }
             verify::lemma_transitions_weight_push(verify::tables_graph(&before).transitions, view@);
-            verify::lemma_mul_bytes_succ(before.transitions@.len(), vstd::layout::size_of::<ArenaTransition>());
+            verify::lemma_mul_bytes_succ(before.transitions@.len(), vstd::layout::size_of::<TransitionNode>());
             assert(verify::tables_wf(self));
             assert(verify::arena_live(self) <= verify::arena_live(&before) + verify::transition_weight(view@));
         }
@@ -1169,32 +1141,27 @@ impl ArenaTables {
     #[verus_spec(requires verify::tables_wf(&self))]
     fn release(self) {
         self.tests.free();
-        #[cfg(any(test, feature = "test-util"))]
+        #[cfg(test)]
         ArenaLifetimeCounts::freed(&self.lifetime_counts);
         self.test_ids.free();
-        #[cfg(any(test, feature = "test-util"))]
+        #[cfg(test)]
         ArenaLifetimeCounts::freed(&self.lifetime_counts);
         self.regexes.free();
-        #[cfg(any(test, feature = "test-util"))]
+        #[cfg(test)]
         ArenaLifetimeCounts::freed(&self.lifetime_counts);
         self.regex_ids.free();
-        #[cfg(any(test, feature = "test-util"))]
+        #[cfg(test)]
         ArenaLifetimeCounts::freed(&self.lifetime_counts);
         self.transitions.free();
-        #[cfg(any(test, feature = "test-util"))]
+        #[cfg(test)]
         ArenaLifetimeCounts::freed(&self.lifetime_counts);
         self.transition_ids.free();
-        #[cfg(any(test, feature = "test-util"))]
+        #[cfg(test)]
         ArenaLifetimeCounts::freed(&self.lifetime_counts);
     }
 }
 #[verus_verify]
 impl ArenaStorage {
-    #[verus_spec(result => ensures result matches Ok(s) ==> verify::empty_tables(s.graph())
-        && s.capacity() == MAX_GRAPH_BYTES && s.slack() == 0)]
-    pub fn new() -> KernelResult<Self> {
-        Self::with_capacity(ARENA_CAPACITY)
-    }
     #[verus_spec(result => ensures result matches Ok(s) ==> verify::empty_tables(s.graph())
         && s.capacity() == capacity && s.slack() == 0)]
     pub(crate) fn with_capacity(capacity: usize) -> KernelResult<Self> {
@@ -1223,71 +1190,146 @@ impl ArenaStorage {
     }
 }
 #[verus_verify]
-impl Storage for ArenaStorage {
+impl ArenaStorage {
+    #[verus_spec(r =>
+        ensures r matches Ok(v) ==> id@ < self.graph().tests.len()
+            && v@ == self.graph().tests[id@ as int],
+            r matches Err(error) ==> !(error is ArenaExhausted)
+    )]
     fn test(&self, id: TestId) -> KernelResult<TestView<'_>> {
         proof! { use_type_invariant(&*self); }
         let tables = present(self.tables.as_ref(), "arena released")?;
         tables.test(id.index()?)
     }
+    #[verus_spec(r =>
+        ensures r matches Ok(Some(id)) ==> id@ < self.graph().tests.len()
+            && self.graph().tests[id@ as int] == view@,
+            r matches Ok(None) ==> !self.graph().tests.contains(view@),
+            r matches Err(error) ==> !(error is ArenaExhausted)
+    )]
     fn find_test(&self, view: TestView<'_>) -> KernelResult<Option<TestId>> {
         proof! { use_type_invariant(&*self); }
         present(self.tables.as_ref(), "arena released")?.find_test(view)
     }
+    #[verus_spec(r =>
+        ensures r matches Ok(Some(id)) ==> id@ < self.graph().regexes.len()
+            && self.graph().regexes[id@ as int] == view@,
+            r matches Ok(None) ==> !self.graph().regexes.contains(view@),
+            r matches Err(error) ==> !(error is ArenaExhausted)
+    )]
     fn find_regex(&self, view: RegexView<'_>) -> KernelResult<Option<RegexId>> {
         proof! { use_type_invariant(&*self); }
         present(self.tables.as_ref(), "arena released")?.find_regex(view)
     }
+    #[verus_spec(r =>
+        ensures r matches Ok(Some(id)) ==> id@ < self.graph().transitions.len()
+            && self.graph().transitions[id@ as int] == view@,
+            r matches Ok(None) ==> !self.graph().transitions.contains(view@),
+            r matches Err(error) ==> !(error is ArenaExhausted)
+    )]
     fn find_transition(&self, view: TransitionView<'_>) -> KernelResult<Option<TransitionId>> {
         proof! { use_type_invariant(&*self); }
         present(self.tables.as_ref(), "arena released")?.find_transition(view)
     }
+    #[verus_spec(r =>
+        requires !old(self).graph().tests.contains(view@),
+        ensures
+            final(self).graph().constants == old(self).graph().constants,
+            final(self).graph().regexes == old(self).graph().regexes,
+            final(self).graph().transitions == old(self).graph().transitions,
+            r is Err ==> final(self).graph() == old(self).graph(),
+            r matches Ok(id) ==> id@ == old(self).graph().tests.len()
+                && final(self).graph().tests == old(self).graph().tests.push(view@),
+            final(self).capacity() == old(self).capacity(),
+            r is Ok ==> final(self).slack() >= old(self).slack(),
+            r matches Err(error) ==> error is ArenaExhausted ==>
+                verify::graph_weight(old(self).graph()) + verify::test_weight(view@) - old(self).slack()
+                    > old(self).capacity()
+    )]
     fn push_test(
         &mut self,
         view: TestView<'_>,
-        world: &mut ObservationWorld,
     ) -> KernelResult<TestId> {
         proof! { use_type_invariant(&*self); }
         // Restore table ownership before propagating either success or failure.
         let Some(mut tables) = self.tables.take() else {
             return Err(HistoryError::invariant("arena released"));
         };
-        let result = tables.push_test(view, world);
+        let result = tables.push_test(view);
         self.tables = Some(tables);
         result
     }
+    #[verus_spec(r =>
+        ensures r matches Ok(v) ==> id@ < self.graph().regexes.len()
+            && v@ == self.graph().regexes[id@ as int],
+            r matches Err(error) ==> !(error is ArenaExhausted)
+    )]
     fn regex(&self, id: RegexId) -> KernelResult<RegexView<'_>> {
         proof! { use_type_invariant(&*self); }
         let tables = present(self.tables.as_ref(), "arena released")?;
         tables.regex(id.index()?)
     }
+    #[verus_spec(r =>
+        requires !old(self).graph().regexes.contains(view@),
+        ensures
+            final(self).graph().constants == old(self).graph().constants,
+            final(self).graph().tests == old(self).graph().tests,
+            final(self).graph().transitions == old(self).graph().transitions,
+            r is Err ==> final(self).graph() == old(self).graph(),
+            r matches Ok(id) ==> id@ == old(self).graph().regexes.len()
+                && final(self).graph().regexes == old(self).graph().regexes.push(view@),
+            final(self).capacity() == old(self).capacity(),
+            r is Ok ==> final(self).slack() >= old(self).slack(),
+            r matches Err(error) ==> error is ArenaExhausted ==>
+                verify::graph_weight(old(self).graph()) + verify::regex_weight(view@) - old(self).slack()
+                    > old(self).capacity()
+    )]
     fn push_regex(
         &mut self,
         view: RegexView<'_>,
-        world: &mut ObservationWorld,
     ) -> KernelResult<RegexId> {
         proof! { use_type_invariant(&*self); }
         let Some(mut tables) = self.tables.take() else {
             return Err(HistoryError::invariant("arena released"));
         };
-        let result = tables.push_regex(view, world);
+        let result = tables.push_regex(view);
         self.tables = Some(tables);
         result
     }
+    #[verus_spec(r =>
+        ensures r matches Ok(v) ==> id@ < self.graph().transitions.len()
+            && v@ == self.graph().transitions[id@ as int],
+            r matches Err(error) ==> !(error is ArenaExhausted)
+    )]
     fn transition(&self, id: TransitionId) -> KernelResult<TransitionView<'_>> {
         proof! { use_type_invariant(&*self); }
         let tables = present(self.tables.as_ref(), "arena released")?;
         tables.transition(id.index()?)
     }
+    #[verus_spec(r =>
+        requires !old(self).graph().transitions.contains(view@),
+        ensures
+            final(self).graph().constants == old(self).graph().constants,
+            final(self).graph().tests == old(self).graph().tests,
+            final(self).graph().regexes == old(self).graph().regexes,
+            r is Err ==> final(self).graph() == old(self).graph(),
+            r matches Ok(id) ==> id@ == old(self).graph().transitions.len()
+                && final(self).graph().transitions == old(self).graph().transitions.push(view@),
+            final(self).capacity() == old(self).capacity(),
+            r is Ok ==> final(self).slack() >= old(self).slack(),
+            r matches Err(error) ==> error is ArenaExhausted ==>
+                verify::graph_weight(old(self).graph()) + verify::transition_weight(view@) - old(self).slack()
+                    > old(self).capacity()
+    )]
     fn push_transition(
         &mut self,
         view: TransitionView<'_>,
-        world: &mut ObservationWorld,
     ) -> KernelResult<TransitionId> {
         proof! { use_type_invariant(&*self); }
         let Some(mut tables) = self.tables.take() else {
             return Err(HistoryError::invariant("arena released"));
         };
-        let result = tables.push_transition(view, world);
+        let result = tables.push_transition(view);
         self.tables = Some(tables);
         result
     }
@@ -1308,24 +1350,33 @@ impl core::fmt::Debug for ArenaStorage {
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Debug)]
-pub struct CanonicalStore<S> {
-    pub(crate) storage: S,
+pub struct CanonicalStore {
+    pub(crate) storage: ArenaStorage,
     // Verus needs every field crate-visible for direct accounting contracts.
     pub(crate) constants: Constants,
     pub(crate) bytes: usize,
 }
 #[verus_verify]
-impl<S: Storage> CanonicalStore<S> {
+impl CanonicalStore {
     #[cfg(verus_keep_ghost)]
     verus! {
         pub closed spec fn charged(&self) -> nat { self.bytes as nat }
+    }
+
+    /// Creates the fixed-capacity canonical graph and its algebraic constants.
+    #[verus_spec(result => ensures match result {
+        Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
+        Err(_) => true,
+    })]
+    pub fn new() -> KernelResult<Self> {
+        Self::from_storage(ArenaStorage::with_capacity(ARENA_CAPACITY)?)
     }
 
     #[verus_spec(result =>
         requires verify::empty_tables(storage.graph()),
         ensures match result { Ok(store) => model::graph_wf(store.graph()) && store.valid_store(), Err(_) => true },
     )]
-    pub fn new(storage: S, world: &mut ObservationWorld) -> KernelResult<Self> {
+    fn from_storage(storage: ArenaStorage) -> KernelResult<Self> {
         proof_decl! { let ghost initial_graph = storage.graph(); }
         let mut store = Self {
             storage,
@@ -1343,7 +1394,7 @@ impl<S: Storage> CanonicalStore<S> {
         };
         proof! { assert(store.valid_store()); }
         proof! { verify::lemma_tables_wf_same_tables(initial_graph, store.graph()); }
-        store.intern_constants(world)?;
+        store.intern_constants()?;
         Ok(store)
     }
 
@@ -1357,15 +1408,15 @@ impl<S: Storage> CanonicalStore<S> {
             Err(_) => true,
         },
     )]
-    fn intern_constants(&mut self, world: &mut ObservationWorld) -> KernelResult<()> {
-        let test_true = self.intern_test(TestView::True, world)?;
-        let test_false = self.intern_test(TestView::False, world)?;
-        let empty = self.intern_regex(RegexKindView::Empty, false, world)?;
-        let all = self.intern_regex(RegexKindView::All, true, world)?;
-        let epsilon = self.intern_regex(RegexKindView::Epsilon, true, world)?;
-        let transition_empty = self.intern_transition(TransitionView::Const(empty), world)?;
-        let transition_all = self.intern_transition(TransitionView::Const(all), world)?;
-        let transition_epsilon = self.intern_transition(TransitionView::Const(epsilon), world)?;
+    fn intern_constants(&mut self) -> KernelResult<()> {
+        let test_true = self.intern_test(TestView::True)?;
+        let test_false = self.intern_test(TestView::False)?;
+        let empty = self.intern_regex(RegexKindView::Empty, false)?;
+        let all = self.intern_regex(RegexKindView::All, true)?;
+        let epsilon = self.intern_regex(RegexKindView::Epsilon, true)?;
+        let transition_empty = self.intern_transition(TransitionView::Const(empty))?;
+        let transition_all = self.intern_transition(TransitionView::Const(all))?;
+        let transition_epsilon = self.intern_transition(TransitionView::Const(epsilon))?;
         proof_decl! { let ghost built_graph = self.graph(); }
         self.constants = Constants {
             test_true,
@@ -1460,7 +1511,6 @@ impl<S: Storage> CanonicalStore<S> {
     pub(crate) fn intern_test(
         &mut self,
         node: TestView<'_>,
-        world: &mut ObservationWorld,
     ) -> KernelResult<TestId> {
         proof_decl! { let ghost original = self.graph(); }
         if let Some(id) = self.storage.find_test(node)? {
@@ -1470,7 +1520,7 @@ impl<S: Storage> CanonicalStore<S> {
             TestView::And(ids) | TestView::Or(ids) => ids.len(),
             _ => 0,
         };
-        let bytes = size_of::<ArenaTest>()
+        let bytes = size_of::<TestNode>()
             .checked_add(sequence_bytes::<TestId>(len)?)
             .ok_or(HistoryError::GraphLimit {
                 limit: MAX_GRAPH_BYTES,
@@ -1483,7 +1533,7 @@ impl<S: Storage> CanonicalStore<S> {
             assert(verify::graph_weight(original) + verify::test_weight(node@) <= MAX_GRAPH_BYTES);
         }
         // Publish the charge only after storage succeeds; failed pushes leave accounting unchanged.
-        let id = self.storage.push_test(node, world)?;
+        let id = self.storage.push_test(node)?;
         self.bytes = projected;
         proof! {
             assert(self.graph() == model::append_test(original, node@));
@@ -1518,7 +1568,6 @@ impl<S: Storage> CanonicalStore<S> {
         &mut self,
         kind: RegexKindView<'_>,
         nullable: bool,
-        world: &mut ObservationWorld,
     ) -> KernelResult<RegexId> {
         proof_decl! { let ghost original = self.graph(); }
         let node = RegexView { kind, nullable };
@@ -1531,7 +1580,7 @@ impl<S: Storage> CanonicalStore<S> {
             | RegexKindView::Intersect(ids) => ids.len(),
             _ => 0,
         };
-        let bytes = size_of::<ArenaRegex>()
+        let bytes = size_of::<RegexNode>()
             .checked_add(sequence_bytes::<RegexId>(len)?)
             .ok_or(HistoryError::GraphLimit {
                 limit: MAX_GRAPH_BYTES,
@@ -1543,7 +1592,7 @@ impl<S: Storage> CanonicalStore<S> {
             assert(bytes as int == verify::regex_weight(node@));
             assert(verify::graph_weight(original) + verify::regex_weight(node@) <= MAX_GRAPH_BYTES);
         }
-        let id = self.storage.push_regex(node, world)?;
+        let id = self.storage.push_regex(node)?;
         self.bytes = projected;
         proof! {
             assert(self.graph() == model::append_regex(original, node@));
@@ -1577,7 +1626,6 @@ impl<S: Storage> CanonicalStore<S> {
     pub(crate) fn intern_transition(
         &mut self,
         node: TransitionView<'_>,
-        world: &mut ObservationWorld,
     ) -> KernelResult<TransitionId> {
         proof_decl! { let ghost original = self.graph(); }
         if let Some(id) = self.storage.find_transition(node)? {
@@ -1591,7 +1639,7 @@ impl<S: Storage> CanonicalStore<S> {
             _ => 0,
         };
         let bytes =
-            size_of::<ArenaTransition>()
+            size_of::<TransitionNode>()
                 .checked_add(children)
                 .ok_or(HistoryError::GraphLimit {
                     limit: MAX_GRAPH_BYTES,
@@ -1603,7 +1651,7 @@ impl<S: Storage> CanonicalStore<S> {
             assert(bytes as int == verify::transition_weight(node@));
             assert(verify::graph_weight(original) + verify::transition_weight(node@) <= MAX_GRAPH_BYTES);
         }
-        let id = self.storage.push_transition(node, world)?;
+        let id = self.storage.push_transition(node)?;
         self.bytes = projected;
         proof! {
             assert(self.graph() == model::append_transition(original, node@));
@@ -1619,7 +1667,7 @@ impl<S: Storage> CanonicalStore<S> {
 }
 
 #[cfg(any(test, feature = "test-util"))]
-impl<S> CanonicalStore<S> {
+impl CanonicalStore {
     pub fn replace_graph_byte_pressure(&mut self, bytes: usize) -> usize {
         core::mem::replace(&mut self.bytes, bytes)
     }
@@ -1630,7 +1678,7 @@ impl<S> CanonicalStore<S> {
 }
 
 #[cfg(any(test, feature = "test-util"))]
-impl CanonicalStore<ArenaStorage> {
+impl CanonicalStore {
     pub fn table_counts(&self) -> Option<(usize, usize)> {
         self.storage
             .tables
@@ -1639,13 +1687,13 @@ impl CanonicalStore<ArenaStorage> {
     }
 }
 #[verus_verify]
-pub struct RuntimeKernel<'a, S, L: Limits> {
-    pub store: &'a mut CanonicalStore<S>,
+pub struct RuntimeKernel<'a, L: Limits> {
+    pub store: &'a mut CanonicalStore,
     pub limits: &'a mut L,
     pub world: &'a mut ObservationWorld,
 }
 #[verus_verify]
-impl<S: Storage, L: Limits> KernelStore for RuntimeKernel<'_, S, L> {
+impl<L: Limits> KernelStore for RuntimeKernel<'_, L> {
     fn checkpoint(&mut self) -> KernelResult<()> {
         self.limits.checkpoint()?;
         Ok(())
@@ -1678,19 +1726,19 @@ impl<S: Storage, L: Limits> KernelStore for RuntimeKernel<'_, S, L> {
     }
     fn intern_test(&mut self, node: TestView<'_>) -> KernelResult<TestId> {
         self.checkpoint()?;
-        let id = self.store.intern_test(node, self.world)?;
+        let id = self.store.intern_test(node)?;
         self.checkpoint()?;
         Ok(id)
     }
     fn intern_regex(&mut self, kind: RegexKindView<'_>, nullable: bool) -> KernelResult<RegexId> {
         self.checkpoint()?;
-        let id = self.store.intern_regex(kind, nullable, self.world)?;
+        let id = self.store.intern_regex(kind, nullable)?;
         self.checkpoint()?;
         Ok(id)
     }
     fn intern_transition(&mut self, node: TransitionView<'_>) -> KernelResult<TransitionId> {
         self.checkpoint()?;
-        let id = self.store.intern_transition(node, self.world)?;
+        let id = self.store.intern_transition(node)?;
         self.checkpoint()?;
         Ok(id)
     }
@@ -1716,7 +1764,7 @@ mod storage_tests {
             (Principal, Term::Variable(Resource), true),
             (Principal, Term::Constant(0), false),
         ]
-        .map(|(field, term, positive)| ArenaTest::Atom {
+        .map(|(field, term, positive)| TestNode::Atom {
             primitive: Primitive::Eq { field, term },
             positive,
         });
@@ -1729,10 +1777,10 @@ mod storage_tests {
 
     fn tracked_store(
         counts: &alloc::sync::Arc<ArenaLifetimeCounts>,
-    ) -> KernelResult<CanonicalStore<ArenaStorage>> {
+    ) -> KernelResult<CanonicalStore> {
         let mut storage = ArenaStorage::with_capacity(512)?;
         storage.track_lifetime(alloc::sync::Arc::clone(counts))?;
-        CanonicalStore::new(storage, &mut ObservationWorld)
+        CanonicalStore::from_storage(storage)
     }
 
     #[test]
@@ -1770,7 +1818,7 @@ mod storage_tests {
         let mut storage = ArenaStorage::with_capacity(CHUNK_ALIGN)?;
         storage.track_lifetime(Arc::clone(&counts))?;
         assert!(matches!(
-            CanonicalStore::new(storage, &mut ObservationWorld),
+            CanonicalStore::from_storage(storage),
             Err(HistoryError::ArenaExhausted)
         ));
         assert_eq!(counts.snapshot(), (6, 6));
@@ -1779,9 +1827,8 @@ mod storage_tests {
 
     #[test]
     fn budget_equality_is_allowed_and_failed_growth_is_transactional() -> KernelResult<()> {
-        let mut world = ObservationWorld;
-        let mut store = CanonicalStore::new(ArenaStorage::new()?, &mut world)?;
-        let payload = size_of::<ArenaTest>();
+        let mut store = CanonicalStore::new()?;
+        let payload = size_of::<TestNode>();
         store.bytes = MAX_GRAPH_BYTES
             .checked_sub(payload)
             .ok_or_else(|| HistoryError::invariant("invalid test budget"))?;
@@ -1792,9 +1839,9 @@ mod storage_tests {
             },
             positive: true,
         };
-        let id = store.intern_test(node, &mut world)?;
+        let id = store.intern_test(node)?;
         assert_eq!(store.bytes, MAX_GRAPH_BYTES);
-        assert_eq!(store.intern_test(node, &mut world)?, id);
+        assert_eq!(store.intern_test(node)?, id);
         let rows = store.storage.lengths();
         let failed = store.intern_test(
             TestView::Atom {
@@ -1804,7 +1851,6 @@ mod storage_tests {
                 },
                 positive: true,
             },
-            &mut world,
         );
         assert!(matches!(
             failed,
@@ -1819,8 +1865,7 @@ mod storage_tests {
 
     #[test]
     fn arena_allocation_failure_does_not_publish_or_charge() -> KernelResult<()> {
-        let mut world = ObservationWorld;
-        let mut store = CanonicalStore::new(ArenaStorage::with_capacity(512)?, &mut world)?;
+        let mut store = CanonicalStore::from_storage(ArenaStorage::with_capacity(512)?)?;
         for path in 0_u32..u32::MAX {
             let before = (store.bytes, store.storage.lengths());
             match store.intern_test(
@@ -1831,12 +1876,11 @@ mod storage_tests {
                     },
                     positive: true,
                 },
-                &mut world,
             ) {
                 Ok(_) => {}
                 Err(HistoryError::ArenaExhausted) => {
                     assert_eq!((store.bytes, store.storage.lengths()), before);
-                    let constant = store.intern_test(TestView::True, &mut world);
+                    let constant = store.intern_test(TestView::True);
                     let expected = store.constants().test_true;
                     assert_eq!(constant?, expected);
                     return Ok(());
@@ -1849,8 +1893,7 @@ mod storage_tests {
 
     #[test]
     fn arena_round_trips_child_slices() -> KernelResult<()> {
-        let mut world = ObservationWorld;
-        let mut store = CanonicalStore::new(ArenaStorage::new()?, &mut world)?;
+        let mut store = CanonicalStore::new()?;
         let outcome = (|| -> KernelResult<_> {
             let a = store.intern_test(
                 TestView::Atom {
@@ -1860,7 +1903,6 @@ mod storage_tests {
                     },
                     positive: true,
                 },
-                &mut world,
             )?;
             let b = store.intern_test(
                 TestView::Atom {
@@ -1870,31 +1912,30 @@ mod storage_tests {
                     },
                     positive: true,
                 },
-                &mut world,
             )?;
-            let and = store.intern_test(TestView::And(&[a, b]), &mut world)?;
-            let r = store.intern_regex(RegexKindView::Test(a), false, &mut world)?;
+            let and = store.intern_test(TestView::And(&[a, b]))?;
+            let r = store.intern_regex(RegexKindView::Test(a), false)?;
             let epsilon = store.constants().epsilon;
             let union =
-                store.intern_regex(RegexKindView::Union(&[r, epsilon]), true, &mut world)?;
+                store.intern_regex(RegexKindView::Union(&[r, epsilon]), true)?;
             let transition_epsilon = store.constants().transition_epsilon;
             let append = TransitionView::Append {
                 transition: transition_epsilon,
                 suffix: &[r],
             };
-            let t = store.intern_transition(append, &mut world)?;
+            let t = store.intern_transition(append)?;
             assert_eq!(store.storage.test(and)?, TestView::And(&[a, b]));
             assert_eq!(
                 store.storage.regex(union)?.kind,
                 RegexKindView::Union(&[r, epsilon])
             );
             assert_eq!(store.storage.transition(t)?, append);
-            assert_eq!(store.intern_test(TestView::And(&[a, b]), &mut world)?, and);
+            assert_eq!(store.intern_test(TestView::And(&[a, b]))?, and);
             assert_eq!(
-                store.intern_regex(RegexKindView::Union(&[r, epsilon]), true, &mut world)?,
+                store.intern_regex(RegexKindView::Union(&[r, epsilon]), true)?,
                 union
             );
-            assert_eq!(store.intern_transition(append, &mut world)?, t);
+            assert_eq!(store.intern_transition(append)?, t);
             Ok(())
         })();
         outcome?;
@@ -1917,58 +1958,58 @@ pub mod verify {
                 }
 
 
-    pub(super) open spec fn arena_test_node(node: ArenaTest, pools: Seq<Seq<TestId>>) -> model::TestNode {
+    pub(super) open spec fn arena_test_node(node: TestNode, pools: Seq<Seq<TestId>>) -> model::TestNode {
         match node {
-            ArenaTest::True => model::TestNode::True,
-            ArenaTest::False => model::TestNode::False,
-            ArenaTest::Atom { primitive, positive } => model::TestNode::Atom(primitive@, positive),
-            ArenaTest::And(slot) => model::TestNode::And(model::test_ids(pools[slot as int])),
-            ArenaTest::Or(slot) => model::TestNode::Or(model::test_ids(pools[slot as int])),
+            TestNode::True => model::TestNode::True,
+            TestNode::False => model::TestNode::False,
+            TestNode::Atom { primitive, positive } => model::TestNode::Atom(primitive@, positive),
+            TestNode::And(slot) => model::TestNode::And(model::test_ids(pools[slot as int])),
+            TestNode::Or(slot) => model::TestNode::Or(model::test_ids(pools[slot as int])),
         }
     }
-    pub(super) open spec fn arena_regex_node(node: ArenaRegex, pools: Seq<Seq<RegexId>>) -> model::RegexNode {
+    pub(super) open spec fn arena_regex_node(node: RegexNode, pools: Seq<Seq<RegexId>>) -> model::RegexNode {
         model::RegexNode {
             nullable: node.nullable,
             kind: match node.kind {
-                ArenaRegexKind::Empty => model::RegexKindNode::Empty,
-                ArenaRegexKind::All => model::RegexKindNode::All,
-                ArenaRegexKind::Epsilon => model::RegexKindNode::Epsilon,
-                ArenaRegexKind::Test(id) => model::RegexKindNode::Test(id@),
-                ArenaRegexKind::Union(slot) => model::RegexKindNode::Union(model::regex_ids(pools[slot as int])),
-                ArenaRegexKind::Concat(slot) => model::RegexKindNode::Concat(model::regex_ids(pools[slot as int])),
-                ArenaRegexKind::Star(id) => model::RegexKindNode::Star(id@),
-                ArenaRegexKind::Intersect(slot) => model::RegexKindNode::Intersect(model::regex_ids(pools[slot as int])),
-                ArenaRegexKind::Not(id) => model::RegexKindNode::Not(id@),
+                RegexKind::Empty => model::RegexKindNode::Empty,
+                RegexKind::All => model::RegexKindNode::All,
+                RegexKind::Epsilon => model::RegexKindNode::Epsilon,
+                RegexKind::Test(id) => model::RegexKindNode::Test(id@),
+                RegexKind::Union(slot) => model::RegexKindNode::Union(model::regex_ids(pools[slot as int])),
+                RegexKind::Concat(slot) => model::RegexKindNode::Concat(model::regex_ids(pools[slot as int])),
+                RegexKind::Star(id) => model::RegexKindNode::Star(id@),
+                RegexKind::Intersect(slot) => model::RegexKindNode::Intersect(model::regex_ids(pools[slot as int])),
+                RegexKind::Not(id) => model::RegexKindNode::Not(id@),
             },
         }
     }
-    pub(super) open spec fn arena_transition_node(node: ArenaTransition, ids: Seq<Seq<TransitionId>>, regex_pools: Seq<Seq<RegexId>>) -> model::TransitionNode {
+    pub(super) open spec fn arena_transition_node(node: TransitionNode, ids: Seq<Seq<TransitionId>>, regex_pools: Seq<Seq<RegexId>>) -> model::TransitionNode {
         match node {
-            ArenaTransition::Const(id) => model::TransitionNode::Const(id@),
-            ArenaTransition::If { test, then_transition, else_transition } => model::TransitionNode::If(test@, then_transition@, else_transition@),
-            ArenaTransition::Union(slot) => model::TransitionNode::Union(model::transition_ids(ids[slot as int])),
-            ArenaTransition::Intersect(slot) => model::TransitionNode::Intersect(model::transition_ids(ids[slot as int])),
-            ArenaTransition::Not(id) => model::TransitionNode::Not(id@),
-            ArenaTransition::Append { transition, suffix } => model::TransitionNode::Append(transition@, model::regex_ids(regex_pools[suffix as int])),
+            TransitionNode::Const(id) => model::TransitionNode::Const(id@),
+            TransitionNode::If { test, then_transition, else_transition } => model::TransitionNode::If(test@, then_transition@, else_transition@),
+            TransitionNode::Union(slot) => model::TransitionNode::Union(model::transition_ids(ids[slot as int])),
+            TransitionNode::Intersect(slot) => model::TransitionNode::Intersect(model::transition_ids(ids[slot as int])),
+            TransitionNode::Not(id) => model::TransitionNode::Not(id@),
+            TransitionNode::Append { transition, suffix } => model::TransitionNode::Append(transition@, model::regex_ids(regex_pools[suffix as int])),
         }
     }
-    pub(super) open spec fn arena_test_wf(t: &ArenaTables, node: ArenaTest) -> bool {
+    pub(super) open spec fn arena_test_wf(t: &ArenaTables, node: TestNode) -> bool {
         match node {
-            ArenaTest::And(slot) | ArenaTest::Or(slot) => slot < t.test_ids@.len(),
+            TestNode::And(slot) | TestNode::Or(slot) => slot < t.test_ids@.len(),
             _ => true,
         }
     }
-    pub(super) open spec fn arena_regex_wf(t: &ArenaTables, node: ArenaRegex) -> bool {
+    pub(super) open spec fn arena_regex_wf(t: &ArenaTables, node: RegexNode) -> bool {
         match node.kind {
-            ArenaRegexKind::Union(slot) | ArenaRegexKind::Concat(slot) | ArenaRegexKind::Intersect(slot) =>
+            RegexKind::Union(slot) | RegexKind::Concat(slot) | RegexKind::Intersect(slot) =>
                 slot < t.regex_ids@.len(),
             _ => true,
         }
     }
-    pub(super) open spec fn arena_transition_wf(t: &ArenaTables, node: ArenaTransition) -> bool {
+    pub(super) open spec fn arena_transition_wf(t: &ArenaTables, node: TransitionNode) -> bool {
         match node {
-            ArenaTransition::Union(slot) | ArenaTransition::Intersect(slot) => slot < t.transition_ids@.len(),
-            ArenaTransition::Append { suffix, .. } => suffix < t.regex_ids@.len(),
+            TransitionNode::Union(slot) | TransitionNode::Intersect(slot) => slot < t.transition_ids@.len(),
+            TransitionNode::Append { suffix, .. } => suffix < t.regex_ids@.len(),
             _ => true,
         }
     }
@@ -2028,74 +2069,74 @@ pub mod verify {
             },
         }
     }
-    pub(super) proof fn lemma_arena_test_eq_iff_node_eq(t: &ArenaTables, a: ArenaTest, b: ArenaTest)
+    pub(super) proof fn lemma_arena_test_eq_iff_node_eq(t: &ArenaTables, a: TestNode, b: TestNode)
         requires tables_index_wf(t), arena_test_wf(t, a), arena_test_wf(t, b),
         ensures (a == b) == (arena_test_node(a, t.test_ids@) == arena_test_node(b, t.test_ids@)),
     {
         match (a, b) {
-            (ArenaTest::And(x), ArenaTest::And(y)) | (ArenaTest::Or(x), ArenaTest::Or(y)) => {
+            (TestNode::And(x), TestNode::And(y)) | (TestNode::Or(x), TestNode::Or(y)) => {
                 model::lemma_test_ids_eq(t.test_ids@[x as int], t.test_ids@[y as int]);
                 lemma_pool_slot_eq(t.test_ids@, x, y);
             },
-            (ArenaTest::Atom { primitive: x, .. }, ArenaTest::Atom { primitive: y, .. }) => {
+            (TestNode::Atom { primitive: x, .. }, TestNode::Atom { primitive: y, .. }) => {
                 lemma_primitive_eq(x, y);
             },
             _ => {},
         }
     }
-    pub(super) proof fn lemma_arena_regex_eq_iff_node_eq(t: &ArenaTables, a: ArenaRegex, b: ArenaRegex)
+    pub(super) proof fn lemma_arena_regex_eq_iff_node_eq(t: &ArenaTables, a: RegexNode, b: RegexNode)
         requires tables_index_wf(t), arena_regex_wf(t, a), arena_regex_wf(t, b),
         ensures (a == b) == (arena_regex_node(a, t.regex_ids@) == arena_regex_node(b, t.regex_ids@)),
     {
         match (a.kind, b.kind) {
-            (ArenaRegexKind::Union(x), ArenaRegexKind::Union(y))
-            | (ArenaRegexKind::Concat(x), ArenaRegexKind::Concat(y))
-            | (ArenaRegexKind::Intersect(x), ArenaRegexKind::Intersect(y)) => {
+            (RegexKind::Union(x), RegexKind::Union(y))
+            | (RegexKind::Concat(x), RegexKind::Concat(y))
+            | (RegexKind::Intersect(x), RegexKind::Intersect(y)) => {
                 model::lemma_regex_ids_eq(t.regex_ids@[x as int], t.regex_ids@[y as int]);
                 lemma_pool_slot_eq(t.regex_ids@, x, y);
             },
-            (ArenaRegexKind::Test(x), ArenaRegexKind::Test(y)) => {
+            (RegexKind::Test(x), RegexKind::Test(y)) => {
                 lemma_test_id_eq(x, y);
             },
-            (ArenaRegexKind::Star(x), ArenaRegexKind::Star(y))
-            | (ArenaRegexKind::Not(x), ArenaRegexKind::Not(y)) => {
+            (RegexKind::Star(x), RegexKind::Star(y))
+            | (RegexKind::Not(x), RegexKind::Not(y)) => {
                 lemma_regex_id_eq(x, y);
             },
             _ => {},
         }
     }
-    pub(super) proof fn lemma_arena_transition_eq_iff_node_eq(t: &ArenaTables, a: ArenaTransition, b: ArenaTransition)
+    pub(super) proof fn lemma_arena_transition_eq_iff_node_eq(t: &ArenaTables, a: TransitionNode, b: TransitionNode)
         requires tables_index_wf(t), arena_transition_wf(t, a), arena_transition_wf(t, b),
         ensures (a == b) == (arena_transition_node(a, t.transition_ids@, t.regex_ids@)
             == arena_transition_node(b, t.transition_ids@, t.regex_ids@)),
     {
         match (a, b) {
-            (ArenaTransition::Union(x), ArenaTransition::Union(y))
-            | (ArenaTransition::Intersect(x), ArenaTransition::Intersect(y)) => {
+            (TransitionNode::Union(x), TransitionNode::Union(y))
+            | (TransitionNode::Intersect(x), TransitionNode::Intersect(y)) => {
                 model::lemma_transition_ids_eq(t.transition_ids@[x as int], t.transition_ids@[y as int]);
                 lemma_pool_slot_eq(t.transition_ids@, x, y);
             },
-            (ArenaTransition::Append { transition: a, suffix: x }, ArenaTransition::Append { transition: b, suffix: y }) => {
+            (TransitionNode::Append { transition: a, suffix: x }, TransitionNode::Append { transition: b, suffix: y }) => {
                 lemma_transition_id_eq(a, b);
                 model::lemma_regex_ids_eq(t.regex_ids@[x as int], t.regex_ids@[y as int]);
                 lemma_pool_slot_eq(t.regex_ids@, x, y);
             },
-            (ArenaTransition::Const(x), ArenaTransition::Const(y)) => {
+            (TransitionNode::Const(x), TransitionNode::Const(y)) => {
                 lemma_regex_id_eq(x, y);
             },
-            (ArenaTransition::If { test: t, then_transition: a, else_transition: b },
-                ArenaTransition::If { test: u, then_transition: c, else_transition: d }) => {
+            (TransitionNode::If { test: t, then_transition: a, else_transition: b },
+                TransitionNode::If { test: u, then_transition: c, else_transition: d }) => {
                 lemma_test_id_eq(t, u);
                 lemma_transition_id_eq(a, c);
                 lemma_transition_id_eq(b, d);
             },
-            (ArenaTransition::Not(x), ArenaTransition::Not(y)) => {
+            (TransitionNode::Not(x), TransitionNode::Not(y)) => {
                 lemma_transition_id_eq(x, y);
             },
             _ => {},
         }
     }
-    pub(super) proof fn lemma_test_contains(t: &ArenaTables, node: ArenaTest)
+    pub(super) proof fn lemma_test_contains(t: &ArenaTables, node: TestNode)
         requires tables_index_wf(t), arena_test_wf(t, node),
         ensures t.tests@.contains(node) == tables_graph(t).tests.contains(arena_test_node(node, t.test_ids@)),
     {
@@ -2110,7 +2151,7 @@ pub mod verify {
             assert(t.tests@.contains(node));
         }
     }
-    pub(super) proof fn lemma_regex_contains(t: &ArenaTables, node: ArenaRegex)
+    pub(super) proof fn lemma_regex_contains(t: &ArenaTables, node: RegexNode)
         requires tables_index_wf(t), arena_regex_wf(t, node),
         ensures t.regexes@.contains(node) == tables_graph(t).regexes.contains(arena_regex_node(node, t.regex_ids@)),
     {
@@ -2125,7 +2166,7 @@ pub mod verify {
             assert(t.regexes@.contains(node));
         }
     }
-    pub(super) proof fn lemma_transition_contains(t: &ArenaTables, node: ArenaTransition)
+    pub(super) proof fn lemma_transition_contains(t: &ArenaTables, node: TransitionNode)
         requires tables_index_wf(t), arena_transition_wf(t, node),
         ensures t.transitions@.contains(node) == tables_graph(t).transitions.contains(
             arena_transition_node(node, t.transition_ids@, t.regex_ids@)),
@@ -2148,7 +2189,7 @@ pub mod verify {
     {
         assert forall|i: int| 0 <= i < t.tests@.len() implies tables_graph(t).tests[i] != view by {
             match t.tests@[i] {
-                ArenaTest::And(slot) | ArenaTest::Or(slot) => {
+                TestNode::And(slot) | TestNode::Or(slot) => {
                     assert(t.test_ids@.contains(t.test_ids@[slot as int]));
                     model::lemma_test_ids_eq(t.test_ids@[slot as int], ids);
                 },
@@ -2165,7 +2206,7 @@ pub mod verify {
     {
         assert forall|i: int| 0 <= i < t.regexes@.len() implies tables_graph(t).regexes[i] != view by {
             match t.regexes@[i].kind {
-                ArenaRegexKind::Union(slot) | ArenaRegexKind::Concat(slot) | ArenaRegexKind::Intersect(slot) => {
+                RegexKind::Union(slot) | RegexKind::Concat(slot) | RegexKind::Intersect(slot) => {
                     assert(t.regex_ids@.contains(t.regex_ids@[slot as int]));
                     model::lemma_regex_ids_eq(t.regex_ids@[slot as int], ids);
                 },
@@ -2181,7 +2222,7 @@ pub mod verify {
     {
         assert forall|i: int| 0 <= i < t.transitions@.len() implies tables_graph(t).transitions[i] != view by {
             match t.transitions@[i] {
-                ArenaTransition::Union(slot) | ArenaTransition::Intersect(slot) => {
+                TransitionNode::Union(slot) | TransitionNode::Intersect(slot) => {
                     assert(t.transition_ids@.contains(t.transition_ids@[slot as int]));
                     model::lemma_transition_ids_eq(t.transition_ids@[slot as int], ids);
                 },
@@ -2196,7 +2237,7 @@ pub mod verify {
         assert forall|i: int| 0 <= i < t.transitions@.len() implies tables_graph(t).transitions[i]
             != model::TransitionNode::Append(transition, model::regex_ids(ids)) by {
             match t.transitions@[i] {
-                ArenaTransition::Append { suffix, .. } => {
+                TransitionNode::Append { suffix, .. } => {
                     assert(t.regex_ids@.contains(t.regex_ids@[suffix as int]));
                     model::lemma_regex_ids_eq(t.regex_ids@[suffix as int], ids);
                 },
@@ -2212,16 +2253,16 @@ pub mod verify {
         &&& t.tests.inv() && t.regexes.inv() && t.transitions.inv()
         &&& t.test_ids.inv() && t.regex_ids.inv() && t.transition_ids.inv()
         &&& forall|i: int| 0 <= i < t.tests@.len() ==> match #[trigger] t.tests@[i] {
-            ArenaTest::And(slot) | ArenaTest::Or(slot) => slot < t.test_ids@.len(),
+            TestNode::And(slot) | TestNode::Or(slot) => slot < t.test_ids@.len(),
             _ => true,
         }
         &&& forall|i: int| 0 <= i < t.regexes@.len() ==> match (#[trigger] t.regexes@[i]).kind {
-            ArenaRegexKind::Union(slot) | ArenaRegexKind::Concat(slot) | ArenaRegexKind::Intersect(slot) => slot < t.regex_ids@.len(),
+            RegexKind::Union(slot) | RegexKind::Concat(slot) | RegexKind::Intersect(slot) => slot < t.regex_ids@.len(),
             _ => true,
         }
         &&& forall|i: int| 0 <= i < t.transitions@.len() ==> match #[trigger] t.transitions@[i] {
-            ArenaTransition::Union(slot) | ArenaTransition::Intersect(slot) => slot < t.transition_ids@.len(),
-            ArenaTransition::Append { transition, suffix } => suffix < t.regex_ids@.len(),
+            TransitionNode::Union(slot) | TransitionNode::Intersect(slot) => slot < t.transition_ids@.len(),
+            TransitionNode::Append { transition, suffix } => suffix < t.regex_ids@.len(),
             _ => true,
         }
     }
@@ -2249,20 +2290,20 @@ pub mod verify {
     }
 
     pub open(super) spec fn test_weight(n: model::TestNode) -> nat {
-        vstd::layout::size_of::<ArenaTest>() + match n {
+        vstd::layout::size_of::<TestNode>() + match n {
             model::TestNode::And(ids) | model::TestNode::Or(ids) => mul_bytes(ids.len(), vstd::layout::size_of::<TestId>()),
             _ => 0,
         }
     }
     pub open(super) spec fn regex_weight(n: model::RegexNode) -> nat {
-        vstd::layout::size_of::<ArenaRegex>() + match n.kind {
+        vstd::layout::size_of::<RegexNode>() + match n.kind {
             model::RegexKindNode::Union(ids) | model::RegexKindNode::Concat(ids) | model::RegexKindNode::Intersect(ids) =>
                 mul_bytes(ids.len(), vstd::layout::size_of::<RegexId>()),
             _ => 0,
         }
     }
     pub open(super) spec fn transition_weight(n: model::TransitionNode) -> nat {
-        vstd::layout::size_of::<ArenaTransition>() + match n {
+        vstd::layout::size_of::<TransitionNode>() + match n {
             model::TransitionNode::Union(ids) | model::TransitionNode::Intersect(ids) =>
                 mul_bytes(ids.len(), vstd::layout::size_of::<TransitionId>()),
             model::TransitionNode::Append(_, suffix) => mul_bytes(suffix.len(), vstd::layout::size_of::<RegexId>()),
@@ -2315,14 +2356,14 @@ pub mod verify {
     }
 
     pub(super) open spec fn layout_premises() -> bool {
-        &&& vstd::layout::size_of::<ArenaTest>() > 0
-        &&& vstd::layout::size_of::<ArenaRegex>() > 0
-        &&& vstd::layout::size_of::<ArenaTransition>() > 0
+        &&& vstd::layout::size_of::<TestNode>() > 0
+        &&& vstd::layout::size_of::<RegexNode>() > 0
+        &&& vstd::layout::size_of::<TransitionNode>() > 0
     }
     pub(super) open spec fn arena_live(t: &ArenaTables) -> nat {
-        mul_bytes(t.tests@.len(), vstd::layout::size_of::<ArenaTest>())
-            + mul_bytes(t.regexes@.len(), vstd::layout::size_of::<ArenaRegex>())
-            + mul_bytes(t.transitions@.len(), vstd::layout::size_of::<ArenaTransition>())
+        mul_bytes(t.tests@.len(), vstd::layout::size_of::<TestNode>())
+            + mul_bytes(t.regexes@.len(), vstd::layout::size_of::<RegexNode>())
+            + mul_bytes(t.transitions@.len(), vstd::layout::size_of::<TransitionNode>())
             + pool_bytes(t.test_ids@) + pool_bytes(t.regex_ids@) + pool_bytes(t.transition_ids@)
     }
     // All six arenas share one capacity, stay aligned, and hold exactly `arena_live` bytes.
@@ -2333,9 +2374,9 @@ pub mod verify {
             && t.regex_ids.aligned() && t.transitions.aligned() && t.transition_ids.aligned()
         &&& t.test_ids.capacity() == cap && t.regexes.capacity() == cap && t.regex_ids.capacity() == cap
             && t.transitions.capacity() == cap && t.transition_ids.capacity() == cap
-        &&& t.tests.remaining() == cap - mul_bytes(t.tests@.len(), vstd::layout::size_of::<ArenaTest>())
-        &&& t.regexes.remaining() == cap - mul_bytes(t.regexes@.len(), vstd::layout::size_of::<ArenaRegex>())
-        &&& t.transitions.remaining() == cap - mul_bytes(t.transitions@.len(), vstd::layout::size_of::<ArenaTransition>())
+        &&& t.tests.remaining() == cap - mul_bytes(t.tests@.len(), vstd::layout::size_of::<TestNode>())
+        &&& t.regexes.remaining() == cap - mul_bytes(t.regexes@.len(), vstd::layout::size_of::<RegexNode>())
+        &&& t.transitions.remaining() == cap - mul_bytes(t.transitions@.len(), vstd::layout::size_of::<TransitionNode>())
         &&& t.test_ids.remaining() == cap - pool_bytes(t.test_ids@)
         &&& t.regex_ids.remaining() == cap - pool_bytes(t.regex_ids@)
         &&& t.transition_ids.remaining() == cap - pool_bytes(t.transition_ids@)
@@ -2350,8 +2391,8 @@ pub mod verify {
             layout_premises(),
             t.tests.inv() && t.regexes.inv() && t.transitions.inv(),
             t.test_ids.inv() && t.regex_ids.inv() && t.transition_ids.inv(),
-            t.tests@ == Seq::<ArenaTest>::empty(), t.regexes@ == Seq::<ArenaRegex>::empty(),
-            t.transitions@ == Seq::<ArenaTransition>::empty(),
+            t.tests@ == Seq::<TestNode>::empty(), t.regexes@ == Seq::<RegexNode>::empty(),
+            t.transitions@ == Seq::<TransitionNode>::empty(),
             t.test_ids@ == Seq::<Seq<TestId>>::empty(), t.regex_ids@ == Seq::<Seq<RegexId>>::empty(),
             t.transition_ids@ == Seq::<Seq<TransitionId>>::empty(),
             t.tests.aligned() && t.test_ids.aligned() && t.regexes.aligned()
@@ -2394,7 +2435,7 @@ pub mod verify {
             arena_test_node(before.tests@[i], before.test_ids@) ==
             arena_test_node(after.tests@[i], after.test_ids@) by {
             match before.tests@[i] {
-                ArenaTest::And(slot) | ArenaTest::Or(slot) => {
+                TestNode::And(slot) | TestNode::Or(slot) => {
                     assert(before.test_ids@[slot as int] == after.test_ids@[slot as int]);
                 },
                 _ => {},
@@ -2404,7 +2445,7 @@ pub mod verify {
             arena_regex_node(before.regexes@[i], before.regex_ids@) ==
             arena_regex_node(after.regexes@[i], after.regex_ids@) by {
             match before.regexes@[i].kind {
-                ArenaRegexKind::Union(slot) | ArenaRegexKind::Concat(slot) | ArenaRegexKind::Intersect(slot) => {
+                RegexKind::Union(slot) | RegexKind::Concat(slot) | RegexKind::Intersect(slot) => {
                     assert(before.regex_ids@[slot as int] == after.regex_ids@[slot as int]);
                 },
                 _ => {},
@@ -2414,10 +2455,10 @@ pub mod verify {
             arena_transition_node(before.transitions@[i], before.transition_ids@, before.regex_ids@) ==
             arena_transition_node(after.transitions@[i], after.transition_ids@, after.regex_ids@) by {
             match before.transitions@[i] {
-                ArenaTransition::Union(slot) | ArenaTransition::Intersect(slot) => {
+                TransitionNode::Union(slot) | TransitionNode::Intersect(slot) => {
                     assert(before.transition_ids@[slot as int] == after.transition_ids@[slot as int]);
                 },
-                ArenaTransition::Append { transition, suffix } => {
+                TransitionNode::Append { transition, suffix } => {
                     assert(before.regex_ids@[suffix as int] == after.regex_ids@[suffix as int]);
                 },
                 _ => {},
@@ -2428,8 +2469,8 @@ pub mod verify {
         assert(tables_graph(after).regexes =~= tables_graph(before).regexes);
         assert(tables_graph(after).transitions =~= tables_graph(before).transitions);
     }
-    impl crate::verify::storage::StorageSpecImpl for ArenaStorage {
-        open(super) spec fn graph(&self) -> model::Graph {
+    impl ArenaStorage {
+        pub(crate) open(super) spec fn graph(&self) -> model::Graph {
             match self.tables {
                 Some(t) => tables_graph(&t),
                 None => model::Graph {
@@ -2438,15 +2479,15 @@ pub mod verify {
                 },
             }
         }
-        open(super) spec fn capacity(&self) -> int {
+        pub(crate) open(super) spec fn capacity(&self) -> int {
             match self.tables { Some(t) => tables_capacity(&t), None => 0 }
         }
-        open(super) spec fn slack(&self) -> int {
+        pub(crate) open(super) spec fn slack(&self) -> int {
             match self.tables { Some(t) => tables_slack(&t), None => 0 }
         }
     }
 
-                impl<S: Storage> CanonicalStore<S> {
+                impl CanonicalStore {
                     pub open(super) spec fn graph(&self) -> model::Graph {
                         model::Graph { constants: self.constants@, ..self.storage.graph() }
                     }
@@ -2456,7 +2497,7 @@ pub mod verify {
                     }
                 }
 
-                impl<S: Storage, L: Limits> junco_core::verify::history_assumptions::KernelStoreSpecImpl for RuntimeKernel<'_, S, L> {
+                impl<L: Limits> junco_core::verify::history_assumptions::KernelStoreSpecImpl for RuntimeKernel<'_, L> {
                     open spec fn graph(&self) -> model::Graph { self.store.graph() }
                     open spec fn valid_store(&self) -> bool { self.store.valid_store() }
                     #[verifier::prophetic]

@@ -8,8 +8,7 @@ extern crate alloc;
 extern crate std;
 
 #[cfg(feature = "runtime")]
-#[cfg_attr(docsrs, doc(cfg(feature = "runtime")))]
-pub mod compile;
+pub(crate) mod compile;
 #[cfg(feature = "runtime")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime")))]
 pub mod compiled_rule;

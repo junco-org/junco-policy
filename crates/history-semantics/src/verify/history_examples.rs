@@ -323,7 +323,7 @@ pub(crate) fn flat_template_cached_decision<L: Limits>(
     },
 {
     proof { source::lemma_flat_head(*template, candidate, request@); }
-    let bindings = match crate::compile::bindings(template, request) {
+    let bindings = match crate::progress::CompiledPair::bindings(template, request) {
         Some(bindings) => {
             proof { source::lemma_bindings_match(*template, *request, bindings); }
             bindings
