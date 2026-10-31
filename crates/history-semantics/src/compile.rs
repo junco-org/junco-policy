@@ -2,6 +2,7 @@
 use crate::normalize::verify as norm;
 use crate::normalize::{RegexNormalize, TestNormalize};
 use crate::progress::CompiledPair;
+use crate::runtime::RuleRuntime;
 use alloc::vec::Vec;
 use history_store::graph::{CanonicalStore, RuntimeKernel, allocation};
 use history_store::store::Event as NumericEvent;
@@ -48,13 +49,14 @@ verus! {
 }
 
 #[verus_verify]
-impl CompiledPair {
+impl RuleRuntime {
+    /// Return bindings for a matching numeric head, or `None` for a constant mismatch.
     #[verus_verify]
     #[verus_spec(result => ensures match result {
         Some(bindings) => bindings_match(*template, *request, bindings),
         None => head_rejects(*template, *request),
     })]
-    pub(crate) fn bindings(template: &FlatPair<u64>, request: &NumericEvent) -> Option<Bindings> {
+    pub fn bindings(template: &FlatPair<u64>, request: &NumericEvent) -> Option<Bindings> {
         proof! { reveal(bindings_match); reveal(head_rejects); }
         let p = Self::bind_head(&template.head[0], request.principal.get())?;
         let a = Self::bind_head(&template.head[1], request.action.get())?;
@@ -79,6 +81,10 @@ impl CompiledPair {
             FlatHead::Bind => Some(value),
         }
     }
+}
+
+#[verus_verify]
+impl CompiledPair {
 
     #[verus_verify]
     #[verus_spec(result => ensures result matches Ok(value)

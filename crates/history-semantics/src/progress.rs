@@ -2370,8 +2370,8 @@ mod tests {
         let mut pair = CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
         pair.work.skip_guards = true;
         let (alice, bob) = events();
-        let alice_bindings = CompiledPair::bindings(&source, &alice).unwrap();
-        let bob_bindings = CompiledPair::bindings(&source, &bob).unwrap();
+        let alice_bindings = crate::runtime::RuleRuntime::bindings(&source, &alice).unwrap();
+        let bob_bindings = crate::runtime::RuleRuntime::bindings(&source, &bob).unwrap();
         assert!(decide(&mut pair, &[alice, alice], &alice_bindings));
         assert_eq!(pair.work.successor_misses, 1);
         assert_eq!(pair.work.successor_hits, 1);
@@ -2393,7 +2393,7 @@ mod tests {
             FlatRegex::Concat(vec![0, 1]),
         ]);
         let (alice, bob) = events();
-        let bindings = CompiledPair::bindings(&source, &alice).unwrap();
+        let bindings = crate::runtime::RuleRuntime::bindings(&source, &alice).unwrap();
         for (skip_guards, hits, classes) in [(false, 3, 1), (true, 0, 4)] {
             let mut pair =
                 CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
@@ -2423,7 +2423,7 @@ mod tests {
             .unwrap();
         eager.reset_work_counters();
         let (alice, bob) = events();
-        let bindings = CompiledPair::bindings(&source, &alice).unwrap();
+        let bindings = crate::runtime::RuleRuntime::bindings(&source, &alice).unwrap();
         for (word, expected) in [
             (&[][..], false),
             (&[alice][..], true),

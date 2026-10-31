@@ -349,6 +349,7 @@ impl core::fmt::Debug for RuleRuntime {
 
 #[verus_verify]
 impl RuleRuntime {
+
     #[cfg(verus_keep_ghost)]
     verus! {
         pub open(crate) spec fn spec_store(&self) -> Arc<HistoryStore> { self.store }
@@ -447,7 +448,7 @@ impl RuleRuntime {
         world: &mut ObservationWorld,
     ) -> Result<Option<bool>, HistoryError> {
         proof_decl! { let ghost entry = *self; }
-        let bindings = match CompiledPair::bindings(template, request) {
+        let bindings = match Self::bindings(template, request) {
             Some(bindings) => bindings,
             None => return Ok(None),
         };

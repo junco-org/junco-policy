@@ -26,6 +26,8 @@ new suffix, and shortening invalidates the owner's cursors.
 
 `history_store::graph::CanonicalStore::new()` owns concrete arena tables and checked numeric
 node IDs. `KernelStore` defines the cross-crate graph contract.
+`history_semantics::RuleRuntime::bindings(&template, &request)` matches a lowered numeric
+head for resumable consumers; compiler helpers remain private.
 
 `History::new`, `from_events`, `push`, `truncate`, `rollback`, and `try_clone` are fallible.
 `try_clone` shares the store but gets a fresh history identity. There is no infallible
