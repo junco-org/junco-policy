@@ -7,10 +7,14 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use junco_policy::{
-    Action, AtomPattern, Bump, Comparison, ComponentPattern, Decision, Head, LockEvent, RegexExpr,
-    Request, Rule, RuleMode, TestExpr, Validator,
+use history_semantics::{Decision, Validator};
+use history_store::Store;
+use history_syntax::{
+    AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
+use junco_core::Request;
+use junco_policy::{Action, LockEvent};
+use std::sync::Arc;
 
 /// Benchmark principal identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -226,14 +230,14 @@ fn benchmark_million_event_nested_scan(criterion: &mut Criterion) {
     const HISTORY_LEN: usize = 1_000_000;
     const REGEX_DEPTH: usize = 32;
 
-    let arena = Bump::new();
-    let mut builder = Validator::builder(&arena);
+    let store = Arc::new(Store::new().unwrap());
+    let mut builder = Validator::builder(Arc::clone(&store));
     builder
         .add_rule(deeply_nested_allow_all_rule(REGEX_DEPTH))
         .expect("benchmark rule is valid");
-    let mut validator = builder.finish();
+    let mut validator = builder.finish().unwrap();
     for _ in 0..HISTORY_LEN {
-        let _ = validator.check(request(ALICE, Action::Read, ROOT));
+        let _ = validator.check(request(ALICE, Action::Read, ROOT)).unwrap();
     }
     assert_eq!(validator.history().len(), HISTORY_LEN);
     let checkpoint = validator.checkpoint();
@@ -247,10 +251,10 @@ fn benchmark_million_event_nested_scan(criterion: &mut Criterion) {
             for _ in 0..iterations {
                 let candidate = request(ALICE, Action::Release, ROOT);
                 let start = Instant::now();
-                let decision = validator.check(black_box(candidate));
+                let decision = validator.check(black_box(candidate)).unwrap();
                 elapsed += start.elapsed();
                 assert!(decision.is_grant());
-                validator.rollback(checkpoint);
+                validator.rollback(checkpoint).unwrap();
             }
             elapsed
         });
@@ -264,14 +268,14 @@ fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
     const HISTORY_LEN: usize = 100_000;
     const REGEX_DEPTH: usize = 32;
 
-    let arena = Bump::new();
-    let mut builder = Validator::builder(&arena);
+    let store = Arc::new(Store::new().unwrap());
+    let mut builder = Validator::builder(Arc::clone(&store));
     builder
         .add_rule(deeply_nested_resource_allow_all_rule(REGEX_DEPTH))
         .expect("benchmark rule is valid");
-    let mut validator = builder.finish();
+    let mut validator = builder.finish().unwrap();
     for index in 0..HISTORY_LEN {
-        let _ = validator.check(unique_read(index));
+        let _ = validator.check(unique_read(index)).unwrap();
     }
     assert_eq!(validator.history().len(), HISTORY_LEN);
     let checkpoint = validator.checkpoint();
@@ -285,10 +289,10 @@ fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
             for _ in 0..iterations {
                 let candidate = request(CANDIDATE, Action::Release, ROOT);
                 let start = Instant::now();
-                let decision = validator.check(black_box(candidate));
+                let decision = validator.check(black_box(candidate)).unwrap();
                 elapsed += start.elapsed();
                 assert!(decision.is_grant());
-                validator.rollback(checkpoint);
+                validator.rollback(checkpoint).unwrap();
             }
             elapsed
         });
@@ -301,14 +305,16 @@ fn benchmark_high_cardinality_scan(criterion: &mut Criterion) {
 fn benchmark_advancing_derivatives(criterion: &mut Criterion) {
     const STEPS: usize = 16;
 
-    let arena = Bump::new();
-    let mut builder = Validator::builder(&arena);
+    let store = Arc::new(Store::new().unwrap());
+    let mut builder = Validator::builder(Arc::clone(&store));
     builder
         .add_rule(advancing_optional_rule(STEPS))
         .expect("benchmark rule is valid");
-    let mut validator = builder.finish();
+    let mut validator = builder.finish().unwrap();
     for _ in 0..STEPS {
-        let _ = validator.check(request(HISTORY, Action::Read, ROOT));
+        let _ = validator
+            .check(request(HISTORY, Action::Read, ROOT))
+            .unwrap();
     }
     let checkpoint = validator.checkpoint();
 
@@ -321,10 +327,10 @@ fn benchmark_advancing_derivatives(criterion: &mut Criterion) {
             for _ in 0..iterations {
                 let candidate = request(CANDIDATE, Action::Release, ROOT);
                 let start = Instant::now();
-                let decision = validator.check(black_box(candidate));
+                let decision = validator.check(black_box(candidate)).unwrap();
                 elapsed += start.elapsed();
                 assert!(decision.is_grant());
-                validator.rollback(checkpoint);
+                validator.rollback(checkpoint).unwrap();
             }
             elapsed
         });
@@ -347,11 +353,11 @@ fn benchmark_growing_residual_stress(criterion: &mut Criterion) {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
                         let source = growing_residual_rule(window);
-                        let arena = Bump::new();
+                        let store = Arc::new(Store::new().unwrap());
                         let start = Instant::now();
-                        let mut builder = Validator::builder(&arena);
+                        let mut builder = Validator::builder(Arc::clone(&store));
                         builder.add_rule(source).expect("stress rule is valid");
-                        let validator = builder.finish();
+                        let validator = builder.finish().unwrap();
                         black_box(&validator);
                         elapsed += start.elapsed();
                     }
@@ -368,16 +374,17 @@ fn benchmark_growing_residual_stress(criterion: &mut Criterion) {
         .measurement_time(Duration::from_secs(3))
         .sample_size(10);
     for window in [8_usize, 16, 32, 64] {
-        let arena = Bump::new();
-        let mut builder = Validator::builder(&arena);
+        let store = Arc::new(Store::new().unwrap());
+        let mut builder = Validator::builder(Arc::clone(&store));
         builder
             .add_rule(growing_residual_rule(window))
             .expect("stress rule is valid");
-        let mut validator = builder.finish();
+        let mut validator = builder.finish().unwrap();
         for _ in 0..window {
             assert!(
                 validator
                     .check(request(HISTORY, Action::Read, EVENT))
+                    .unwrap()
                     .is_grant()
             );
         }
@@ -392,10 +399,10 @@ fn benchmark_growing_residual_stress(criterion: &mut Criterion) {
                     for _ in 0..iterations {
                         let candidate = request(CANDIDATE, Action::Release, TARGET);
                         let start = Instant::now();
-                        let decision = validator.check(black_box(candidate));
+                        let decision = validator.check(black_box(candidate)).unwrap();
                         elapsed += start.elapsed();
                         assert!(decision.is_grant());
-                        validator.rollback(checkpoint);
+                        validator.rollback(checkpoint).unwrap();
                     }
                     elapsed
                 });
@@ -423,13 +430,13 @@ fn benchmark_many_rules_stress(criterion: &mut Criterion) {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
                         let rules = (0..rule_count).map(absent_witness_rule).collect::<Vec<_>>();
-                        let arena = Bump::new();
+                        let store = Arc::new(Store::new().unwrap());
                         let start = Instant::now();
-                        let mut builder = Validator::builder(&arena);
+                        let mut builder = Validator::builder(Arc::clone(&store));
                         for rule in rules {
                             builder.add_rule(rule).expect("stress rule is valid");
                         }
-                        let validator = builder.finish();
+                        let validator = builder.finish().unwrap();
                         black_box(&validator);
                         elapsed += start.elapsed();
                     }
@@ -446,18 +453,19 @@ fn benchmark_many_rules_stress(criterion: &mut Criterion) {
         .measurement_time(Duration::from_secs(3))
         .sample_size(10);
     for rule_count in RULE_COUNTS {
-        let arena = Bump::new();
-        let mut builder = Validator::builder(&arena);
+        let store = Arc::new(Store::new().unwrap());
+        let mut builder = Validator::builder(Arc::clone(&store));
         for index in 0..rule_count {
             builder
                 .add_rule(absent_witness_rule(index))
                 .expect("stress rule is valid");
         }
-        let mut validator = builder.finish();
+        let mut validator = builder.finish().unwrap();
         for _ in 0..HISTORY_LEN {
             assert!(
                 validator
                     .check(request(HISTORY, Action::Read, EVENT))
+                    .unwrap()
                     .is_grant()
             );
         }
@@ -476,10 +484,10 @@ fn benchmark_many_rules_stress(criterion: &mut Criterion) {
                     for _ in 0..iterations {
                         let candidate = request(CANDIDATE, Action::Release, TARGET);
                         let start = Instant::now();
-                        let decision = validator.check(black_box(candidate));
+                        let decision = validator.check(black_box(candidate)).unwrap();
                         elapsed += start.elapsed();
                         assert!(decision.is_grant());
-                        validator.rollback(checkpoint);
+                        validator.rollback(checkpoint).unwrap();
                     }
                     elapsed
                 });
@@ -501,13 +509,13 @@ fn benchmark_compilation(criterion: &mut Criterion) {
                     for _ in 0..iterations {
                         let rules: Vec<Rule<LockEvent<Actor, Path>>> =
                             (0..count).map(prior_edit_rule).collect();
-                        let arena = Bump::new();
+                        let store = Arc::new(Store::new().unwrap());
                         let start = Instant::now();
-                        let mut builder = Validator::builder(&arena);
+                        let mut builder = Validator::builder(Arc::clone(&store));
                         for rule in rules {
                             builder.add_rule(rule).expect("benchmark rule is valid");
                         }
-                        let validator = builder.finish();
+                        let validator = builder.finish().unwrap();
                         black_box(&validator);
                         elapsed += start.elapsed();
                         drop(validator);
@@ -520,17 +528,19 @@ fn benchmark_compilation(criterion: &mut Criterion) {
     group.finish();
 }
 
-fn validator_with_edit_history<'arena>(
-    arena: &'arena Bump,
+fn validator_with_edit_history(
+    store: Arc<Store<LockEvent<Actor, Path>>>,
     history_len: usize,
-) -> Validator<'arena, LockEvent<Actor, Path>> {
-    let mut builder = Validator::builder(arena);
+) -> Validator<LockEvent<Actor, Path>> {
+    let mut builder = Validator::builder(store);
     builder
         .add_rule(prior_edit_rule(0))
         .expect("benchmark rule is valid");
-    let mut validator = builder.finish();
+    let mut validator = builder.finish().unwrap();
     for _ in 0..history_len {
-        let decision = validator.check(request(ALICE, Action::Edit, SRC_A));
+        let decision = validator
+            .check(request(ALICE, Action::Edit, SRC_A))
+            .unwrap();
         debug_assert!(decision.is_grant());
     }
     validator
@@ -539,8 +549,8 @@ fn validator_with_edit_history<'arena>(
 fn benchmark_history_scan(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("history_scan");
     for history_len in [1_usize, 32, 256] {
-        let arena = Bump::new();
-        let mut validator = validator_with_edit_history(&arena, history_len);
+        let store = Arc::new(Store::new().unwrap());
+        let mut validator = validator_with_edit_history(Arc::clone(&store), history_len);
         let checkpoint = validator.checkpoint();
         group.bench_with_input(
             BenchmarkId::from_parameter(history_len),
@@ -551,10 +561,10 @@ fn benchmark_history_scan(criterion: &mut Criterion) {
                     for _ in 0..iterations {
                         let candidate = request(ALICE, Action::Release, SRC_A);
                         let start = Instant::now();
-                        let decision = validator.check(black_box(candidate));
+                        let decision = validator.check(black_box(candidate)).unwrap();
                         elapsed += start.elapsed();
                         debug_assert!(decision.is_grant());
-                        validator.rollback(checkpoint);
+                        validator.rollback(checkpoint).unwrap();
                     }
                     elapsed
                 });
@@ -565,13 +575,13 @@ fn benchmark_history_scan(criterion: &mut Criterion) {
 }
 
 fn benchmark_denial(criterion: &mut Criterion) {
-    let arena = Bump::new();
-    let mut builder = Validator::builder(&arena);
+    let store = Arc::new(Store::new().unwrap());
+    let mut builder = Validator::builder(Arc::clone(&store));
     builder
         .add_rule(duplicate_remove_rule())
         .expect("benchmark rule is valid");
-    let mut validator = builder.finish();
-    let first = validator.check(request(ALICE, Action::Remove, A));
+    let mut validator = builder.finish().unwrap();
+    let first = validator.check(request(ALICE, Action::Remove, A)).unwrap();
     debug_assert!(first.is_grant());
 
     criterion.bench_function("deny_duplicate_remove", |bencher| {
@@ -580,7 +590,7 @@ fn benchmark_denial(criterion: &mut Criterion) {
             for _ in 0..iterations {
                 let candidate = request(ALICE, Action::Remove, A);
                 let start = Instant::now();
-                let decision = validator.check(black_box(candidate));
+                let decision = validator.check(black_box(candidate)).unwrap();
                 elapsed += start.elapsed();
                 debug_assert!(matches!(decision, Decision::Denied(_)));
             }
@@ -592,23 +602,25 @@ fn benchmark_denial(criterion: &mut Criterion) {
 fn benchmark_rollback(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("rollback");
     for removed_events in [1_usize, 64, 1024] {
-        let arena = Bump::new();
+        let store = Arc::new(Store::new().unwrap());
         group.bench_with_input(
             BenchmarkId::from_parameter(removed_events),
             &removed_events,
             |bencher, &removed_events| {
                 bencher.iter_batched(
                     || {
-                        let mut validator = Validator::builder(&arena).finish();
+                        let mut validator =
+                            Validator::builder(Arc::clone(&store)).finish().unwrap();
                         let checkpoint = validator.checkpoint();
                         for _ in 0..removed_events {
-                            let decision = validator.check(request(ALICE, Action::Read, A));
+                            let decision =
+                                validator.check(request(ALICE, Action::Read, A)).unwrap();
                             debug_assert!(decision.is_grant());
                         }
                         (validator, checkpoint)
                     },
                     |(mut validator, checkpoint)| {
-                        validator.rollback(checkpoint);
+                        validator.rollback(checkpoint).unwrap();
                         black_box(validator);
                     },
                     BatchSize::SmallInput,

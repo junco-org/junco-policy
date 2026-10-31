@@ -7,11 +7,16 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   validator:
     name: Validator (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: 1.98.1
     strategy:
       fail-fast: false
       matrix:
@@ -19,13 +24,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Rust
-        # Installs rustup itself when the image lacks it, then `rustup default stable`.
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Set up Rust 1.98.1
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -40,37 +42,101 @@ jobs:
 
       - name: Check formatting
         run: |
-          cargo fmt --check
+          cargo fmt --check -p junco-policy -p junco-core -p history-syntax -p history-store -p history-semantics
           cargo fmt --check --manifest-path fuzz/Cargo.toml
 
       - name: Lint
         run: |
-          cargo clippy --all-targets -- -D warnings
-          cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked --no-deps -p junco-policy -p junco-core -p history-syntax -p history-store -p history-semantics --all-targets -- -D warnings
+          cargo clippy --locked --no-deps --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
 
       - name: Unit tests
-        run: cargo test
+        run: cargo test --locked --workspace
 
       - name: No-surprise oracle
         # Release: generation re-checks the whole history at every step (166s debug vs 23s release).
-        run: cargo test --release --manifest-path fuzz/Cargo.toml --lib
+        run: cargo test --locked --release --manifest-path fuzz/Cargo.toml --lib
+
+  verify-core:
+    name: Verify history packages (Verus 0.2026.10.04.426d8b0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Z3
+        shell: bash
+        run: |
+          set -euxo pipefail
+          z3_url=https://github.com/Z3Prover/z3/releases/download/z3-4.16.0/z3-4.16.0-x64-glibc-2.39.zip
+          z3_sha256=7288c49a5bd6dbafd7b0b0d1f65956b91672da24b08f09242919af159be3418e
+          curl -fsSL "$z3_url" -o z3.zip
+          echo "${z3_sha256}  z3.zip" | sha256sum --check --strict
+          unzip -q z3.zip
+          echo "$PWD/z3-4.16.0-x64-glibc-2.39/bin" >> "$GITHUB_PATH"
+          echo "VERUS_Z3_PATH=$PWD/z3-4.16.0-x64-glibc-2.39/bin/z3" >> "$GITHUB_ENV"
+
+      - name: Install Verus and verify all library configurations
+        shell: bash
+        run: |
+          set -euxo pipefail
+          asset_url=https://github.com/verus-lang/verus/releases/download/release%2F0.2026.10.04.426d8b0/verus-0.2026.10.04.426d8b0-x86-linux.zip
+          asset_sha256=624018662868563a7bec0dd07be5e4dd0c3d61124b4b55105765884bf2d4d1a0
+          curl -fsSL "$asset_url" -o verus.zip
+          echo "${asset_sha256}  verus.zip" | sha256sum --check --strict
+          unzip -q verus.zip -d verus-dist
+          verus_bin="$(find "$PWD/verus-dist" -type f -name verus -perm -u+x | head -n1)"
+          cargo_verus_bin="$(find "$PWD/verus-dist" -type f -name cargo-verus -perm -u+x | head -n1)"
+          version_json="$(find "$PWD/verus-dist" -type f -name version.json | head -n1)"
+          test -n "$verus_bin"
+          test -n "$cargo_verus_bin"
+          test -n "$version_json"
+          required_toolchain="$(
+            python3 - "$version_json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as version_file:
+              toolchain = json.load(version_file).get("verus", {}).get("toolchain", "")
+          if not toolchain:
+              raise SystemExit("missing verus.toolchain in version.json")
+          print(toolchain.split()[0])
+          PY
+          )"
+          test "$required_toolchain" = 1.98.1-x86_64-unknown-linux-gnu
+          rustup toolchain install "$required_toolchain" --profile minimal \
+            --component rustc-dev --component llvm-tools --component rustfmt
+          export RUSTUP_TOOLCHAIN="$required_toolchain"
+          export PATH="$(dirname "$cargo_verus_bin"):$(dirname "$verus_bin"):$PATH"
+          cargo fetch --locked
+          # No module filters: verify all library bodies and verified helper dependencies.
+          cargo verus verify --locked -p history-syntax --no-default-features
+          cargo verus verify --locked -p history-syntax --features serde,std
+          cargo verus verify --locked -p junco-core --no-default-features
+          cargo verus verify --locked -p junco-core --features runtime,std,serde
+          cargo verus verify --locked -p history-store --no-default-features --features runtime
+          cargo verus verify --locked -p history-store --features runtime,std
+          cargo verus verify --locked -p history-semantics --no-default-features --features runtime
+          cargo verus verify --locked -p history-semantics --features runtime,std,cache
 
   msrv:
-    name: MSRV (Rust 1.91.0)
+    name: MSRV (Rust 1.98.1)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: 1.98.1
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Rust 1.91.0
-        # The declared `rust-version` of both manifests; stable and nightly jobs float above it.
-        uses: dtolnay/rust-toolchain@1.91.0
+      - name: Set up Rust 1.98.1
+        run: rustup toolchain install 1.98.1 --profile minimal
 
       - name: Check at the minimum supported Rust
         run: |
-          cargo check --locked --all-targets
+          cargo check --locked --workspace --all-targets
           cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
 
   fuzz:
@@ -89,7 +155,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Rust nightly
         # cargo-fuzz needs -Zsanitizer and the sancov passes; the smoke step runs `cargo +nightly`.

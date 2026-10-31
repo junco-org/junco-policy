@@ -1,4 +1,4 @@
-//! Ownership locks expressed as a native trace policy over the [`crate::policy`] kernel.
+//! Ownership locks expressed as a native trace policy over `history-semantics`.
 //!
 //! A resource has two independent claims, each folded from committed history:
 //!
@@ -9,18 +9,22 @@
 //! `release` is denied only while another principal owns it. `read` always grants. A foreign
 //! `edit` also blocks `edit` and `remove` until the acting principal reads the resource again;
 //! `release` does not restore freshness, and `remove` resets it. Owner denials precede freshness
-//! and reader denials. [`LockPolicy`] compiles this seven-rule table once and retains its canonical
-//! nodes and evaluator caches across decisions.
+//! and reader denials. [`LockPolicy`] compiles this seven-rule table once and retains its
+//! evaluator caches across decisions.
 
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
+use std::sync::Arc;
 
-use crate::policy::atoms::{action_is, principal_is, resource_is};
-use crate::policy::decision::PolicyDecision;
-use crate::policy::evaluate::CompiledPolicy;
-use crate::policy::language::last_state_change;
-use crate::policy::rule::{PolicyRule, forbid};
-use crate::{Action, Bump, Comparison, Event, History, LockEvent, RegexExpr, TestExpr};
+use history_semantics::policy::{
+    CompiledPolicy, PolicyRule, action_is, forbid, last_state_change, principal_is, resource_is,
+};
+use history_semantics::{PolicyDecision, PolicyError};
+use history_store::{History, Store};
+use history_syntax::{Comparison, Event, RegexExpr, TestExpr};
+use junco_core::{CompileError, HistoryError};
+
+use crate::{Action, LockEvent};
 
 /// Everything a lock denial renders from.
 struct LockContext {
@@ -174,28 +178,26 @@ where
 
 /// Compiled ownership-lock trace policy reusable across candidate decisions.
 ///
-/// [`LockPolicy::decide`] accepts an externally owned committed [`History`] so callers can
-/// preserve append-on-grant semantics while this value retains canonical syntax, derivative
-/// caches, and per-history evaluated progress.
-pub struct LockPolicy<'arena, P, R>
+/// [`LockPolicy::decide`] accepts an externally owned committed [`History`] in the same store.
+/// Decisions do not append events; the caller records successful operations explicitly.
+pub struct LockPolicy<P, R>
 where
-    P: Copy + Debug + Eq + Hash + 'arena,
-    R: Copy + Debug + Eq + Hash + 'arena,
+    P: Copy + Debug + Eq + Hash,
+    R: Copy + Debug + Eq + Hash,
 {
-    compiled: CompiledPolicy<'arena, LockEvent<P, R>, LockContext>,
+    compiled: CompiledPolicy<LockEvent<P, R>, LockContext>,
 }
 
-impl<'arena, P, R> LockPolicy<'arena, P, R>
+impl<P, R> LockPolicy<P, R>
 where
-    P: Copy + Debug + Eq + Hash + Display + 'arena,
-    R: Copy + Debug + Eq + Hash + Display + 'arena,
+    P: Copy + Debug + Eq + Hash + Display,
+    R: Copy + Debug + Eq + Hash + Display,
 {
-    /// Builds and compiles the static lock policy in `arena`.
-    pub fn new(arena: &'arena Bump) -> Self {
-        Self {
-            compiled: CompiledPolicy::new(arena, lock_rules())
-                .expect("static lock policy rules compile"),
-        }
+    /// Builds and compiles the static lock policy in `store`.
+    pub fn new(store: Arc<Store<LockEvent<P, R>>>) -> Result<Self, CompileError> {
+        Ok(Self {
+            compiled: CompiledPolicy::new(store, lock_rules())?,
+        })
     }
 
     /// Decides one candidate against `history`, reusing the compiled table and evaluator caches.
@@ -203,7 +205,7 @@ where
         &mut self,
         history: &History<LockEvent<P, R>>,
         candidate: &LockEvent<P, R>,
-    ) -> PolicyDecision {
+    ) -> Result<PolicyDecision, HistoryError> {
         self.compiled.decide(history, candidate, || {
             lock_context(history.as_slice(), candidate)
         })
@@ -216,13 +218,13 @@ where
 pub fn lock_decision<P, R>(
     history: &History<LockEvent<P, R>>,
     candidate: &LockEvent<P, R>,
-) -> PolicyDecision
+) -> Result<PolicyDecision, PolicyError>
 where
     P: Copy + Debug + Eq + Hash + Display,
     R: Copy + Debug + Eq + Hash + Display,
 {
-    let arena = Bump::new();
-    LockPolicy::new(&arena).decide(history, candidate)
+    let mut policy = LockPolicy::new(history.store().clone())?;
+    Ok(policy.decide(history, candidate)?)
 }
 
 #[cfg(test)]

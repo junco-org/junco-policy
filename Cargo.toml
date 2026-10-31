@@ -1,8 +1,13 @@
+[workspace]
+members = [".", "crates/junco-core", "crates/history-syntax", "crates/history-store", "crates/history-semantics"]
+exclude = ["fuzz"]
+resolver = "3"
+
 [package]
 name = "junco-policy"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.98.1"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -11,20 +16,14 @@ name = "junco_policy"
 path = "src/lib.rs"
 
 [dependencies]
-bumpalo = "3.16"
-frunk_core = { version = "=0.5.0", default-features = false }
-glob = "0.3"
-hashconsing = { git = "https://github.com/elefthei/hashconsing", rev = "6d79a7e287adbb9a8e43ddf96a956b80a156dfd0", features = ["bumpalo"] }
-hashbrown = { version = "0.16", features = ["raw-entry"] }
-lru = "=0.18.4"
-smallbitvec = "2.6"
-smallvec = "1.15"
-string-interner = "0.20.0"
-thiserror = "2.0"
+junco-core = { path = "crates/junco-core", default-features = false, features = ["std"] }
+history-store = { path = "crates/history-store", default-features = false, features = ["runtime", "std"] }
+history-semantics = { path = "crates/history-semantics", default-features = false, features = ["runtime", "std", "cache"] }
+history-syntax = { path = "crates/history-syntax", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 criterion = "0.5"
-serde_json = "1"
+history-semantics = { path = "crates/history-semantics", default-features = false, features = ["test-util"] }
 
 [[bench]]
 name = "validator"

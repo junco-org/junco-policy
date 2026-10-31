@@ -1,7 +1,11 @@
-use junco_policy::{
-    Action, AtomPattern, Bump, Comparison, ComponentPattern, Event, Head, LockEvent, RegexExpr,
-    Request, Rule, RuleMode, TestExpr, Validator,
+use history_semantics::Validator;
+use history_store::Store;
+use history_syntax::{
+    AtomPattern, Comparison, ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
+use junco_core::Request;
+use junco_policy::{Action, LockEvent};
+use std::sync::Arc;
 
 /// Principal of committed history events versus the rule-probing candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -178,9 +182,9 @@ impl Generator {
 /// At each prefix the probe is checked twice with `permits` (cold or suffix-resumed, then warm)
 /// against the reference interpreter; the next word event is then appended through `check`.
 fn assert_prefixes_match_reference(regex: &RefRegex, word: &[LockEvent<Actor, Path>]) {
-    let arena = Bump::new();
+    let store = Arc::new(Store::new().unwrap());
     let probe = LockEvent::new(Actor::Probe, Action::Remove, Path::Probe);
-    let mut builder = Validator::builder(&arena);
+    let mut builder = Validator::builder(Arc::clone(&store));
     builder
         .add_rule(Rule::new(
             RuleMode::Require,
@@ -192,19 +196,19 @@ fn assert_prefixes_match_reference(regex: &RefRegex, word: &[LockEvent<Actor, Pa
             source_regex(regex),
         ))
         .unwrap();
-    let mut validator = builder.finish();
+    let mut validator = builder.finish().unwrap();
     for split in 0..=word.len() {
         let prefix = &word[..split];
         let expected = accepts(regex, prefix);
         for pass in ["first", "repeat"] {
             assert_eq!(
-                validator.permits(&probe),
+                validator.permits(&probe).unwrap(),
                 expected,
                 "{pass} permits: {regex:?} over {prefix:?}"
             );
         }
         if let Some(next) = word.get(split) {
-            assert!(validator.check(Request::new(*next, ())).is_grant());
+            assert!(validator.check(Request::new(*next, ())).unwrap().is_grant());
         }
     }
 }

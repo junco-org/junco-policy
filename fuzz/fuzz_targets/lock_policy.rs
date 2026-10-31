@@ -14,7 +14,7 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let trace = lock_policy_harness::validate_trace(data);
+    let trace = lock_policy_harness::validate_trace(data).expect("fuzz trace validation failed");
     if let Some(surprise) = lock_policy_harness::no_surprise_violation(trace.history.as_slice()) {
         panic!("no-surprise violated: {surprise}");
     }
