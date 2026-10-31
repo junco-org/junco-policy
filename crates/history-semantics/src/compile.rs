@@ -91,7 +91,6 @@ impl CompiledPair {
         clippy::option_if_let_else,
         reason = "Explicit matches preserve the Verus proof structure"
     )]
-
     fn lookup<T: Copy>(values: &[T], id: u32) -> KernelResult<T> {
         let index = match usize::try_from(id) {
             Ok(index) => index,
