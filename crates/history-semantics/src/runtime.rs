@@ -380,7 +380,8 @@ impl RuleRuntime {
     ) -> Result<Self, HistoryError> {
         proof! { reveal(constructor_result); reveal(runtime_wf); }
         #[cfg_attr(not(feature = "cache"), allow(unused_mut))]
-        let mut pair = CompiledPair::compile(template, limits, world)?;
+        let mut pair =
+            CompiledPair::compile(template, junco_core::limits::MAX_GRAPH_BYTES, limits, world)?;
         #[cfg(feature = "cache")]
         if precompile {
             proof_decl! { let ghost compiled = pair; }
@@ -389,7 +390,12 @@ impl RuleRuntime {
                     return Err(error);
                 }
                 drop(pair);
-                pair = CompiledPair::compile(template, limits, world)?;
+                pair = CompiledPair::compile(
+                    template,
+                    junco_core::limits::MAX_GRAPH_BYTES,
+                    limits,
+                    world,
+                )?;
             }
             proof! {
                 if progress::pair_frame(compiled, pair) {

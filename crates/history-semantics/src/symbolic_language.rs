@@ -31,17 +31,20 @@ use crate::symbolic::RegexDerivative;
 /// realize them. Residuals are canonical within one language, so equal identifiers denote equal
 /// normal forms.
 ///
-/// The graph has the runtime's fixed budget; an operation that would exceed it fails with
-/// [`HistoryError::GraphLimit`].
+/// The graph may be charged the budget given at compilation; an operation that would exceed it
+/// fails with [`HistoryError::GraphLimit`]. The runtime's budget is
+/// [`junco_core::limits::MAX_GRAPH_BYTES`] per compiled rule.
 #[derive(Debug)]
 pub struct SymbolicLanguage {
     pair: CompiledPair,
 }
 
 impl SymbolicLanguage {
-    /// Compiles a numeric tail into a fresh graph, as the runtime does.
-    pub fn compile(template: &FlatPair<u64>) -> Result<Self, HistoryError> {
-        let pair = CompiledPair::compile(template, &mut Unmetered, &mut ObservationWorld)?;
+    /// Compiles a numeric tail into a fresh graph, as the runtime does, that may be charged
+    /// `budget` bytes. Each of the graph's six arenas reserves `budget` bytes of address space,
+    /// which is committed as it fills. `budget` must be a multiple of 16.
+    pub fn compile(template: &FlatPair<u64>, budget: usize) -> Result<Self, HistoryError> {
+        let pair = CompiledPair::compile(template, budget, &mut Unmetered, &mut ObservationWorld)?;
         Ok(Self { pair })
     }
 

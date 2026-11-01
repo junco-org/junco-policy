@@ -54,8 +54,8 @@ preserves the event and opaque metadata. Denials and operational errors leave it
 a rule of `by`; `redundant`, `at_least_as_strict`, `never_fires`, and `always_fires` are
 built on it, and `tail_included(head, left, right)` decides one tail inclusion. A verdict is
 `Holds`, a shortest `Counterexample` (a candidate and the history before it), or `Exhausted`
-once a search exceeds `SearchOptions::max_items` (unbounded by default) or the runtime's graph
-budget. Queries return `HistoryError` for any other runtime failure.
+once a search exceeds `SearchOptions::max_items` (unbounded by default) or its graph budget,
+`SearchOptions::graph_bytes`. Queries return `HistoryError` for any other runtime failure.
 
 Rules are validated and lowered by `junco_core::flatten_rule` and `lower_flat`, as for the
 runtime. Each question reduces to inclusions between tails, decided by a breadth-first search
@@ -69,11 +69,12 @@ Components are infinite unless `Domains` declares their values, as an action enu
 generic `Event` cannot be built from components, so a counterexample names each component by a
 constant or by a numbered fresh value.
 
-Each search compiles one graph, so the runtime's 100 KiB graph budget bounds it: a few hundred
-states for small tails, fewer for tails with nested complements. The classes of events and the
-search are unverified. Their tests replay every counterexample through `TracePolicy`, and a
-differential test compares the verdicts on random tail pairs, including counterexample lengths,
-with brute force over every history up to a length bound.
+Each search compiles one graph with its own budget, through `CanonicalStore::with_budget`: 16 MiB
+unless `SearchOptions::graph_bytes` says otherwise, where the runtime keeps `MAX_GRAPH_BYTES`
+(100 KiB) per rule. The classes of events and the search are unverified. Their tests replay
+every counterexample through `TracePolicy`, and a differential test compares the verdicts on
+random tail pairs, including counterexample lengths, with brute force over every history up to
+a length bound.
 
 ## Lock policy
 

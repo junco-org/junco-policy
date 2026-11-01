@@ -29,8 +29,9 @@
 //! components.
 //!
 //! Rules are validated and lowered by [`junco_core::flatten_rule`] and [`junco_core::lower_flat`],
-//! as for the runtime. A search's graph has the runtime's fixed budget; a search that exceeds it
-//! is reported as [`Inclusion::Exhausted`]. The classes of events and the search are not verified.
+//! as for the runtime. Each search compiles one graph that may be charged
+//! [`SearchOptions::graph_bytes`], 16 MiB by default; a search that exceeds it is reported as
+//! [`Inclusion::Exhausted`]. The classes of events and the search are not verified.
 
 #![no_std]
 #![forbid(unsafe_code)]

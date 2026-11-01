@@ -389,8 +389,11 @@ fn vacuity_distinguishes_rules_that_never_or_always_fire() {
 
 #[test]
 fn a_budget_stops_the_search() {
-    let mut analyzer =
-        PolicyAnalyzer::with_options(finite_actions(), SearchOptions { max_items: Some(0) });
+    let options = SearchOptions {
+        max_items: Some(0),
+        ..SearchOptions::default()
+    };
+    let mut analyzer = PolicyAnalyzer::with_options(finite_actions(), options);
     let verdict = analyzer
         .tail_included(
             &head(),
@@ -399,6 +402,37 @@ fn a_budget_stops_the_search() {
         )
         .unwrap();
     assert_eq!(verdict.inclusion, Inclusion::Exhausted);
+}
+
+#[test]
+fn the_graph_budget_bounds_each_search() {
+    // The left side ends in a read ten events back; the search visits 2^10 states, more than
+    // the runtime's graph budget for one rule holds.
+    let ten_back = |test| {
+        let mut parts = Vec::from([RegexExpr::all(), RegexExpr::test(test)]);
+        parts.extend((0..10).map(|_| RegexExpr::test(TestExpr::True)));
+        RegexExpr::concat(parts)
+    };
+    let read = || action_is(Comparison::Eq, Action::Read);
+    let left = ten_back(read());
+    let right = ten_back(TestExpr::or([
+        read(),
+        action_is(Comparison::Eq, Action::Edit),
+    ]));
+    let runtime_budget = SearchOptions {
+        graph_bytes: junco_core::limits::MAX_GRAPH_BYTES,
+        ..SearchOptions::default()
+    };
+    let mut analyzer = PolicyAnalyzer::with_options(finite_actions(), runtime_budget);
+    let verdict = analyzer.tail_included(&head(), &left, &right).unwrap();
+    assert_eq!(verdict.inclusion, Inclusion::Exhausted);
+    let mut analyzer = PolicyAnalyzer::new(finite_actions());
+    assert!(
+        analyzer
+            .tail_included(&head(), &left, &right)
+            .unwrap()
+            .holds()
+    );
 }
 
 #[test]
