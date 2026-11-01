@@ -67,6 +67,8 @@ pub use policy::{
     git::{GitPolicy, git_decision},
 };
 pub use syntax::{
-    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
+    Alphabet, AtomPattern, Comparison, Component, ComponentPattern, Counterexample, Head,
+    Inclusion, PolicyAnalyzer, RegexExpr, Rule, RuleId, RuleMode, SearchOptions, SearchStats,
+    Strategy, Subsumption, TestExpr, Verdict,
 };
 pub use validator::{Checkpoint, CompileError, Decision, Denial, Validator, ValidatorBuilder};

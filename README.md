@@ -3,6 +3,45 @@
 Capability validation for Junco, written in Rust. It owns the git trace policy: the rule table, its
 no-surprise oracle, and the harness that both the fuzzer and the benchmark drive.
 
+## Policy analysis
+
+`PolicyAnalyzer` answers questions about rule tables without running them on histories:
+
+- `redundant(rule, policy)`: whether the policy's other rules deny everything `rule` denies;
+- `at_least_as_strict(stricter, than)` and `covered(rule, by)`: whether one rule set denies
+  everything another denies;
+- `never_fires(rule)` and `always_fires(rule)`: rule vacuity;
+- `tail_included(head, left, right)`: inclusion between two tails for every candidate the head
+  matches.
+
+Each question holds for every candidate, not just one: tails that compare history events with the
+candidate's components are decided for all values of those components. A failed question returns a
+concrete candidate and history that can be replayed through `TracePolicy`. `GitPolicy::rules()`
+exposes the git table for analysis.
+
+Every query searches breadth-first for a counterexample. Per state it branches over finitely many
+classes of events, splitting on how the candidate compares with constants. `SearchOptions` selects
+the derivative engine:
+
+- `Strategy::Residual` (default) derives one Boolean formula over residual states for
+  `left ∧ ¬right`. Intersection and complement stay Boolean at every step; concatenation attaches
+  its suffix to whole conjunctive cubes so that their members share one split point. States are
+  canonical BDDs, and `Subsumption::Implication` skips states implied by visited ones.
+- `Strategy::Antichain` explores partial derivatives of `left` against subset-construction states
+  of `right`, with intersections and complements below the root advanced by junco's Brzozowski
+  derivatives, and skips states that a syntactic term simulation shows subsumed.
+- `Strategy::Brzozowski` determinises `left ∩ ¬right` with junco's derivatives: a baseline.
+- `Strategy::Simple` also determinises `left ∩ ¬right` by Brzozowski derivatives, but in its own
+  expression syntax. Only local smart constructors simplify it (flat, sorted, deduplicated `∪`
+  and `∩` with their units, absorbers and complementary pairs; `¬¬x = x`; `ε` and `∅` factors of
+  binary concatenations; trivial stars), which is enough to keep every expression's derivatives
+  finite. States are compared by identity only, so its counterexamples are shortest.
+
+`Alphabet::Minterms` enumerates truth assignments instead of building letters directly, for
+comparison. `tests/inclusion.rs` checks every configuration against an independent reference
+semantics on random tails, and checks the simple strategy's counterexamples against the shortest
+ones found by brute force.
+
 ## Fuzzing
 
 Linux and macOS only. libFuzzer generates git traces and checks the policy for panics and

@@ -83,8 +83,7 @@ pub(crate) fn compile_rule<'arena>(
     store: &mut CanonicalStore<'arena>,
     source: &Rule,
 ) -> Result<RuntimeRule<'arena>, CompileError> {
-    let (head, variables) = compile_head(store, &source.head)?;
-    let tail = compile_regex(store, &variables, &source.tail)?;
+    let (head, tail) = compile_head_and_tail(store, source)?;
     let mut derivatives = SymbolicDerivativeCache::new();
     SymbolicMatcher::new(store, &mut derivatives).precompile(tail);
     Ok(RuntimeRule {
@@ -93,6 +92,16 @@ pub(crate) fn compile_rule<'arena>(
         tail,
         derivatives,
     })
+}
+
+/// Compiles and validates one source rule's head and tail, without the runtime derivative cache.
+pub(super) fn compile_head_and_tail<'arena>(
+    store: &mut CanonicalStore<'arena>,
+    source: &Rule,
+) -> Result<(CompiledHead<'arena>, RegexId<'arena>), CompileError> {
+    let (head, variables) = compile_head(store, &source.head)?;
+    let tail = compile_regex(store, &variables, &source.tail)?;
+    Ok((head, tail))
 }
 
 /// Compiles one head coordinate and records variable declarations.

@@ -4,7 +4,9 @@ use super::git_decision;
 use super::languages::{clean_lang, staged_lang, unstaged_other_lang, unstaged_self_lang};
 use crate::policy::PolicyDecision;
 use crate::syntax::{CanonicalStore, compile_rule};
-use crate::{Action, Bump, ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode};
+use crate::{
+    Action, Bump, ComponentPattern, Event, Head, PolicyAnalyzer, RegexExpr, Rule, RuleMode,
+};
 
 fn resource() -> [&'static str; 2] {
     ["src", "x"]
@@ -227,6 +229,39 @@ fn row_languages_match_the_four_canonical_states() {
                 inside,
                 lang_name == *history_name,
                 "lang={lang_name} history={history_name}",
+            );
+        }
+    }
+}
+
+#[test]
+fn row_languages_partition_every_history() {
+    let head = Head::new(
+        ComponentPattern::variable("p"),
+        ComponentPattern::variable("a"),
+        ComponentPattern::variable("r"),
+    );
+    let rows = [
+        clean_lang(),
+        staged_lang(),
+        unstaged_self_lang(),
+        unstaged_other_lang(),
+    ];
+    let arena = Bump::new();
+    let mut analyzer = PolicyAnalyzer::new(&arena);
+    let exhaustive = analyzer
+        .tail_included(&head, &RegexExpr::all(), &RegexExpr::union(rows.clone()))
+        .expect("row languages compile");
+    assert!(exhaustive.holds(), "{exhaustive:?}");
+    for (index, row) in rows.iter().enumerate() {
+        for other in &rows[index + 1..] {
+            let overlap = RegexExpr::intersect([row.clone(), other.clone()]);
+            let disjoint = analyzer
+                .tail_included(&head, &overlap, &RegexExpr::empty())
+                .expect("row languages compile");
+            assert!(
+                disjoint.holds(),
+                "rows {index} and a later row overlap: {disjoint:?}"
             );
         }
     }

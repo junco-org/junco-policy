@@ -52,7 +52,11 @@ impl<'arena> SymbolicDerivativeCache<'arena> {
         self.minterms.len()
     }
 
-    fn atoms(&mut self, transition: TransitionId<'arena>) -> &[CompiledAtomPattern<'arena>] {
+    /// Atoms tested by `transition`: the first atoms of the regex it was derived from.
+    pub(super) fn atoms(
+        &mut self,
+        transition: TransitionId<'arena>,
+    ) -> &[CompiledAtomPattern<'arena>] {
         self.atoms
             .entry(transition)
             .or_insert_with(|| collect_transition_atoms(transition))
@@ -208,7 +212,11 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
                 continue;
             }
             let successors = (0..minterm_count)
-                .map(|minterm| self.evaluate_minterm(transition, &atoms, minterm))
+                .map(|minterm| {
+                    self.evaluate_assignment(transition, &mut |atom| {
+                        minterm_holds(&atoms, minterm, atom)
+                    })
+                })
                 .collect::<Vec<_>>();
             pending.extend(successors.iter().copied());
             compiled_minterms += minterm_count;
@@ -222,13 +230,17 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
         }
     }
 
-    /// Interprets one symbolic transition under a precomputed atom minterm.
-    fn evaluate_minterm(
+    /// Interprets one symbolic transition under a truth assignment to its atoms.
+    ///
+    /// `truth` is consulted only for atoms of `transition`, each time an atom is tested.
+    pub(super) fn evaluate_assignment<F>(
         &mut self,
         transition: TransitionId<'arena>,
-        atoms: &[CompiledAtomPattern<'arena>],
-        minterm: usize,
-    ) -> RegexId<'arena> {
+        truth: &mut F,
+    ) -> RegexId<'arena>
+    where
+        F: FnMut(CompiledAtomPattern<'arena>) -> bool,
+    {
         match *transition.get() {
             TransitionNode::Const(regex) => regex,
             TransitionNode::If {
@@ -236,33 +248,33 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
                 then_transition,
                 else_transition,
             } => {
-                let selected = if eval_test_minterm(test, atoms, minterm) {
+                let selected = if eval_test_assignment(test, truth) {
                     then_transition
                 } else {
                     else_transition
                 };
-                self.evaluate_minterm(selected, atoms, minterm)
+                self.evaluate_assignment(selected, truth)
             }
             TransitionNode::Union(children) => {
                 let regexes = children
                     .iter()
-                    .map(|child| self.evaluate_minterm(*child, atoms, minterm))
+                    .map(|child| self.evaluate_assignment(*child, truth))
                     .collect::<SmallVec<[RegexId<'arena>; 4]>>();
                 self.store.regex_union(regexes)
             }
             TransitionNode::Intersect(children) => {
                 let regexes = children
                     .iter()
-                    .map(|child| self.evaluate_minterm(*child, atoms, minterm))
+                    .map(|child| self.evaluate_assignment(*child, truth))
                     .collect::<SmallVec<[RegexId<'arena>; 4]>>();
                 self.store.regex_intersect(regexes)
             }
             TransitionNode::Not(inner) => {
-                let regex = self.evaluate_minterm(inner, atoms, minterm);
+                let regex = self.evaluate_assignment(inner, truth);
                 self.store.regex_not(regex)
             }
             TransitionNode::Append { transition, suffix } => {
-                let regex = self.evaluate_minterm(transition, atoms, minterm);
+                let regex = self.evaluate_assignment(transition, truth);
                 let mut factors = SmallVec::<[RegexId<'arena>; 4]>::new();
                 factors.push(regex);
                 factors.extend_from_slice(suffix);
@@ -435,12 +447,24 @@ impl<'state, 'arena, 'event> SymbolicMatcher<'state, 'arena, 'event> {
     }
 }
 
-/// Evaluates one canonical event test from a dense atom truth assignment.
-fn eval_test_minterm<'arena>(
-    test: TestId<'arena>,
+/// Whether `atom` holds in the dense `minterm` over `atoms`.
+fn minterm_holds<'arena>(
     atoms: &[CompiledAtomPattern<'arena>],
     minterm: usize,
+    atom: CompiledAtomPattern<'arena>,
 ) -> bool {
+    let index = atoms
+        .iter()
+        .position(|candidate| *candidate == atom)
+        .expect("compiled minterm contains every transition atom");
+    minterm & (1_usize << index) != 0
+}
+
+/// Evaluates one canonical event test under a truth assignment to its atoms.
+pub(super) fn eval_test_assignment<'arena, F>(test: TestId<'arena>, truth: &mut F) -> bool
+where
+    F: FnMut(CompiledAtomPattern<'arena>) -> bool,
+{
     match *test.get() {
         TestNode::True => true,
         TestNode::False => false,
@@ -448,11 +472,7 @@ fn eval_test_minterm<'arena>(
             comparison,
             pattern,
         } => {
-            let index = atoms
-                .iter()
-                .position(|atom| *atom == pattern)
-                .expect("compiled minterm contains every transition atom");
-            let equal = minterm & (1_usize << index) != 0;
+            let equal = truth(pattern);
             match comparison {
                 Comparison::Eq => equal,
                 Comparison::Neq => !equal,
@@ -460,10 +480,10 @@ fn eval_test_minterm<'arena>(
         }
         TestNode::And(children) => children
             .iter()
-            .all(|child| eval_test_minterm(*child, atoms, minterm)),
+            .all(|child| eval_test_assignment(*child, truth)),
         TestNode::Or(children) => children
             .iter()
-            .any(|child| eval_test_minterm(*child, atoms, minterm)),
+            .any(|child| eval_test_assignment(*child, truth)),
     }
 }
 

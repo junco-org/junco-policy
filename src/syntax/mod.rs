@@ -9,6 +9,7 @@ mod compile;
 mod component;
 mod environment;
 mod evaluate;
+mod inclusion;
 mod node;
 mod normalize;
 mod source;
@@ -16,6 +17,10 @@ mod store;
 mod symbolic;
 mod transition;
 
+pub use inclusion::{
+    Alphabet, Counterexample, Inclusion, PolicyAnalyzer, RuleId, SearchOptions, SearchStats,
+    Strategy, Subsumption, Verdict,
+};
 pub use source::{
     AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };

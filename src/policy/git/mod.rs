@@ -22,7 +22,7 @@ use self::diagnostics::git_context;
 use self::rules::git_rules;
 use crate::policy::decision::PolicyDecision;
 use crate::policy::evaluate::CompiledPolicy;
-use crate::{Action, Bump, Event};
+use crate::{Action, Bump, Event, Rule};
 
 /// Compiled Git trace policy reusable across candidate decisions.
 ///
@@ -40,6 +40,12 @@ impl<'arena> GitPolicy<'arena> {
             compiled: CompiledPolicy::new(arena, git_rules())
                 .expect("static Git policy rules compile"),
         }
+    }
+
+    /// The 23 source rules of the table, in decision order, for static analysis with
+    /// [`crate::PolicyAnalyzer`].
+    pub fn rules() -> Vec<Rule> {
+        git_rules().into_iter().map(|rule| rule.rule).collect()
     }
 
     /// Decides one candidate against `history`, reusing the compiled table and evaluator caches.

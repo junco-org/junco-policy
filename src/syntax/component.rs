@@ -15,7 +15,7 @@ use crate::model::{Action, Event, Principal, Resource};
 use super::source::{Component, ComponentPattern};
 
 /// Resolved action value using string-interner symbols for commit messages.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum ResolvedAction {
     Read,
     Edit,
@@ -31,7 +31,7 @@ pub(super) enum ResolvedAction {
 }
 
 /// Resolved resource value represented as an arena-backed sequence of segment symbols.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct ResolvedResource<'arena>(&'arena [DefaultSymbol]);
 
 /// Resolves model values using a black-box string interner and arena allocation.
@@ -64,6 +64,46 @@ impl<'arena> ComponentResolver<'arena> {
         ResolvedResource(self.arena.alloc_slice_copy(&segments))
     }
 
+    /// Whether `value` has been interned, and so may occur as a compiled constant.
+    pub(super) fn is_interned(&self, value: &str) -> bool {
+        self.strings.get(value).is_some()
+    }
+
+    /// Converts a resolved principal back into its model value.
+    pub(super) fn principal(&self, value: DefaultSymbol) -> Principal {
+        Principal::new(self.string(value))
+    }
+
+    /// Converts a resolved action back into its model value.
+    pub(super) fn action(&self, value: ResolvedAction) -> Action {
+        match value {
+            ResolvedAction::Read => Action::Read,
+            ResolvedAction::Edit => Action::Edit,
+            ResolvedAction::Stage => Action::Stage,
+            ResolvedAction::Unstage => Action::Unstage,
+            ResolvedAction::Commit(message) => Action::Commit {
+                message: message.map(|message| self.string(message).to_owned()),
+            },
+            ResolvedAction::Checkout => Action::Checkout,
+            ResolvedAction::Stash => Action::Stash,
+            ResolvedAction::Delete => Action::Delete,
+            ResolvedAction::Clean => Action::Clean,
+            ResolvedAction::Diff => Action::Diff,
+            ResolvedAction::History => Action::History,
+        }
+    }
+
+    /// Converts a resolved resource back into its model value.
+    pub(super) fn resource(&self, value: ResolvedResource<'arena>) -> Resource {
+        Resource::new(value.0.iter().map(|segment| self.string(*segment)))
+    }
+
+    fn string(&self, symbol: DefaultSymbol) -> &str {
+        self.strings
+            .resolve(symbol)
+            .expect("resolved symbols come from this interner")
+    }
+
     /// Number of distinct interned strings, used to verify value reuse.
     #[cfg(test)]
     pub(super) fn string_count(&self) -> usize {
@@ -72,7 +112,7 @@ impl<'arena> ComponentResolver<'arena> {
 }
 
 /// Heterogeneous resolved value stored in a candidate substitution.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum ResolvedValue<'arena> {
     Principal(<Principal as ComponentDomain<'arena>>::Resolved),
     Action(<Action as ComponentDomain<'arena>>::Resolved),

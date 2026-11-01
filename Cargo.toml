@@ -25,3 +25,7 @@ criterion = "0.5"
 [[bench]]
 name = "validator"
 harness = false
+
+[[bench]]
+name = "inclusion"
+harness = false
