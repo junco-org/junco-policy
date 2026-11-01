@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/junco-core", "crates/history-syntax", "crates/history-store", "crates/history-semantics"]
+members = [".", "crates/junco-core", "crates/history-syntax", "crates/history-store", "crates/history-semantics", "crates/history-analysis"]
 exclude = ["fuzz"]
 resolver = "3"
 
