@@ -4,8 +4,7 @@
 //! length bound. The brute force ranges over concrete events and merges two of them only when
 //! every atom of the pair has the same value on both, which cannot merge events that the tails
 //! tell apart. A counterexample must fail by the interpreter and by the runtime, and no shorter
-//! history within the bound may fail. A search that exhausts the runtime's graph budget has no
-//! verdict to check, but a rewrite must never be refuted.
+//! history within the bound may fail.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -72,17 +71,17 @@ fn inclusion_agrees_with_brute_force() {
         check(&setup, &tail, &setup.regex(&mut rng, 3));
         check(&setup, &tail, &setup.mutate(&mut rng, &tail));
         let rewritten = rewrite(&mut rng, &tail);
-        let verdicts = check(&setup, &tail, &rewritten);
-        assert!(
-            !verdicts.contains(&Some(false)),
+        assert_eq!(
+            check(&setup, &tail, &rewritten),
+            [true; 2],
             "{tail:?} and its rewrite {rewritten:?} differ"
         );
     }
 }
 
 /// Decides `left ⊑ right` and `right ⊑ left` under `setup`, checks both verdicts against brute
-/// force, and returns whether each holds, or `None` if its search was exhausted.
-fn check(setup: &Setup, left: &RegexExpr<Access>, right: &RegexExpr<Access>) -> [Option<bool>; 2] {
+/// force, and returns whether each holds.
+fn check(setup: &Setup, left: &RegexExpr<Access>, right: &RegexExpr<Access>) -> [bool; 2] {
     let tails = [left, right];
     let mut interpreter = Interpreter::default();
     let roots = tails.map(|tail| interpreter.add(tail));
@@ -120,7 +119,7 @@ fn check(setup: &Setup, left: &RegexExpr<Access>, right: &RegexExpr<Access>) -> 
                         context()
                     );
                 }
-                Some(true)
+                true
             }
             Inclusion::Counterexample(counterexample) => {
                 let candidate = setup.concrete(&counterexample.candidate);
@@ -158,9 +157,9 @@ fn check(setup: &Setup, left: &RegexExpr<Access>, right: &RegexExpr<Access>) -> 
                         context()
                     );
                 }
-                Some(false)
+                false
             }
-            Inclusion::Exhausted => None,
+            Inclusion::Exhausted => panic!("the search exhausted its budget: {}", context()),
         }
     })
 }

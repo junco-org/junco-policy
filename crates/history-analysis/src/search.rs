@@ -20,11 +20,26 @@ use crate::constraint::{
 };
 
 /// Search configuration.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SearchOptions {
     /// Stop with [`Inclusion::Exhausted`](crate::Inclusion::Exhausted) once one search has
     /// inserted more states than this.
     pub max_items: Option<usize>,
+    /// Bytes of runtime graph one search may be charged before it stops with
+    /// [`Inclusion::Exhausted`](crate::Inclusion::Exhausted); 16 MiB by default, against the
+    /// runtime's [`MAX_GRAPH_BYTES`](junco_core::limits::MAX_GRAPH_BYTES) per rule. Each search
+    /// reserves this much address space for each of its six arenas and commits it as the graph
+    /// grows. Must be a multiple of 16.
+    pub graph_bytes: usize,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            max_items: None,
+            graph_bytes: 16 * 1024 * 1024,
+        }
+    }
 }
 
 /// Work done by one analysis query, summed over its inclusion searches.

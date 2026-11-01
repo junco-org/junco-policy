@@ -111,7 +111,7 @@ pub enum Inclusion<E: Event> {
     Holds,
     /// The inclusion fails; the counterexample witnesses it.
     Counterexample(Counterexample<E>),
-    /// A search exceeded [`SearchOptions::max_items`] or the runtime's graph budget before
+    /// A search exceeded [`SearchOptions::max_items`] or [`SearchOptions::graph_bytes`] before
     /// deciding.
     Exhausted,
 }
@@ -495,15 +495,16 @@ impl<E: Event> PolicyAnalyzer<E> {
         Ok(Inclusion::Holds)
     }
 
-    /// Decides whether `difference` is empty under `constraint`. Exceeding the runtime's graph
-    /// budget exhausts the search like exceeding [`SearchOptions::max_items`].
+    /// Decides whether `difference` is empty under `constraint`. Exceeding the graph budget
+    /// exhausts the search like exceeding [`SearchOptions::max_items`].
     fn decide(
         &self,
         constraint: Constraint,
         difference: FlatPair<u64>,
         stats: &mut SearchStats,
     ) -> Result<Inclusion<E>, HistoryError> {
-        let outcome = SymbolicLanguage::compile(&difference).and_then(|mut language| {
+        let budget = self.options.graph_bytes;
+        let outcome = SymbolicLanguage::compile(&difference, budget).and_then(|mut language| {
             search(
                 &mut language,
                 &self.universes,

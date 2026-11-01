@@ -2599,7 +2599,7 @@ mod tests {
     use history_store::store::HistoryStore;
     use history_syntax::syntax::Component;
     use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
-    use junco_core::limits::Unmetered;
+    use junco_core::limits::{MAX_GRAPH_BYTES, Unmetered};
 
     #[test]
     fn atom_payload_byte_sum_overflow_is_allocation_failure() {
@@ -2664,8 +2664,13 @@ mod tests {
     #[test]
     fn fixed_bindings_share_classes_only_when_truth_words_match() {
         let source = template(vec![FlatRegex::Test(0), FlatRegex::Star(0)]);
-        let mut pair =
-            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut pair = CompiledPair::compile(
+            &source,
+            MAX_GRAPH_BYTES,
+            &mut Unmetered,
+            &mut ObservationWorld,
+        )
+        .unwrap();
         pair.work.skip_guards = true;
         let (alice, bob) = events();
         let alice_bindings = crate::runtime::RuleRuntime::bindings(&source, &alice).unwrap();
@@ -2693,8 +2698,13 @@ mod tests {
         let (alice, bob) = events();
         let bindings = crate::runtime::RuleRuntime::bindings(&source, &alice).unwrap();
         for (skip_guards, hits, classes) in [(false, 3, 1), (true, 0, 4)] {
-            let mut pair =
-                CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+            let mut pair = CompiledPair::compile(
+                &source,
+                MAX_GRAPH_BYTES,
+                &mut Unmetered,
+                &mut ObservationWorld,
+            )
+            .unwrap();
             pair.work.skip_guards = skip_guards;
             assert!(decide(&mut pair, &[bob, bob, bob, alice], &bindings));
             assert_eq!(pair.work.guard_hits, hits);
@@ -2714,10 +2724,20 @@ mod tests {
             FlatRegex::Star(1),
             FlatRegex::Concat(vec![0, 1, 2]),
         ]);
-        let mut eager =
-            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
-        let mut lazy =
-            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut eager = CompiledPair::compile(
+            &source,
+            MAX_GRAPH_BYTES,
+            &mut Unmetered,
+            &mut ObservationWorld,
+        )
+        .unwrap();
+        let mut lazy = CompiledPair::compile(
+            &source,
+            MAX_GRAPH_BYTES,
+            &mut Unmetered,
+            &mut ObservationWorld,
+        )
+        .unwrap();
         eager
             .precompile(&mut Unmetered, &mut ObservationWorld)
             .unwrap();
@@ -2740,8 +2760,13 @@ mod tests {
     #[test]
     fn answer_checkpoint_failure_is_not_a_verdict() {
         let source = template(vec![FlatRegex::Epsilon]);
-        let mut pair =
-            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut pair = CompiledPair::compile(
+            &source,
+            MAX_GRAPH_BYTES,
+            &mut Unmetered,
+            &mut ObservationWorld,
+        )
+        .unwrap();
         let root = pair.root;
         pair.set_answer_checkpoint_failure(true);
         assert!(matches!(
