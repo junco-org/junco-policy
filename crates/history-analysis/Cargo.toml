@@ -1,0 +1,17 @@
+[package]
+name = "history-analysis"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+history-syntax = { path = "../history-syntax", default-features = false }
+junco-core = { path = "../junco-core", default-features = false }
+hashbrown = { version = "0.17", default-features = false, features = ["default-hasher"] }
+smallvec = { version = "=1.16.2", default-features = false }
+
+[dev-dependencies]
+history-semantics = { path = "../history-semantics", default-features = false, features = ["runtime", "std"] }
+history-store = { path = "../history-store", default-features = false, features = ["runtime", "std"] }
