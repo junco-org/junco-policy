@@ -73,9 +73,10 @@ fn arena<T>(result: Result<T, AllocErr>) -> KernelResult<T> {
 /// `ARENA_CAPACITY % align == 0` are asserted below for every compile target and re-checked at
 /// runtime in `ArenaTables::with_capacity` so Verus can use them; same-type allocations from an
 /// aligned cursor never pad. Theorem (`CanonicalStore::intern_*`): `ArenaExhausted` is returned
-/// only if `storage.slack() < MAX_GRAPH_BYTES - storage.capacity()`, which a production store
-/// (`capacity == MAX_GRAPH_BYTES`, `slack == 0`) never satisfies.
-// ponytail: six fixed 100 KiB chunks per retained pair; share a chunk if allocation cost matters.
+/// only if `storage.slack() < budget - storage.capacity()`, which a store whose arenas hold its
+/// budget (`capacity == budget`, `slack == 0`) never satisfies.
+// ponytail: six budget-sized chunks per retained pair (100 KiB for the runtime); share a chunk if
+// allocation cost matters.
 #[verus_verify]
 pub(crate) const ARENA_CAPACITY: usize = MAX_GRAPH_BYTES;
 // Premises of the capacity argument, checked on every compile target. `%` rather than
@@ -1337,32 +1338,49 @@ pub struct CanonicalStore {
     // Verus needs every field crate-visible for direct accounting contracts.
     pub(crate) constants: Constants,
     pub(crate) bytes: usize,
+    /// Bytes the graph may be charged; each arena holds this many.
+    pub(crate) budget: usize,
 }
 #[verus_verify]
 impl CanonicalStore {
     #[cfg(verus_keep_ghost)]
     verus! {
         pub closed spec fn charged(&self) -> nat { self.bytes as nat }
+        pub closed spec fn budget(&self) -> nat { self.budget as nat }
     }
 
-    /// Creates the fixed-capacity canonical graph and its algebraic constants.
+    /// Creates the canonical graph with the runtime's budget, [`MAX_GRAPH_BYTES`], and its
+    /// algebraic constants.
     #[verus_spec(result => ensures match result {
         Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
         Err(_) => true,
     })]
     pub fn new() -> KernelResult<Self> {
-        Self::from_storage(ArenaStorage::with_capacity(ARENA_CAPACITY)?)
+        Self::with_budget(ARENA_CAPACITY)
+    }
+
+    /// Creates a canonical graph that may be charged `budget` bytes, and its algebraic
+    /// constants. Each of its six arenas holds `budget` bytes, so the charge rather than arena
+    /// space bounds the graph. `budget` must be a multiple of every node alignment, as any
+    /// multiple of 16 is.
+    #[verus_spec(result => ensures match result {
+        Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
+        Err(_) => true,
+    })]
+    pub fn with_budget(budget: usize) -> KernelResult<Self> {
+        Self::from_storage(ArenaStorage::with_capacity(budget)?, budget)
     }
 
     #[verus_spec(result =>
         requires verify::empty_tables(storage.graph()),
         ensures match result { Ok(store) => model::graph_wf(store.graph()) && store.valid_store(), Err(_) => true },
     )]
-    fn from_storage(storage: ArenaStorage) -> KernelResult<Self> {
+    fn from_storage(storage: ArenaStorage, budget: usize) -> KernelResult<Self> {
         proof_decl! { let ghost initial_graph = storage.graph(); }
         let mut store = Self {
             storage,
             bytes: 0,
+            budget,
             constants: Constants {
                 test_true: TestId::ZERO,
                 test_false: TestId::ZERO,
@@ -1425,20 +1443,17 @@ impl CanonicalStore {
     }
 
     #[verus_spec(result => ensures match result {
-        Ok(total) => total as int == self.charged() as int + bytes as int && total <= MAX_GRAPH_BYTES,
+        Ok(total) => total as int == self.charged() as int + bytes as int
+            && total as int <= self.budget() as int,
         Err(error) => error is GraphLimit,
     })]
     pub fn projected(&self, bytes: usize) -> KernelResult<usize> {
         let total = self
             .bytes
             .checked_add(bytes)
-            .ok_or(HistoryError::GraphLimit {
-                limit: MAX_GRAPH_BYTES,
-            })?;
-        if total > MAX_GRAPH_BYTES {
-            return Err(HistoryError::GraphLimit {
-                limit: MAX_GRAPH_BYTES,
-            });
+            .ok_or(HistoryError::GraphLimit { limit: self.budget })?;
+        if total > self.budget {
+            return Err(HistoryError::GraphLimit { limit: self.budget });
         }
         Ok(total)
     }
@@ -1488,7 +1503,7 @@ impl CanonicalStore {
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
             result matches Err(error) ==> error is ArenaExhausted ==>
-                old(self).storage.slack() < MAX_GRAPH_BYTES - old(self).storage.capacity(),
+                old(self).storage.slack() < old(self).budget as int - old(self).storage.capacity(),
     )]
     pub(crate) fn intern_test(&mut self, node: TestView<'_>) -> KernelResult<TestId> {
         proof_decl! { let ghost original = self.graph(); }
@@ -1501,15 +1516,13 @@ impl CanonicalStore {
         };
         let bytes = size_of::<TestNode>()
             .checked_add(sequence_bytes::<TestId>(len)?)
-            .ok_or(HistoryError::GraphLimit {
-                limit: MAX_GRAPH_BYTES,
-            })?;
+            .ok_or(HistoryError::GraphLimit { limit: self.budget })?;
         let projected = self.projected(bytes)?;
         proof! {
             assert(model::unique_nodes(original));
             assert(verify::graph_weight(self.storage.graph()) == verify::graph_weight(original));
             assert(bytes as int == verify::test_weight(node@));
-            assert(verify::graph_weight(original) + verify::test_weight(node@) <= MAX_GRAPH_BYTES);
+            assert(verify::graph_weight(original) + verify::test_weight(node@) <= self.budget as int);
         }
         // Publish the charge only after storage succeeds; failed pushes leave accounting unchanged.
         let id = self.storage.push_test(node)?;
@@ -1541,7 +1554,7 @@ impl CanonicalStore {
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
             result matches Err(error) ==> error is ArenaExhausted ==>
-                old(self).storage.slack() < MAX_GRAPH_BYTES - old(self).storage.capacity(),
+                old(self).storage.slack() < old(self).budget as int - old(self).storage.capacity(),
     )]
     pub(crate) fn intern_regex(
         &mut self,
@@ -1561,15 +1574,13 @@ impl CanonicalStore {
         };
         let bytes = size_of::<RegexNode>()
             .checked_add(sequence_bytes::<RegexId>(len)?)
-            .ok_or(HistoryError::GraphLimit {
-                limit: MAX_GRAPH_BYTES,
-            })?;
+            .ok_or(HistoryError::GraphLimit { limit: self.budget })?;
         let projected = self.projected(bytes)?;
         proof! {
             assert(model::unique_nodes(original));
             assert(verify::graph_weight(self.storage.graph()) == verify::graph_weight(original));
             assert(bytes as int == verify::regex_weight(node@));
-            assert(verify::graph_weight(original) + verify::regex_weight(node@) <= MAX_GRAPH_BYTES);
+            assert(verify::graph_weight(original) + verify::regex_weight(node@) <= self.budget as int);
         }
         let id = self.storage.push_regex(node)?;
         self.bytes = projected;
@@ -1600,7 +1611,7 @@ impl CanonicalStore {
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
             result matches Err(error) ==> error is ArenaExhausted ==>
-                old(self).storage.slack() < MAX_GRAPH_BYTES - old(self).storage.capacity(),
+                old(self).storage.slack() < old(self).budget as int - old(self).storage.capacity(),
     )]
     pub(crate) fn intern_transition(
         &mut self,
@@ -1617,18 +1628,15 @@ impl CanonicalStore {
             TransitionView::Append { suffix, .. } => sequence_bytes::<RegexId>(suffix.len())?,
             _ => 0,
         };
-        let bytes =
-            size_of::<TransitionNode>()
-                .checked_add(children)
-                .ok_or(HistoryError::GraphLimit {
-                    limit: MAX_GRAPH_BYTES,
-                })?;
+        let bytes = size_of::<TransitionNode>()
+            .checked_add(children)
+            .ok_or(HistoryError::GraphLimit { limit: self.budget })?;
         let projected = self.projected(bytes)?;
         proof! {
             assert(model::unique_nodes(original));
             assert(verify::graph_weight(self.storage.graph()) == verify::graph_weight(original));
             assert(bytes as int == verify::transition_weight(node@));
-            assert(verify::graph_weight(original) + verify::transition_weight(node@) <= MAX_GRAPH_BYTES);
+            assert(verify::graph_weight(original) + verify::transition_weight(node@) <= self.budget as int);
         }
         let id = self.storage.push_transition(node)?;
         self.bytes = projected;
@@ -1759,7 +1767,7 @@ mod storage_tests {
     ) -> KernelResult<CanonicalStore> {
         let mut storage = ArenaStorage::with_capacity(512)?;
         storage.track_lifetime(alloc::sync::Arc::clone(counts))?;
-        CanonicalStore::from_storage(storage)
+        CanonicalStore::from_storage(storage, MAX_GRAPH_BYTES)
     }
 
     #[test]
@@ -1797,7 +1805,7 @@ mod storage_tests {
         let mut storage = ArenaStorage::with_capacity(CHUNK_ALIGN)?;
         storage.track_lifetime(Arc::clone(&counts))?;
         assert!(matches!(
-            CanonicalStore::from_storage(storage),
+            CanonicalStore::from_storage(storage, MAX_GRAPH_BYTES),
             Err(HistoryError::ArenaExhausted)
         ));
         assert_eq!(counts.snapshot(), (6, 6));
@@ -1841,8 +1849,32 @@ mod storage_tests {
     }
 
     #[test]
+    fn a_store_enforces_its_own_budget() -> KernelResult<()> {
+        let atom = |constant| TestView::Atom {
+            primitive: Primitive::Eq {
+                field: history_syntax::syntax::Component::Principal,
+                term: Term::Constant(constant),
+            },
+            positive: true,
+        };
+        let budget = 2 * MAX_GRAPH_BYTES;
+        let mut store = CanonicalStore::with_budget(budget)?;
+        // Past the runtime's budget, within this store's.
+        store.bytes = MAX_GRAPH_BYTES;
+        store.intern_test(atom(0))?;
+        store.bytes = budget;
+        assert!(matches!(
+            store.intern_test(atom(1)),
+            Err(HistoryError::GraphLimit { limit }) if limit == budget
+        ));
+        assert!(CanonicalStore::with_budget(MAX_GRAPH_BYTES + 1).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn arena_allocation_failure_does_not_publish_or_charge() -> KernelResult<()> {
-        let mut store = CanonicalStore::from_storage(ArenaStorage::with_capacity(512)?)?;
+        let mut store =
+            CanonicalStore::from_storage(ArenaStorage::with_capacity(512)?, MAX_GRAPH_BYTES)?;
         for path in 0_u32..u32::MAX {
             let before = (store.bytes, store.storage.lengths());
             match store.intern_test(TestView::Atom {

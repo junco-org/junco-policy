@@ -1,9 +1,10 @@
 # junco-policy
 
-The workspace has five library packages: `history-syntax` owns the generic Rust policy
+The workspace has six library packages: `history-syntax` owns the generic Rust policy
 DSL and event projections; `junco-core` owns shared IR, encoding, errors, and contracts;
 `history-store` owns histories, interning, graph storage, and cache containers;
 `history-semantics` owns compilation, evaluation, and generic policy facades;
+`history-analysis` answers static questions about rule tables by inclusion between tails;
 `junco-policy` is their ownership-lock consumer. Import APIs directly from their owners.
 The root package exports only `Action`, `LockEvent`, `LockPolicy`, and `lock_decision`;
 there are no generic compatibility re-exports. The fuzz harness retains an independent
@@ -45,6 +46,35 @@ the selected violation invokes its diagnostic, once; grants and errors do not re
 diagnostics. `Validator::builder(store)` uses the same engine but owns its history.
 `permits` never appends; `check(Request<E, M>)` appends only on a successful grant and
 preserves the event and opaque metadata. Denials and operational errors leave it unchanged.
+
+## Static analysis
+
+`history_analysis::PolicyAnalyzer` answers questions about a rule table without a history:
+`covered(rule, by)` asks whether every candidate and history that `rule` denies is denied by
+a rule of `by`; `redundant`, `at_least_as_strict`, `never_fires`, and `always_fires` are
+built on it, and `tail_included(head, left, right)` decides one tail inclusion. A verdict is
+`Holds`, a shortest `Counterexample` (a candidate and the history before it), or `Exhausted`
+once a search exceeds `SearchOptions::max_items` (unbounded by default) or its graph budget,
+`SearchOptions::graph_bytes`. Queries return `HistoryError` for any other runtime failure.
+
+Rules are validated and lowered by `junco_core::flatten_rule` and `lower_flat`, as for the
+runtime. Each question reduces to inclusions between tails, decided by a breadth-first search
+over the derivatives of `left ∩ ¬right`. The derivatives are the runtime's:
+`history_semantics::SymbolicLanguage` compiles the difference with the runtime's normalizing
+constructors and exposes its verified symbolic derivatives and successor interpretation, keyed
+by the truth values of the atoms a derivative tests. A search state branches over classes of
+events rather than events: per component, a value that its atoms mention or any other value.
+The candidate is case-split only where an atom compares one of its components with a constant.
+Components are infinite unless `Domains` declares their values, as an action enum should. A
+generic `Event` cannot be built from components, so a counterexample names each component by a
+constant or by a numbered fresh value.
+
+Each search compiles one graph with its own budget, through `CanonicalStore::with_budget`: 16 MiB
+unless `SearchOptions::graph_bytes` says otherwise, where the runtime keeps `MAX_GRAPH_BYTES`
+(100 KiB) per rule. The classes of events and the search are unverified. Their tests replay
+every counterexample through `TracePolicy`, and a differential test compares the verdicts on
+random tail pairs, including counterexample lengths, with brute force over every history up to
+a length bound.
 
 ## Lock policy
 
@@ -108,6 +138,9 @@ native locks and Semantics `cache` enables optional precompilation; neither impl
 `runtime`. Runtime also supports no_std + alloc. The root lock consumer selects core/Syntax
 `std`, Store `runtime,std`, and Semantics `runtime,std,cache`. Semantics `test-util` is a
 dev-only integration probe feature, not a production dependency or a retained-prefix-cache switch.
+Analysis has no features; it is no_std + alloc and outside the Verus job. It uses Semantics
+`runtime` through `SymbolicLanguage`, a native facade like `TracePolicy` that owns a compiled
+pair and calls only verified graph operations.
 
 Body proofs cover DSL structure/lowering, constant encoding under later codebook extensions,
 the numeric compiler/evaluator, raw-to-numeric history correspondence, and cached lifecycle

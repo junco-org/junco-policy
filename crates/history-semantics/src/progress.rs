@@ -81,7 +81,10 @@ impl CompiledPair {
     #[verus_spec(result =>
         ensures result matches Ok(set) ==> transition@ < atoms@.len() && atoms@[transition@ as int] == Some(*set),
     )]
-    fn cached_atoms(atoms: &[Option<AtomSet>], transition: TransitionId) -> KernelResult<&AtomSet> {
+    pub(crate) fn cached_atoms(
+        atoms: &[Option<AtomSet>],
+        transition: TransitionId,
+    ) -> KernelResult<&AtomSet> {
         match atoms.get(transition.index()?) {
             Some(Some(set)) => Ok(set),
             _ => Err(HistoryError::invariant("missing transition atoms")),
@@ -278,7 +281,7 @@ impl CompiledPair {
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result is Ok ==> has_atoms(*final(self), transition),
     )]
-    fn ensure_atoms<L: Limits>(
+    pub(crate) fn ensure_atoms<L: Limits>(
         &mut self,
         transition: TransitionId,
         limits: &mut L,
@@ -860,7 +863,7 @@ impl CompiledPair {
     )]
     /// Cached or freshly interpreted successor of `key`; every entry it publishes is covered by
     /// `successor_entries_wf`, so callers read the language equivalence from `pair_wf`.
-    fn successor<L: Limits>(
+    pub(crate) fn successor<L: Limits>(
         &mut self,
         key: EventClass,
         limits: &mut L,
@@ -2314,7 +2317,7 @@ mod tests {
     use history_store::store::HistoryStore;
     use history_syntax::syntax::Component;
     use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
-    use junco_core::limits::Unmetered;
+    use junco_core::limits::{MAX_GRAPH_BYTES, Unmetered};
 
     fn template(regexes: Vec<FlatRegex>) -> FlatPair<u64> {
         FlatPair {
@@ -2368,8 +2371,13 @@ mod tests {
     #[test]
     fn fixed_bindings_share_classes_only_when_truth_words_match() {
         let source = template(vec![FlatRegex::Test(0), FlatRegex::Star(0)]);
-        let mut pair =
-            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut pair = CompiledPair::compile(
+            &source,
+            MAX_GRAPH_BYTES,
+            &mut Unmetered,
+            &mut ObservationWorld,
+        )
+        .unwrap();
         pair.work.skip_guards = true;
         let (alice, bob) = events();
         let alice_bindings = crate::runtime::RuleRuntime::bindings(&source, &alice).unwrap();
@@ -2397,8 +2405,13 @@ mod tests {
         let (alice, bob) = events();
         let bindings = crate::runtime::RuleRuntime::bindings(&source, &alice).unwrap();
         for (skip_guards, hits, classes) in [(false, 3, 1), (true, 0, 4)] {
-            let mut pair =
-                CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+            let mut pair = CompiledPair::compile(
+                &source,
+                MAX_GRAPH_BYTES,
+                &mut Unmetered,
+                &mut ObservationWorld,
+            )
+            .unwrap();
             pair.work.skip_guards = skip_guards;
             assert!(decide(&mut pair, &[bob, bob, bob, alice], &bindings));
             assert_eq!(pair.work.guard_hits, hits);
@@ -2418,10 +2431,20 @@ mod tests {
             FlatRegex::Star(1),
             FlatRegex::Concat(vec![0, 1, 2]),
         ]);
-        let mut eager =
-            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
-        let mut lazy =
-            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut eager = CompiledPair::compile(
+            &source,
+            MAX_GRAPH_BYTES,
+            &mut Unmetered,
+            &mut ObservationWorld,
+        )
+        .unwrap();
+        let mut lazy = CompiledPair::compile(
+            &source,
+            MAX_GRAPH_BYTES,
+            &mut Unmetered,
+            &mut ObservationWorld,
+        )
+        .unwrap();
         eager
             .precompile(&mut Unmetered, &mut ObservationWorld)
             .unwrap();
@@ -2444,8 +2467,13 @@ mod tests {
     #[test]
     fn answer_checkpoint_failure_is_not_a_verdict() {
         let source = template(vec![FlatRegex::Epsilon]);
-        let mut pair =
-            CompiledPair::compile(&source, &mut Unmetered, &mut ObservationWorld).unwrap();
+        let mut pair = CompiledPair::compile(
+            &source,
+            MAX_GRAPH_BYTES,
+            &mut Unmetered,
+            &mut ObservationWorld,
+        )
+        .unwrap();
         let root = pair.root;
         pair.set_answer_checkpoint_failure(true);
         assert!(matches!(
