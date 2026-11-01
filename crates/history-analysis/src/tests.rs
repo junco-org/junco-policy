@@ -314,10 +314,10 @@ fn a_forbid_all_rule_makes_a_narrower_rule_redundant_without_a_step() {
     let broad = analyzer
         .add_rule(&rule(RuleMode::Forbid, Some(NET), RegexExpr::all()))
         .unwrap();
-    let verdict = analyzer.redundant(narrow, &[narrow, broad]);
+    let verdict = analyzer.redundant(narrow, &[narrow, broad]).unwrap();
     assert!(verdict.holds());
     assert_eq!(verdict.stats.expanded, 0);
-    assert!(!analyzer.redundant(broad, &[narrow, broad]).holds());
+    assert!(!analyzer.redundant(broad, &[narrow, broad]).unwrap().holds());
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn coverage_splits_on_the_head_constants_of_the_covering_rules() {
     let target = analyzer.add_rule(&any_resource).unwrap();
     let ids = [&only_x, &after_read, &without_read].map(|rule| analyzer.add_rule(rule).unwrap());
 
-    let verdict = analyzer.covered(target, &ids[..2]);
+    let verdict = analyzer.covered(target, &ids[..2]).unwrap();
     let Inclusion::Counterexample(counterexample) = verdict.inclusion else {
         panic!("resources other than x without a read are not covered");
     };
@@ -346,10 +346,20 @@ fn coverage_splits_on_the_head_constants_of_the_covering_rules() {
         "κ_R = x and κ_R ≠ x are separate cases"
     );
 
-    assert!(analyzer.covered(target, &ids).holds());
-    assert!(analyzer.at_least_as_strict(&ids, &[target]).holds());
+    assert!(analyzer.covered(target, &ids).unwrap().holds());
+    assert!(
+        analyzer
+            .at_least_as_strict(&ids, &[target])
+            .unwrap()
+            .holds()
+    );
     // Every rule of `ids` denies a subset of what `target` denies.
-    assert!(analyzer.at_least_as_strict(&[target], &ids).holds());
+    assert!(
+        analyzer
+            .at_least_as_strict(&[target], &ids)
+            .unwrap()
+            .holds()
+    );
 }
 
 #[test]
@@ -369,12 +379,12 @@ fn vacuity_distinguishes_rules_that_never_or_always_fire() {
     let sometimes = analyzer
         .add_rule(&rule(RuleMode::Require, None, read))
         .unwrap();
-    assert!(analyzer.never_fires(never).holds());
-    assert!(!analyzer.always_fires(never).holds());
-    assert!(analyzer.always_fires(always).holds());
-    assert!(!analyzer.never_fires(always).holds());
-    assert!(!analyzer.never_fires(sometimes).holds());
-    assert!(!analyzer.always_fires(sometimes).holds());
+    assert!(analyzer.never_fires(never).unwrap().holds());
+    assert!(!analyzer.always_fires(never).unwrap().holds());
+    assert!(analyzer.always_fires(always).unwrap().holds());
+    assert!(!analyzer.never_fires(always).unwrap().holds());
+    assert!(!analyzer.never_fires(sometimes).unwrap().holds());
+    assert!(!analyzer.always_fires(sometimes).unwrap().holds());
 }
 
 #[test]
@@ -460,7 +470,7 @@ fn a_head_constant_outside_a_declared_domain_matches_no_candidate() {
     let editing = analyzer
         .add_rule(&rule(RuleMode::Forbid, None, RegexExpr::all()))
         .unwrap();
-    assert!(analyzer.never_fires(staging).holds());
-    assert!(analyzer.covered(staging, &[]).holds());
-    assert!(!analyzer.covered(editing, &[staging]).holds());
+    assert!(analyzer.never_fires(staging).unwrap().holds());
+    assert!(analyzer.covered(staging, &[]).unwrap().holds());
+    assert!(!analyzer.covered(editing, &[staging]).unwrap().holds());
 }

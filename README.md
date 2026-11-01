@@ -54,20 +54,26 @@ preserves the event and opaque metadata. Denials and operational errors leave it
 a rule of `by`; `redundant`, `at_least_as_strict`, `never_fires`, and `always_fires` are
 built on it, and `tail_included(head, left, right)` decides one tail inclusion. A verdict is
 `Holds`, a shortest `Counterexample` (a candidate and the history before it), or `Exhausted`
-once a search exceeds `SearchOptions::max_items`, which is unbounded by default.
+once a search exceeds `SearchOptions::max_items` (unbounded by default) or the runtime's graph
+budget. Queries return `HistoryError` for any other runtime failure.
 
-Rules are validated and lowered by `junco_core::flatten_rule`, as for the runtime. Each
-question reduces to inclusions between tails, decided by a breadth-first search over the
-Brzozowski derivatives of `left ∩ ¬right`. A search state branches over classes of events
-rather than events: per component, a value that its tests mention or any other value. The
-candidate is case-split only where a test compares one of its components with a constant.
+Rules are validated and lowered by `junco_core::flatten_rule` and `lower_flat`, as for the
+runtime. Each question reduces to inclusions between tails, decided by a breadth-first search
+over the derivatives of `left ∩ ¬right`. The derivatives are the runtime's:
+`history_semantics::SymbolicLanguage` compiles the difference with the runtime's normalizing
+constructors and exposes its verified symbolic derivatives and successor interpretation, keyed
+by the truth values of the atoms a derivative tests. A search state branches over classes of
+events rather than events: per component, a value that its atoms mention or any other value.
+The candidate is case-split only where an atom compares one of its components with a constant.
 Components are infinite unless `Domains` declares their values, as an action enum should. A
-generic `Event` cannot be built from components, so a counterexample names each component by
-a constant or by a numbered fresh value.
+generic `Event` cannot be built from components, so a counterexample names each component by a
+constant or by a numbered fresh value.
 
-The analysis is native and unverified. Its tests replay every counterexample through
-`TracePolicy`, and a differential test compares the verdicts on random tail pairs, including
-counterexample lengths, with brute force over every history up to a length bound.
+Each search compiles one graph, so the runtime's 100 KiB graph budget bounds it: a few hundred
+states for small tails, fewer for tails with nested complements. The classes of events and the
+search are unverified. Their tests replay every counterexample through `TracePolicy`, and a
+differential test compares the verdicts on random tail pairs, including counterexample lengths,
+with brute force over every history up to a length bound.
 
 ## Lock policy
 
@@ -131,7 +137,9 @@ native locks and Semantics `cache` enables optional precompilation; neither impl
 `runtime`. Runtime also supports no_std + alloc. The root lock consumer selects core/Syntax
 `std`, Store `runtime,std`, and Semantics `runtime,std,cache`. Semantics `test-util` is a
 dev-only integration probe feature, not a production dependency or a retained-prefix-cache switch.
-Analysis has no features; it is no_std + alloc and outside the Verus job.
+Analysis has no features; it is no_std + alloc and outside the Verus job. It uses Semantics
+`runtime` through `SymbolicLanguage`, a native facade like `TracePolicy` that owns a compiled
+pair and calls only verified graph operations.
 
 Body proofs cover DSL structure/lowering, constant encoding under later codebook extensions,
 the numeric compiler/evaluator, raw-to-numeric history correspondence, and cached lifecycle

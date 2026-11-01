@@ -29,6 +29,9 @@ pub mod runtime;
 pub(crate) mod symbolic;
 #[cfg(feature = "runtime")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime")))]
+pub mod symbolic_language;
+#[cfg(feature = "runtime")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime")))]
 pub mod validator;
 #[cfg(all(verus_keep_ghost, feature = "runtime"))]
 pub mod verify;
@@ -44,6 +47,8 @@ pub use error::PolicyError;
 pub use policy::{PolicyDecision, TraceDiagnostic, TracePolicy, TraceRule};
 #[cfg(feature = "runtime")]
 pub use runtime::{BatchCursor, RuleRuntime};
+#[cfg(feature = "runtime")]
+pub use symbolic_language::SymbolicLanguage;
 #[cfg(feature = "runtime")]
 pub use validator::{Decision, Denial, Validator, ValidatorBuilder};
 
