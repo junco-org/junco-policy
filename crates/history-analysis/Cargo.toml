@@ -8,7 +8,8 @@ publish = false
 
 [dependencies]
 history-syntax = { path = "../history-syntax", default-features = false }
-junco-core = { path = "../junco-core", default-features = false }
+junco-core = { path = "../junco-core", default-features = false, features = ["runtime"] }
+history-semantics = { path = "../history-semantics", default-features = false, features = ["runtime"] }
 hashbrown = { version = "0.17", default-features = false, features = ["default-hasher"] }
 smallvec = { version = "=1.16.2", default-features = false }
 

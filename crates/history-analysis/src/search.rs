@@ -1,17 +1,23 @@
 //! The breadth-first search for a counterexample.
 //!
-//! A search state pairs a constraint on the candidate with a normal-form residual. Expanding a
-//! state derives its residual once per step of its constraint and first atoms; a successor is
-//! discarded if its residual is `∅` or the same state was inserted before. The first expanded
-//! state whose residual accepts the empty history ends the search, and its parent chain yields a
-//! counterexample of minimum length.
+//! A search state pairs a constraint on the candidate with a residual of the runtime's
+//! [`SymbolicLanguage`]. Expanding a state derives its residual once, splits the constraint and
+//! builds letters from the atoms the derivative tests, and interprets the derivative under each
+//! letter's truth values. A successor is discarded if its residual is `∅` or the same state was
+//! inserted before. The first expanded state whose residual accepts the empty history ends the
+//! search, and its parent chain yields a counterexample of minimum length.
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use hashbrown::HashSet;
+use history_semantics::SymbolicLanguage;
+use junco_core::HistoryError;
+use junco_core::kernel::{Primitive, RegexId, Term};
+use smallvec::{SmallVec, smallvec};
 
-use crate::constraint::{Constraint, ConstraintId, ConstraintTable, Letter, Universes, steps};
-use crate::expression::{ExprId, Expressions};
+use crate::constraint::{
+    Atom, ConstId, Constraint, ConstraintId, ConstraintTable, Letter, Operand, Universes, steps,
+};
 
 /// Search configuration.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -57,19 +63,18 @@ pub(crate) struct Refutation {
     pub(crate) letters: Vec<Letter>,
 }
 
-/// Searches breadth-first for a history in `residual` under some valuation satisfying
+/// Searches breadth-first for a history in `language` under some valuation satisfying
 /// `constraint`.
 pub(crate) fn search(
-    expressions: &mut Expressions,
+    language: &mut SymbolicLanguage,
     universes: &Universes,
     constraint: Constraint,
-    residual: ExprId,
     options: SearchOptions,
     stats: &mut SearchStats,
-) -> SearchOutcome {
+) -> Result<SearchOutcome, HistoryError> {
     stats.searches += 1;
     let mut search = Search {
-        expressions,
+        language,
         universes,
         options,
         stats,
@@ -78,7 +83,8 @@ pub(crate) fn search(
         seen: HashSet::new(),
     };
     let constraint = search.constraints.intern(constraint);
-    search.insert(constraint, residual, None);
+    let root = search.language.root();
+    search.insert(constraint, root, None);
     search.run()
 }
 
@@ -86,73 +92,78 @@ pub(crate) fn search(
 #[derive(Clone, Copy)]
 struct Item {
     constraint: ConstraintId,
-    residual: ExprId,
+    residual: RegexId,
     parent: Option<(usize, Letter)>,
 }
 
 struct Search<'search> {
-    expressions: &'search mut Expressions,
+    language: &'search mut SymbolicLanguage,
     universes: &'search Universes,
     options: SearchOptions,
     stats: &'search mut SearchStats,
     constraints: ConstraintTable,
     /// Inserted states, in insertion order, which is also the order of expansion.
     items: Vec<Item>,
-    seen: HashSet<(ConstraintId, ExprId)>,
+    seen: HashSet<(ConstraintId, RegexId)>,
 }
 
 impl Search<'_> {
-    fn run(&mut self) -> SearchOutcome {
+    fn run(&mut self) -> Result<SearchOutcome, HistoryError> {
         let mut next = 0;
         while next < self.items.len() {
-            if self.expressions.nullable(self.items[next].residual) {
-                return self.counterexample(next);
+            if self.language.nullable(self.items[next].residual)? {
+                return Ok(self.counterexample(next));
             }
             if self
                 .options
                 .max_items
                 .is_some_and(|budget| self.items.len() > budget)
             {
-                return SearchOutcome::Exhausted;
+                return Ok(SearchOutcome::Exhausted);
             }
-            self.expand(next);
+            self.expand(next)?;
             next += 1;
         }
-        SearchOutcome::Holds
+        Ok(SearchOutcome::Holds)
     }
 
-    /// Inserts the derivative of the item by each step of its constraint and first atoms.
-    fn expand(&mut self, index: usize) {
+    /// Inserts the successor of the item by each step of its constraint and the atoms its
+    /// derivative tests.
+    fn expand(&mut self, index: usize) -> Result<(), HistoryError> {
         self.stats.expanded += 1;
         let Item {
             constraint,
             residual,
             ..
         } = self.items[index];
-        let branches = steps(
-            self.constraints.get(constraint),
-            self.expressions.first(residual),
-            self.universes,
-        );
+        let (transition, primitives) = self.language.derive(residual)?;
+        let atoms = primitives
+            .into_iter()
+            .map(atom)
+            .collect::<Result<Vec<_>, _>>()?;
+        let branches = steps(self.constraints.get(constraint), &atoms, self.universes);
         for (refined, letters) in branches {
             let refined = self.constraints.intern(refined);
             for letter in letters {
                 self.stats.steps += 1;
                 self.stats.generated += 1;
-                let successor = self.expressions.derive(residual, &letter);
+                let successor = self
+                    .language
+                    .successor(transition, &truth(&atoms, &letter))?;
                 self.insert(refined, successor, Some((index, letter)));
             }
         }
+        Ok(())
     }
 
     /// Queues a state unless its residual is `∅` or the same state was inserted before.
     fn insert(
         &mut self,
         constraint: ConstraintId,
-        residual: ExprId,
+        residual: RegexId,
         parent: Option<(usize, Letter)>,
     ) {
-        if residual == ExprId::EMPTY {
+        if self.language.is_empty(residual) {
             self.stats.dead += 1;
             return;
         }
@@ -182,4 +193,37 @@ impl Search<'_> {
             letters,
         }))
     }
+}
+
+/// The atom of a compiled primitive. Compiled tails encode each constant as its constant id, and
+/// a tail variable names the candidate's value of its own component.
+fn atom(primitive: Primitive) -> Result<Atom, HistoryError> {
+    let Primitive::Eq { field, term } = primitive;
+    let operand = match term {
+        Term::Constant(code) => Operand::Constant(
+            ConstId::try_from(code)
+                .map_err(|_| HistoryError::invariant("constant code is not a constant id"))?,
+        ),
+        Term::Variable(component) if component == field => Operand::Register,
+        Term::Variable(_) => {
+            return Err(HistoryError::invariant(
+                "tail variable compared with another component",
+            ));
+        }
+    };
+    Ok(Atom {
+        component: field.index(),
+        operand,
+    })
+}
+
+/// Truth words of `atoms` under `letter`: bit `i % 64` of word `i / 64` is atom `i`.
+fn truth(atoms: &[Atom], letter: &Letter) -> SmallVec<[u64; 2]> {
+    let mut words: SmallVec<[u64; 2]> = smallvec![0; atoms.len().div_ceil(64)];
+    for (index, atom) in atoms.iter().enumerate() {
+        if letter.holds(*atom) {
+            words[index / 64] |= 1 << (index % 64);
+        }
+    }
+    words
 }

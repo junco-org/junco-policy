@@ -9,17 +9,18 @@
 //!
 //! Each question reduces to inclusions `left ⊑ right` between tails under a constraint on the
 //! candidate. An inclusion is decided by a breadth-first search for a counterexample among the
-//! Brzozowski derivatives of `left ∩ ¬right`:
+//! derivatives of `left ∩ ¬right`. These are the runtime's own: the difference is compiled into a
+//! [`history_semantics::SymbolicLanguage`] and stepped by its verified symbolic derivatives and
+//! successor interpretation.
 //!
 //! - each search state branches over finitely many classes of events: per component, one of the
-//!   values that the state's tests mention, or any other value;
-//! - the constraint on the candidate is split only where a test compares one of its components
+//!   values that its derivative's atoms mention, or any other value. A class's successor is the
+//!   runtime's successor for the truth values the atoms take on it;
+//! - the constraint on the candidate is split only where an atom compares one of its components
 //!   with a constant;
-//! - residuals stay in a normal form given by four local rules (flat, sorted, duplicate-free unions
-//!   and intersections without their unit, collapsing to their absorber when it, or a child beside
-//!   its complement, occurs; `¬∅ = Σ*`, `¬Σ* = ∅`, `¬¬x = x`; binary concatenation without `∅` or
-//!   `ε` factors; `∅* = ε* = ε`, `(Σ*)* = Σ*`). With exactly these rules every expression has
-//!   finitely many iterated derivatives, so the search terminates;
+//! - the runtime keeps residuals in a normal form whose unions and intersections are flat, sorted
+//!   and duplicate-free, so every residual has finitely many iterated derivatives and the search
+//!   terminates;
 //! - states are compared by identity only, so a reported counterexample is a shortest one.
 //!
 //! A component is assumed to have more values than the rules mention, unless [`Domains`] declares
@@ -27,8 +28,9 @@
 //! value ([`Value`]), because a generic [`Event`](history_syntax::Event) cannot be built from
 //! components.
 //!
-//! Rules are validated and lowered by [`junco_core::flatten_rule`], as for the runtime. The
-//! analysis itself is not verified.
+//! Rules are validated and lowered by [`junco_core::flatten_rule`] and [`junco_core::lower_flat`],
+//! as for the runtime. A search's graph has the runtime's fixed budget; a search that exceeds it
+//! is reported as [`Inclusion::Exhausted`]. The classes of events and the search are not verified.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -38,8 +40,8 @@ extern crate alloc;
 
 mod analyzer;
 mod constraint;
-mod expression;
 mod search;
+mod tables;
 
 #[cfg(test)]
 mod tests;

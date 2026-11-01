@@ -101,7 +101,10 @@ impl CompiledPair {
                 ==> language::no_internal_error(result),
             result matches Ok(set) ==> transition@ < atoms@.len() && atoms@[transition@ as int] == Some(*set),
     )]
-    fn cached_atoms(atoms: &[Option<AtomSet>], transition: TransitionId) -> KernelResult<&AtomSet> {
+    pub(crate) fn cached_atoms(
+        atoms: &[Option<AtomSet>],
+        transition: TransitionId,
+    ) -> KernelResult<&AtomSet> {
         match atoms.get(transition.index()?) {
             Some(Some(set)) => Ok(set),
             _ => Err(HistoryError::invariant("missing transition atoms")),
@@ -322,7 +325,7 @@ impl CompiledPair {
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result is Ok ==> has_atoms(*final(self), transition),
     )]
-    fn ensure_atoms<L: Limits>(
+    pub(crate) fn ensure_atoms<L: Limits>(
         &mut self,
         transition: TransitionId,
         limits: &mut L,
@@ -991,7 +994,7 @@ impl CompiledPair {
     )]
     /// Cached or freshly interpreted successor of `key`; every entry it publishes is covered by
     /// `successor_entries_wf`, so callers read the language equivalence from `pair_wf`.
-    fn successor<L: Limits>(
+    pub(crate) fn successor<L: Limits>(
         &mut self,
         key: EventClass,
         limits: &mut L,

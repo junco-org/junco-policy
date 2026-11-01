@@ -3,19 +3,21 @@
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
-use history_syntax::{Event, Head, RegexExpr, Rule, RuleMode};
-use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
+use history_semantics::SymbolicLanguage;
+use history_syntax::{Component, Event, Head, RegexExpr, Rule, RuleMode};
+use junco_core::compile::validate_component;
+use junco_core::flat::{FlatHead, FlatPair, FlatRegex};
 use junco_core::limits::Unmetered;
 use junco_core::observation::ObservationWorld;
-use junco_core::{CompileError, ComponentValue, flatten_rule};
-use smallvec::SmallVec;
+use junco_core::{
+    CompileError, ComponentValue, FlatEncoder, HistoryError, flatten_rule, lower_flat,
+};
 
 use crate::constraint::{
-    Atom, COMPONENTS, Class, ConstId, Constraint, Letter, Operand, Operands, RegisterConstraint,
-    Universes, split,
+    COMPONENTS, Class, ConstId, Constraint, Letter, Operands, RegisterConstraint, Universes, split,
 };
-use crate::expression::{ExprId, Expressions, TestId};
 use crate::search::{SearchOptions, SearchOutcome, SearchStats, search};
+use crate::tables::Tables;
 
 /// Handle of a rule added to a [`PolicyAnalyzer`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -109,7 +111,8 @@ pub enum Inclusion<E: Event> {
     Holds,
     /// The inclusion fails; the counterexample witnesses it.
     Counterexample(Counterexample<E>),
-    /// A search exceeded [`SearchOptions::max_items`] before deciding.
+    /// A search exceeded [`SearchOptions::max_items`] or the runtime's graph budget before
+    /// deciding.
     Exhausted,
 }
 
@@ -159,12 +162,21 @@ impl<E: Event> Constants<E> {
     }
 }
 
+/// Encodes each constant as its constant id, so compiled tails compare constant ids.
+impl<E: Event> FlatEncoder<ComponentValue<E>> for Constants<E> {
+    fn encode(&mut self, field: Component, value: &ComponentValue<E>) -> Result<u64, HistoryError> {
+        validate_component(field, value)?;
+        Ok(u64::from(self.intern(*value)))
+    }
+}
+
 /// One analysed rule: its head constants, the constraint they impose on the candidate (`None` if
-/// no candidate can match), and the language of histories it denies.
+/// no candidate can match), and its tail with every constant encoded as its constant id.
 struct AnalyzedRule {
     constants: [Option<ConstId>; COMPONENTS],
     constraint: Option<Constraint>,
-    denial: ExprId,
+    mode: RuleMode,
+    tail: FlatPair<u64>,
 }
 
 /// A counterexample component before its constant is resolved.
@@ -233,14 +245,13 @@ enum Slot {
 /// let mut analyzer = PolicyAnalyzer::new(domains);
 /// let narrow = analyzer.add_rule(&Rule::new(RuleMode::Forbid, head.clone(), ever_read))?;
 /// let broad = analyzer.add_rule(&Rule::new(RuleMode::Forbid, head, RegexExpr::all()))?;
-/// assert!(analyzer.redundant(narrow, &[narrow, broad]).holds());
-/// assert!(!analyzer.redundant(broad, &[narrow, broad]).holds());
+/// assert!(analyzer.redundant(narrow, &[narrow, broad])?.holds());
+/// assert!(!analyzer.redundant(broad, &[narrow, broad])?.holds());
 /// # Ok::<(), junco_core::CompileError>(())
 /// ```
 pub struct PolicyAnalyzer<E: Event> {
     constants: Constants<E>,
     universes: Universes,
-    expressions: Expressions,
     rules: Vec<AnalyzedRule>,
     options: SearchOptions,
 }
@@ -271,7 +282,6 @@ impl<E: Event> PolicyAnalyzer<E> {
         Self {
             constants,
             universes,
-            expressions: Expressions::default(),
             rules: Vec::new(),
             options,
         }
@@ -291,15 +301,12 @@ impl<E: Event> PolicyAnalyzer<E> {
     pub fn add_rule(&mut self, rule: &Rule<E>) -> Result<RuleId, CompileError> {
         let flat = flatten_rule(rule, &mut Unmetered, &mut ObservationWorld)?;
         let constants = self.head_constants(&flat.source.head);
-        let tail = self.lower(&flat.source);
-        let denial = match flat.mode {
-            RuleMode::Forbid => tail,
-            RuleMode::Require => self.expressions.not(tail),
-        };
+        let tail = self.encode(&flat.source)?;
         self.rules.push(AnalyzedRule {
             constants,
             constraint: Constraint::head(constants, &self.universes),
-            denial,
+            mode: flat.mode,
+            tail,
         });
         Ok(RuleId(self.rules.len() - 1))
     }
@@ -308,18 +315,22 @@ impl<E: Event> PolicyAnalyzer<E> {
     ///
     /// A counterexample is a candidate and history that `rule` denies and no rule of `by` denies.
     ///
+    /// # Errors
+    /// Fails if the runtime fails to compile or derive a tail, other than by exceeding its graph
+    /// budget, which yields [`Inclusion::Exhausted`]. The other queries fail likewise.
+    ///
     /// # Panics
     /// Panics if a [`RuleId`] was not returned by this analyzer.
-    pub fn covered(&mut self, rule: RuleId, by: &[RuleId]) -> Verdict<E> {
+    pub fn covered(&self, rule: RuleId, by: &[RuleId]) -> Result<Verdict<E>, HistoryError> {
         let mut stats = SearchStats::default();
-        let inclusion = self.covered_with(rule, by, &mut stats);
-        Verdict { inclusion, stats }
+        let inclusion = self.covered_with(rule, by, &mut stats)?;
+        Ok(Verdict { inclusion, stats })
     }
 
     /// Whether `rule` is redundant in `policy`: covered by the policy's other rules.
     ///
     /// A counterexample is a candidate and history that only `rule` denies.
-    pub fn redundant(&mut self, rule: RuleId, policy: &[RuleId]) -> Verdict<E> {
+    pub fn redundant(&self, rule: RuleId, policy: &[RuleId]) -> Result<Verdict<E>, HistoryError> {
         let others = policy
             .iter()
             .copied()
@@ -331,32 +342,40 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// Whether `stricter` denies everything that `than` denies.
     ///
     /// A counterexample is a candidate and history that `than` denies and `stricter` grants.
-    pub fn at_least_as_strict(&mut self, stricter: &[RuleId], than: &[RuleId]) -> Verdict<E> {
+    pub fn at_least_as_strict(
+        &self,
+        stricter: &[RuleId],
+        than: &[RuleId],
+    ) -> Result<Verdict<E>, HistoryError> {
         let mut stats = SearchStats::default();
         for rule in than {
-            let inclusion = self.covered_with(*rule, stricter, &mut stats);
+            let inclusion = self.covered_with(*rule, stricter, &mut stats)?;
             if !matches!(inclusion, Inclusion::Holds) {
-                return Verdict { inclusion, stats };
+                return Ok(Verdict { inclusion, stats });
             }
         }
-        Verdict {
+        Ok(Verdict {
             inclusion: Inclusion::Holds,
             stats,
-        }
+        })
     }
 
     /// Whether `rule` never denies.
     ///
     /// A counterexample is a candidate and history that `rule` denies.
-    pub fn never_fires(&mut self, rule: RuleId) -> Verdict<E> {
-        self.rule_query(rule, |denial| (denial, ExprId::EMPTY))
+    pub fn never_fires(&self, rule: RuleId) -> Result<Verdict<E>, HistoryError> {
+        self.rule_query(rule, |tables, denial| {
+            Ok((denial, tables.push(FlatRegex::Empty)?))
+        })
     }
 
     /// Whether `rule` denies every candidate its head matches, whatever the history.
     ///
     /// A counterexample is a matching candidate and a history that `rule` grants.
-    pub fn always_fires(&mut self, rule: RuleId) -> Verdict<E> {
-        self.rule_query(rule, |denial| (ExprId::ALL, denial))
+    pub fn always_fires(&self, rule: RuleId) -> Result<Verdict<E>, HistoryError> {
+        self.rule_query(rule, |tables, denial| {
+            Ok((tables.push(FlatRegex::All)?, denial))
+        })
     }
 
     /// Whether, for every candidate that `head` matches, every history in `left` is in `right`.
@@ -380,10 +399,14 @@ impl<E: Event> PolicyAnalyzer<E> {
             &mut ObservationWorld,
         )?;
         let constants = self.head_constants(&left.source.head);
-        let (left, right) = (self.lower(&left.source), self.lower(&right.source));
+        let (left, right) = (self.encode(&left.source)?, self.encode(&right.source)?);
         let mut stats = SearchStats::default();
         let inclusion = match Constraint::head(constants, &self.universes) {
-            Some(constraint) => self.decide(constraint, left, right, &mut stats),
+            Some(constraint) => {
+                let mut tables = Tables::default();
+                let (left, right) = (tables.append(&left)?, tables.append(&right)?);
+                self.decide(constraint, tables.difference(left, right)?, &mut stats)?
+            }
             None => Inclusion::Holds,
         };
         Ok(Verdict { inclusion, stats })
@@ -400,104 +423,52 @@ impl<E: Event> PolicyAnalyzer<E> {
         })
     }
 
-    /// The normal form of a lowered tail, built bottom-up by the smart constructors.
-    fn lower(&mut self, source: &FlatPair<ComponentValue<E>>) -> ExprId {
-        let mut tests = Vec::<TestId>::with_capacity(source.tests.len());
-        for test in &source.tests {
-            let test = match test {
-                FlatTest::Bool(value) => self.expressions.test_bool(*value),
-                FlatTest::Atom {
-                    field,
-                    term,
-                    positive,
-                } => {
-                    let operand = match term {
-                        FlatTerm::Constant(value) => {
-                            Operand::Constant(self.constants.intern(*value))
-                        }
-                        // Lowering resolves a variable only in its own component.
-                        FlatTerm::Variable(_) => Operand::Register,
-                    };
-                    let atom = Atom {
-                        component: field.index(),
-                        operand,
-                    };
-                    self.expressions.test_atom(atom, *positive)
-                }
-                FlatTest::And(children) => {
-                    let children = children
-                        .iter()
-                        .map(|child| tests[*child as usize])
-                        .collect::<SmallVec<[TestId; 4]>>();
-                    self.expressions.test_and(&children)
-                }
-                FlatTest::Or(children) => {
-                    let children = children
-                        .iter()
-                        .map(|child| tests[*child as usize])
-                        .collect::<SmallVec<[TestId; 4]>>();
-                    self.expressions.test_or(&children)
-                }
-            };
-            tests.push(test);
-        }
-        let mut regexes = Vec::<ExprId>::with_capacity(source.regexes.len());
-        for regex in &source.regexes {
-            let expressions = &mut self.expressions;
-            let regex = match regex {
-                FlatRegex::Empty => ExprId::EMPTY,
-                FlatRegex::All => ExprId::ALL,
-                FlatRegex::Epsilon => ExprId::EPSILON,
-                FlatRegex::Test(test) => expressions.test(tests[*test as usize]),
-                FlatRegex::Union(children) => {
-                    expressions.union(children.iter().map(|child| regexes[*child as usize]))
-                }
-                FlatRegex::Intersect(children) => {
-                    expressions.intersect(children.iter().map(|child| regexes[*child as usize]))
-                }
-                // Concatenation is binary in normal form; associate it to the right.
-                FlatRegex::Concat(children) => {
-                    children.iter().rev().fold(ExprId::EPSILON, |tail, child| {
-                        expressions.concat(regexes[*child as usize], tail)
-                    })
-                }
-                FlatRegex::Star(child) => expressions.star(regexes[*child as usize]),
-                FlatRegex::Complement(child) => expressions.not(regexes[*child as usize]),
-            };
-            regexes.push(regex);
-        }
-        regexes[source.root as usize]
+    /// `source` with each constant replaced by its constant id.
+    fn encode(
+        &mut self,
+        source: &FlatPair<ComponentValue<E>>,
+    ) -> Result<FlatPair<u64>, HistoryError> {
+        lower_flat(
+            source,
+            &mut self.constants,
+            &mut Unmetered,
+            &mut ObservationWorld,
+        )
     }
 
+    /// Decides `left ⊑ right` for one rule, with both sides built from the rule's denial.
     fn rule_query(
-        &mut self,
+        &self,
         rule: RuleId,
-        sides: impl FnOnce(ExprId) -> (ExprId, ExprId),
-    ) -> Verdict<E> {
+        sides: impl FnOnce(&mut Tables, u32) -> Result<(u32, u32), HistoryError>,
+    ) -> Result<Verdict<E>, HistoryError> {
         let analyzed = &self.rules[rule.0];
-        let (constraint, (left, right)) = (analyzed.constraint.clone(), sides(analyzed.denial));
         let mut stats = SearchStats::default();
-        let inclusion = match constraint {
-            Some(constraint) => self.decide(constraint, left, right, &mut stats),
+        let inclusion = match analyzed.constraint.clone() {
+            Some(constraint) => {
+                let mut tables = Tables::default();
+                let denial = tables.denial(&analyzed.tail, analyzed.mode)?;
+                let (left, right) = sides(&mut tables, denial)?;
+                self.decide(constraint, tables.difference(left, right)?, &mut stats)?
+            }
             // No candidate matches the head, so the rule denies nothing.
             None => Inclusion::Holds,
         };
-        Verdict { inclusion, stats }
+        Ok(Verdict { inclusion, stats })
     }
 
     /// Splits on the head constants of `by` and decides one inclusion per case: under each case,
     /// every head of `by` either matches every candidate or none.
     fn covered_with(
-        &mut self,
+        &self,
         rule: RuleId,
         by: &[RuleId],
         stats: &mut SearchStats,
-    ) -> Inclusion<E> {
+    ) -> Result<Inclusion<E>, HistoryError> {
         let analyzed = &self.rules[rule.0];
         let Some(constraint) = analyzed.constraint.clone() else {
-            return Inclusion::Holds;
+            return Ok(Inclusion::Holds);
         };
-        let denial = analyzed.denial;
         let operands = Operands::pairs(by.iter().flat_map(|other| {
             self.rules[other.0]
                 .constants
@@ -506,47 +477,50 @@ impl<E: Event> PolicyAnalyzer<E> {
                 .filter_map(|(component, value)| value.map(|value| (component, value)))
         }));
         for case in split(&constraint, &operands, &self.universes) {
-            let matching = by
-                .iter()
-                .filter(|other| {
-                    self.rules[other.0]
-                        .constraint
-                        .as_ref()
-                        .is_some_and(|theirs| case.entails(theirs))
-                })
-                .map(|other| self.rules[other.0].denial)
-                .collect::<Vec<_>>();
-            let covering = self.expressions.union(matching);
-            let inclusion = self.decide(case, denial, covering, stats);
+            let mut tables = Tables::default();
+            let denial = tables.denial(&analyzed.tail, analyzed.mode)?;
+            let mut matching = Vec::new();
+            for other in by {
+                let theirs = &self.rules[other.0];
+                if theirs.constraint.as_ref().is_some_and(|c| case.entails(c)) {
+                    matching.push(tables.denial(&theirs.tail, theirs.mode)?);
+                }
+            }
+            let covering = tables.push(FlatRegex::Union(matching))?;
+            let inclusion = self.decide(case, tables.difference(denial, covering)?, stats)?;
             if !matches!(inclusion, Inclusion::Holds) {
-                return inclusion;
+                return Ok(inclusion);
             }
         }
-        Inclusion::Holds
+        Ok(Inclusion::Holds)
     }
 
+    /// Decides whether `difference` is empty under `constraint`. Exceeding the runtime's graph
+    /// budget exhausts the search like exceeding [`SearchOptions::max_items`].
     fn decide(
-        &mut self,
+        &self,
         constraint: Constraint,
-        left: ExprId,
-        right: ExprId,
+        difference: FlatPair<u64>,
         stats: &mut SearchStats,
-    ) -> Inclusion<E> {
-        let excluded = self.expressions.not(right);
-        let difference = self.expressions.intersect([left, excluded]);
-        match search(
-            &mut self.expressions,
-            &self.universes,
-            constraint,
-            difference,
-            self.options,
-            stats,
-        ) {
-            SearchOutcome::Holds => Inclusion::Holds,
-            SearchOutcome::Exhausted => Inclusion::Exhausted,
-            SearchOutcome::Refuted(refutation) => Inclusion::Counterexample(
+    ) -> Result<Inclusion<E>, HistoryError> {
+        let outcome = SymbolicLanguage::compile(&difference).and_then(|mut language| {
+            search(
+                &mut language,
+                &self.universes,
+                constraint,
+                self.options,
+                stats,
+            )
+        });
+        match outcome {
+            Ok(SearchOutcome::Holds) => Ok(Inclusion::Holds),
+            Ok(SearchOutcome::Exhausted) | Err(HistoryError::GraphLimit { .. }) => {
+                Ok(Inclusion::Exhausted)
+            }
+            Ok(SearchOutcome::Refuted(refutation)) => Ok(Inclusion::Counterexample(
                 self.counterexample(&refutation.constraint, &refutation.letters),
-            ),
+            )),
+            Err(error) => Err(error),
         }
     }
 
