@@ -3,9 +3,10 @@
 //! A search state pairs a constraint on the candidate with a residual of the runtime's
 //! [`SymbolicLanguage`]. Expanding a state derives its residual once, splits the constraint and
 //! builds letters from the atoms the derivative tests, and interprets the derivative under each
-//! letter's truth values. A successor is discarded if its residual is `∅` or the same state was
-//! inserted before. The first expanded state whose residual accepts the empty history ends the
-//! search, and its parent chain yields a counterexample of minimum length.
+//! letter's truth values. A successor is discarded if its residual is `∅` or dead, if the same
+//! state was inserted before, or if an inserted state subsumes it (see [`crate::prune`]). The
+//! first expanded state whose residual accepts the empty history ends the search, and its parent
+//! chain yields a counterexample of minimum length.
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -18,6 +19,7 @@ use smallvec::{SmallVec, smallvec};
 use crate::constraint::{
     Atom, ConstId, Constraint, ConstraintId, ConstraintTable, Letter, Operand, Universes, steps,
 };
+use crate::prune::{Antichain, Decomposition};
 
 /// Search configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -53,10 +55,13 @@ pub struct SearchStats {
     pub inserted: usize,
     /// States expanded.
     pub expanded: usize,
-    /// States discarded because their residual is empty.
+    /// States discarded because their residual is `∅`, or dead: some part it requires has all of
+    /// its pieces among those it avoids.
     pub dead: usize,
     /// States discarded because an equal state was inserted before.
     pub repeated: usize,
+    /// States discarded because an inserted state subsumes them.
+    pub subsumed: usize,
     /// Letters expanded, summed over expanded states.
     pub steps: usize,
 }
@@ -96,10 +101,11 @@ pub(crate) fn search(
         constraints: ConstraintTable::default(),
         items: Vec::new(),
         seen: HashSet::new(),
+        antichain: Antichain::default(),
     };
     let constraint = search.constraints.intern(constraint);
     let root = search.language.root();
-    search.insert(constraint, root, None);
+    search.insert(constraint, root, None)?;
     search.run()
 }
 
@@ -120,6 +126,8 @@ struct Search<'search> {
     /// Inserted states, in insertion order, which is also the order of expansion.
     items: Vec<Item>,
     seen: HashSet<(ConstraintId, RegexId)>,
+    /// Inserted states, for subsumption.
+    antichain: Antichain,
 }
 
 impl Search<'_> {
@@ -165,33 +173,48 @@ impl Search<'_> {
                 let successor = self
                     .language
                     .successor(transition, &truth(&atoms, &letter))?;
-                self.insert(refined, successor, Some((index, letter)));
+                self.insert(refined, successor, Some((index, letter)))?;
             }
         }
         Ok(())
     }
 
-    /// Queues a state unless its residual is `∅` or the same state was inserted before.
+    /// Queues a state unless its residual is `∅` or dead, the same state was inserted before, or
+    /// an inserted state subsumes it.
     fn insert(
         &mut self,
         constraint: ConstraintId,
         residual: RegexId,
         parent: Option<(usize, Letter)>,
-    ) {
+    ) -> Result<(), HistoryError> {
         if self.language.is_empty(residual) {
             self.stats.dead += 1;
-            return;
+            return Ok(());
         }
         if !self.seen.insert((constraint, residual)) {
             self.stats.repeated += 1;
-            return;
+            return Ok(());
         }
+        let state = Decomposition::of(self.language, residual)?;
+        if state.dead(self.language)? {
+            self.stats.dead += 1;
+            return Ok(());
+        }
+        if self
+            .antichain
+            .subsumes(&self.constraints, constraint, &state)
+        {
+            self.stats.subsumed += 1;
+            return Ok(());
+        }
+        self.antichain.insert(constraint, state);
         self.items.push(Item {
             constraint,
             residual,
             parent,
         });
         self.stats.inserted += 1;
+        Ok(())
     }
 
     fn counterexample(&self, index: usize) -> SearchOutcome {
