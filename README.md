@@ -69,6 +69,14 @@ Components are infinite unless `Domains` declares their values, as an action enu
 generic `Event` cannot be built from components, so a counterexample names each component by a
 constant or by a numbered fresh value.
 
+A residual of `left ∩ ¬right` intersects the parts it requires with the complements of the
+pieces it avoids, as a pair of a state of `left` and a macrostate of `right` does, and the search
+prunes with antichains on that shape. It does not insert a state whose residual is dead, with some
+required part having all of its pieces among the avoided ones, or that an inserted state subsumes:
+its constraint entails that state's, and it requires all of that state's parts and avoids all of
+its pieces. Parts and pieces are compared by node identity. Inserted states are never removed, so
+counterexamples stay shortest.
+
 Each search compiles one graph with its own budget, through `CanonicalStore::with_budget`: 16 MiB
 unless `SearchOptions::graph_bytes` says otherwise, where the runtime keeps `MAX_GRAPH_BYTES`
 (100 KiB) per rule. The classes of events and the search are unverified. Their tests replay

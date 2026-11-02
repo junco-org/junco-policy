@@ -21,7 +21,12 @@
 //! - the runtime keeps residuals in a normal form whose unions and intersections are flat, sorted
 //!   and duplicate-free, so every residual has finitely many iterated derivatives and the search
 //!   terminates;
-//! - states are compared by identity only, so a reported counterexample is a shortest one.
+//! - a residual intersects the parts it requires with the complements of the pieces it avoids,
+//!   like a pair of a state and a macrostate, and the search prunes with antichains: it does not
+//!   insert a state whose residual is dead, some part having all of its pieces among the avoided
+//!   ones, or that an inserted state subsumes, entailing its constraint, requiring all of its
+//!   parts and avoiding all of its pieces. Inserted states are never removed, so a reported
+//!   counterexample is a shortest one.
 //!
 //! A component is assumed to have more values than the rules mention, unless [`Domains`] declares
 //! its values. Counterexamples name each component either by a constant or by a numbered fresh
@@ -41,6 +46,7 @@ extern crate alloc;
 
 mod analyzer;
 mod constraint;
+mod prune;
 mod search;
 mod tables;
 

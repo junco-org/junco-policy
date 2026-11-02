@@ -12,7 +12,9 @@ use history_syntax::{
 };
 
 use crate::constraint::{Atom, Constraint, Operand, Universes, steps};
-use crate::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, SearchOptions, Value};
+use crate::{
+    Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, RuleId, SearchOptions, Value,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Action {
@@ -362,6 +364,76 @@ fn coverage_splits_on_the_head_constants_of_the_covering_rules() {
     );
 }
 
+/// The document edits that the approval policy guards, and a secret.
+const DOC: u32 = 30;
+const SECRET: u32 = 31;
+
+/// Forbid rules on edits of `DOC`: `H` once the principal has done anything but edit or stage,
+/// which with the declared actions means read; for each program `i`, `S_i` while an edit of
+/// `100 + i` by the principal awaits a stage of `200 + i`; and the narrower `H'` once the principal
+/// has read `SECRET`. Returns `H'` and the policy, which holds it.
+fn approval_policy(analyzer: &mut PolicyAnalyzer<Access>, programs: u32) -> (RuleId, Vec<RuleId>) {
+    let mut tails = Vec::from([ever(TestExpr::and([
+        principal_is_p(),
+        action_is(Comparison::Neq, Action::Edit),
+        action_is(Comparison::Neq, Action::Stage),
+    ]))]);
+    for program in 0..programs {
+        let edit = TestExpr::and([
+            principal_is_p(),
+            action_is(Comparison::Eq, Action::Edit),
+            resource_is(Comparison::Eq, Some(100 + program)),
+        ]);
+        let unapproved = TestExpr::or([
+            action_is(Comparison::Neq, Action::Stage),
+            resource_is(Comparison::Neq, Some(200 + program)),
+        ]);
+        tails.push(RegexExpr::concat([
+            RegexExpr::all(),
+            RegexExpr::test(edit),
+            RegexExpr::star(RegexExpr::test(unapproved)),
+        ]));
+    }
+    tails.push(ever(TestExpr::and([
+        principal_is_p(),
+        action_is(Comparison::Eq, Action::Read),
+        resource_is(Comparison::Eq, Some(SECRET)),
+    ])));
+    let policy = tails
+        .into_iter()
+        .map(|tail| {
+            analyzer
+                .add_rule(&rule(RuleMode::Forbid, Some(DOC), tail))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    (*policy.last().unwrap(), policy)
+}
+
+#[test]
+fn a_policy_covers_its_own_rule_without_a_step() {
+    // The rule's tail is among the pieces that the residual avoids, so the residual is dead.
+    // Searched, it would track every set of pending approvals of the other rules.
+    let mut analyzer = PolicyAnalyzer::new(finite_actions());
+    let (_, policy) = approval_policy(&mut analyzer, 12);
+    let verdict = analyzer.covered(policy[1], &policy).unwrap();
+    assert!(verdict.holds());
+    assert_eq!(verdict.stats.expanded, 0);
+}
+
+#[test]
+fn the_initial_state_subsumes_every_set_of_pending_approvals() {
+    // A residual of `H' ∩ ¬(H ∪ S_0 ∪ …)` avoids the initial residual's pieces and, for each
+    // pending approval, `η_i*`, so the initial state subsumes all of them: one expansion where
+    // the search would otherwise expand one state per set of pending approvals.
+    let mut analyzer = PolicyAnalyzer::new(finite_actions());
+    let (narrow, policy) = approval_policy(&mut analyzer, 12);
+    let verdict = analyzer.redundant(narrow, &policy).unwrap();
+    assert!(verdict.holds());
+    assert_eq!(verdict.stats.expanded, 1);
+    assert!(verdict.stats.subsumed > 0);
+}
+
 #[test]
 fn vacuity_distinguishes_rules_that_never_or_always_fire() {
     let mut analyzer = PolicyAnalyzer::new(finite_actions());
@@ -406,19 +478,22 @@ fn a_budget_stops_the_search() {
 
 #[test]
 fn the_graph_budget_bounds_each_search() {
-    // The left side ends in a read ten events back; the search visits 2^10 states, more than
-    // the runtime's graph budget for one rule holds.
-    let ten_back = |test| {
-        let mut parts = Vec::from([RegexExpr::all(), RegexExpr::test(test)]);
-        parts.extend((0..10).map(|_| RegexExpr::test(TestExpr::True)));
+    // Both sides end in a read ten events back, but the right side tests its later events against
+    // the declared actions instead of `⊤`. The sides are equal under the domain, yet no state is
+    // dead or subsumed: the search tracks each pattern of reads among the last ten events, 2^10
+    // states, more than the runtime's graph budget for one rule holds.
+    let ten_back = |later: TestExpr<Access>| {
+        let mut parts = Vec::from([
+            RegexExpr::all(),
+            RegexExpr::test(action_is(Comparison::Eq, Action::Read)),
+        ]);
+        parts.extend((0..10).map(|_| RegexExpr::test(later.clone())));
         RegexExpr::concat(parts)
     };
-    let read = || action_is(Comparison::Eq, Action::Read);
-    let left = ten_back(read());
-    let right = ten_back(TestExpr::or([
-        read(),
-        action_is(Comparison::Eq, Action::Edit),
-    ]));
+    let left = ten_back(TestExpr::True);
+    let right = ten_back(TestExpr::or(
+        ACTIONS.map(|action| action_is(Comparison::Eq, action)),
+    ));
     let runtime_budget = SearchOptions {
         graph_bytes: junco_core::limits::MAX_GRAPH_BYTES,
         ..SearchOptions::default()
