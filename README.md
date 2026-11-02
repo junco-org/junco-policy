@@ -71,10 +71,14 @@ constant or by a numbered fresh value.
 
 A residual of `left ∩ ¬right` intersects the parts it requires with the complements of the
 pieces it avoids, as a pair of a state of `left` and a macrostate of `right` does, and the search
-prunes with antichains on that shape. It does not insert a state whose residual is dead, with some
-required part having all of its pieces among the avoided ones, or that an inserted state subsumes:
-its constraint entails that state's, and it requires all of that state's parts and avoids all of
-its pieces. Parts and pieces are compared by node identity. Inserted states are never removed, so
+prunes with antichains on that shape, up to simulation. It does not insert a state whose residual
+is dead, with some required part having each of its pieces below an avoided one, or that an
+inserted state subsumes: its constraint entails that state's, it requires all of that state's
+parts, and it avoids a piece above each of that state's pieces. "Below" is a syntactic simulation,
+a sound under-approximation of inclusion decided by memoised recursion on pairs of nodes: it
+compares unions, intersections, concatenations factor by factor, stars and complements
+structurally, and tests by their conjuncts and disjuncts. Parts are compared by identity, so
+inserted states are indexed by their parts. Inserted states are never removed, so
 counterexamples stay shortest.
 
 Each search compiles one graph with its own budget, through `CanonicalStore::with_budget`: 16 MiB

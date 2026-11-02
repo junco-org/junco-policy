@@ -20,6 +20,7 @@ use crate::constraint::{
     Atom, ConstId, Constraint, ConstraintId, ConstraintTable, Letter, Operand, Universes, steps,
 };
 use crate::prune::{Antichain, Decomposition};
+use crate::simulation::Simulation;
 
 /// Search configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -102,6 +103,7 @@ pub(crate) fn search(
         items: Vec::new(),
         seen: HashSet::new(),
         antichain: Antichain::default(),
+        simulation: Simulation::default(),
     };
     let constraint = search.constraints.intern(constraint);
     let root = search.language.root();
@@ -128,6 +130,8 @@ struct Search<'search> {
     seen: HashSet<(ConstraintId, RegexId)>,
     /// Inserted states, for subsumption.
     antichain: Antichain,
+    /// Simulation between the language's residuals, for the dead test and subsumption.
+    simulation: Simulation,
 }
 
 impl Search<'_> {
@@ -196,14 +200,17 @@ impl Search<'_> {
             return Ok(());
         }
         let state = Decomposition::of(self.language, residual)?;
-        if state.dead(self.language)? {
+        if state.dead(self.language, &mut self.simulation)? {
             self.stats.dead += 1;
             return Ok(());
         }
-        if self
-            .antichain
-            .subsumes(&self.constraints, constraint, &state)
-        {
+        if self.antichain.subsumes(
+            self.language,
+            &mut self.simulation,
+            &self.constraints,
+            constraint,
+            &state,
+        )? {
             self.stats.subsumed += 1;
             return Ok(());
         }
