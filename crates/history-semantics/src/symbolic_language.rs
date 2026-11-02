@@ -5,7 +5,8 @@
 //! interprets the derivative under those truth values. [`SymbolicLanguage`] exposes the first and
 //! last parts, so a caller that knows only which atoms hold, such as a static analysis over
 //! classes of events, follows exactly the runtime's derivatives and successors. It also reads the
-//! nodes of residuals, so such a caller can compare residuals by the shape of their normal forms.
+//! nodes of residuals and their tests, so such a caller can compare residuals by the shape of their
+//! normal forms.
 //!
 //! This is a native facade. Graph construction, derivatives, atom collection and successor
 //! interpretation are the verified runtime operations; the facade keeps their shared
@@ -17,7 +18,9 @@ use history_store::cache::EventClass;
 use history_store::graph::RuntimeKernel;
 use junco_core::error::HistoryError;
 use junco_core::flat::FlatPair;
-use junco_core::kernel::{KernelStore, Primitive, RegexId, RegexView, TestView, TransitionId};
+use junco_core::kernel::{
+    KernelStore, Primitive, RegexId, RegexView, TestId, TestView, TransitionId,
+};
 use junco_core::limits::Unmetered;
 use junco_core::observation::ObservationWorld;
 use smallvec::SmallVec;
@@ -79,6 +82,22 @@ impl SymbolicLanguage {
             world: &mut world,
         };
         Ok(read(kernel.regex(residual)?))
+    }
+
+    /// Reads the node of `test`: an atom, a constant, or the conjunction or disjunction of its
+    /// children, which are listed in increasing identifier order.
+    pub fn read_test<R>(
+        &mut self,
+        test: TestId,
+        read: impl FnOnce(TestView<'_>) -> R,
+    ) -> Result<R, HistoryError> {
+        let (mut limits, mut world) = (Unmetered, ObservationWorld);
+        let kernel = RuntimeKernel {
+            store: &mut self.pair.store,
+            limits: &mut limits,
+            world: &mut world,
+        };
+        Ok(read(kernel.test(test)?))
     }
 
     /// The derivative of `residual`, with the primitives of the positive atoms it tests in the

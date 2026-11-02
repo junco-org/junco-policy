@@ -1,18 +1,21 @@
-//! Pruning of search states by antichains.
+//! Pruning of search states by antichains, up to simulation.
 //!
 //! A residual of `left ∩ ¬right` in normal form keeps the shape of a pair of a state of `left` and
 //! a macrostate of `right`: it intersects the parts it requires with the complements of unions of
 //! the pieces it avoids, and its language is the parts' languages intersected, minus the pieces'
 //! languages. Two kinds of state need no expansion:
 //!
-//! - a *dead* state has a part all of whose pieces it avoids, so its language is empty;
-//! - a *subsumed* state entails the constraint of an inserted state, requires every part and
-//!   avoids every piece of it, so each of its counterexamples is one of the inserted state. This is
-//!   the antichain order on pairs of a state and a macrostate, extended to constraints.
+//! - a *dead* state has a part whose pieces each lie below a piece it avoids, so its language is
+//!   empty;
+//! - a *subsumed* state entails the constraint of an inserted state, requires every part of it,
+//!   and avoids a piece above each of its pieces, so each of its counterexamples is one of the
+//!   inserted state. This is the antichain order on pairs of a state and a macrostate, extended to
+//!   constraints and relaxed to simulation.
 //!
-//! Residuals are canonical, so parts and pieces are compared by identity. Inserted states are
-//! never removed: a subsumed state's counterexamples belong to a state inserted no later, so
-//! breadth-first order still reports a shortest counterexample.
+//! Pieces are compared by the syntactic simulation of [`crate::simulation`], which contains
+//! identity. Parts are compared by identity, so that inserted states can be indexed by their parts.
+//! Inserted states are never removed: a subsumed state's counterexamples belong to a state inserted
+//! no later, so breadth-first order still reports a shortest counterexample.
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -21,9 +24,10 @@ use hashbrown::HashMap;
 use history_semantics::SymbolicLanguage;
 use junco_core::HistoryError;
 use junco_core::kernel::{RegexId, RegexKindView};
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 
-use crate::constraint::{ConstraintId, ConstraintTable};
+use crate::constraint::{Constraint, ConstraintId, ConstraintTable};
+use crate::simulation::Simulation;
 
 /// Number of parts up to which a subsumption check looks up every subset of a state's parts.
 /// Beyond it, only states with the same parts are compared, which loses pruning, not soundness.
@@ -78,26 +82,26 @@ impl Decomposition {
         Ok(Self { parts, pieces })
     }
 
-    /// Whether some part has all of its pieces among the avoided ones, so that the residual has no
+    /// Whether some part has each of its pieces below an avoided piece, so that the residual has no
     /// histories.
-    pub(crate) fn dead(&self, language: &mut SymbolicLanguage) -> Result<bool, HistoryError> {
+    pub(crate) fn dead(
+        &self,
+        language: &mut SymbolicLanguage,
+        simulation: &mut Simulation,
+    ) -> Result<bool, HistoryError> {
         if self.pieces.is_empty() {
             return Ok(false);
         }
         for &part in &self.parts {
-            let covered = language.read_regex(part, |node| match node.kind {
-                RegexKindView::Union(children) => children.iter().all(|piece| self.avoids(*piece)),
-                _ => self.avoids(part),
+            let members = language.read_regex(part, |node| match node.kind {
+                RegexKindView::Union(children) => SmallVec::<[RegexId; 8]>::from_slice(children),
+                _ => smallvec![part],
             })?;
-            if covered {
+            if simulation.covered(language, &members, &self.pieces)? {
                 return Ok(true);
             }
         }
         Ok(false)
-    }
-
-    fn avoids(&self, piece: RegexId) -> bool {
-        self.pieces.binary_search(&piece).is_ok()
     }
 }
 
@@ -122,66 +126,79 @@ pub(crate) struct Antichain {
 struct Entry {
     constraint: ConstraintId,
     pieces: Box<[RegexId]>,
-    /// One hashed bit per piece, so that the signature of a subset is contained in the set's.
-    signature: u64,
 }
 
 impl Antichain {
     /// Whether an inserted state subsumes the state of `constraint` and `state`.
     pub(crate) fn subsumes(
         &self,
+        language: &mut SymbolicLanguage,
+        simulation: &mut Simulation,
         constraints: &ConstraintTable,
         constraint: ConstraintId,
         state: &Decomposition,
-    ) -> bool {
-        let signature = signature(&state.pieces);
+    ) -> Result<bool, HistoryError> {
         let constraint = constraints.get(constraint);
-        let covers = |entries: &Vec<Entry>| {
-            entries.iter().any(|entry| {
-                entry.signature & !signature == 0
-                    && subset(&entry.pieces, &state.pieces)
-                    && constraint.entails(constraints.get(entry.constraint))
-            })
-        };
         let parts = &state.parts;
         if parts.len() > ENUMERATED_PARTS {
-            return self.groups.get(parts).is_some_and(covers);
+            return self.group_subsumes(
+                language,
+                simulation,
+                constraints,
+                constraint,
+                parts,
+                state,
+            );
         }
-        (0..1_usize << parts.len()).any(|mask| {
+        for mask in 0_usize..1 << parts.len() {
             let subset = parts
                 .iter()
                 .enumerate()
                 .filter(|(bit, _)| mask & 1 << bit != 0)
                 .map(|(_, part)| *part)
                 .collect::<SmallVec<[RegexId; 4]>>();
-            self.groups.get(&subset).is_some_and(covers)
-        })
+            if self.group_subsumes(
+                language,
+                simulation,
+                constraints,
+                constraint,
+                &subset,
+                state,
+            )? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Whether an inserted state with exactly `parts` subsumes the state.
+    fn group_subsumes(
+        &self,
+        language: &mut SymbolicLanguage,
+        simulation: &mut Simulation,
+        constraints: &ConstraintTable,
+        constraint: &Constraint,
+        parts: &[RegexId],
+        state: &Decomposition,
+    ) -> Result<bool, HistoryError> {
+        let Some(entries) = self.groups.get(parts) else {
+            return Ok(false);
+        };
+        for entry in entries {
+            if constraint.entails(constraints.get(entry.constraint))
+                && simulation.covered(language, &entry.pieces, &state.pieces)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Records an inserted state.
     pub(crate) fn insert(&mut self, constraint: ConstraintId, state: Decomposition) {
-        let signature = signature(&state.pieces);
         self.groups.entry(state.parts).or_default().push(Entry {
             constraint,
             pieces: state.pieces.into_iter().collect(),
-            signature,
         });
     }
-}
-
-fn signature(pieces: &[RegexId]) -> u64 {
-    pieces.iter().fold(0, |signature, piece| {
-        signature | 1 << (u64::from(piece.get()).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 58)
-    })
-}
-
-/// Whether every member of `small` is in `large`; both are in increasing order.
-fn subset(small: &[RegexId], large: &[RegexId]) -> bool {
-    let mut large = large.iter();
-    small.iter().all(|piece| {
-        large
-            .by_ref()
-            .find(|other| *other >= piece)
-            .is_some_and(|other| other == piece)
-    })
 }

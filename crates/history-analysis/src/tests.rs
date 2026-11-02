@@ -151,9 +151,9 @@ fn included(left: &RegexExpr<Access>, right: &RegexExpr<Access>) -> bool {
 }
 
 #[test]
-fn since_is_included_in_once_with_one_expansion() {
-    // On a read, the left side becomes `since ∪ p*` and the right side `Σ*`, so the difference is
-    // empty; on any other event both sides are unchanged and the state repeats.
+fn since_is_included_in_once_without_a_step() {
+    // `Σ*·read·(P ≐ p)*` lies below `Σ*·read·Σ*` factor by factor, so the initial residual is
+    // dead.
     let since = RegexExpr::concat([
         RegexExpr::all(),
         RegexExpr::test(action_is(Comparison::Eq, Action::Read)),
@@ -163,8 +163,31 @@ fn since_is_included_in_once_with_one_expansion() {
     let mut analyzer = PolicyAnalyzer::new(finite_actions());
     let verdict = analyzer.tail_included(&head(), &since, &once).unwrap();
     assert!(verdict.holds());
-    assert_eq!(verdict.stats.expanded, 1);
+    assert_eq!(verdict.stats.expanded, 0);
     assert!(!included(&once, &since));
+}
+
+#[test]
+fn simulation_compares_counting_tails_factor_by_factor() {
+    // A read nine events before a final read is a read nine events before the end: `read ≤ ⊤`
+    // settles it at the root, where the search would track each pattern of reads among the
+    // last ten events.
+    let reads_then = |gap: usize, last: TestExpr<Access>| {
+        let mut factors = Vec::from([
+            RegexExpr::all(),
+            RegexExpr::test(action_is(Comparison::Eq, Action::Read)),
+        ]);
+        factors.extend((0..gap).map(|_| RegexExpr::test(TestExpr::True)));
+        factors.push(RegexExpr::test(last));
+        RegexExpr::concat(factors)
+    };
+    let left = reads_then(8, action_is(Comparison::Eq, Action::Read));
+    let right = reads_then(8, TestExpr::True);
+    let mut analyzer = PolicyAnalyzer::new(finite_actions());
+    let verdict = analyzer.tail_included(&head(), &left, &right).unwrap();
+    assert!(verdict.holds());
+    assert_eq!(verdict.stats.expanded, 0);
+    assert!(!included(&right, &left));
 }
 
 #[test]
@@ -371,7 +394,8 @@ const SECRET: u32 = 31;
 /// Forbid rules on edits of `DOC`: `H` once the principal has done anything but edit or stage,
 /// which with the declared actions means read; for each program `i`, `S_i` while an edit of
 /// `100 + i` by the principal awaits a stage of `200 + i`; and the narrower `H'` once the principal
-/// has read `SECRET`. Returns `H'` and the policy, which holds it.
+/// has read `SECRET`. Returns `H'` and the policy, which holds it. Stated this way, `H` covers `H'`
+/// only through the domain, which simulation does not see, so the search must step past the root.
 fn approval_policy(analyzer: &mut PolicyAnalyzer<Access>, programs: u32) -> (RuleId, Vec<RuleId>) {
     let mut tails = Vec::from([ever(TestExpr::and([
         principal_is_p(),
@@ -432,6 +456,25 @@ fn the_initial_state_subsumes_every_set_of_pending_approvals() {
     assert!(verdict.holds());
     assert_eq!(verdict.stats.expanded, 1);
     assert!(verdict.stats.subsumed > 0);
+}
+
+#[test]
+fn simulation_settles_a_narrower_rule_at_the_root() {
+    // `P ≐ p ∧ A ≐ read ∧ R ≐ secret` implies `P ≐ p ∧ A ≐ read` by its conjuncts, so the narrow
+    // tail lies below the broad one and the initial residual is dead.
+    let mut analyzer = PolicyAnalyzer::new(finite_actions());
+    let reads = TestExpr::and([principal_is_p(), action_is(Comparison::Eq, Action::Read)]);
+    let broad = analyzer
+        .add_rule(&rule(RuleMode::Forbid, Some(DOC), ever(reads.clone())))
+        .unwrap();
+    let secret = TestExpr::and([reads, resource_is(Comparison::Eq, Some(SECRET))]);
+    let narrow = analyzer
+        .add_rule(&rule(RuleMode::Forbid, Some(DOC), ever(secret)))
+        .unwrap();
+    let verdict = analyzer.redundant(narrow, &[broad, narrow]).unwrap();
+    assert!(verdict.holds());
+    assert_eq!(verdict.stats.expanded, 0);
+    assert!(!analyzer.redundant(broad, &[broad, narrow]).unwrap().holds());
 }
 
 #[test]
