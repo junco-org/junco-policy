@@ -17,6 +17,8 @@ use junco_core::observation::ObservationWorld;
 use junco_core::observation::SmallVecSpecFns;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_assumptions::KernelStoreSpec;
+#[cfg(verus_keep_ghost)]
+use junco_core::verify::history_specs::no_internal_error;
 use junco_core::{error::HistoryError, kernel::*};
 use verus_bumpalo::{AllocErr, CHUNK_ALIGN, SliceArena};
 use vstd::prelude::*;
@@ -88,6 +90,9 @@ const _: () = assert!(
         && align_of::<TestNode>() <= CHUNK_ALIGN
         && align_of::<RegexNode>() <= CHUNK_ALIGN
         && align_of::<TransitionNode>() <= CHUNK_ALIGN
+        && align_of::<TestId>() <= CHUNK_ALIGN
+        && align_of::<RegexId>() <= CHUNK_ALIGN
+        && align_of::<TransitionId>() <= CHUNK_ALIGN
         && ARENA_CAPACITY % align_of::<TestNode>() == 0
         && ARENA_CAPACITY % align_of::<RegexNode>() == 0
         && ARENA_CAPACITY % align_of::<TransitionNode>() == 0
@@ -164,6 +169,21 @@ pub(crate) enum TransitionNode {
 
 // Identity keys keep hash-consing over arena records, not lifted graph nodes.
 vstd::prelude::verus! {
+    // Pinned 64-bit native layouts, observed from the compiled Rust types.
+    // Verus erasure emits exact Rust const assertions, so compiler layout drift fails to build.
+    #[cfg(target_pointer_width = "64")]
+    global layout TestNode is size == 32, align == 8;
+    #[cfg(target_pointer_width = "64")]
+    global layout RegexNode is size == 24, align == 8;
+    #[cfg(target_pointer_width = "64")]
+    global layout TransitionNode is size == 16, align == 8;
+    #[cfg(target_pointer_width = "64")]
+    global layout TestId is size == 4, align == 4;
+    #[cfg(target_pointer_width = "64")]
+    global layout RegexId is size == 4, align == 4;
+    #[cfg(target_pointer_width = "64")]
+    global layout TransitionId is size == 4, align == 4;
+
     impl View for TestNode {
         type V = Self;
         open(in crate::graph) spec fn view(&self) -> Self { *self }
@@ -557,6 +577,10 @@ impl ArenaStorage {
 #[cfg(verus_keep_ghost)]
 verus! {
     impl ArenaStorage {
+        pub(crate) closed spec fn has_tables(&self) -> bool {
+            self.tables is Some
+        }
+
         #[verifier::type_invariant]
         closed spec fn inv(&self) -> bool {
             self.tables is Some ==> verify::tables_wf(&self.tables->0)
@@ -572,7 +596,9 @@ impl ArenaTables {
     )]
     #[verus_spec(result => ensures result matches Ok(t) ==> verify::tables_wf(&t)
         && verify::empty_tables(verify::tables_graph(&t))
-        && verify::tables_capacity(&t) == capacity && verify::tables_slack(&t) == 0)]
+        && verify::tables_capacity(&t) == capacity && verify::tables_slack(&t) == 0,
+        result matches Err(error) ==> error is Invariant || error is AllocationFailed,
+        verify::construction_layout(capacity) ==> no_internal_error(result))]
     #[allow(clippy::manual_is_multiple_of)]
     fn with_capacity(capacity: usize) -> KernelResult<Self> {
         vstd::layout::layout_for_type_is_valid::<TestNode>();
@@ -662,12 +688,14 @@ impl ArenaTables {
     #[verus_spec(result => requires verify::tables_wf(self), ensures
         result matches Ok(v) ==> index < verify::tables_graph(self).tests.len()
             && v@ == verify::tables_graph(self).tests[index as int],
-        result matches Err(error) ==> error is Invariant)]
+        result matches Err(error) ==> error is Invariant,
+        index < verify::tables_graph(self).tests.len() ==> result is Ok)]
     fn test(&self, index: usize) -> KernelResult<TestView<'_>> {
         if index >= self.tests.len() {
             return Err(HistoryError::invariant("invalid test ID"));
         }
         let node = self.tests.elem(index);
+        proof! { assert(verify::arena_test_wf(self, *node)); }
         Ok(match *node {
             TestNode::True => TestView::True,
             TestNode::False => TestView::False,
@@ -691,12 +719,14 @@ impl ArenaTables {
     #[verus_spec(result => requires verify::tables_wf(self), ensures
         result matches Ok(v) ==> index < verify::tables_graph(self).regexes.len()
             && v@ == verify::tables_graph(self).regexes[index as int],
-        result matches Err(error) ==> error is Invariant)]
+        result matches Err(error) ==> error is Invariant,
+        index < verify::tables_graph(self).regexes.len() ==> result is Ok)]
     fn regex(&self, index: usize) -> KernelResult<RegexView<'_>> {
         if index >= self.regexes.len() {
             return Err(HistoryError::invariant("invalid regex ID"));
         }
         let node = self.regexes.elem(index);
+        proof! { assert(verify::arena_regex_wf(self, *node)); }
         let kind = match node.kind {
             RegexKind::Empty => RegexKindView::Empty,
             RegexKind::All => RegexKindView::All,
@@ -725,12 +755,14 @@ impl ArenaTables {
     #[verus_spec(result => requires verify::tables_wf(self), ensures
         result matches Ok(v) ==> index < verify::tables_graph(self).transitions.len()
             && v@ == verify::tables_graph(self).transitions[index as int],
-        result matches Err(error) ==> error is Invariant)]
+        result matches Err(error) ==> error is Invariant,
+        index < verify::tables_graph(self).transitions.len() ==> result is Ok)]
     fn transition(&self, index: usize) -> KernelResult<TransitionView<'_>> {
         if index >= self.transitions.len() {
             return Err(HistoryError::invariant("invalid transition ID"));
         }
         let node = self.transitions.elem(index);
+        proof! { assert(verify::arena_transition_wf(self, *node)); }
         Ok(match *node {
             TransitionNode::Const(id) => TransitionView::Const(id),
             TransitionNode::If {
@@ -761,7 +793,7 @@ impl ArenaTables {
         result matches Ok(Some(id)) ==> id@ < verify::tables_graph(self).tests.len()
             && verify::tables_graph(self).tests[id@ as int] == view@,
         result matches Ok(None) ==> !verify::tables_graph(self).tests.contains(view@),
-        result matches Err(error) ==> !(error is ArenaExhausted))]
+        result matches Err(error) ==> error is GraphLimit)]
     fn find_test(&self, view: TestView<'_>) -> KernelResult<Option<TestId>> {
         let node = match view {
             TestView::True => TestNode::True,
@@ -794,7 +826,7 @@ impl ArenaTables {
         result matches Ok(Some(id)) ==> id@ < verify::tables_graph(self).regexes.len()
             && verify::tables_graph(self).regexes[id@ as int] == view@,
         result matches Ok(None) ==> !verify::tables_graph(self).regexes.contains(view@),
-        result matches Err(error) ==> !(error is ArenaExhausted))]
+        result matches Err(error) ==> error is GraphLimit)]
     fn find_regex(&self, view: RegexView<'_>) -> KernelResult<Option<RegexId>> {
         let kind = match view.kind {
             RegexKindView::Empty => RegexKind::Empty,
@@ -831,7 +863,7 @@ impl ArenaTables {
         result matches Ok(Some(id)) ==> id@ < verify::tables_graph(self).transitions.len()
             && verify::tables_graph(self).transitions[id@ as int] == view@,
         result matches Ok(None) ==> !verify::tables_graph(self).transitions.contains(view@),
-        result matches Err(error) ==> !(error is ArenaExhausted))]
+        result matches Err(error) ==> error is GraphLimit)]
     fn find_transition(&self, view: TransitionView<'_>) -> KernelResult<Option<TransitionId>> {
         let node = match view {
             TransitionView::Const(id) => TransitionNode::Const(id),
@@ -881,6 +913,7 @@ impl ArenaTables {
         result is Err ==> verify::tables_graph(final(self)) == verify::tables_graph(old(self)),
         result matches Ok(id) ==> id@ == verify::tables_graph(old(self)).tests.len()
             && verify::tables_graph(final(self)).tests == verify::tables_graph(old(self)).tests.push(view@),
+        result matches Err(error) ==> error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
         verify::tables_capacity(final(self)) == verify::tables_capacity(old(self)),
         result is Ok ==> verify::tables_slack(final(self)) >= verify::tables_slack(old(self)),
         result matches Err(error) ==> error is ArenaExhausted ==>
@@ -960,6 +993,7 @@ impl ArenaTables {
         result is Err ==> verify::tables_graph(final(self)) == verify::tables_graph(old(self)),
         result matches Ok(id) ==> id@ == verify::tables_graph(old(self)).regexes.len()
             && verify::tables_graph(final(self)).regexes == verify::tables_graph(old(self)).regexes.push(view@),
+        result matches Err(error) ==> error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
         verify::tables_capacity(final(self)) == verify::tables_capacity(old(self)),
         result is Ok ==> verify::tables_slack(final(self)) >= verify::tables_slack(old(self)),
         result matches Err(error) ==> error is ArenaExhausted ==>
@@ -1049,6 +1083,7 @@ impl ArenaTables {
         result is Err ==> verify::tables_graph(final(self)) == verify::tables_graph(old(self)),
         result matches Ok(id) ==> id@ == verify::tables_graph(old(self)).transitions.len()
             && verify::tables_graph(final(self)).transitions == verify::tables_graph(old(self)).transitions.push(view@),
+        result matches Err(error) ==> error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
         verify::tables_capacity(final(self)) == verify::tables_capacity(old(self)),
         result is Ok ==> verify::tables_slack(final(self)) >= verify::tables_slack(old(self)),
         result matches Err(error) ==> error is ArenaExhausted ==>
@@ -1154,7 +1189,9 @@ impl ArenaTables {
 #[verus_verify]
 impl ArenaStorage {
     #[verus_spec(result => ensures result matches Ok(s) ==> verify::empty_tables(s.graph())
-        && s.capacity() == capacity && s.slack() == 0)]
+        && s.has_tables() && s.capacity() == capacity && s.slack() == 0,
+        result matches Err(error) ==> error is Invariant || error is AllocationFailed,
+        verify::construction_layout(capacity) ==> no_internal_error(result))]
     pub(crate) fn with_capacity(capacity: usize) -> KernelResult<Self> {
         Ok(Self {
             tables: Some(ArenaTables::with_capacity(capacity)?),
@@ -1185,18 +1222,21 @@ impl ArenaStorage {
     #[verus_spec(r =>
         ensures r matches Ok(v) ==> id@ < self.graph().tests.len()
             && v@ == self.graph().tests[id@ as int],
-            r matches Err(error) ==> !(error is ArenaExhausted)
+            r matches Err(error) ==> error is Invariant,
+            self.tables is Some && id@ < self.graph().tests.len() ==> r is Ok
     )]
     fn test(&self, id: TestId) -> KernelResult<TestView<'_>> {
         proof! { use_type_invariant(&*self); }
         let tables = present(self.tables.as_ref(), "arena released")?;
+        proof! { TestId::lemma_view(id); }
         tables.test(id.index()?)
     }
     #[verus_spec(r =>
         ensures r matches Ok(Some(id)) ==> id@ < self.graph().tests.len()
             && self.graph().tests[id@ as int] == view@,
             r matches Ok(None) ==> !self.graph().tests.contains(view@),
-            r matches Err(error) ==> !(error is ArenaExhausted)
+            r matches Err(error) ==> error is Invariant || error is GraphLimit,
+            self.tables is Some ==> no_internal_error(r)
     )]
     fn find_test(&self, view: TestView<'_>) -> KernelResult<Option<TestId>> {
         proof! { use_type_invariant(&*self); }
@@ -1206,7 +1246,8 @@ impl ArenaStorage {
         ensures r matches Ok(Some(id)) ==> id@ < self.graph().regexes.len()
             && self.graph().regexes[id@ as int] == view@,
             r matches Ok(None) ==> !self.graph().regexes.contains(view@),
-            r matches Err(error) ==> !(error is ArenaExhausted)
+            r matches Err(error) ==> error is Invariant || error is GraphLimit,
+            self.tables is Some ==> no_internal_error(r)
     )]
     fn find_regex(&self, view: RegexView<'_>) -> KernelResult<Option<RegexId>> {
         proof! { use_type_invariant(&*self); }
@@ -1216,7 +1257,8 @@ impl ArenaStorage {
         ensures r matches Ok(Some(id)) ==> id@ < self.graph().transitions.len()
             && self.graph().transitions[id@ as int] == view@,
             r matches Ok(None) ==> !self.graph().transitions.contains(view@),
-            r matches Err(error) ==> !(error is ArenaExhausted)
+            r matches Err(error) ==> error is Invariant || error is GraphLimit,
+            self.tables is Some ==> no_internal_error(r)
     )]
     fn find_transition(&self, view: TransitionView<'_>) -> KernelResult<Option<TransitionId>> {
         proof! { use_type_invariant(&*self); }
@@ -1225,12 +1267,16 @@ impl ArenaStorage {
     #[verus_spec(r =>
         requires !old(self).graph().tests.contains(view@),
         ensures
+            (final(self).tables is Some) == (old(self).tables is Some),
+            old(self).tables is Some ==> no_internal_error(r),
             final(self).graph().constants == old(self).graph().constants,
             final(self).graph().regexes == old(self).graph().regexes,
             final(self).graph().transitions == old(self).graph().transitions,
             r is Err ==> final(self).graph() == old(self).graph(),
             r matches Ok(id) ==> id@ == old(self).graph().tests.len()
                 && final(self).graph().tests == old(self).graph().tests.push(view@),
+            r matches Err(error) ==> error is Invariant || error is GraphLimit
+                || error is ArenaExhausted || error is AllocationFailed,
             final(self).capacity() == old(self).capacity(),
             r is Ok ==> final(self).slack() >= old(self).slack(),
             r matches Err(error) ==> error is ArenaExhausted ==>
@@ -1250,22 +1296,28 @@ impl ArenaStorage {
     #[verus_spec(r =>
         ensures r matches Ok(v) ==> id@ < self.graph().regexes.len()
             && v@ == self.graph().regexes[id@ as int],
-            r matches Err(error) ==> !(error is ArenaExhausted)
+            r matches Err(error) ==> error is Invariant,
+            self.tables is Some && id@ < self.graph().regexes.len() ==> r is Ok
     )]
     fn regex(&self, id: RegexId) -> KernelResult<RegexView<'_>> {
         proof! { use_type_invariant(&*self); }
         let tables = present(self.tables.as_ref(), "arena released")?;
+        proof! { RegexId::lemma_view(id); }
         tables.regex(id.index()?)
     }
     #[verus_spec(r =>
         requires !old(self).graph().regexes.contains(view@),
         ensures
+            (final(self).tables is Some) == (old(self).tables is Some),
+            old(self).tables is Some ==> no_internal_error(r),
             final(self).graph().constants == old(self).graph().constants,
             final(self).graph().tests == old(self).graph().tests,
             final(self).graph().transitions == old(self).graph().transitions,
             r is Err ==> final(self).graph() == old(self).graph(),
             r matches Ok(id) ==> id@ == old(self).graph().regexes.len()
                 && final(self).graph().regexes == old(self).graph().regexes.push(view@),
+            r matches Err(error) ==> error is Invariant || error is GraphLimit
+                || error is ArenaExhausted || error is AllocationFailed,
             final(self).capacity() == old(self).capacity(),
             r is Ok ==> final(self).slack() >= old(self).slack(),
             r matches Err(error) ==> error is ArenaExhausted ==>
@@ -1284,22 +1336,28 @@ impl ArenaStorage {
     #[verus_spec(r =>
         ensures r matches Ok(v) ==> id@ < self.graph().transitions.len()
             && v@ == self.graph().transitions[id@ as int],
-            r matches Err(error) ==> !(error is ArenaExhausted)
+            r matches Err(error) ==> error is Invariant,
+            self.tables is Some && id@ < self.graph().transitions.len() ==> r is Ok
     )]
     fn transition(&self, id: TransitionId) -> KernelResult<TransitionView<'_>> {
         proof! { use_type_invariant(&*self); }
         let tables = present(self.tables.as_ref(), "arena released")?;
+        proof! { TransitionId::lemma_view(id); }
         tables.transition(id.index()?)
     }
     #[verus_spec(r =>
         requires !old(self).graph().transitions.contains(view@),
         ensures
+            (final(self).tables is Some) == (old(self).tables is Some),
+            old(self).tables is Some ==> no_internal_error(r),
             final(self).graph().constants == old(self).graph().constants,
             final(self).graph().tests == old(self).graph().tests,
             final(self).graph().regexes == old(self).graph().regexes,
             r is Err ==> final(self).graph() == old(self).graph(),
             r matches Ok(id) ==> id@ == old(self).graph().transitions.len()
                 && final(self).graph().transitions == old(self).graph().transitions.push(view@),
+            r matches Err(error) ==> error is Invariant || error is GraphLimit
+                || error is ArenaExhausted || error is AllocationFailed,
             final(self).capacity() == old(self).capacity(),
             r is Ok ==> final(self).slack() >= old(self).slack(),
             r matches Err(error) ==> error is ArenaExhausted ==>
@@ -1343,20 +1401,41 @@ impl CanonicalStore {
     #[cfg(verus_keep_ghost)]
     verus! {
         pub closed spec fn charged(&self) -> nat { self.bytes as nat }
+
+        /// Charged native node payloads leave representable room for cache and truth indices.
+        #[cfg(target_pointer_width = "64")]
+        pub proof fn lemma_node_count_bounds(&self)
+            requires self.valid_store(),
+            ensures self.graph().tests.len() + 64 <= usize::MAX,
+                self.graph().regexes.len() < usize::MAX,
+                self.graph().transitions.len() < usize::MAX,
+        {
+            verify::lemma_tests_weight_count(self.graph().tests);
+            verify::lemma_regexes_weight_count(self.graph().regexes);
+            verify::lemma_transitions_weight_count(self.graph().transitions);
+        }
     }
 
     /// Creates the fixed-capacity canonical graph and its algebraic constants.
+    /// Live production operations report graph/resource failures, never internal/owner errors.
     #[verus_spec(result => ensures match result {
         Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
-        Err(_) => true,
-    })]
+        Err(error) => error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
+    }, no_internal_error(result))]
     pub fn new() -> KernelResult<Self> {
+        proof! {
+            #[cfg(target_pointer_width = "64")]
+            verify::lemma_production_layout();
+        }
         Self::from_storage(ArenaStorage::with_capacity(ARENA_CAPACITY)?)
     }
 
     #[verus_spec(result =>
-        requires verify::empty_tables(storage.graph()),
-        ensures match result { Ok(store) => model::graph_wf(store.graph()) && store.valid_store(), Err(_) => true },
+        requires storage.tables is Some, verify::empty_tables(storage.graph()),
+        ensures match result {
+            Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
+            Err(error) => error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
+        },
     )]
     fn from_storage(storage: ArenaStorage) -> KernelResult<Self> {
         proof_decl! { let ghost initial_graph = storage.graph(); }
@@ -1380,17 +1459,24 @@ impl CanonicalStore {
         Ok(store)
     }
 
+    verus! {
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
     #[verus_spec(result =>
         requires old(self).valid_store(), verify::empty_tables(old(self).graph()),
             model::tables_wf(old(self).graph()),
-        ensures match result {
-            Ok(()) => model::graph_wf(final(self).graph()) && final(self).valid_store(),
-            Err(_) => true,
+        ensures final(self).valid_store(), match result {
+            Ok(()) => model::graph_wf(final(self).graph()),
+            Err(error) => error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
         },
     )]
     fn intern_constants(&mut self) -> KernelResult<()> {
+        // Each interner preserves these predicates through its checked contract.
+        // Unfold their quantified/recursive bodies only at the final constant update.
+        hide(CanonicalStore::valid_store);
+        hide(model::unique_nodes);
+        hide(model::tables_wf);
+        hide(verify::graph_weight);
         let test_true = self.intern_test(TestView::True)?;
         let test_false = self.intern_test(TestView::False)?;
         let empty = self.intern_regex(RegexKindView::Empty, false)?;
@@ -1415,13 +1501,22 @@ impl CanonicalStore {
             assert(self.graph().tests == built_graph.tests);
             assert(self.graph().regexes == built_graph.regexes);
             assert(self.graph().transitions == built_graph.transitions);
-            assert(verify::graph_weight(self.graph()) == verify::graph_weight(built_graph));
-            assert(self.valid_store());
+            assert(verify::graph_weight(self.graph()) == verify::graph_weight(built_graph)) by {
+                reveal(verify::graph_weight);
+            }
+            assert(self.valid_store()) by {
+                reveal(CanonicalStore::valid_store);
+                reveal(model::unique_nodes);
+            }
             assert(model::tables_wf(self.graph()));
             assert(model::constants_wf(self.graph()));
+            assert(model::unique_nodes(self.graph())) by {
+                reveal(CanonicalStore::valid_store);
+            }
             model::lemma_graph_wf_intro(self.graph());
         }
         Ok(())
+    }
     }
 
     #[verus_spec(result => ensures match result {
@@ -1444,7 +1539,8 @@ impl CanonicalStore {
     }
     #[verus_spec(result => ensures final(self).graph() == old(self).graph(),
         (final(self).bytes as nat) >= (old(self).bytes as nat),
-        old(self).valid_store() ==> final(self).valid_store())]
+        old(self).valid_store() ==> final(self).valid_store(),
+        result matches Err(error) ==> error is GraphLimit)]
     pub(crate) fn charge(&mut self, bytes: usize) -> KernelResult<()> {
         self.bytes = self.projected(bytes)?;
         Ok(())
@@ -1485,6 +1581,8 @@ impl CanonicalStore {
                 Err(_) => final(self).graph() == old(self).graph()
                     && (final(self).bytes as nat) == (old(self).bytes as nat),
             },
+            result matches Err(error) ==> error is GraphLimit
+                || error is ArenaExhausted || error is AllocationFailed,
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
             result matches Err(error) ==> error is ArenaExhausted ==>
@@ -1538,6 +1636,8 @@ impl CanonicalStore {
                 Err(_) => final(self).graph() == old(self).graph()
                     && (final(self).bytes as nat) == (old(self).bytes as nat),
             },
+            result matches Err(error) ==> error is GraphLimit
+                || error is ArenaExhausted || error is AllocationFailed,
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
             result matches Err(error) ==> error is ArenaExhausted ==>
@@ -1597,6 +1697,8 @@ impl CanonicalStore {
                 Err(_) => final(self).graph() == old(self).graph()
                     && (final(self).bytes as nat) == (old(self).bytes as nat),
             },
+            result matches Err(error) ==> error is GraphLimit
+                || error is ArenaExhausted || error is AllocationFailed,
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
             result matches Err(error) ==> error is ArenaExhausted ==>
@@ -1673,14 +1775,17 @@ pub struct RuntimeKernel<'a, L: Limits> {
 }
 #[verus_verify]
 impl<L: Limits> KernelStore for RuntimeKernel<'_, L> {
+    #[verus_spec(result => ensures result matches Err(error) ==> error is Limit)]
     fn checkpoint(&mut self) -> KernelResult<()> {
         self.limits.checkpoint()?;
         Ok(())
     }
+    #[verus_spec(result => ensures result matches Err(error) ==> error is Limit || error is GraphLimit)]
     fn charge_aux(&mut self, bytes: usize) -> KernelResult<()> {
         self.checkpoint()?;
         self.store.charge(bytes)
     }
+    #[verus_spec(result => ensures result matches Err(error) ==> error is AllocationFailed)]
     fn reserve_derivatives(
         &mut self,
         values: &mut Vec<Option<TransitionId>>,
@@ -1688,33 +1793,43 @@ impl<L: Limits> KernelStore for RuntimeKernel<'_, L> {
     ) -> KernelResult<()> {
         allocation(self.world.try_reserve_vec(values, additional))
     }
+    #[verus_spec(result => ensures result matches Err(error) ==> error is AllocationFailed)]
     fn reserve_atoms(&mut self, values: &mut Vec<TestId>, additional: usize) -> KernelResult<()> {
         allocation(self.world.try_reserve_vec(values, additional))
     }
     fn constants(&self) -> Constants {
         self.store.constants()
     }
+    #[verus_spec(result => ensures result matches Err(error) ==> error is Invariant)]
     fn test(&self, id: TestId) -> KernelResult<TestView<'_>> {
         self.store.storage.test(id)
     }
+    #[verus_spec(result => ensures result matches Err(error) ==> error is Invariant)]
     fn regex(&self, id: RegexId) -> KernelResult<RegexView<'_>> {
         self.store.storage.regex(id)
     }
+    #[verus_spec(result => ensures result matches Err(error) ==> error is Invariant)]
     fn transition(&self, id: TransitionId) -> KernelResult<TransitionView<'_>> {
         self.store.storage.transition(id)
     }
+    #[verus_spec(result => ensures result matches Err(error) ==> error is Limit
+        || error is GraphLimit || error is ArenaExhausted || error is AllocationFailed)]
     fn intern_test(&mut self, node: TestView<'_>) -> KernelResult<TestId> {
         self.checkpoint()?;
         let id = self.store.intern_test(node)?;
         self.checkpoint()?;
         Ok(id)
     }
+    #[verus_spec(result => ensures result matches Err(error) ==> error is Limit
+        || error is GraphLimit || error is ArenaExhausted || error is AllocationFailed)]
     fn intern_regex(&mut self, kind: RegexKindView<'_>, nullable: bool) -> KernelResult<RegexId> {
         self.checkpoint()?;
         let id = self.store.intern_regex(kind, nullable)?;
         self.checkpoint()?;
         Ok(id)
     }
+    #[verus_spec(result => ensures result matches Err(error) ==> error is Limit
+        || error is GraphLimit || error is ArenaExhausted || error is AllocationFailed)]
     fn intern_transition(&mut self, node: TransitionView<'_>) -> KernelResult<TransitionId> {
         self.checkpoint()?;
         let id = self.store.intern_transition(node)?;
@@ -2298,6 +2413,45 @@ pub mod verify {
     pub open spec fn graph_weight(g: model::Graph) -> nat {
         tests_weight(g.tests) + regexes_weight(g.regexes) + transitions_weight(g.transitions)
     }
+
+    #[cfg(target_pointer_width = "64")]
+    pub(super) proof fn lemma_tests_weight_count(s: Seq<model::TestNode>)
+        ensures 32 * s.len() <= tests_weight(s),
+        decreases s.len(),
+    {
+        broadcast use super::VERUS_layout_of_TestNode;
+        if s.len() > 0 {
+            lemma_tests_weight_count(s.drop_last());
+            assert(s.drop_last().len() + 1 == s.len());
+            assert(test_weight(s.last()) >= 32);
+        }
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    pub(super) proof fn lemma_regexes_weight_count(s: Seq<model::RegexNode>)
+        ensures 24 * s.len() <= regexes_weight(s),
+        decreases s.len(),
+    {
+        broadcast use super::VERUS_layout_of_RegexNode;
+        if s.len() > 0 {
+            lemma_regexes_weight_count(s.drop_last());
+            assert(s.drop_last().len() + 1 == s.len());
+            assert(regex_weight(s.last()) >= 24);
+        }
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    pub(super) proof fn lemma_transitions_weight_count(s: Seq<model::TransitionNode>)
+        ensures 16 * s.len() <= transitions_weight(s),
+        decreases s.len(),
+    {
+        broadcast use super::VERUS_layout_of_TransitionNode;
+        if s.len() > 0 {
+            lemma_transitions_weight_count(s.drop_last());
+            assert(s.drop_last().len() + 1 == s.len());
+            assert(transition_weight(s.last()) >= 16);
+        }
+    }
     pub proof fn lemma_tests_weight_push(s: Seq<model::TestNode>, n: model::TestNode)
         ensures tests_weight(s.push(n)) == tests_weight(s) + test_weight(n),
     {
@@ -2323,6 +2477,53 @@ pub mod verify {
         ensures pool_bytes(p.push(s)) == pool_bytes(p) + mul_bytes(s.len(), vstd::layout::size_of::<T>()),
     {
         assert(p.push(s).drop_last() =~= p);
+    }
+
+    /// Exact native layout premises checked before allocating any of the six arenas.
+    pub open(crate) spec fn construction_layout(capacity: usize) -> bool {
+        &&& vstd::layout::size_of::<TestNode>() > 0
+        &&& vstd::layout::size_of::<RegexNode>() > 0
+        &&& vstd::layout::size_of::<TransitionNode>() > 0
+        &&& vstd::layout::align_of::<TestNode>() <= CHUNK_ALIGN
+        &&& vstd::layout::align_of::<RegexNode>() <= CHUNK_ALIGN
+        &&& vstd::layout::align_of::<TransitionNode>() <= CHUNK_ALIGN
+        &&& vstd::layout::align_of::<TestId>() <= CHUNK_ALIGN
+        &&& vstd::layout::align_of::<RegexId>() <= CHUNK_ALIGN
+        &&& vstd::layout::align_of::<TransitionId>() <= CHUNK_ALIGN
+        &&& capacity as int % vstd::layout::align_of::<TestNode>() as int == 0
+        &&& capacity as int % vstd::layout::align_of::<RegexNode>() as int == 0
+        &&& capacity as int % vstd::layout::align_of::<TransitionNode>() as int == 0
+        &&& capacity as int % vstd::layout::align_of::<TestId>() as int == 0
+        &&& capacity as int % vstd::layout::align_of::<RegexId>() as int == 0
+        &&& capacity as int % vstd::layout::align_of::<TransitionId>() as int == 0
+    }
+
+    /// Establishes constructor layout readiness on the pinned 64-bit verification target.
+    #[cfg(target_pointer_width = "64")]
+    pub(super) proof fn lemma_production_layout()
+        ensures construction_layout(ARENA_CAPACITY),
+    {
+        // Activate the existing global-layout directives' generated theorems locally.
+        broadcast use {
+            super::VERUS_layout_of_TestNode,
+            super::VERUS_layout_of_RegexNode,
+            super::VERUS_layout_of_TransitionNode,
+            super::VERUS_layout_of_TestId,
+            super::VERUS_layout_of_RegexId,
+            super::VERUS_layout_of_TransitionId,
+        };
+        assert(vstd::layout::size_of::<TestNode>() == 32);
+        assert(vstd::layout::size_of::<RegexNode>() == 24);
+        assert(vstd::layout::size_of::<TransitionNode>() == 16);
+        assert(vstd::layout::align_of::<TestNode>() == 8);
+        assert(vstd::layout::align_of::<RegexNode>() == 8);
+        assert(vstd::layout::align_of::<TransitionNode>() == 8);
+        assert(vstd::layout::align_of::<TestId>() == 4);
+        assert(vstd::layout::align_of::<RegexId>() == 4);
+        assert(vstd::layout::align_of::<TransitionId>() == 4);
+        assert(ARENA_CAPACITY == 102400) by (compute);
+        assert(CHUNK_ALIGN == 16) by (compute);
+        assert(102400int % 8 == 0 && 102400int % 4 == 0) by (compute);
     }
 
     pub(super) open spec fn layout_premises() -> bool {
@@ -2463,13 +2664,17 @@ pub mod verify {
                     }
                     pub open(super) spec fn valid_store(&self) -> bool {
                         let g = self.graph();
-                        model::unique_nodes(g) && graph_weight(g) <= (self.bytes as nat)
+                        self.storage.tables is Some
+                            && model::unique_nodes(g) && graph_weight(g) <= (self.bytes as nat)
                     }
                 }
 
-                impl<L: Limits> junco_core::verify::history_assumptions::KernelStoreSpecImpl for RuntimeKernel<'_, L> {
+                impl<L: Limits> junco_core::verify::history_assumptions::KernelStoreSpec for RuntimeKernel<'_, L> {
                     open spec fn graph(&self) -> model::Graph { self.store.graph() }
                     open spec fn valid_store(&self) -> bool { self.store.valid_store() }
+                    open spec fn errors_are_non_owner(&self) -> bool { true }
+                    open spec fn errors_are_non_invariant(&self) -> bool { true }
+                    open spec fn errors_are_non_invalid_policy(&self) -> bool { true }
                     #[verifier::prophetic]
                     open spec fn restoration(&self) -> (model::Graph, bool) {
                         let restored = mut_ref_future(self.store);

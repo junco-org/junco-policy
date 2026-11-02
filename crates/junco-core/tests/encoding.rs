@@ -63,6 +63,21 @@ impl FlatEncoder<Value> for Encoder {
     }
 }
 
+#[test]
+fn custom_encoder_may_report_structural_errors() {
+    struct CustomEncoder;
+    impl FlatEncoder<Value> for CustomEncoder {
+        fn encode(&mut self, _: Component, _: &Value) -> Result<u64, HistoryError> {
+            Err(HistoryError::invariant("custom encoder failure"))
+        }
+    }
+    assert_eq!(
+        lower_flat(&source(), &mut CustomEncoder, &mut Unmetered, &mut ObservationWorld),
+        Err(HistoryError::invariant("custom encoder failure")),
+    );
+}
+
+
 fn source() -> FlatPair<Value> {
     FlatPair {
         head: [

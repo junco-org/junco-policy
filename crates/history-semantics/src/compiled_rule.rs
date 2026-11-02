@@ -24,7 +24,8 @@ use history_store::history::verify as raw;
 #[cfg(verus_keep_ghost)]
 use history_store::typed::verify as books;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::{encoding, flatten as source};
+use junco_core::verify::{dsl, encoding, flatten as source,
+    history_specs::{no_internal_compile_error, no_internal_error}};
 #[cfg(verus_keep_ghost)]
 use verify::*;
 
@@ -46,7 +47,7 @@ pub(crate) open spec fn compiled_source<E: Event>(
 }
 
 #[cfg(verus_keep_ghost)]
-pub(crate) mod verify {
+pub mod verify {
     use super::*;
     verus! {
     broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas,
@@ -59,6 +60,21 @@ pub(crate) mod verify {
 
     pub open(crate) spec fn source_rule<E: Event>(compiled: CompiledRule<E>) -> Rule<E> {
         compiled.source@
+    }
+
+    /// Native store owner retained by this compiled rule.
+    pub open(crate) spec fn compiled_store<E: Event>(compiled: CompiledRule<E>) -> Arc<Store<E>> {
+        compiled.store
+    }
+
+    /// Encoding witnesses are retained without exposing their representation.
+    pub closed spec fn compiled_maps_frame<E: Event>(before: CompiledRule<E>, after: CompiledRule<E>) -> bool {
+        after.maps@ == before.maps@
+    }
+
+    /// A failed decision retains the committed numeric cursor cache.
+    pub closed spec fn compiled_cursor_frame<E: Event>(before: CompiledRule<E>, after: CompiledRule<E>) -> bool {
+        after.runtime.cursors@ == before.runtime.cursors@
     }
 
     pub open(crate) spec fn observation_matches(registry: vstd::resource::Loc, key: (usize, u64),
@@ -77,12 +93,14 @@ pub(crate) mod verify {
                 observation_matches(registry, key, snapshots[key], observations[key])
     }
 
+    /// Publishing an exact lifecycle observation also introduces closed snapshot compatibility.
     pub(crate) proof fn lemma_observations_insert(registry: vstd::resource::Loc,
         snapshots: crate::runtime::verify::HistorySnapshots, observations: Map<(usize, u64), ObservedHistory>,
         key: (usize, u64), events: Seq<junco_core::verify::history_specs::EventView>, observation: ObservedHistory)
         requires observations_wf(registry, snapshots, observations),
             observation_matches(registry, key, events, observation),
         ensures observations_wf(registry, snapshots.insert(key, events), observations.insert(key, observation)),
+            crate::runtime::verify::snapshot_compatible(snapshots.insert(key, events), key.0, key.1, events),
     {
         assert forall|k: (usize, u64)| observations.insert(key, observation).contains_key(k) implies
             observation_matches(registry, k, snapshots.insert(key, events)[k], observations.insert(key, observation)[k]) by {
@@ -91,6 +109,7 @@ pub(crate) mod verify {
                 assert(observation_matches(registry, k, snapshots[k], observations[k]));
             }
         }
+        crate::runtime::verify::lemma_snapshot_compatible_intro(snapshots.insert(key, events), key.0, key.1, events);
     }
 
     pub open(crate) spec fn compiled_wf<E: Event>(compiled: CompiledRule<E>) -> bool {
@@ -111,15 +130,24 @@ pub(crate) mod verify {
             && compiled.runtime.snapshots@ == Map::<(usize, u64), Seq<junco_core::verify::history_specs::EventView>>::empty()
     }
 
-    pub(crate) proof fn lemma_constructed_decision<E: Event>(compiled: CompiledRule<E>, rule: Rule<E>,
+    /// Introduces decision readiness from actual rule and history constructors.
+    pub proof fn lemma_constructed_decision<E: Event>(compiled: CompiledRule<E>, rule: Rule<E>,
         store: Arc<Store<E>>, history: History<E>)
         requires constructed(compiled, rule, store), raw::history_wf(history),
-        ensures decision_requires(compiled, history),
+        ensures decision_requires(compiled, history), compiled_wf(compiled),
+            source_rule(compiled) == rule, compiled_store(compiled) == store,
+            books::store_wf(*store),
     {}
 
     pub open(crate) spec fn decision_requires<E: Event>(compiled: CompiledRule<E>, history: History<E>) -> bool {
         compiled_wf(compiled) && raw::history_wf(history)
     }
+
+    /// Readiness is preserved when a well-formed history is paired with a retained rule.
+    pub proof fn lemma_decision_requires<E: Event>(compiled: CompiledRule<E>, history: History<E>)
+        requires compiled_wf(compiled), raw::history_wf(history),
+        ensures decision_requires(compiled, history),
+    {}
 
     /// Persistent observations agree with the history's body-maintained transition ledger.
     pub(crate) proof fn lemma_history_compatible(registry: vstd::resource::Loc,
@@ -145,25 +173,110 @@ pub(crate) mod verify {
             assert(observation.snapshot.value().events.is_prefix_of(
                 history_store::store::verify::events_view(raw::stored_events(&stored))));
         }
+        crate::runtime::verify::lemma_snapshot_compatible_intro(snapshots, history, stored.revision(),
+            history_store::store::verify::events_view(raw::stored_events(&stored)));
     }
 
-    pub open(crate) spec fn dsl_result<E: Event>(rule: Rule<E>, history: History<E>, candidate: E,
+    pub open spec fn dsl_result<E: Event>(rule: Rule<E>, history: History<E>, candidate: E,
         result: Result<Option<bool>, HistoryError>) -> bool {
-        result matches Ok(answer) ==> match answer {
-            None => !junco_core::verify::dsl::head_matches(rule.head@, books::projection(candidate)),
-            Some(accepted) => junco_core::verify::dsl::head_matches(rule.head@, books::projection(candidate))
-                && accepted == junco_core::verify::dsl::lang(rule.tail@, rule.head@,
-                    books::projection(candidate), raw::raw_word(history)),
+        result matches Ok(answer) ==> answer == junco_core::verify::dsl::rule_evaluation(
+            rule, candidate, raw::raw_events(history))
+    }
+
+
+    pub open spec fn least_violation<E: Event>(sources: Seq<Rule<E>>, history: History<E>, candidate: E, index: int) -> bool {
+        0 <= index < sources.len() && junco_core::verify::dsl::rule_violated(sources[index], candidate, raw::raw_events(history))
+            && forall|j: int| 0 <= j < index ==> !junco_core::verify::dsl::rule_violated(sources[j], candidate, raw::raw_events(history))
+    }
+
+    pub open spec fn ordered_result<E: Event>(sources: Seq<Rule<E>>, history: History<E>, candidate: E,
+        result: Result<Option<usize>, HistoryError>) -> bool {
+        books::native_obligations::<E>() ==> match result {
+            Ok(Some(index)) => least_violation(sources, history, candidate, index as int),
+            Ok(None) => forall|j: int| 0 <= j < sources.len() ==> !junco_core::verify::dsl::rule_violated(sources[j], candidate, raw::raw_events(history)),
+            Err(_) => true,
         }
+    }
+
+    pub open spec fn compiled_sources<E: Event>(rules: Seq<CompiledRule<E>>) -> Seq<Rule<E>> {
+        rules.map(|i: int, rule: CompiledRule<E>| source_rule(rule))
+    }
+
+    pub open(crate) spec fn compiled_table_wf<E: Event>(rules: Seq<CompiledRule<E>>, store: Arc<Store<E>>) -> bool {
+        books::store_wf(*store) && forall|i: int| 0 <= i < rules.len() ==>
+            compiled_wf(rules[i]) && rules[i].store == store
+    }
+
+    pub open(crate) spec fn compiled_structure_frame<E: Event>(before: CompiledRule<E>, after: CompiledRule<E>) -> bool {
+        compiled_wf(after) && source_rule(after) == source_rule(before)
+            && after.store == before.store && after.mode == before.mode
+            && after.template == before.template
+    }
+
+    pub open(crate) spec fn compiled_table_frame<E: Event>(before: Seq<CompiledRule<E>>, after: Seq<CompiledRule<E>>) -> bool {
+        before.len() == after.len() && forall|i: int| 0 <= i < before.len() ==>
+            compiled_structure_frame(before[i], after[i])
+    }
+
+    pub(crate) proof fn lemma_compiled_sources_frame<E: Event>(before: Seq<CompiledRule<E>>, after: Seq<CompiledRule<E>>)
+        requires compiled_table_frame(before, after),
+        ensures compiled_sources(before) == compiled_sources(after),
+    {
+        assert(compiled_sources(before) =~= compiled_sources(after));
+    }
+
+    pub(crate) proof fn lemma_compiled_mode_frame<E: Event>(before: Seq<CompiledRule<E>>, after: Seq<CompiledRule<E>>, index: int)
+        requires compiled_table_frame(before, after), 0 <= index < before.len(),
+        ensures after[index].mode_spec() == before[index].mode_spec(),
+    { reveal(CompiledRule::mode_spec); }
+
+    pub proof fn lemma_compiled_source_mode<E: Event>(compiled: CompiledRule<E>, mode: RuleMode)
+        requires compiled_wf(compiled), books::native_obligations::<E>(), mode == compiled.mode_spec(),
+        ensures mode == source_rule(compiled).mode,
+    { reveal(CompiledRule::mode_spec); }
+
+    pub proof fn lemma_dsl_violation<E: Event>(compiled: CompiledRule<E>, history: History<E>, candidate: E,
+        result: Result<Option<bool>, HistoryError>, mode: RuleMode)
+        requires compiled_wf(compiled), books::native_obligations::<E>(),
+            dsl_result(source_rule(compiled), history, candidate, result), mode == compiled.mode_spec(),
+        ensures result matches Ok(answer) ==> junco_core::verify::dsl::rule_violated(source_rule(compiled), candidate, raw::raw_events(history))
+            == match answer { None => false, Some(accepted) => match mode {
+                RuleMode::Require => !accepted, RuleMode::Forbid => accepted,
+            } },
+    {
+        reveal(CompiledRule::mode_spec);
     }
 
     pub open(crate) spec fn decision_result<E: Event>(before: CompiledRule<E>, after: CompiledRule<E>,
         history: History<E>, candidate: E, result: Result<Option<bool>, HistoryError>) -> bool {
-        compiled_wf(after) && after.template == before.template && after.mode == before.mode
-            && after.store == before.store && after.source@ == before.source@ && after.maps@ == before.maps@
+        compiled_structure_frame(before, after) && after.maps@ == before.maps@
+            && no_internal_error(result)
             && (result is Err ==> after.runtime.cursors@ == before.runtime.cursors@)
             && (books::native_obligations::<E>() ==> dsl_result(before.source@, history, candidate, result))
+            && ((result == Err(HistoryError::WrongHistoryOwner))
+                == !books::same_store_owner(before.store, raw::store_of(history)))
     }
+
+    /// Eliminates a checked decision without revealing graphs, maps, or cursors.
+    pub proof fn lemma_decision_result_facts<E: Event>(
+        before: CompiledRule<E>, after: CompiledRule<E>, history: History<E>,
+        candidate: E, result: Result<Option<bool>, HistoryError>)
+        requires decision_result(before, after, history, candidate, result),
+        ensures compiled_wf(after), compiled_structure_frame(before, after),
+            source_rule(after) == source_rule(before), compiled_store(after) == compiled_store(before),
+            compiled_maps_frame(before, after),
+            no_internal_error(result),
+            result is Err ==> compiled_cursor_frame(before, after),
+            raw::history_wf(history) ==> decision_requires(after, history),
+            (result == Err(HistoryError::WrongHistoryOwner))
+                == !books::same_store_owner(compiled_store(before), raw::store_of(history)),
+            books::native_obligations::<E>() ==> dsl_result(source_rule(before), history, candidate, result),
+            books::native_obligations::<E>() ==> match result {
+                Ok(answer) => answer == junco_core::verify::dsl::rule_evaluation(
+                    source_rule(before), candidate, raw::raw_events(history)),
+                Err(_) => true,
+            },
+    {}
 
     pub open(crate) spec fn numeric_result(template: FlatPair<u64>, request: history_store::store::Event,
         stored: StoredHistory, result: Result<Option<bool>, HistoryError>) -> bool {
@@ -186,6 +299,9 @@ pub(crate) mod verify {
         ensures dsl_result(compiled.source@, history, candidate, result),
     {
         raw::lemma_history_wf(history);
+        assert(books::projection(candidate) == junco_core::verify::dsl::event_view(candidate));
+        assert(raw::raw_word(history) =~= raw::raw_events(history).map(
+            |i: int, event: E| junco_core::verify::dsl::event_view(event)));
         let flat = choose|flat: junco_core::flat::FlatRule<ComponentValue<E>>|
             source::flattened::<E>(compiled.source@, flat)
                 && encoding::lowering(flat.source, compiled.template, compiled.maps@, source::component_equality::<E>())
@@ -239,12 +355,19 @@ impl<E: Event> CompiledRule<E> {
             && (books::native_obligations::<E>() ==> books::maps_wf::<E>(maps@)
                 && compiled_source::<E>(*rule, mode, numeric, maps@,
                     source::component_equality::<E>(), books::domain::<E>())),
+            books::native_obligations::<E>() ==> no_internal_compile_error(result),
+            books::native_obligations::<E>() && dsl::head_scoped(rule.head@)
+                && dsl::regex_scoped(rule.tail@, rule.head@)
+                ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
+                    && !(result matches Err(CompileError::UnboundVariable { .. }))
+                    && !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
     {
         let flat = flatten_rule(rule, limits, world)?;
         proof_decl! { let ghost flattened = flat; }
         proof! {
             books::lemma_empty_snapshot::<E>(store);
             if books::native_obligations::<E>() { books::lemma_empty_maps_wf::<E>(); }
+            assert(encoding::constants_in_domain(flat.source, books::domain::<E>()));
         }
         let (result, maps) = store.lower_with_snapshot(&flat.source, limits, world,
             verus_exec_expr! { Ghost(books::empty_maps::<E>()) });
@@ -285,23 +408,41 @@ impl<E: Event> CompiledRule<E> {
 
 #[verus_verify]
 impl<E: Event> CompiledRule<E> {
-    // Arc identity is a native ownership leaf; it supplies no encoding or language theorem.
+    // Pointer comparison relates native identity to contents, never registry equality to identity.
+    #[doc(hidden)]
     #[verus_verify]
     #[verus_verify(external_body)]
-    #[verus_spec(result => ensures result ==> *left == *right)]
-    fn same_owner(left: &Arc<Store<E>>, right: &Arc<Store<E>>) -> bool {
+    #[verus_spec(result => ensures
+        result == (junco_core::verify::history_assumptions::arc_identity(*left)
+            == junco_core::verify::history_assumptions::arc_identity(*right)),
+        result == books::same_store_owner(*left, *right),
+        result ==> *left == *right && **left == **right)]
+    pub fn same_owner(left: &Arc<Store<E>>, right: &Arc<Store<E>>) -> bool {
         Arc::ptr_eq(left, right)
     }
 
     /// Consume the source on every outcome using its iterative disposal path.
+    /// Native event laws exclude internal failures; scoped sources also exclude scope/validation diagnostics.
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures result matches Ok(compiled) ==> constructed(compiled, rule, store))]
+        ensures result matches Ok(compiled) ==> constructed(compiled, rule, store),
+            books::native_obligations::<E>() ==> no_internal_compile_error(result),
+            books::native_obligations::<E>() && dsl::head_scoped(rule.head@)
+                && dsl::regex_scoped(rule.tail@, rule.head@)
+                ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
+                    && !(result matches Err(CompileError::UnboundVariable { .. }))
+                    && !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))))]
     pub fn new(store: Arc<Store<E>>, rule: Rule<E>) -> Result<Self, CompileError> {
         Self::new_with_limits(store, rule, &mut Unmetered, &mut ObservationWorld)
     }
 
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures result matches Ok(compiled) ==> constructed(compiled, rule, store))]
+        ensures result matches Ok(compiled) ==> constructed(compiled, rule, store),
+            books::native_obligations::<E>() ==> no_internal_compile_error(result),
+            books::native_obligations::<E>() && dsl::head_scoped(rule.head@)
+                && dsl::regex_scoped(rule.tail@, rule.head@)
+                ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
+                    && !(result matches Err(CompileError::UnboundVariable { .. }))
+                    && !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))))]
     pub(crate) fn new_with_limits<L: Limits>(
         store: Arc<Store<E>>,
         rule: Rule<E>,
@@ -312,7 +453,13 @@ impl<E: Event> CompiledRule<E> {
     }
 
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures result matches Ok(compiled) ==> constructed(compiled, rule, store))]
+        ensures result matches Ok(compiled) ==> constructed(compiled, rule, store),
+            books::native_obligations::<E>() ==> no_internal_compile_error(result),
+            books::native_obligations::<E>() && dsl::head_scoped(rule.head@)
+                && dsl::regex_scoped(rule.tail@, rule.head@)
+                ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
+                    && !(result matches Err(CompileError::UnboundVariable { .. }))
+                    && !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))))]
     fn construct<L: Limits>(
         store: Arc<Store<E>>,
         rule: Rule<E>,
@@ -322,12 +469,12 @@ impl<E: Event> CompiledRule<E> {
     ) -> Result<Self, CompileError> {
         proof_decl! { let ghost source = rule; }
         // No `?` may bypass disposal of the caller's recursive owned source.
-        let lowered = Self::lower(&store, &rule, limits, world);
+        let owner = history_store::typed::borrow_store(&store);
+        let lowered = Self::lower(owner, &rule, limits, world);
         rule.dispose();
         let (mode, template, _maps) = lowered?;
         let runtime =
             RuleRuntime::new(store.numeric_store(), &template, precompile, limits, world)?;
-        proof! { reveal(crate::runtime::verify::constructor_result); }
         proof_decl! { let tracked observations = Map::<(usize, u64), ObservedHistory>::tracked_empty(); }
         Ok(Self {
             template,
@@ -350,8 +497,11 @@ impl<E: Event> CompiledRule<E> {
     }
 
     /// `None` is only a head mismatch; operational errors never become verdicts.
+    /// Foreign native store owners yield `WrongHistoryOwner`; matching owners never do.
+    /// Readiness excludes internal invariant failures on both matching and foreign-owner paths.
     #[verus_spec(result => requires decision_requires(*old(self), *history),
-        ensures decision_result(*old(self), *final(self), *history, *candidate, result))]
+        ensures decision_result(*old(self), *final(self), *history, *candidate, result),
+            no_internal_error(result))]
     pub fn accepts_history(
         &mut self,
         history: &History<E>,
@@ -361,7 +511,8 @@ impl<E: Event> CompiledRule<E> {
     }
 
     #[verus_spec(result => requires decision_requires(*old(self), *history),
-        ensures decision_result(*old(self), *final(self), *history, *candidate, result))]
+        ensures decision_result(*old(self), *final(self), *history, *candidate, result),
+            no_internal_error(result))]
     pub(crate) fn accepts_history_with_limits<L: Limits>(
         &mut self,
         history: &History<E>,
@@ -376,13 +527,13 @@ impl<E: Event> CompiledRule<E> {
         }
         proof! {
             raw::lemma_history_wf(*history);
+            assert(history.id() == history.numeric().id());
             history_store::history::lemma_stored_history_view(*history.numeric());
             let ghost registry = books::registry_id(&self.store);
             lemma_history_compatible(registry, history.id(), *history.numeric(),
                 self.runtime.snapshots@, self.observations.borrow(), history.registration_ref(), history.lifecycle_ref());
             let key = (history.id(), history.numeric().revision());
             let events = history_store::store::verify::events_view(raw::stored_events(history.numeric()));
-            reveal(crate::runtime::verify::runtime_wf);
             crate::runtime::verify::lemma_cursor_cache_observe(self.runtime.pair,
                 self.runtime.cursors@, self.runtime.snapshots@, history.id(), history.numeric().revision(), events);
             let tracked observation = ObservedHistory {
@@ -394,7 +545,8 @@ impl<E: Event> CompiledRule<E> {
             *self.runtime.snapshots = self.runtime.snapshots@.insert(key, events);
             assert(compiled_wf(*self));
         }
-        let (encoded, _maps) = self.store.encode_event_with_snapshot(
+        let owner = history_store::typed::borrow_store(&self.store);
+        let (encoded, _maps) = owner.encode_event_with_snapshot(
             candidate,
             verus_exec_expr! { Ghost(self.maps@) },
             verus_exec_expr! { Ghost(raw::history_maps(*history)) },
@@ -421,7 +573,6 @@ impl<E: Event> CompiledRule<E> {
                     limits,
                     world,
                 )?;
-                proof! { reveal(crate::runtime::verify::constructor_result); }
                 proof_decl! { let tracked mut replacement_observations = Map::<(usize, u64), ObservedHistory>::tracked_empty(); }
                 proof! {
                     history_store::history::lemma_stored_history_view(*history.numeric());

@@ -53,6 +53,7 @@ impl<K: Copy + Eq + Hash> NativeMap<K> {
     #[verifier::external_body]
     pub(super) fn reserve_one(&mut self) -> (result: Result<(), HistoryError>)
         ensures representatives(*final(self)) == representatives(*old(self)),
+            result is Err ==> result == Err(HistoryError::AllocationFailed),
     {
         #[cfg(any(test, feature = "test-util"))]
         junco_core::observation::reservation_checkpoint()

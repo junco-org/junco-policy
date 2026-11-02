@@ -8,9 +8,22 @@ use crate::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
 use crate::verify::encoding::*;
 use alloc::vec::Vec;
+#[cfg(verus_keep_ghost)]
+use crate::verify::history_specs::no_internal_error;
 use history_syntax::Event;
 use history_syntax::syntax::Component;
 use vstd::prelude::*;
+
+// Expand inside the trait contract: calling a FlatEncoder-bounded predicate there is cyclic.
+#[cfg(verus_keep_ghost)]
+macro_rules! encoder_wf_clause {
+    ($model:ty, $($encoder:tt)+) => {
+        vstd::prelude::verus_proof_expr! {
+            ($($encoder)+).obeys_encoding_spec()
+                && maps_wf(($($encoder)+).maps(), <$model>::equality(), <$model>::domain())
+        }
+    };
+}
 
 verus! {
 
@@ -26,16 +39,26 @@ pub trait FlatEncoder<C>: Sized {
     spec fn maps(&self) -> Codebook<C>;
     spec fn obeys_encoding_spec(&self) -> bool;
 
+    open spec fn state_wf(&self) -> bool { true }
+
+    /// Opt in only when valid component requests cannot report structural failures.
+    open spec fn errors_are_non_invariant(&self) -> bool { false }
+
     // Keep the original books valid when a nested mutable encoder borrow ends.
     #[verifier::prophetic]
     spec fn restoration(&self) -> (Codebook<C>, bool);
 
     fn encode(&mut self, field: Component, value: &C) -> (result: Result<u64, HistoryError>)
-        ensures final(self).restoration() == old(self).restoration(),
-            old(self).obeys_encoding_spec()
-            && maps_wf(old(self).maps(), Self::equality(), Self::domain()) ==> {
-            final(self).obeys_encoding_spec()
-            && maps_wf(final(self).maps(), Self::equality(), Self::domain())
+        requires old(self).state_wf(),
+        ensures final(self).state_wf(),
+            final(self).restoration() == old(self).restoration(),
+            final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
+            old(self).errors_are_non_invariant() && encoder_wf_clause!(Self, old(self))
+                ==> no_internal_error(result)
+                    && (Self::domain()(field, *value)
+                        ==> !(result matches Err(HistoryError::InvalidPolicy { .. }))),
+            encoder_wf_clause!(Self, old(self)) ==> {
+            encoder_wf_clause!(Self, final(self))
             && extends(old(self).maps(), final(self).maps(), Self::equality())
             && match result {
                 Ok(id) => Self::domain()(field, *value)
@@ -46,7 +69,7 @@ pub trait FlatEncoder<C>: Sized {
 }
 
 pub open spec fn encoder_wf<C, M: FlatEncoder<C>>(encoder: M) -> bool {
-    encoder.obeys_encoding_spec() && maps_wf(encoder.maps(), M::equality(), M::domain())
+    encoder_wf_clause!(M, encoder)
 }
 
 /// Validate a typed constant's coordinate before touching a component codebook.
@@ -85,6 +108,8 @@ fn invalid_source() -> (error: HistoryError)
 fn copy_ids<L: Limits>(source: &[u32], limits: &mut L, world: &mut ObservationWorld)
     -> (result: Result<Vec<u32>, HistoryError>)
     ensures result matches Ok(ids) ==> ids@ == source@,
+        no_internal_error(result),
+        !(result matches Err(HistoryError::InvalidPolicy { .. })),
 {
     let mut ids = Vec::new();
     match world.try_reserve_vec_exact(&mut ids, source.len()) {
@@ -104,8 +129,15 @@ fn copy_ids<L: Limits>(source: &[u32], limits: &mut L, world: &mut ObservationWo
 
 fn encode_head<C, M: FlatEncoder<C>>(source: &FlatHead<C>, field: Component, encoder: &mut M)
     -> (result: Result<FlatHead<u64>, HistoryError>)
-    ensures result matches Ok(head) ==> head_shape(*source, head),
+    requires old(encoder).state_wf(),
+    ensures final(encoder).state_wf(),
+        result matches Ok(head) ==> head_shape(*source, head),
         final(encoder).restoration() == old(encoder).restoration(),
+        final(encoder).errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+        old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
+            ==> no_internal_error(result)
+                && (head_in_domain(*source, field, M::domain())
+                    ==> !(result matches Err(HistoryError::InvalidPolicy { .. }))),
         encoder_wf::<C, M>(*old(encoder)) ==> encoder_wf::<C, M>(*final(encoder))
             && extends(old(encoder).maps(), final(encoder).maps(), M::equality())
             && (result matches Ok(head) ==> head_encoded(*source, head, field, final(encoder).maps(), M::equality())
@@ -120,8 +152,15 @@ fn encode_head<C, M: FlatEncoder<C>>(source: &FlatHead<C>, field: Component, enc
 
 fn encode_test<C, M: FlatEncoder<C>, L: Limits>(source: &FlatTest<C>, encoder: &mut M,
     limits: &mut L, world: &mut ObservationWorld) -> (result: Result<FlatTest<u64>, HistoryError>)
-    ensures result matches Ok(test) ==> test_shape(*source, test),
+    requires old(encoder).state_wf(),
+    ensures final(encoder).state_wf(),
+        result matches Ok(test) ==> test_shape(*source, test),
         final(encoder).restoration() == old(encoder).restoration(),
+        final(encoder).errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+        old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
+            ==> no_internal_error(result)
+                && (test_in_domain(*source, M::domain())
+                    ==> !(result matches Err(HistoryError::InvalidPolicy { .. }))),
         encoder_wf::<C, M>(*old(encoder)) ==> encoder_wf::<C, M>(*final(encoder))
             && extends(old(encoder).maps(), final(encoder).maps(), M::equality())
             && (result matches Ok(test) ==> test_encoded(*source, test, final(encoder).maps(), M::equality())
@@ -144,6 +183,8 @@ fn encode_test<C, M: FlatEncoder<C>, L: Limits>(source: &FlatTest<C>, encoder: &
 fn copy_regex<L: Limits>(source: &FlatRegex, limits: &mut L, world: &mut ObservationWorld)
     -> (result: Result<FlatRegex, HistoryError>)
     ensures result matches Ok(regex) ==> regex_same(*source, regex),
+        no_internal_error(result),
+        !(result matches Err(HistoryError::InvalidPolicy { .. })),
 {
     Ok(match source {
         FlatRegex::Empty => FlatRegex::Empty,
@@ -160,11 +201,21 @@ fn copy_regex<L: Limits>(source: &FlatRegex, limits: &mut L, world: &mut Observa
 
 /// Validate before interning, then encode each stored constant exactly once.
 /// Repeated edges, unreachable nodes, and non-last roots remain untouched.
+/// Encoders retain their error capability; opted-in well-formed encoders cannot
+/// report internal failures, or invalid-policy errors for valid in-domain sources.
 pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder: &mut M,
     limits: &mut L, world: &mut ObservationWorld) -> (result: Result<FlatPair<u64>, HistoryError>)
-    ensures result matches Ok(target) ==> topology(*source, target)
+    requires old(encoder).state_wf(),
+    ensures final(encoder).state_wf(),
+        result matches Ok(target) ==> topology(*source, target)
             && crate::flat::verify::structural_wf(target),
         final(encoder).restoration() == old(encoder).restoration(),
+        final(encoder).errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+        old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
+            ==> no_internal_error(result)
+                && (crate::flat::verify::structural_wf(*source)
+                    && constants_in_domain(*source, M::domain())
+                    ==> !(result matches Err(HistoryError::InvalidPolicy { .. }))),
         encoder_wf::<C, M>(*old(encoder)) ==> encoder_wf::<C, M>(*final(encoder))
             && extends(old(encoder).maps(), final(encoder).maps(), M::equality())
             && (result matches Ok(target) ==> lowering(*source, target, final(encoder).maps(), M::equality())
@@ -173,10 +224,38 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
     if source.validate().is_err() { return Err(invalid_source()); }
     let ghost initial_maps = encoder.maps();
     let ghost verified = encoder_wf::<C, M>(*encoder);
+    proof {
+        assert(verified == encoder_wf::<C, M>(*old(encoder)));
+        assert(verified ==> encoder_wf::<C, M>(*encoder));
+        assert(encoder.state_wf());
+        assert(encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant());
+        assert(constants_in_domain(*source, M::domain())
+            ==> head_in_domain(source.head@[0], Component::Principal, M::domain())) by {
+            assert(field_at(0) == Component::Principal);
+        }
+    }
     let principal = encode_head(&source.head[0], Component::Principal, encoder)?;
     let ghost principal_maps = encoder.maps();
+    proof {
+        assert(encoder.state_wf());
+        assert(encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant());
+        assert(verified ==> encoder_wf::<C, M>(*encoder));
+        assert(constants_in_domain(*source, M::domain())
+            ==> head_in_domain(source.head@[1], Component::Action, M::domain())) by {
+            assert(field_at(1) == Component::Action);
+        }
+    }
     let action = encode_head(&source.head[1], Component::Action, encoder)?;
     let ghost action_maps = encoder.maps();
+    proof {
+        assert(encoder.state_wf());
+        assert(encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant());
+        assert(verified ==> encoder_wf::<C, M>(*encoder));
+        assert(constants_in_domain(*source, M::domain())
+            ==> head_in_domain(source.head@[2], Component::Resource, M::domain())) by {
+            assert(field_at(2) == Component::Resource);
+        }
+    }
     let resource = encode_head(&source.head[2], Component::Resource, encoder)?;
     proof {
         if verified {
@@ -191,7 +270,10 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
     let mut index = 0;
     while index < source.tests.len()
         invariant index <= source.tests@.len(), builder.wf(),
+            encoder.state_wf(),
+            crate::flat::verify::structural_wf(*source),
             encoder.restoration() == old(encoder).restoration(),
+            encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
             initial_maps == old(encoder).maps(), verified == encoder_wf::<C, M>(*old(encoder)),
             builder.tests_view().len() == index, builder.regexes_view().len() == 0,
             (forall|i: int| 0 <= i < 3 ==> head_shape(source.head@[i], builder.head_view()[i])),
@@ -206,8 +288,22 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
     {
         limits.checkpoint()?;
         let ghost before = encoder.maps();
+        proof {
+            assert(encoder.state_wf());
+            assert(encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant());
+            assert(verified ==> encoder_wf::<C, M>(*encoder));
+            assert(constants_in_domain(*source, M::domain())
+                ==> test_in_domain(source.tests@[index as int], M::domain()));
+        }
         let node = encode_test(&source.tests[index], encoder, limits, world)?;
         proof {
+            assert(crate::flat::verify::test_wf(source.head@, source.tests@[index as int], index as nat));
+            if let FlatTest::Atom { field, term: FlatTerm::Variable(_), .. } = node {
+                let f = crate::flat::verify::field_index(field);
+                assert(source.head@[f] is Bind);
+                assert(builder.head_view()[f] is Bind);
+            }
+            assert(crate::flat::verify::test_wf(builder.head_view(), node, builder.tests_view().len()));
             if verified {
                 lemma_extends_transitive(initial_maps, before, encoder.maps(), M::equality());
                 assert forall|i: int| 0 <= i < 3 implies head_encoded(source.head@[i], builder.head_view()[i], field_at(i), encoder.maps(), M::equality()) by {
@@ -224,10 +320,14 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
     index = 0;
     while index < source.regexes.len()
         invariant index <= source.regexes@.len(), builder.wf(),
+            encoder.state_wf(),
+            crate::flat::verify::structural_wf(*source),
             encoder.restoration() == old(encoder).restoration(),
+            encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
             initial_maps == old(encoder).maps(), verified == encoder_wf::<C, M>(*old(encoder)),
             regex_tables_same(source.regexes@.take(index as int), builder.regexes_view()),
             builder.tests_view().len() == source.tests@.len(),
+            builder.regexes_view().len() == index,
             (forall|i: int| 0 <= i < 3 ==> head_shape(source.head@[i], builder.head_view()[i])),
             (forall|i: int| 0 <= i < source.tests@.len() ==> test_shape(source.tests@[i], builder.tests_view()[i])),
             verified ==> encoder_wf::<C, M>(*encoder)
@@ -239,9 +339,14 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
     {
         limits.checkpoint()?;
         let node = copy_regex(&source.regexes[index], limits, world)?;
+        proof {
+            assert(crate::flat::verify::regex_wf(source.regexes@[index as int], index as nat, source.tests@.len()));
+            assert(crate::flat::verify::regex_wf(node, builder.regexes_view().len(), builder.tests_view().len()));
+        }
         builder.regex(node, limits, world)?;
         index += 1;
     }
+    proof { assert(source.root < builder.regexes_view().len()); }
     builder.finish(source.root)
 }
 

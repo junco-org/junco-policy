@@ -20,30 +20,33 @@
 //! implicit destructor invocation is outside the Verus model.
 //! Native allocator Send/Sync markers rely on exclusive chunk ownership,
 //! immutable shared access, and the corresponding element-type bounds outside SMT.
-//! The history owner isolates borrowed UTF-8 BTree operations and mutex-protected
-//! allocator freshness/provenance in narrow native adapters. Mutex linearization
-//! and the global counter invariant are trusted; allocation arithmetic, interner
-//! insertion/rollback, and locked history append/truncate carry executable contracts.
+//! History owners isolate borrowed UTF-8 operations, const/static installation and
+//! reference identity, mutex callbacks, and Arc/record mechanics in native leaves.
+//! Coordinate, history-key and store-ID transitions check successor arithmetic,
+//! key absence, exact authority insertion, and consumed-ID failure behavior.
+//! Retained persistent receipts prove issuer and independent-owner separation;
+//! exclusive registry births and receipt agreement prove foreign checkpoint rejection.
+//! Byte interner insertion/rollback and typed history mutation have checked bodies.
+//! Full byte-record mutation/read refinement remains a native boundary.
+//! Ordered policy/validator construction, selection and transactions are checked;
+//! field unpacking and context/diagnostic invocation remain native callback leaves.
 //! ArenaStorage inherent operation and KernelStore trait contracts are implemented
 //! by verified bodies, not trusted implementations. No compiler, normalizer, derivative,
 //! interpreter, matcher, replay, or evaluator may be external_body or assume_specification.
 
-use crate::kernel::verify::{
-    Graph, RegexNode, graph_extends, graph_wf, regex_node_wf, tables_wf, test_node_wf,
-    transition_node_wf,
-};
-use crate::kernel::{
-    Constants, KernelResult, RegexId, RegexKindView, RegexView, TestId, TestView, TransitionId,
-    TransitionView,
-};
+use crate::kernel::verify::Graph;
 use crate::observation::{ObservationWorld, SmallVecSpecFns};
 use alloc::vec::Vec;
+use alloc::sync::Arc;
 use core::{alloc::Allocator, ops::Deref};
 use smallvec::SmallVec;
 use vstd::prelude::*;
 use vstd::std_specs::cmp::{OrdSpec, PartialEqSpec};
 
 verus! {
+pub uninterp spec fn arc_identity<T>(arc: Arc<T>) -> vstd::resource::Loc;
+pub uninterp spec fn reference_identity<T>(value: &T) -> vstd::resource::Loc;
+
 
 pub assume_specification[ alloc::string::String::try_reserve ](
     value: &mut alloc::string::String, additional: usize,
@@ -130,7 +133,7 @@ pub assume_specification<A: smallvec::Array>[ SmallVec::<A>::try_reserve_exact ]
 pub assume_specification<A: smallvec::Array>[ <SmallVec<A> as Deref>::deref ](
     v: &SmallVec<A>,
 ) -> (s: &[A::Item])
-    ensures s@ == v.view();
+    ensures s@ == v.view(), v.view().len() <= usize::MAX;
 
 // Mutable autoderef triggers the pinned verifier's anyhow dyn-target importer bug.
 // The native slice accessor is the same borrow, without importing DerefMut.
@@ -195,75 +198,18 @@ pub assume_specification<T, A: Allocator>[ Vec::<T, A>::into_boxed_slice ](
 pub assume_specification<T>[ core::mem::drop ](value: T);
 
 
-#[verifier::external_trait_specification]
-#[verifier::external_trait_extension(KernelStoreSpec via KernelStoreSpecImpl)]
-pub trait ExKernelStore {
-    type ExternalTraitSpecificationFor: crate::kernel::KernelStore;
-
+/// Proof observations for checked kernel stores. Error exclusions are opt-in;
+/// custom stores that omit either capability retain arbitrary errors.
+pub trait KernelStoreSpec {
     spec fn graph(&self) -> Graph;
     spec fn valid_store(&self) -> bool;
+    open spec fn errors_are_non_owner(&self) -> bool { false }
+    open spec fn errors_are_non_invariant(&self) -> bool { false }
+    open spec fn errors_are_non_invalid_policy(&self) -> bool { false }
 
     // Preserve the abstract store restored when a nested mutable borrow ends.
     #[verifier::prophetic]
     spec fn restoration(&self) -> (Graph, bool);
-
-    fn checkpoint(&mut self) -> (r: KernelResult<()>)
-        ensures final(self).graph() == old(self).graph(),
-            final(self).valid_store() == old(self).valid_store(), final(self).restoration() == old(self).restoration();
-    fn charge_aux(&mut self, bytes: usize) -> (r: KernelResult<()>)
-        ensures final(self).graph() == old(self).graph(),
-            old(self).valid_store() ==> final(self).valid_store(), final(self).restoration() == old(self).restoration();
-    fn reserve_derivatives(&mut self, values: &mut Vec<Option<TransitionId>>, additional: usize)
-        -> (r: KernelResult<()>)
-        ensures final(self).graph() == old(self).graph(), final(values)@ == old(values)@,
-            final(self).valid_store() == old(self).valid_store(), final(self).restoration() == old(self).restoration();
-    fn reserve_atoms(&mut self, values: &mut Vec<TestId>, additional: usize)
-        -> (r: KernelResult<()>)
-        ensures final(self).graph() == old(self).graph(), final(values)@ == old(values)@,
-            final(self).valid_store() == old(self).valid_store(), final(self).restoration() == old(self).restoration();
-    fn constants(&self) -> (r: Constants)
-        ensures r@ == self.graph().constants;
-    fn test(&self, id: TestId) -> (r: KernelResult<TestView<'_>>)
-        ensures r matches Ok(v) ==> id@ < self.graph().tests.len()
-            && v@ == self.graph().tests[id@ as int];
-    fn regex(&self, id: RegexId) -> (r: KernelResult<RegexView<'_>>)
-        ensures r matches Ok(v) ==> id@ < self.graph().regexes.len()
-            && v@ == self.graph().regexes[id@ as int];
-    fn transition(&self, id: TransitionId) -> (r: KernelResult<TransitionView<'_>>)
-        ensures r matches Ok(v) ==> id@ < self.graph().transitions.len()
-            && v@ == self.graph().transitions[id@ as int];
-
-    fn intern_test(&mut self, node: TestView<'_>) -> (r: KernelResult<TestId>)
-        requires old(self).valid_store(), test_node_wf(old(self).graph(), node@),
-        ensures
-            final(self).restoration() == old(self).restoration(),
-            final(self).valid_store(),
-            graph_extends(old(self).graph(), final(self).graph()),
-            tables_wf(old(self).graph()) ==> tables_wf(final(self).graph()),
-            graph_wf(old(self).graph()) ==> graph_wf(final(self).graph()),
-            r matches Ok(id) ==> id@ < final(self).graph().tests.len()
-                && final(self).graph().tests[id@ as int] == node@;
-    fn intern_regex(&mut self, kind: RegexKindView<'_>, nullable: bool)
-        -> (r: KernelResult<RegexId>)
-        requires old(self).valid_store(), regex_node_wf(old(self).graph(), RegexNode { kind: kind@, nullable }),
-        ensures
-            final(self).restoration() == old(self).restoration(),
-            final(self).valid_store(),
-            graph_extends(old(self).graph(), final(self).graph()),
-            tables_wf(old(self).graph()) ==> tables_wf(final(self).graph()),
-            graph_wf(old(self).graph()) ==> graph_wf(final(self).graph()),
-            r matches Ok(id) ==> id@ < final(self).graph().regexes.len()
-                && final(self).graph().regexes[id@ as int] == (RegexNode { kind: kind@, nullable });
-    fn intern_transition(&mut self, node: TransitionView<'_>) -> (r: KernelResult<TransitionId>)
-        requires old(self).valid_store(), transition_node_wf(old(self).graph(), node@),
-        ensures
-            final(self).restoration() == old(self).restoration(),
-            final(self).valid_store(),
-            graph_extends(old(self).graph(), final(self).graph()),
-            tables_wf(old(self).graph()) ==> tables_wf(final(self).graph()),
-            graph_wf(old(self).graph()) ==> graph_wf(final(self).graph()),
-            r matches Ok(id) ==> id@ < final(self).graph().transitions.len()
-                && final(self).graph().transitions[id@ as int] == node@;
 }
 
 // The pinned vstd release does not specify this primitive integer method.

@@ -5,10 +5,53 @@
 //! in oldest-to-newest order. Runtime errors carry no Boolean interpretation.
 
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 use history_syntax::syntax::Component;
 use vstd::prelude::*;
+use vstd::std_specs::iter::IteratorSpec;
 
 verus! {
+
+/// Resource failures and policy rejection remain distinct from impossible internal failures.
+pub open spec fn no_internal_error<T>(result: Result<T, crate::error::HistoryError>) -> bool {
+    !(result matches Err(crate::error::HistoryError::Invariant { .. }))
+}
+
+pub open spec fn no_internal_compile_error<T>(result: Result<T, crate::error::CompileError>) -> bool {
+    !(result matches Err(crate::error::CompileError::Runtime(crate::error::HistoryError::Invariant { .. })))
+}
+
+
+/// Exact yielded items for conversions whose result obeys the prophetic iterator laws.
+#[verifier::prophetic]
+pub open spec fn into_iter_yields<I: IntoIterator>(input: I, items: Seq<I::Item>) -> bool {
+    forall|iter: I::IntoIter|
+        #[trigger] call_ensures(I::into_iter, (input,), iter)
+        ==> iter.obeys_prophetic_iter_laws() && iter.remaining() == items
+}
+
+/// Owned vectors convert without changing their exact item sequence.
+pub proof fn lemma_vec_into_iter_yields<T>(input: Vec<T>)
+    ensures into_iter_yields(input, input@),
+{
+    assert forall|iter: alloc::vec::IntoIter<T>|
+        #[trigger] call_ensures(Vec::<T>::into_iter, (input,), iter)
+        implies iter.obeys_prophetic_iter_laws() && iter.remaining() == input@ by {
+        assert(iter.remaining() == input@);
+    }
+}
+
+/// Iterator identity conversion preserves the caller's established prophetic laws.
+pub proof fn lemma_iterator_into_iter_yields<I: Iterator>(input: I)
+    requires input.obeys_prophetic_iter_laws(),
+    ensures into_iter_yields(input, input.remaining()),
+{
+    assert forall|iter: I|
+        #[trigger] call_ensures(I::into_iter, (input,), iter)
+        implies iter.obeys_prophetic_iter_laws() && iter.remaining() == input.remaining() by {
+        assert(iter == input);
+    }
+}
 
 /// Fixed-width semantic event; zero is reserved for an unbound binding coordinate.
 pub struct EventView {

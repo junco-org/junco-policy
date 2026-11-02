@@ -3,6 +3,8 @@
 use crate::error::CompileError;
 use alloc::borrow::ToOwned;
 use history_syntax::Component;
+#[cfg(verus_keep_ghost)]
+use crate::verify::history_specs::no_internal_compile_error;
 use vstd::prelude::*;
 
 /// Three borrowed head-name slots; names are local to one rule.
@@ -56,6 +58,7 @@ impl<'a> VariableScope<'a> {
             final(self).name_spec(field) == old(self).name_spec(field),
         result matches Err(CompileError::VariableComponentConflict { name: bad }) ==> bad@ == name@,
         result is Err ==> result matches Err(CompileError::VariableComponentConflict { .. }),
+        no_internal_compile_error(result),
     )]
     pub fn bind(&mut self, component: Component, name: &'a str) -> Result<(), CompileError> {
         proof! { reveal(VariableScope::name_spec); }
@@ -82,6 +85,9 @@ impl<'a> VariableScope<'a> {
             !self.has_name(component, name@) && self.conflicts(component, name@),
         result matches Err(CompileError::UnboundVariable { .. }) <==>
             !self.has_name(component, name@) && !self.conflicts(component, name@),
+        no_internal_compile_error(result),
+        result is Err ==> result matches Err(CompileError::VariableComponentConflict { .. })
+            || result matches Err(CompileError::UnboundVariable { .. }),
     )]
     pub fn resolve(&self, component: Component, name: &str) -> Result<Component, CompileError> {
         if Self::same_name(self.name(component), name) {

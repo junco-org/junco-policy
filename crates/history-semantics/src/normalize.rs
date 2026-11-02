@@ -42,7 +42,8 @@ const fn midpoint(low: usize, high: usize) -> KernelResult<usize> {
     reason = "Explicit matches preserve the Verus proof structure."
 )]
 #[verus_verify]
-#[verus_spec(result => ensures match result {
+#[verus_spec(result => ensures result != Err(HistoryError::WrongHistoryOwner),
+    index < ids@.len() ==> language::no_internal_error(result), match result {
     Ok(id) => index < ids@.len() && id == ids@[index as int],
     Err(_) => index >= ids@.len(),
 })]
@@ -150,6 +151,12 @@ impl TestMode {
             a@ < old(store).graph().tests.len(), b@ < old(store).graph().tests.len(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(found) => found ==> test_opposite(final(store).graph(), a, b), Err(_) => true },
     )]
@@ -215,7 +222,10 @@ impl TestMode {
     #[verus_verify]
     #[verus_spec(result =>
         requires model::graph_wf(store.graph()), test_child_count(store.graph(), parent, count as nat),
-        ensures match result {
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            match result {
             Ok(found) => found == test_children(store.graph(), parent).contains(id@),
             Err(_) => true,
         },
@@ -238,6 +248,9 @@ impl TestMode {
                 low <= high <= count,
                 forall|i: int| 0 <= i < low ==> #[trigger] test_children(store.graph(), parent)[i] < id@,
                 forall|i: int| high <= i < count ==> #[trigger] test_children(store.graph(), parent)[i] >= id@,
+                store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> low == high,
             decreases high - low,
         ))]
@@ -277,7 +290,10 @@ impl TestMode {
         requires model::graph_wf(store.graph()),
             test_child_count(store.graph(), a, a_count as nat),
             test_child_count(store.graph(), b, b_count as nat),
-        ensures match result {
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            match result {
             Ok(included) => included == (forall|i: int| 0 <= i < a_count
                 ==> test_children(store.graph(), b).contains(test_children(store.graph(), a)[i]))
                 && included == (forall|child: nat| test_children(store.graph(), a).contains(child)
@@ -307,6 +323,9 @@ impl TestMode {
                 i <= a_count,
                 included == (forall|j: int| 0 <= j < i
                     ==> test_children(store.graph(), b).contains(test_children(store.graph(), a)[j])),
+                store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> i == a_count,
             decreases a_count - i,
         ))]
@@ -343,6 +362,12 @@ impl TestMode {
             a@ < old(store).graph().tests.len(), test_ids_valid(old(store).graph(), siblings@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(out) => out ==> test_absorbs(final(store).graph(), seq![a] + siblings@, self.and), Err(_) => true },
     )]
     fn pair_collapses<G: KernelStore>(
@@ -407,6 +432,13 @@ impl TestMode {
         };
             invariant model::graph_extends(old(store).graph(), store.graph()), model::graph_wf(store.graph()), store.valid_store(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 a@ < store.graph().tests.len(), test_ids_valid(store.graph(), siblings@), index <= siblings.len(),
                 match state { Ok(out) => out ==> test_absorbs(store.graph(), seq![a] + siblings@, self.and), Err(_) => true },
             decreases siblings.len() - index,
@@ -420,6 +452,12 @@ impl TestMode {
             id@ < old(store).graph().tests.len(), test_ids_valid(old(store).graph(), siblings@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(out) => out ==> test_has_opposite(final(store).graph(), id, siblings@), Err(_) => true },
     )]
     fn has_complement<G: KernelStore>(
@@ -449,6 +487,13 @@ impl TestMode {
         };
             invariant model::graph_extends(old(store).graph(), store.graph()), model::graph_wf(store.graph()), store.valid_store(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 id@ < store.graph().tests.len(), test_ids_valid(store.graph(), siblings@), index <= siblings.len(),
                 match state { Ok(out) => out ==> test_has_opposite(store.graph(), id, siblings@), Err(_) => true },
             decreases siblings.len() - index,
@@ -466,6 +511,12 @@ impl TestMode {
             a@ < old(store).graph().tests.len(), test_ids_valid(old(store).graph(), siblings@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(out) => out ==> test_absorbs(final(store).graph(), seq![a] + siblings@, self.and), Err(_) => true },
     )]
     fn compound_collapses<G: KernelStore>(
@@ -519,6 +570,13 @@ impl TestMode {
         };
             invariant model::graph_extends(old(store).graph(), store.graph()), model::graph_wf(store.graph()), store.valid_store(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 a@ < store.graph().tests.len(), test_ids_valid(store.graph(), siblings@), index <= count,
                 count != 0 ==> test_dual(store.graph(), a, self.and) && test_child_count(store.graph(), a, count as nat),
                 count != 0 ==> test_children(store.graph(), a).take(count as int) == test_children(store.graph(), a),
@@ -542,6 +600,12 @@ impl TestMode {
             a@ < old(store).graph().tests.len(), test_ids_valid(old(store).graph(), siblings@),
         ensures final(store).graph() == old(store).graph(), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(out) => out == test_redundant_in(final(store).graph(), a, siblings@, self.and), Err(_) => true },
     )]
     fn redundant<G: KernelStore>(
@@ -599,6 +663,13 @@ impl TestMode {
         };
             invariant store.graph() == old(store).graph(), store.valid_store(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 model::graph_wf(store.graph()), a@ < store.graph().tests.len(), test_ids_valid(store.graph(), siblings@),
                 index <= siblings.len(),
                 siblings@.take(siblings@.len() as int) == siblings@,
@@ -613,7 +684,10 @@ impl TestMode {
     #[verus_verify]
     #[verus_spec(result =>
         requires model::graph_wf(store.graph()), test_child_count(store.graph(), id, count as nat),
-        ensures old(flat).view().is_prefix_of(final(flat).view()),
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(flat).view().is_prefix_of(final(flat).view()),
             final(flat).view().len() <= old(flat).view().len() + count,
             forall|j: int| old(flat).view().len() <= j < final(flat).view().len()
                 ==> #[trigger] final(flat).view()[j]@ < store.graph().tests.len(),
@@ -640,6 +714,9 @@ impl TestMode {
                 forall|j: int| old(flat).view().len() <= j < flat.view().len()
                     ==> #[trigger] flat.view()[j]@ == test_children(store.graph(), id)[j - old(flat).view().len()],
                 forall|j: int| old(flat).view().len() <= j < flat.view().len() ==> #[trigger] flat.view()[j]@ < store.graph().tests.len(),
+                store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> i == count,
             decreases count - i,
         ))]
@@ -662,6 +739,12 @@ pub(crate) trait TestNormalize: Sized {
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), this@ < old(store).graph().tests.len(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().tests.len()
@@ -680,6 +763,12 @@ pub(crate) trait TestNormalize: Sized {
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), test_ids_valid(old(store).graph(), children@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(id) => id@ < final(store).graph().tests.len()
                 && (forall|theta: Subst, event: EventView| language::event_wf(theta)
                     ==> test_truth(final(store).graph(), theta, id@, event)
@@ -697,7 +786,10 @@ pub(crate) trait TestNormalize: Sized {
         tasks: &mut WorkVec<(TestId, bool)>,
     ) -> (result: KernelResult<()>)
         requires model::graph_wf(store.graph()), test_child_count(store.graph(), id, count as nat),
-        ensures old(tasks).view().is_prefix_of(final(tasks).view()),
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(tasks).view().is_prefix_of(final(tasks).view()),
             forall|j: int| old(tasks).view().len() <= j < final(tasks).view().len()
                 ==> #[trigger] final(tasks).view()[j].0@ < store.graph().tests.len()
                     && !final(tasks).view()[j].1,
@@ -727,6 +819,9 @@ pub(crate) trait TestNormalize: Sized {
                     && (forall|j: int| 0 <= j < count - remaining
                         ==> #[trigger] tasks.view()[old(tasks).view().len() + j].0@
                             == test_children(store.graph(), id)[count as int - 1 - j]),
+                store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> remaining == 0,
             decreases remaining,
         ))]
@@ -767,6 +862,12 @@ pub(crate) trait TestNormalize: Sized {
             old(values).view().subrange(old(values).view().len() as int - count, old(values).view().len() as int).no_duplicates(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result {
                 Ok(()) => {
@@ -854,6 +955,12 @@ pub(crate) trait TestNormalize: Sized {
             forall|i: int| 0 <= i < old(tasks).view().len() ==> #[trigger] old(tasks).view()[i].0@ < old(store).graph().tests.len(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result {
                 Ok(()) => test_ids_valid(final(store).graph(), final(values).view())
@@ -947,6 +1054,12 @@ pub(crate) trait TestNormalize: Sized {
             exists|root: TestId| test_not_state(old(store).graph(), old(tasks).view(), old(values).view(), root),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result {
                 Ok(()) => test_not_work(final(store).graph(), final(tasks).view())
@@ -991,6 +1104,13 @@ impl TestNormalize for TestId {
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 model::graph_extends(old(store).graph(), store.graph()), model::graph_wf(store.graph()), store.valid_store(),
                 state is Ok ==> test_not_state(store.graph(), tasks.view(), values.view(), this),
             decreases if state is Ok { test_not_work(store.graph(), tasks.view()) + 1 } else { 0 },
@@ -1114,6 +1234,13 @@ impl TestNormalize for TestId {
         };
             invariant store.graph() == old(store).graph(), model::graph_wf(store.graph()), store.valid_store(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> collecting != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(collecting),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(collecting matches Err(HistoryError::InvalidPolicy { .. })),
                 c@ == store.graph().constants, mode.and == and, mode.identity == identity, mode.absorber == absorber,
                 identity@ == if and { c.test_true@ } else { c.test_false@ }, absorber@ == if and { c.test_false@ } else { c.test_true@ },
                 test_ids_valid(store.graph(), children@), index <= children.len(),
@@ -1205,6 +1332,13 @@ impl TestNormalize for TestId {
         };
             invariant model::graph_extends(old(store).graph(), store.graph()), model::graph_wf(store.graph()), store.valid_store(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> collapse != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(collapse),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(collapse matches Err(HistoryError::InvalidPolicy { .. })),
                 mode.and == and,
                 test_ids_valid(store.graph(), flat.view()), test_ids_valid(store.graph(), children@), index <= flat.len(),
                 model::strictly_increasing(model::test_ids(flat.view())),
@@ -1254,6 +1388,13 @@ impl TestNormalize for TestId {
         };
             invariant model::graph_extends(old(store).graph(), store.graph()), model::graph_wf(store.graph()), store.valid_store(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> retaining != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(retaining),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(retaining matches Err(HistoryError::InvalidPolicy { .. })),
                 mode.and == and, test_ids_valid(store.graph(), children@),
                 test_ids_valid(store.graph(), flat.view()), index <= flat.len(),
                 model::strictly_increasing(model::test_ids(flat.view())),
@@ -1394,7 +1535,10 @@ impl RegexMode {
         requires model::graph_wf(store.graph()), parent@ < store.graph().regexes.len(),
             count == regex_children(store.graph(), parent@).len(),
             model::strictly_increasing(regex_children(store.graph(), parent@)),
-        ensures match result {
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            match result {
             Ok(found) => found == regex_children(store.graph(), parent@).contains(id@),
             Err(_) => true,
         },
@@ -1414,11 +1558,15 @@ impl RegexMode {
                 count == regex_children(store.graph(), parent@).len(), model::strictly_increasing(regex_children(store.graph(), parent@)),
                 forall|i: int| 0 <= i < low ==> regex_children(store.graph(), parent@)[i] < id@,
                 forall|i: int| high <= i < count ==> regex_children(store.graph(), parent@)[i] >= id@,
+                store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> low == high,
             decreases high - low,
         ))]
         while low < high {
             let mid = loop_try!(midpoint(low, high), failure);
+            proof! { regex_lemma_child_available(store.graph(), parent@, mid as nat); }
             let child = loop_try!(parent.child(store, mid), failure);
             proof! { regex_child_exact(store.graph(), parent@, mid as nat, child@); }
             if child < id {
@@ -1431,6 +1579,7 @@ impl RegexMode {
             return Err(error);
         }
         if low < count {
+            proof! { regex_lemma_child_available(store.graph(), parent@, low as nat); }
             let child = parent.child(store, low)?;
             proof! { regex_child_exact(store.graph(), parent@, low as nat, child@); }
             Ok(child == id)
@@ -1444,7 +1593,10 @@ impl RegexMode {
         requires model::graph_wf(store.graph()), a@ < store.graph().regexes.len(), b@ < store.graph().regexes.len(),
             a_count == regex_children(store.graph(), a@).len(), b_count == regex_children(store.graph(), b@).len(),
             model::strictly_increasing(regex_children(store.graph(), b@)),
-        ensures match result {
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            match result {
             Ok(included) => included == (forall|i: int| 0 <= i < a_count
                 ==> regex_children(store.graph(), b@).contains(regex_children(store.graph(), a@)[i])),
             Err(_) => true,
@@ -1467,10 +1619,14 @@ impl RegexMode {
                 model::strictly_increasing(regex_children(store.graph(), b@)),
                 included == (forall|j: int| 0 <= j < i
                     ==> regex_children(store.graph(), b@).contains(regex_children(store.graph(), a@)[j])),
+                store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> i == a_count,
             decreases a_count - i,
         ))]
         while i < a_count {
+            proof! { regex_lemma_child_available(store.graph(), a@, i as nat); }
             let id = loop_try!(a.child(store, i), failure);
             proof! { regex_child_exact(store.graph(), a@, i as nat, id@); }
             included &= loop_try!(RegexMode::contains(store, b, b_count, id), failure);
@@ -1489,6 +1645,12 @@ impl RegexMode {
             regex_ids_valid(old(store).graph(), siblings@),
         ensures final(store).graph() == old(store).graph(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(store).valid_store(),
             match result {
                 Ok(found) => found == match old(store).graph().regexes[a@ as int].kind {
@@ -1524,6 +1686,13 @@ impl RegexMode {
             };
                     invariant store.graph() == old(store).graph(), index <= siblings.len(),
                         store.restoration() == old(store).restoration(),
+                        store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                        store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                        store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                        old(store).valid_store() ==> store.valid_store(),
+                        old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
+                        old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
+                        old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                         store.valid_store(), model::graph_wf(store.graph()), regex_ids_valid(store.graph(), siblings@),
                         inner@ < store.graph().regexes.len(),
                         match state { Ok(found) => found == siblings@.subrange(0, index as int).contains(inner), Err(_) => true },
@@ -1542,6 +1711,12 @@ impl RegexMode {
             a@ < old(store).graph().regexes.len(), regex_ids_valid(old(store).graph(), siblings@),
         ensures final(store).graph() == old(store).graph(), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result {
                 Ok(value) => value == (exists|i: int| 0 <= i < siblings.len()
                     && regex_absorbed_by(final(store).graph(), a@, siblings@[i]@, self.intersect)),
@@ -1592,6 +1767,13 @@ impl RegexMode {
         };
             invariant store.graph() == old(store).graph(), store.valid_store(), model::graph_wf(store.graph()),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 a@ < store.graph().regexes.len(), regex_ids_valid(store.graph(), siblings@), index <= siblings.len(),
                 match state { Ok(value) => value == (exists|i: int| 0 <= i < index
                     && regex_absorbed_by(store.graph(), a@, siblings@[i]@, self.intersect)), Err(_) => true },
@@ -1604,7 +1786,10 @@ impl RegexMode {
     #[verus_spec(result =>
         requires model::graph_wf(store.graph()), id@ < store.graph().regexes.len(),
             count == regex_children(store.graph(), id@).len(), regex_ids_valid(store.graph(), old(flat).view()),
-        ensures regex_ids_valid(store.graph(), final(flat).view()),
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            regex_ids_valid(store.graph(), final(flat).view()),
             old(flat).view().is_prefix_of(final(flat).view()),
             match result {
                 Ok(()) => model::regex_ids(final(flat).view())
@@ -1628,11 +1813,15 @@ impl RegexMode {
                 old(flat).view().is_prefix_of(flat.view()),
                 model::regex_ids(flat.view()) == model::regex_ids(old(flat).view())
                     + regex_children(store.graph(), id@).subrange(0, i as int),
+                store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> i == count,
             decreases count - i,
         ))]
         while i < count {
             proof_decl! { let ghost prior = flat.view(); }
+            proof! { regex_lemma_child_available(store.graph(), id@, i as nat); }
             let child = loop_try!(id.child(store, i), failure);
             proof! { regex_child_exact(store.graph(), id@, i as nat, child@); }
             flat.push(child);
@@ -1681,6 +1870,12 @@ impl RegexStats {
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), regex_ids_valid(old(store).graph(), ids@), index < ids.len(),
         ensures final(store).graph() == old(store).graph(), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(next) => next@ == regex_stats_update(final(store).graph(), ids@, index as int, epsilon, self@, complements)
                 && (regex_stats_prefix(old(store).graph(), ids@, index as nat, epsilon, self@, complements)
                     ==> regex_stats_prefix(final(store).graph(), ids@, index as nat + 1, epsilon, next@, complements)), Err(_) => true },
@@ -1722,7 +1917,10 @@ impl RegexStats {
 pub(crate) trait RegexNormalize: Sized {
     #[verus_spec(result =>
         requires model::graph_wf(store.graph()), this@ < store.graph().regexes.len(),
-        ensures match result {
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            match result {
             Ok(value) => value == language::nullable(model::lift_regex(store.graph(), this@)),
             Err(_) => true,
         },
@@ -1734,6 +1932,12 @@ pub(crate) trait RegexNormalize: Sized {
             old(store).valid_store(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().regexes.len()
@@ -1751,6 +1955,12 @@ pub(crate) trait RegexNormalize: Sized {
             old(store).valid_store(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().regexes.len()
@@ -1767,6 +1977,12 @@ pub(crate) trait RegexNormalize: Sized {
             old(store).valid_store(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(store).valid_store(),
             model::graph_wf(final(store).graph()),
             match result {
@@ -1785,6 +2001,12 @@ pub(crate) trait RegexNormalize: Sized {
             old(store).valid_store(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().regexes.len()
@@ -1801,6 +2023,12 @@ pub(crate) trait RegexNormalize: Sized {
             model::regex_node_wf(old(store).graph(), model::RegexNode { kind: kind@, nullable: n }),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result {
                 Ok(id) => id@ < final(store).graph().regexes.len()
                     && final(store).graph().regexes[id@ as int] == (model::RegexNode { kind: kind@, nullable: n })
@@ -1818,6 +2046,12 @@ pub(crate) trait RegexNormalize: Sized {
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), regex_ids_valid(old(store).graph(), children@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result {
                 Ok(id) => id@ < final(store).graph().regexes.len() && forall|theta: Subst, word: Seq<EventView>|
                     language::event_wf(theta) ==> model::regex_lang(final(store).graph(), theta, id@, word)
@@ -1934,6 +2168,13 @@ impl RegexNormalize for RegexId {
         };
             invariant store.graph() == old(store).graph(), index <= children.len(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> collecting != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(collecting),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(collecting matches Err(HistoryError::InvalidPolicy { .. })),
                 store.valid_store(),
                 model::graph_wf(store.graph()), regex_ids_valid(store.graph(), children@),
                 regex_ids_valid(store.graph(), flat.view()),
@@ -1974,6 +2215,13 @@ impl RegexNormalize for RegexId {
         };
             invariant store.graph() == old(store).graph(), index <= flat.len(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> n != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(n),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(n matches Err(HistoryError::InvalidPolicy { .. })),
                 store.valid_store(),
                 model::graph_wf(store.graph()), regex_ids_valid(store.graph(), children@),
                 regex_ids_valid(store.graph(), flat.view()),
@@ -2113,6 +2361,13 @@ impl RegexNormalize for RegexId {
         };
             invariant store.graph() == old(store).graph(), store.valid_store(), model::graph_wf(store.graph()),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> collecting != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(collecting),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(collecting matches Err(HistoryError::InvalidPolicy { .. })),
                 regex_mode_wf(store.graph(), mode@), regex_ids_valid(store.graph(), children@), regex_ids_valid(store.graph(), flat.view()), index <= children.len(),
                 mode.intersect == intersect, mode.absorber == absorber,
                 match collecting {
@@ -2167,6 +2422,13 @@ impl RegexNormalize for RegexId {
         };
             invariant store.graph() == old(store).graph(), store.valid_store(), model::graph_wf(store.graph()),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> splitting != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(splitting),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(splitting matches Err(HistoryError::InvalidPolicy { .. })),
                 regex_ids_valid(store.graph(), flat.view()), regex_ids_valid(store.graph(), children@),
                 regex_equivalent(store.graph(), flat.view(), children@, intersect),
                 test_ids_valid(store.graph(), tests.view()), regex_ids_valid(store.graph(), others.view()), index <= flat.len(),
@@ -2283,6 +2545,13 @@ impl RegexNormalize for RegexId {
         scan!(stats,index,others.len(),stats.is_ok(),prior=>prior.update(store,&others,index,c.epsilon,true);
             invariant model::graph_extends(old(store).graph(), store.graph()), store.valid_store(), model::graph_wf(store.graph()),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> stats != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(stats),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(stats matches Err(HistoryError::InvalidPolicy { .. })),
                 store.graph().constants == c@, regex_ids_valid(store.graph(), others.view()), regex_ids_valid(store.graph(), children@),
                 regex_equivalent(store.graph(), others.view(), children@, intersect), model::strictly_increasing(model::regex_ids(others.view())), index <= others.len(),
                 match stats { Ok(value) => regex_stats_prefix(store.graph(), others.view(), index as nat, c.epsilon, value@, true), Err(_) => true },
@@ -2308,6 +2577,13 @@ impl RegexNormalize for RegexId {
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant model::graph_extends(old(store).graph(), store.graph()), store.valid_store(), model::graph_wf(store.graph()),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
                 regex_ids_valid(store.graph(), others.view()), index <= others.len(),
                 mode.intersect == intersect, regex_ids_valid(store.graph(), children@),
                 forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
@@ -2335,6 +2611,13 @@ impl RegexNormalize for RegexId {
                                 scan!(stats,scan_index,others.len(),stats.is_ok(),prior=>prior.update(store,&others,scan_index,epsilon,false);
                                     invariant store.graph() == retention_graph, store.valid_store(), model::graph_wf(store.graph()),
                                         store.restoration() == old(store).restoration(),
+                                        store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                                        store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                                        store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                                        old(store).valid_store() ==> store.valid_store(),
+                                        old(store).errors_are_non_owner() ==> stats != Err(HistoryError::WrongHistoryOwner),
+                                        old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(stats),
+                                        old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(stats matches Err(HistoryError::InvalidPolicy { .. })),
                                         others.view() == prior_ids, regex_ids_valid(store.graph(), others.view()), scan_index <= others.len(),
                                         match stats { Ok(value) => regex_stats_prefix(store.graph(), others.view(), scan_index as nat, epsilon, value@, false), Err(_) => true },
                                     decreases others.len() - scan_index,
@@ -2413,6 +2696,13 @@ impl RegexNormalize for RegexId {
         };
             invariant model::graph_extends(old(store).graph(), store.graph()), store.valid_store(), model::graph_wf(store.graph()),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> n != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(n),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(n matches Err(HistoryError::InvalidPolicy { .. })),
                 regex_ids_valid(store.graph(), others.view()), regex_ids_valid(store.graph(), children@),
                 regex_equivalent(store.graph(), others.view(), children@, intersect), model::strictly_increasing(model::regex_ids(others.view())), index <= others.len(),
                 match n { Ok(value) => value == regex_nullable_combo(store.graph(), others.view().subrange(0, index as int), intersect), Err(_) => true },
@@ -2478,9 +2768,17 @@ impl TransitionMode {
             transition_ids_valid(old(store).graph(), old(flat).view()), regex_ids_valid(old(store).graph(), old(constants).view()),
         ensures final(store).graph() == old(store).graph(), model::graph_wf(final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(store).valid_store() == old(store).valid_store(),
             transition_ids_valid(final(store).graph(), final(pending).view()),
             transition_ids_valid(final(store).graph(), final(flat).view()), regex_ids_valid(final(store).graph(), final(constants).view()),
+            forall|i: int| old(flat).view().len() <= i < final(flat).view().len()
+                ==> transition_set_leaf(final(store).graph().transitions[final(flat).view()[i]@ as int], self.intersect),
             match result {
                 Ok(collapsed) => transition_collect_effect(final(store).graph(), self@,
                     old(pending).view(), old(flat).view(), old(constants).view(),
@@ -2512,9 +2810,19 @@ impl TransitionMode {
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant store.graph() == old(store).graph(), model::graph_wf(store.graph()),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 store.valid_store(), transition_mode_valid(store.graph(), self@),
                 transition_ids_valid(store.graph(), pending.view()), transition_ids_valid(store.graph(), flat.view()),
                 regex_ids_valid(store.graph(), constants.view()),
+                flat.view().len() >= f0.len(),
+                forall|i: int| f0.len() <= i < flat.view().len()
+                    ==> transition_set_leaf(store.graph().transitions[flat.view()[i]@ as int], self.intersect),
                 match state {
                     Ok(collapsed) => forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
                         ==> transition_collect_combo(store.graph(), theta, p0, f0, rs0, event, word, self.intersect)
@@ -2652,6 +2960,12 @@ pub(crate) trait TransitionNormalize: Sized {
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), regex@ < old(store).graph().regexes.len(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().transitions.len()
@@ -2674,6 +2988,12 @@ pub(crate) trait TransitionNormalize: Sized {
             else_id@ < old(store).graph().transitions.len(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
@@ -2688,6 +3008,12 @@ pub(crate) trait TransitionNormalize: Sized {
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), transition_ids_valid(old(store).graph(), children@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
                 && transition_result(final(store).graph(), ActionShape::Fold(model::transition_ids(children@), 0), id), Err(_) => true },
@@ -2697,6 +3023,12 @@ pub(crate) trait TransitionNormalize: Sized {
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), this@ < old(store).graph().transitions.len(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
                 && transition_result(final(store).graph(), ActionShape::Not(this@), id), Err(_) => true },
@@ -2711,6 +3043,12 @@ pub(crate) trait TransitionNormalize: Sized {
             regex_ids_valid(old(store).graph(), suffix@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
@@ -2726,6 +3064,12 @@ pub(crate) trait TransitionNormalize: Sized {
             model::transition_node_wf(old(store).graph(), node@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().transitions.len()
@@ -2747,6 +3091,12 @@ pub(crate) trait TransitionNormalize: Sized {
             test@ < old(store).graph().tests.len(), a@ < old(store).graph().transitions.len(), b@ < old(store).graph().transitions.len(),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().transitions.len()
@@ -2767,9 +3117,20 @@ pub(crate) trait TransitionNormalize: Sized {
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), transition_ids_valid(old(store).graph(), children@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result {
                 Ok(id) => id@ < final(store).graph().transitions.len()
                     && tdepth(final(store).graph(), id@) <= collect_bound(old(store).graph(), children@, intersect)
+                    && (match final(store).graph().transitions[id@ as int] {
+                        model::TransitionNode::Intersect(cs) => intersect ==> cs.len() > 1,
+                        model::TransitionNode::Union(cs) => !intersect ==> cs.len() > 1,
+                        _ => true,
+                    })
                     && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
                         ==> transition_lang(final(store).graph(), theta, id, event, word)
                             == transition_combo(final(store).graph(), theta, children@, event, word, intersect),
@@ -2785,7 +3146,10 @@ pub(crate) trait TransitionNormalize: Sized {
     ) -> (result: KernelResult<()>)
         requires model::graph_wf(store.graph()), transition_child_count(store.graph(), id@, count as nat),
             transition_ids_valid(store.graph(), old(flat).view()),
-        ensures old(flat).view().is_prefix_of(final(flat).view()), transition_ids_valid(store.graph(), final(flat).view()),
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(flat).view().is_prefix_of(final(flat).view()), transition_ids_valid(store.graph(), final(flat).view()),
             match result {
                 Ok(()) => model::transition_ids(final(flat).view())
                     == model::transition_ids(old(flat).view()) + transition_children(store.graph(), id@),
@@ -2803,6 +3167,9 @@ pub(crate) trait TransitionNormalize: Sized {
                 flat.view().len() == old(flat).view().len() + i,
                 model::transition_ids(flat.view()) == model::transition_ids(old(flat).view())
                     + transition_children(store.graph(), id@).take(i as int),
+                store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> i == count,
             decreases count - i,
         ))]
@@ -2940,13 +3307,21 @@ impl TransitionNormalize for TransitionId {
         clippy::option_if_let_else,
         reason = "Explicit matches preserve the Verus proof structure."
     )]
-    #[verus_verify]
+    verus! {
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
 
     fn collect<G: KernelStore>(
         store: &mut G,
         children: &[Self],
         intersect: bool,
     ) -> KernelResult<Self> {
+        hide(language::lang);
+        hide(language::interp_transition);
+        hide(model::test_holds);
+        hide(model::lift_transition);
+        hide(model::lift_regex);
+        hide(Seq::no_duplicates);
+        hide(model::unique_nodes);
         proof_decl! { let ghost original = children@; let ghost entry = store.graph(); }
         proof! {
             tdepth_lemma_constants(entry);
@@ -2985,9 +3360,12 @@ impl TransitionNormalize for TransitionId {
             proof! {
                 transition_lemma_initial_collection(store.graph(), mode@, original,
                     pending.view(), flat.view(), constants.view(), true);
+                model::lemma_graph_wf_elim(store.graph());
             }
             return Ok(absorber);
         }
+        proof! { assert forall|i: int| 0 <= i < flat.view().len() implies
+            transition_set_leaf(store.graph().transitions[flat.view()[i]@ as int], intersect) by {} }
         proof! {
             transition_lemma_initial_collection(store.graph(), mode@, original,
                 pending.view(), flat.view(), constants.view(), false);
@@ -3022,6 +3400,14 @@ impl TransitionNormalize for TransitionId {
             if t != identity {
                 flat.push(t);
             }
+            proof! {
+                assert forall|i: int| 0 <= i < flat.view().len() implies
+                    transition_set_leaf(store.graph().transitions[flat.view()[i]@ as int], intersect) by {
+                    if i < prior_flat.len() {
+                        assert(store.graph().transitions[flat.view()[i]@ as int] == before_group.transitions[prior_flat[i]@ as int]);
+                    }
+                }
+            }
         }
         proof! {
             if constants.view().len() == 0 { assert(transition_equivalent(store.graph(), original, flat.view(), intersect)); }
@@ -3037,9 +3423,6 @@ impl TransitionNormalize for TransitionId {
             transition_multiset_members(unsorted, flat.view());
             transition_member_ids_valid(store.graph(), unsorted, flat.view());
             transition_combo_members(store.graph(), unsorted, flat.view(), intersect);
-            assert forall|i: int, j: int| 0 <= i < j < flat.view().len() implies flat.view()[i]@ <= flat.view()[j]@ by {
-                assert(!(flat.view()[i].cmp_spec(&flat.view()[j]) is Greater));
-            }
         }
         proof_decl! { let ghost sorted = flat.view(); }
         dedup_ids(&mut flat)?;
@@ -3055,17 +3438,16 @@ impl TransitionNormalize for TransitionId {
             assert forall|id: TransitionId| flat.view().contains(id) implies unsorted.contains(id) by {
                 assert(sorted.contains(id));
             }
-            assert(flat.view().no_duplicates()) by {
-                assert forall|i: int, j: int| 0 <= i < flat.view().len() && 0 <= j < flat.view().len() && i != j
-                    implies flat.view()[i] != flat.view()[j] by {
-                    assert(model::transition_ids(flat.view())[i] == flat.view()[i]@);
-                    assert(model::transition_ids(flat.view())[j] == flat.view()[j]@);
-                }
-            }
             collect_lemma_subset(store.graph(), flat.view(), unsorted, intersect);
             collect_lemma_final(entry, store.graph(), original, flat.view(), intersect);
             tdepths_lemma_extends_forall(store.graph(), flat.view());
+            assert forall|i: int| 0 <= i < flat.view().len() implies
+                transition_set_leaf(store.graph().transitions[flat.view()[i]@ as int], intersect) by {
+                assert(unsorted.contains(flat.view()[i]));
+                let j = choose|j: int| 0 <= j < unsorted.len() && unsorted[j] == flat.view()[i];
+            }
         }
+        proof! { model::lemma_graph_wf_elim(store.graph()); }
         if flat.is_empty() {
             Ok(identity)
         } else if flat.len() == 1 {
@@ -3083,6 +3465,7 @@ impl TransitionNormalize for TransitionId {
                 },
             )
         }
+    }
     }
 }
 #[verus_verify]
@@ -3121,7 +3504,10 @@ impl ChildAction {
         requires model::graph_wf(store.graph()), transition_child_count(store.graph(), id@, count as nat),
             transition_child_action_valid(store.graph(), self@),
             transition_tasks_valid(store.graph(), transition_action_views(old(tasks).view())),
-        ensures transition_tasks_valid(store.graph(), transition_action_views(final(tasks).view())),
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            transition_tasks_valid(store.graph(), transition_action_views(final(tasks).view())),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
             match result {
                 Ok(()) => transition_action_views(final(tasks).view())
@@ -3153,6 +3539,9 @@ impl ChildAction {
                 base.is_prefix_of(transition_action_views(tasks.view())),
                 failure.is_none() ==> transition_action_views(tasks.view())
                     == base + transition_child_actions(store.graph(), id@, self@).take(count as int - remaining as int),
+                store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> remaining == 0,
             decreases remaining,
         ))]
@@ -3198,7 +3587,9 @@ impl ChildAction {
 #[verus_verify]
 impl Action {
     #[verus_verify]
-    #[verus_spec(result => ensures match result {
+    #[verus_spec(result => ensures result != Err(HistoryError::WrongHistoryOwner),
+        !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        count <= old(values).view().len() ==> language::no_internal_error(result), match result {
         Ok(taken) => count <= old(values).view().len()
             && taken.view() == old(values).view().subrange(old(values).view().len() as int - count, old(values).view().len() as int)
             && final(values).view() == old(values).view().take(old(values).view().len() as int - count),
@@ -3224,7 +3615,10 @@ impl Action {
     #[verus_verify]
     #[verus_spec(result =>
         requires model::graph_wf(store.graph()), transition_suffix_count(store.graph(), id@, count as nat),
-        ensures match result {
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            match result {
             Ok(values) => regex_ids_valid(store.graph(), values.view())
                 && model::regex_ids(values.view()) == transition_suffix(store.graph(), id@),
             Err(_) => true,
@@ -3244,6 +3638,9 @@ impl Action {
                 model::graph_wf(store.graph()), transition_suffix_count(store.graph(), id@, count as nat),
                 transition_suffix(store.graph(), id@).len() == count,
                 model::regex_ids(values.view()) == transition_suffix(store.graph(), id@).take(i as int),
+                store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> i == count,
             decreases count - i,
         ))]
@@ -3274,7 +3671,10 @@ impl Action {
                 model::TransitionNode::Intersect(ids) => intersect,
                 _ => false,
             },
-        ensures transition_tasks_valid(store.graph(), transition_action_views(final(tasks).view())),
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+                store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+                store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            transition_tasks_valid(store.graph(), transition_action_views(final(tasks).view())),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
             match result {
                 Ok(()) => transition_action_views(final(tasks).view())
@@ -3331,6 +3731,12 @@ impl Action {
             match right { TransitionHead::If(_, _, _) => true, _ => false },
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
@@ -3446,8 +3852,15 @@ impl Action {
         requires model::graph_wf(old(store).graph()), old(store).valid_store(),
             transition_configuration_valid(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view()),
             transition_ids_valid(old(store).graph(), xs.view()),
+            0 < index < xs.view().len() ==> old(values).view().len() > 0,
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
@@ -3483,6 +3896,7 @@ impl Action {
                     TransitionHead::Intersect(n) => {
                         let mut children = WorkVec::new();
                         TransitionId::collect_children(store, flat, n, &mut children)?;
+                        proof! { transition_lemma_children(store.graph(), flat@); }
                         let first = match children.first() {
                             Some(v) => *v,
                             None => return Err(HistoryError::normalization_invariant()),
@@ -3511,6 +3925,7 @@ impl Action {
                     }
                 }
             } else if let Some(next) = xs.get(index) {
+                proof! { assert(index < xs.view().len()); assert(index < usize::MAX); }
                 let a = match values.pop() {
                     Some(v) => v,
                     None => return Err(HistoryError::normalization_invariant()),
@@ -3550,6 +3965,12 @@ impl Action {
             c@ == old(store).graph().constants,
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
@@ -3666,6 +4087,12 @@ impl Action {
             c@ == old(store).graph().constants,
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
@@ -3805,6 +4232,12 @@ impl Action {
             c@ == old(store).graph().constants,
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
@@ -3950,6 +4383,12 @@ impl Action {
             c@ == old(store).graph().constants,
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
@@ -4104,14 +4543,21 @@ impl Action {
         Ok(())
     }
 
-    #[verus_verify]
+    verus! {
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[verus_spec(result =>
         requires model::graph_wf(old(store).graph()), old(store).valid_store(),
             transition_action_valid(old(store).graph(), self@),
             transition_configuration_valid(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view()),
+            transition_program(old(store).graph(), transition_action_views(old(tasks).view()).push(self@), old(values).view()) is Some,
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
@@ -4130,9 +4576,18 @@ impl Action {
         tasks: &mut WorkVec<Action>,
         values: &mut WorkVec<TransitionId>,
     ) -> KernelResult<()> {
+        hide(transition_program);
+        hide(guarded_run);
+        hide(guarded_apply);
+        hide(transition_effect);
+        hide(machine_run);
+        hide(language::lang);
+        hide(model::test_holds);
+        hide(model::lift_transition);
         proof_decl! { let ghost p0 = transition_action_views(tasks.view()); let ghost v0 = values.view();
         let ghost entry = store.graph(); }
         proof! { transition_configuration_future(store.graph(), p0, v0); graph_lemma_extends_refl(entry); }
+        proof! { transition_lemma_stack_ready(store.graph(), p0, self@, v0); }
         store.checkpoint()?;
         let c = store.constants();
         match self {
@@ -4255,14 +4710,23 @@ impl Action {
         }
         Ok(())
     }
+    }
 
     #[verus_verify]
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[verus_spec(result =>
         requires model::graph_wf(old(store).graph()), old(store).valid_store(),
             transition_configuration_valid(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view()),
+            old(tasks).view().len() > 0,
+            transition_program(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view()) is Some,
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             match result {
@@ -4286,6 +4750,7 @@ impl Action {
         };
         proof_decl! { let ghost shape = task@; let ghost pending = transition_action_views(tasks.view()); }
         proof! { assert(p0 =~= pending.push(shape)); }
+        proof! { transition_lemma_stack_ready(store.graph(), pending, shape, v0); }
         proof! {
             assert forall|i: int| 0 <= i < pending.len() implies transition_action_valid(store.graph(), pending[i]) by {
                 assert(p0[i] == pending[i]);
@@ -4305,13 +4770,19 @@ impl Action {
         reason = "Explicit matches preserve the Verus proof structure."
     )]
     #[verus_verify]
-    // Only successful-return correctness is claimed; each step lowers `verify::machine_cost`.
+    // Language correctness is conditional on success; error provenance follows the store capabilities.
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[verus_spec(result =>
         requires model::graph_wf(old(store).graph()), old(store).valid_store(),
             transition_action_valid(old(store).graph(), self@), transition_action_pushes(self@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
                 && transition_result(final(store).graph(), self@, id), Err(_) => true },
@@ -4326,13 +4797,26 @@ impl Action {
             assert(tasks.view() =~= seq![self]);
             assert(transition_action_views(tasks.view())[0] == shape);
             assert(transition_action_views(tasks.view()) =~= seq![shape]);
+            assert(transition_freeze_tasks(entry, seq![shape]) =~= seq![transition_freeze_action(entry, shape)]);
+            assert(transition_known_values(entry, Seq::<TransitionId>::empty()) =~= Seq::<TransitionMeaning>::empty());
+            guarded_lemma_run_singleton(transition_context_sem(), transition_freeze_action(entry, shape), Seq::<TransitionMeaning>::empty());
+            assert(guarded_apply(transition_context_sem(), transition_freeze_action(entry, shape), Seq::<TransitionMeaning>::empty()) is Some);
+            assert(original is Some);
         }
         let mut state = Ok(());
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).valid_store() ==> store.valid_store(),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 model::graph_wf(store.graph()), store.valid_store(), model::graph_extends(entry, store.graph()),
                 transition_configuration_valid(store.graph(), transition_action_views(tasks.view()), values.view()),
+                state.is_ok() ==> transition_program(store.graph(), transition_action_views(tasks.view()), values.view()) is Some,
                 state.is_ok() ==> transition_program_refines(original,
                     transition_program(store.graph(), transition_action_views(tasks.view()), values.view())),
             decreases if state.is_ok() {
@@ -4603,6 +5087,67 @@ pub(crate) mod verify {
         }
     }
 
+    pub(crate) proof fn lemma_combo_inclusion<T>(
+        left: Seq<T>, right: Seq<T>, holds: spec_fn(T) -> bool, all: bool,
+    )
+        requires forall|value: T| left.contains(value) ==> right.contains(value),
+        ensures if all {
+            (forall|i: int| 0 <= i < right.len() ==> holds(right[i]))
+                ==> (forall|i: int| 0 <= i < left.len() ==> holds(left[i]))
+        } else {
+            (exists|i: int| 0 <= i < left.len() && holds(left[i]))
+                ==> (exists|i: int| 0 <= i < right.len() && holds(right[i]))
+        },
+    {
+        if all {
+            if forall|i: int| 0 <= i < right.len() ==> holds(right[i]) {
+                assert forall|i: int| 0 <= i < left.len() implies holds(left[i]) by {
+                    assert(left.contains(left[i]));
+                    assert(right.contains(left[i]));
+                    let j = right.lemma_contains_to_index(left[i]);
+                }
+            }
+        } else if exists|i: int| 0 <= i < left.len() && holds(left[i]) {
+            let i = choose|i: int| 0 <= i < left.len() && holds(left[i]);
+            assert(left.contains(left[i]));
+            assert(right.contains(left[i]));
+            let j = right.lemma_contains_to_index(left[i]);
+            assert(holds(right[j]));
+        }
+    }
+
+    pub(crate) proof fn lemma_combo_pointwise(
+        count: nat, left: spec_fn(int) -> bool, right: spec_fn(int) -> bool, all: bool,
+    )
+        requires forall|i: int| #![trigger left(i)] #![trigger right(i)]
+            0 <= i < count ==> left(i) == right(i),
+        ensures
+            (if all { forall|i: int| 0 <= i < count ==> #[trigger] left(i) }
+             else { exists|i: int| 0 <= i < count && #[trigger] left(i) })
+            ==
+            (if all { forall|i: int| 0 <= i < count ==> #[trigger] right(i) }
+             else { exists|i: int| 0 <= i < count && #[trigger] right(i) }),
+    {
+        if all {
+            if forall|i: int| 0 <= i < count ==> #[trigger] left(i) {
+                assert forall|i: int| 0 <= i < count implies #[trigger] right(i) by {}
+            }
+            if forall|i: int| 0 <= i < count ==> #[trigger] right(i) {
+                assert forall|i: int| 0 <= i < count implies #[trigger] left(i) by {}
+            }
+        } else {
+            if exists|i: int| 0 <= i < count && #[trigger] left(i) {
+                let i = choose|i: int| 0 <= i < count && #[trigger] left(i);
+                assert(right(i));
+            }
+            if exists|i: int| 0 <= i < count && #[trigger] right(i) {
+                let i = choose|i: int| 0 <= i < count && #[trigger] right(i);
+                assert(left(i));
+            }
+        }
+    }
+
+
     pub proof fn test_lemma_combo_inclusion(
         g: model::Graph, theta: Subst, event: EventView,
         left: Seq<TestId>, right: Seq<TestId>, and: bool,
@@ -4614,23 +5159,8 @@ pub(crate) mod verify {
             test_combo(g, theta, left, event, and) ==> test_combo(g, theta, right, event, and)
         },
     {
-        if and {
-            if test_combo(g, theta, right, event, and) {
-                assert forall|i: int| 0 <= i < left.len()
-                    implies model::test_holds(theta, model::lift_test(g, left[i]@), event) by {
-                    assert(left.contains(left[i]));
-                    assert(right.contains(left[i]));
-                    let j = choose|j: int| 0 <= j < right.len() && right[j] == left[i];
-                }
-            }
-        } else if test_combo(g, theta, left, event, and) {
-            let i = choose|i: int| 0 <= i < left.len()
-                && model::test_holds(theta, model::lift_test(g, left[i]@), event);
-            assert(left.contains(left[i]));
-            assert(right.contains(left[i]));
-            let j = choose|j: int| 0 <= j < right.len() && right[j] == left[i];
-            assert(model::test_holds(theta, model::lift_test(g, right[j]@), event));
-        }
+        lemma_combo_inclusion(left, right,
+            |id: TestId| model::test_holds(theta, model::lift_test(g, id@), event), and);
     }
 
     pub proof fn test_lemma_combo_membership(
@@ -6499,6 +7029,17 @@ pub(crate) mod verify {
         }
     }
 
+    pub proof fn regex_lemma_child_available(g: model::Graph, id: nat, index: nat)
+        requires id < g.regexes.len(), index < regex_children(g, id).len(),
+        ensures model::regex_node_child(g.regexes[id as int].kind, index) is Some,
+    {
+        reveal(regex_children);
+        match g.regexes[id as int].kind {
+            model::RegexKindNode::Union(_) | model::RegexKindNode::Concat(_) | model::RegexKindNode::Intersect(_) => {},
+            _ => {},
+        }
+    }
+
     pub proof fn regex_ids_push(ids: Seq<RegexId>, id: RegexId)
         ensures model::regex_ids(ids.push(id)) == model::regex_ids(ids).push(id@),
     {
@@ -6971,39 +7512,10 @@ pub(crate) mod verify {
     {
         assert forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
             implies regex_combo(g, theta, left, word, intersect) == regex_combo(g, theta, right, word, intersect) by {
-            if intersect {
-                if regex_combo(g, theta, left, word, true) {
-                    assert forall|i: int| 0 <= i < right.len() implies model::regex_lang(g, theta, right[i]@, word) by {
-                        assert(right.contains(right[i]));
-                        assert(left.contains(right[i]));
-                        let j = choose|j: int| 0 <= j < left.len() && left[j] == right[i];
-                        assert(model::regex_lang(g, theta, left[j]@, word));
-                    }
-                }
-                if regex_combo(g, theta, right, word, true) {
-                    assert forall|i: int| 0 <= i < left.len() implies model::regex_lang(g, theta, left[i]@, word) by {
-                        assert(left.contains(left[i]));
-                        assert(right.contains(left[i]));
-                        let j = choose|j: int| 0 <= j < right.len() && right[j] == left[i];
-                        assert(model::regex_lang(g, theta, right[j]@, word));
-                    }
-                }
-            } else {
-                if regex_combo(g, theta, left, word, false) {
-                    let i = choose|i: int| 0 <= i < left.len() && model::regex_lang(g, theta, left[i]@, word);
-                    assert(left.contains(left[i]));
-                    assert(right.contains(left[i]));
-                    let j = choose|j: int| 0 <= j < right.len() && right[j] == left[i];
-                    assert(model::regex_lang(g, theta, right[j]@, word));
-                }
-                if regex_combo(g, theta, right, word, false) {
-                    let i = choose|i: int| 0 <= i < right.len() && model::regex_lang(g, theta, right[i]@, word);
-                    assert(right.contains(right[i]));
-                    assert(left.contains(right[i]));
-                    let j = choose|j: int| 0 <= j < left.len() && left[j] == right[i];
-                    assert(model::regex_lang(g, theta, left[j]@, word));
-                }
-            }
+            lemma_combo_inclusion(left, right,
+                |id: RegexId| model::regex_lang(g, theta, id@, word), intersect);
+            lemma_combo_inclusion(right, left,
+                |id: RegexId| model::regex_lang(g, theta, id@, word), intersect);
         }
     }
 
@@ -8273,6 +8785,28 @@ pub(crate) mod verify {
         guarded_run(transition_context_sem(), transition_freeze_tasks(g, tasks), transition_known_values(g, values))
     }
 
+    /// A defined continuation cannot consume values that have not been completed.
+    pub proof fn transition_lemma_stack_ready(g: model::Graph, pending: Seq<ActionShape>, task: ActionShape, values: Seq<TransitionId>)
+        requires transition_program(g, pending.push(task), values) is Some,
+        ensures match task {
+            ActionShape::Union(n) | ActionShape::Intersect(n) => n <= values.len(),
+            ActionShape::If(_) | ActionShape::CleanIf(_, _) | ActionShape::SwapThen => values.len() >= 2,
+            ActionShape::NotResult | ActionShape::AppendResult(_) => values.len() > 0,
+            ActionShape::Fold(ids, index) => 0 < index < ids.len() ==> values.len() > 0,
+            _ => true,
+        },
+    {
+        let actions = transition_freeze_tasks(g, pending.push(task));
+        assert(actions.last() == transition_freeze_action(g, task));
+        assert(guarded_apply(transition_context_sem(), actions.last(), transition_known_values(g, values)) is Some);
+        match task {
+            ActionShape::Union(_) | ActionShape::Intersect(_) | ActionShape::If(_)
+            | ActionShape::CleanIf(_, _) | ActionShape::SwapThen
+            | ActionShape::NotResult | ActionShape::AppendResult(_) | ActionShape::Fold(_, _) => {},
+            _ => {},
+        }
+    }
+
     pub open spec fn transition_program_refines(
         before: Option<Seq<TransitionMeaning>>, after: Option<Seq<TransitionMeaning>>,
     ) -> bool {
@@ -8286,6 +8820,14 @@ pub(crate) mod verify {
         if model::test_holds(theta, model::lift_test(g, test@), event) {
             transition_lang(g, theta, yes, event, word)
         } else { transition_lang(g, theta, no, event, word) }
+    }
+
+    pub open spec fn transition_set_leaf(node: model::TransitionNode, intersect: bool) -> bool {
+        match node {
+            model::TransitionNode::Union(_) => intersect,
+            model::TransitionNode::Intersect(_) => !intersect,
+            _ => true,
+        }
     }
 
     #[verifier::opaque]
@@ -11917,15 +12459,26 @@ pub(crate) mod verify {
 
     pub proof fn transition_dedup_strict(sorted: Seq<TransitionId>, result: Seq<TransitionId>)
         requires result == dedup_spec(sorted),
-            forall|i: int, j: int| 0 <= i < j < sorted.len() ==> sorted[i]@ <= sorted[j]@,
-        ensures model::strictly_increasing(model::transition_ids(result)),
+            forall|i: int, j: int| 0 <= i < j < sorted.len() ==> !(sorted[i].cmp_spec(&sorted[j]) is Greater),
+        ensures model::strictly_increasing(model::transition_ids(result)), result.no_duplicates(),
     {
+        assert forall|i: int, j: int| 0 <= i < j < sorted.len() implies sorted[i]@ <= sorted[j]@ by {
+            assert(!(sorted[i].cmp_spec(&sorted[j]) is Greater));
+        }
         let key: spec_fn(TransitionId) -> nat = |id: TransitionId| id@;
         lemma_dedup_strict::<TransitionId>(sorted, key);
         assert forall|i: int, j: int| 0 <= i < j < result.len() implies
             model::transition_ids(result)[i] < model::transition_ids(result)[j] by {
             assert(key(dedup_spec(sorted)[i])
                 < key(dedup_spec(sorted)[j]));
+        }
+        assert forall|i: int, j: int| 0 <= i < result.len() && 0 <= j < result.len() && i != j
+            implies result[i] != result[j] by {
+            if i < j {
+                assert(model::transition_ids(result)[i] < model::transition_ids(result)[j]);
+            } else {
+                assert(model::transition_ids(result)[j] < model::transition_ids(result)[i]);
+            }
         }
     }
 
@@ -11936,35 +12489,10 @@ pub(crate) mod verify {
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
             implies transition_combo(g, theta, left, event, word, intersect)
                 == transition_combo(g, theta, right, event, word, intersect) by {
-            if intersect {
-                if transition_combo(g, theta, left, event, word, true) {
-                    assert forall|i: int| 0 <= i < right.len() implies transition_lang(g, theta, right[i], event, word) by {
-                        assert(right.contains(right[i])); assert(left.contains(right[i]));
-                        let j = choose|j: int| 0 <= j < left.len() && left[j] == right[i];
-                        assert(transition_lang(g, theta, left[j], event, word));
-                    }
-                }
-                if transition_combo(g, theta, right, event, word, true) {
-                    assert forall|i: int| 0 <= i < left.len() implies transition_lang(g, theta, left[i], event, word) by {
-                        assert(left.contains(left[i])); assert(right.contains(left[i]));
-                        let j = choose|j: int| 0 <= j < right.len() && right[j] == left[i];
-                        assert(transition_lang(g, theta, right[j], event, word));
-                    }
-                }
-            } else {
-                if transition_combo(g, theta, left, event, word, false) {
-                    let i = choose|i: int| 0 <= i < left.len() && transition_lang(g, theta, left[i], event, word);
-                    assert(left.contains(left[i])); assert(right.contains(left[i]));
-                    let j = choose|j: int| 0 <= j < right.len() && right[j] == left[i];
-                    assert(transition_lang(g, theta, right[j], event, word));
-                }
-                if transition_combo(g, theta, right, event, word, false) {
-                    let i = choose|i: int| 0 <= i < right.len() && transition_lang(g, theta, right[i], event, word);
-                    assert(right.contains(right[i])); assert(left.contains(right[i]));
-                    let j = choose|j: int| 0 <= j < left.len() && left[j] == right[i];
-                    assert(transition_lang(g, theta, left[j], event, word));
-                }
-            }
+            lemma_combo_inclusion(left, right,
+                |id: TransitionId| transition_lang(g, theta, id, event, word), intersect);
+            lemma_combo_inclusion(right, left,
+                |id: TransitionId| transition_lang(g, theta, id, event, word), intersect);
         }
     }
 
@@ -13728,6 +14256,30 @@ pub(crate) mod verify {
         machine_unary_append_result(g, id, suffix, out);
     }
 
+    pub proof fn machine_unary_append_const_language(
+        before: model::Graph, after: model::Graph, id: TransitionId, head: RegexId, suffix: RegexId,
+        theta: Subst, event: EventView, word: Seq<EventView>,
+    )
+        requires model::graph_wf(before), model::graph_wf(after), model::graph_extends(before, after),
+            id@ < before.transitions.len(), before.transitions[id@ as int] == model::TransitionNode::Const(head@),
+            suffix@ < before.regexes.len(),
+        ensures machine_unary_append_language(after, theta, id, suffix, event, word)
+            == concat_combo(before, theta, seq![head, suffix], word),
+    {
+        hide(language::lang);
+        hide(model::test_holds);
+        hide(model::lift_regex);
+        hide(model::lift_transition);
+        model::lemma_graph_transition_wf(before, id@);
+        model::lemma_graph_wf_elim(before);
+        model::lemma_lift_regex_stable(before, after, head@);
+        model::lemma_lift_regex_stable(before, after, suffix@);
+        transition_unfold(after, id@);
+        language::lemma_interp_const(model::gsem(theta), event, model::lift_regex(after, head@));
+        assert(model::lift_regexes(before, model::regex_ids(seq![head, suffix]))
+            =~= seq![model::lift_regex(before, head@), model::lift_regex(before, suffix@)]);
+    }
+
     #[verifier::spinoff_prover]
     pub proof fn machine_unary_append_const_result(
         before: model::Graph, after: model::Graph, id: TransitionId, head: RegexId, suffix: RegexId, combined: RegexId, out: TransitionId,
@@ -13749,17 +14301,11 @@ pub(crate) mod verify {
         hide(language::interp_transition);
         hide(transition_result);
         model::lemma_graph_wf_elim(before);
-        model::lemma_graph_transition_wf(before, id@);
-        model::lemma_lift_regex_stable(before, after, head@);
-        model::lemma_lift_regex_stable(before, after, suffix@);
         model::lemma_lift_regex_stable(before, after, combined@);
-        transition_unfold(after, id@);
-        assert(model::lift_regexes(before, model::regex_ids(seq![head, suffix]))
-            =~= seq![model::lift_regex(before, head@), model::lift_regex(before, suffix@)]);
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
             implies transition_lang(after, theta, out, event, word)
                 == machine_unary_append_language(after, theta, id, suffix, event, word) by {
-            language::lemma_interp_const(model::gsem(theta), event, model::lift_regex(after, head@));
+            machine_unary_append_const_language(before, after, id, head, suffix, theta, event, word);
             assert(model::regex_lang(before, theta, combined@, word) == concat_combo(before, theta, seq![head, suffix], word));
         }
         machine_unary_append_result(after, id, suffix, out);

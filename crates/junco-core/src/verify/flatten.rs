@@ -38,6 +38,16 @@ pub open spec fn component_equality<E: Event>() -> spec_fn(Component, ComponentV
     |field: Component, left: ComponentValue<E>, right: ComponentValue<E>| component_eq::<E>(field, left, right)
 }
 
+/// A typed constant belongs only to its tagged product coordinate.
+pub open spec fn component_domain<E: Event>() -> crate::verify::encoding::Domain<ComponentValue<E>> {
+    |field: Component, value: ComponentValue<E>| match (field, value) {
+        (Component::Principal, ComponentValue::Principal(_))
+        | (Component::Action, ComponentValue::Action(_))
+        | (Component::Resource, ComponentValue::Resource(_)) => true,
+        _ => false,
+    }
+}
+
 pub open spec fn event_values<E: Event>(event: SourceEvent<E>) -> Seq<ComponentValue<E>> {
     seq![ComponentValue::Principal(event.principal), ComponentValue::Action(event.action),
         ComponentValue::Resource(event.resource)]
@@ -192,8 +202,50 @@ pub open spec fn result_stacks<E: Event>(tests: Seq<FlatTest<ComponentValue<E>>>
             #[trigger] regex_represents::<E>(tests, regexes, regex_ids[i] as nat, regex_sources[i], head))
 }
 
+/// Pending source visits inherit scope; finish frames retain that same source.
+#[verifier::opaque]
+pub(crate) open spec fn work_scoped<E: Event>(work: Seq<Work<'_, E>>, head: SourceHead<E>) -> bool {
+    forall|i: int| 0 <= i < work.len() ==> match #[trigger] work[i] {
+        Work::Regex(source) | Work::FinishRegex(source, _) => dsl::regex_scoped(source@, head),
+        Work::Test(source) | Work::FinishTest(source, _) => dsl::test_scoped(source@, head),
+    }
+}
+
+pub(crate) proof fn lemma_work_scoped_push<'a, E: Event>(work: Seq<Work<'a, E>>,
+    task: Work<'a, E>, head: SourceHead<E>)
+    requires work_scoped::<E>(work, head), match task {
+        Work::Regex(source) | Work::FinishRegex(source, _) => dsl::regex_scoped(source@, head),
+        Work::Test(source) | Work::FinishTest(source, _) => dsl::test_scoped(source@, head),
+    },
+    ensures work_scoped::<E>(work.push(task), head),
+{
+    reveal(work_scoped);
+    assert forall|i: int| 0 <= i < work.push(task).len() implies match #[trigger] work.push(task)[i] {
+        Work::Regex(source) | Work::FinishRegex(source, _) => dsl::regex_scoped(source@, head),
+        Work::Test(source) | Work::FinishTest(source, _) => dsl::test_scoped(source@, head),
+    } by {
+        if i < work.len() { assert(work.push(task)[i] == work[i]); }
+        else { assert(i == work.len()); }
+    }
+}
+
+pub(crate) proof fn lemma_work_scoped_pop<E: Event>(work: Seq<Work<'_, E>>, head: SourceHead<E>)
+    requires work_scoped::<E>(work, head), work.len() > 0,
+    ensures work_scoped::<E>(work.drop_last(), head), match work.last() {
+        Work::Regex(source) | Work::FinishRegex(source, _) => dsl::regex_scoped(source@, head),
+        Work::Test(source) | Work::FinishTest(source, _) => dsl::test_scoped(source@, head),
+    },
+{
+    reveal(work_scoped);
+    assert forall|i: int| 0 <= i < work.drop_last().len() implies match #[trigger] work.drop_last()[i] {
+        Work::Regex(source) | Work::FinishRegex(source, _) => dsl::regex_scoped(source@, head),
+        Work::Test(source) | Work::FinishTest(source, _) => dsl::test_scoped(source@, head),
+    } by { assert(work.drop_last()[i] == work[i]); }
+}
+
 /// Erased continuation interpreter: visits contribute original views; finish frames check order.
 /// It neither evaluates policies nor reconstructs any executable source tree.
+#[verifier::opaque]
 pub(crate) open spec fn run_work<E: Event>(work: Seq<Work<'_, E>>, tests: Seq<SourceTest<E>>, regexes: Seq<SourceRegex<E>>)
     -> Option<(Seq<SourceTest<E>>, Seq<SourceRegex<E>>)>
     decreases work.len(),
@@ -230,12 +282,58 @@ pub(crate) open spec fn run_work<E: Event>(work: Seq<Work<'_, E>>, tests: Seq<So
     }
 }
 
+/// A successful continuation fixes the next frame's operands and successor stacks.
+pub(crate) proof fn lemma_run_work_step<E: Event>(work: Seq<Work<'_, E>>,
+    tests: Seq<SourceTest<E>>, regexes: Seq<SourceRegex<E>>)
+    requires work.len() > 0, run_work::<E>(work, tests, regexes) is Some,
+    ensures match work.last() {
+        Work::Regex(source) => run_work::<E>(work.drop_last(), tests, regexes.push(source@))
+            == run_work::<E>(work, tests, regexes),
+        Work::Test(source) => run_work::<E>(work.drop_last(), tests.push(source@), regexes)
+            == run_work::<E>(work, tests, regexes),
+        Work::FinishTest(source, start) => match source@ {
+            TestView::And(children) | TestView::Or(children) => start <= tests.len()
+                && tests.subrange(start as int, tests.len() as int) == children
+                && run_work::<E>(work.drop_last(), tests.take(start as int).push(source@), regexes)
+                    == run_work::<E>(work, tests, regexes),
+            _ => false,
+        },
+        Work::FinishRegex(source, start) => match source@ {
+            RegexView::Test(child) => tests.len() == start + 1 && tests[start as int] == child
+                && run_work::<E>(work.drop_last(), tests.take(start as int), regexes.push(source@))
+                    == run_work::<E>(work, tests, regexes),
+            RegexView::Star(child) | RegexView::Not(child) => regexes.len() == start + 1
+                && regexes[start as int] == *child
+                && run_work::<E>(work.drop_last(), tests, regexes.take(start as int).push(source@))
+                    == run_work::<E>(work, tests, regexes),
+            RegexView::Concat(children) | RegexView::Union(children) | RegexView::Intersect(children) =>
+                start <= regexes.len()
+                && regexes.subrange(start as int, regexes.len() as int) == children
+                && run_work::<E>(work.drop_last(), tests, regexes.take(start as int).push(source@))
+                    == run_work::<E>(work, tests, regexes),
+            _ => false,
+        },
+    },
+{
+    reveal_with_fuel(run_work, 1);
+}
+
 pub(crate) proof fn lemma_finish_test<'a, E: Event>(work: Seq<Work<'a, E>>, source: &'a TestExpr<E>, start: usize,
-    tests: Seq<SourceTest<E>>, regexes: Seq<SourceRegex<E>>, children: Seq<SourceTest<E>>)
+    tests: Seq<SourceTest<E>>, regexes: Seq<SourceRegex<E>>, children: Seq<SourceTest<E>>, head: SourceHead<E>)
     requires start == tests.len(), source@ == TestView::And(children) || source@ == TestView::Or(children),
     ensures run_work::<E>(work.push(Work::FinishTest(source, start)), tests + children, regexes)
         == run_work::<E>(work, tests.push(source@), regexes),
+        work_scoped::<E>(work, head) && dsl::test_scoped(source@, head) ==>
+            work_scoped::<E>(work.push(Work::FinishTest(source, start)), head)
+            && (forall|i: int| 0 <= i < children.len() ==> dsl::test_scoped(#[trigger] children[i], head)),
 {
+    hide(dsl::test_scoped);
+    if work_scoped::<E>(work, head) && dsl::test_scoped(source@, head) {
+        assert(forall|i: int| 0 <= i < children.len() ==> dsl::test_scoped(#[trigger] children[i], head)) by {
+            reveal_with_fuel(dsl::test_scoped, 1);
+        }
+        lemma_work_scoped_push::<E>(work, Work::FinishTest(source, start), head);
+    }
     let operands = tests + children;
     assert(operands.subrange(start as int, operands.len() as int) =~= children);
     assert(operands.take(start as int) =~= tests);
@@ -244,11 +342,18 @@ pub(crate) proof fn lemma_finish_test<'a, E: Event>(work: Seq<Work<'a, E>>, sour
 }
 
 pub(crate) proof fn lemma_visit_test_regex<'a, E: Event>(work: Seq<Work<'a, E>>, source: &'a RegexExpr<E>, child: &'a TestExpr<E>,
-    start: usize, tests: Seq<SourceTest<E>>, regexes: Seq<SourceRegex<E>>)
+    start: usize, tests: Seq<SourceTest<E>>, regexes: Seq<SourceRegex<E>>, head: SourceHead<E>)
     requires start == tests.len(), source@ == RegexView::Test(child@),
     ensures run_work::<E>(work.push(Work::FinishRegex(source, start)).push(Work::Test(child)), tests, regexes)
         == run_work::<E>(work, tests, regexes.push(source@)),
+        work_scoped::<E>(work, head) && dsl::regex_scoped(source@, head) ==>
+            work_scoped::<E>(work.push(Work::FinishRegex(source, start)).push(Work::Test(child)), head),
 {
+    if work_scoped::<E>(work, head) && dsl::regex_scoped(source@, head) {
+        reveal_with_fuel(dsl::regex_scoped, 1);
+        lemma_work_scoped_push::<E>(work, Work::FinishRegex(source, start), head);
+        lemma_work_scoped_push::<E>(work.push(Work::FinishRegex(source, start)), Work::Test(child), head);
+    }
     let finish = work.push(Work::FinishRegex(source, start));
     let program = finish.push(Work::Test(child));
     assert(program.drop_last() =~= finish);
@@ -258,12 +363,19 @@ pub(crate) proof fn lemma_visit_test_regex<'a, E: Event>(work: Seq<Work<'a, E>>,
 }
 
 pub(crate) proof fn lemma_visit_unary_regex<'a, E: Event>(work: Seq<Work<'a, E>>, source: &'a RegexExpr<E>, child: &'a RegexExpr<E>,
-    start: usize, tests: Seq<SourceTest<E>>, regexes: Seq<SourceRegex<E>>)
+    start: usize, tests: Seq<SourceTest<E>>, regexes: Seq<SourceRegex<E>>, head: SourceHead<E>)
     requires start == regexes.len(), source@ == RegexView::Star(alloc::boxed::Box::new(child@))
         || source@ == RegexView::Not(alloc::boxed::Box::new(child@)),
     ensures run_work::<E>(work.push(Work::FinishRegex(source, start)).push(Work::Regex(child)), tests, regexes)
         == run_work::<E>(work, tests, regexes.push(source@)),
+        work_scoped::<E>(work, head) && dsl::regex_scoped(source@, head) ==>
+            work_scoped::<E>(work.push(Work::FinishRegex(source, start)).push(Work::Regex(child)), head),
 {
+    if work_scoped::<E>(work, head) && dsl::regex_scoped(source@, head) {
+        reveal_with_fuel(dsl::regex_scoped, 1);
+        lemma_work_scoped_push::<E>(work, Work::FinishRegex(source, start), head);
+        lemma_work_scoped_push::<E>(work.push(Work::FinishRegex(source, start)), Work::Regex(child), head);
+    }
     let finish = work.push(Work::FinishRegex(source, start));
     let program = finish.push(Work::Regex(child));
     assert(program.drop_last() =~= finish);
@@ -273,12 +385,22 @@ pub(crate) proof fn lemma_visit_unary_regex<'a, E: Event>(work: Seq<Work<'a, E>>
 }
 
 pub(crate) proof fn lemma_finish_many_regex<'a, E: Event>(work: Seq<Work<'a, E>>, source: &'a RegexExpr<E>, start: usize,
-    tests: Seq<SourceTest<E>>, regexes: Seq<SourceRegex<E>>, children: Seq<SourceRegex<E>>)
+    tests: Seq<SourceTest<E>>, regexes: Seq<SourceRegex<E>>, children: Seq<SourceRegex<E>>, head: SourceHead<E>)
     requires start == regexes.len(), source@ == RegexView::Concat(children)
         || source@ == RegexView::Union(children) || source@ == RegexView::Intersect(children),
     ensures run_work::<E>(work.push(Work::FinishRegex(source, start)), tests, regexes + children)
         == run_work::<E>(work, tests, regexes.push(source@)),
+        work_scoped::<E>(work, head) && dsl::regex_scoped(source@, head) ==>
+            work_scoped::<E>(work.push(Work::FinishRegex(source, start)), head)
+            && (forall|i: int| 0 <= i < children.len() ==> dsl::regex_scoped(#[trigger] children[i], head)),
 {
+    hide(dsl::regex_scoped);
+    if work_scoped::<E>(work, head) && dsl::regex_scoped(source@, head) {
+        assert(forall|i: int| 0 <= i < children.len() ==> dsl::regex_scoped(#[trigger] children[i], head)) by {
+            reveal_with_fuel(dsl::regex_scoped, 1);
+        }
+        lemma_work_scoped_push::<E>(work, Work::FinishRegex(source, start), head);
+    }
     let operands = regexes + children;
     assert(operands.subrange(start as int, operands.len() as int) =~= children);
     assert(operands.take(start as int) =~= regexes);
@@ -765,7 +887,11 @@ pub proof fn flattening_preserves_semantics<E: Event>(rule: Rule<E>, lowered: Fl
 pub fn flattening_client<E: Event, L: Limits>(rule: &Rule<E>, limits: &mut L, world: &mut ObservationWorld,
     Ghost(candidate): Ghost<SourceEvent<E>>, Ghost(history): Ghost<Seq<SourceEvent<E>>>)
     -> (result: Result<FlatRule<ComponentValue<E>>, CompileError>)
-    ensures result matches Ok(lowered) ==>
+    ensures crate::verify::history_specs::no_internal_compile_error(result),
+        dsl::head_scoped(rule.head@) && dsl::regex_scoped(rule.tail@, rule.head@)
+            ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
+                && !(result matches Err(CompileError::UnboundVariable { .. })),
+        result matches Ok(lowered) ==>
         dsl::head_scoped(rule.head@) && dsl::regex_scoped(rule.tail@, rule.head@)
         && flat::head_matches(lowered.source.head@, event_values::<E>(candidate), component_equality::<E>())
             == dsl::head_matches(rule.head@, candidate)
@@ -787,7 +913,10 @@ pub fn flattening_client<E: Event, L: Limits>(rule: &Rule<E>, limits: &mut L, wo
 pub fn named_variable_client<E: Event, L: Limits>(name: alloc::string::String, action: E::Action,
     resource: E::Resource, limits: &mut L, world: &mut ObservationWorld)
     -> (result: Result<FlatRule<ComponentValue<E>>, CompileError>)
-    ensures result matches Ok(lowered) ==>
+    ensures crate::verify::history_specs::no_internal_compile_error(result),
+        !(result matches Err(CompileError::VariableComponentConflict { .. })),
+        !(result matches Err(CompileError::UnboundVariable { .. })),
+        result matches Ok(lowered) ==>
         lowered.source.head@[0] is Bind && lowered.mode == RuleMode::Require
         && match lowered.source.regexes@[lowered.source.root as int] {
             FlatRegex::Test(id) => lowered.source.tests@[id as int] == (FlatTest::Atom { field: Component::Principal,
@@ -809,4 +938,22 @@ pub fn named_variable_client<E: Event, L: Limits>(name: alloc::string::String, a
     source.dispose();
     result
 }
+
+/// Constant-only heads need no invented head-binding premise.
+pub fn constant_head_client<E: Event, L: Limits>(principal: E::Principal, action: E::Action,
+    resource: E::Resource, limits: &mut L, world: &mut ObservationWorld)
+    -> (result: Result<FlatRule<ComponentValue<E>>, CompileError>)
+    ensures crate::verify::history_specs::no_internal_compile_error(result),
+        !(result matches Err(CompileError::VariableComponentConflict { .. })),
+        !(result matches Err(CompileError::UnboundVariable { .. })),
+        !(result matches Err(CompileError::Runtime(crate::error::HistoryError::InvalidPolicy { .. }))),
+{
+    let source = Rule::new(RuleMode::Require,
+        Head::new(ComponentPattern::Constant(principal), ComponentPattern::Constant(action),
+            ComponentPattern::Constant(resource)), RegexExpr::all());
+    let result = crate::flatten::flatten_rule(&source, limits, world);
+    source.dispose();
+    result
+}
+
 }

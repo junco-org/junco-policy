@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 //! Revision-bound retained cursors and failure-atomic numeric batch evaluation.
+//! Graph construction and evaluation never report `WrongHistoryOwner`; typed facades check ownership.
 
 #[cfg(verus_keep_ghost)]
 use crate::compiled_rule::verify::numeric_result;
@@ -58,12 +59,23 @@ pub mod verify {
         result: Result<RuleRuntime, HistoryError>, store: Arc<HistoryStore>,
         template: junco_core::flat::FlatPair<u64>,
     ) -> bool {
-        result matches Ok(runtime) ==> runtime_wf(runtime)
+        result != Err(HistoryError::WrongHistoryOwner)
+            && (junco_core::flat::verify::structural_wf(template) ==> language::no_internal_error(result))
+            && (junco_core::flat::verify::structural_wf(template)
+                ==> !(result matches Err(HistoryError::InvalidPolicy { .. })))
+            && (result matches Ok(runtime) ==> runtime_wf(runtime)
             && runtime.store == store
             && runtime.cursors@ == Seq::<HistoryCursor>::empty()
             && runtime.snapshots@ == HistorySnapshots::empty()
             && crate::compile::verify::regex_correct(
-                runtime.pair.store.graph(), template, template.root as nat, runtime.pair.root)
+                runtime.pair.store.graph(), template, template.root as nat, runtime.pair.root))
+    }
+
+    /// The retained root language, without exposing graph nodes or cache state.
+    pub closed spec fn runtime_accepts(
+        runtime: RuleRuntime, bindings: language::EventView, events: Seq<language::EventView>,
+    ) -> bool {
+        model::regex_lang(runtime.pair.store.graph(), bindings, runtime.pair.root@, events)
     }
 
     pub open(crate) spec fn resume_requires(
@@ -99,7 +111,10 @@ pub mod verify {
         bindings: Bindings, stored: StoredHistory,
         target_len: usize, batch_size: usize, result: Result<Option<bool>, HistoryError>,
     ) -> bool {
-        runtime_wf(after) && after.store == before.store && progress::pair_frame(before.pair, after.pair)
+        result != Err(HistoryError::WrongHistoryOwner)
+            && (batch_size > 0 && start.consumed <= target_len
+                && target_len <= stored@.events.len() ==> language::no_internal_error(result))
+            && runtime_wf(after) && after.store == before.store && progress::pair_frame(before.pair, after.pair)
             && after.snapshots@ == before.snapshots@.insert((stored.id(), stored.revision()), history_store::store::verify::events_view(history_store::history::verify::stored_events(&stored)))
             && batch_matches_snapshot(after.pair, cursor, stored.id(), stored.revision(), bindings, after.snapshots@)
             && progress::residual_after_prefix(after.pair, history_store::store::verify::events_view(history_store::history::verify::stored_events(&stored)),
@@ -119,6 +134,23 @@ pub mod verify {
         after.store == before.store && progress::pair_frame(before.pair, after.pair)
     }
 
+    /// Retained graph growth does not change the root language of an earlier runtime.
+    pub proof fn lemma_runtime_frame_accepts(
+        before: RuleRuntime, after: RuleRuntime,
+        bindings: language::EventView, events: Seq<language::EventView>,
+    )
+        requires runtime_wf(before), runtime_frame(before, after),
+        ensures runtime_accepts(before, bindings, events) == runtime_accepts(after, bindings, events),
+    {
+        hide(language::lang);
+        hide(model::lift_regex);
+        reveal(runtime_wf);
+        reveal(runtime_frame);
+        reveal(runtime_accepts);
+        model::lemma_graph_wf_elim(before.pair.store.graph());
+        model::lemma_lift_regex_stable(before.pair.store.graph(), after.pair.store.graph(), before.pair.root@);
+    }
+
     /// A failed transaction preserves every previously retained cursor.
     pub open(crate) spec fn cursor_cache_unchanged(before: RuleRuntime, after: RuleRuntime) -> bool {
         after.cursors@ == before.cursors@
@@ -128,8 +160,33 @@ pub mod verify {
         template: junco_core::flat::FlatPair<u64>)
         requires constructor_result(Ok(runtime), store, template),
         ensures runtime_wf(runtime), runtime.spec_store() == store,
+            runtime.spec_snapshots() == HistorySnapshots::empty(),
     {
         reveal(constructor_result);
+    }
+
+    /// A newly constructed runtime has not observed any history revision yet.
+    pub proof fn lemma_constructor_snapshot_compatible(
+        runtime: RuleRuntime, store: Arc<HistoryStore>, template: FlatPair<u64>, stored: StoredHistory,
+    )
+        requires constructor_result(Ok(runtime), store, template),
+        ensures snapshot_compatible(runtime.spec_snapshots(), stored.id(), stored.revision(), stored@.events),
+    {
+        lemma_constructor_runtime_wf(runtime, store, template);
+        lemma_snapshot_compatible_intro(runtime.spec_snapshots(), stored.id(), stored.revision(), stored@.events);
+    }
+
+    /// Introduce readiness from public observations, not from readiness itself.
+    pub proof fn lemma_resume_requires(
+        runtime: RuleRuntime, bindings: Bindings, stored: StoredHistory, target_len: usize,
+    )
+        requires runtime_wf(runtime),
+            snapshot_compatible(runtime.spec_snapshots(), stored.id(), stored.revision(), stored@.events),
+            language::event_wf(bindings@), target_len <= stored@.events.len(),
+        ensures resume_requires(runtime, bindings, stored, target_len),
+    {
+        history_store::history::lemma_stored_history_view(stored);
+        reveal(resume_requires);
     }
 
     pub proof fn lemma_resume_can_advance(
@@ -137,12 +194,20 @@ pub mod verify {
         bindings: Bindings, stored: StoredHistory, target_len: usize,
     )
         requires resume_ensures(before, after, cursor, bindings, stored, target_len),
-        ensures advance_requires(after, cursor, bindings, stored),
-            after.spec_store() == before.spec_store(),
+        ensures advance_requires(after, cursor, bindings, stored), runtime_wf(after),
+            runtime_frame(before, after), cursor_cache_unchanged(before, after),
+            after.spec_store() == before.spec_store(), cursor_consumed(cursor) <= target_len,
+            after.spec_snapshots() == before.spec_snapshots().insert(
+                (stored.id(), stored.revision()), stored@.events),
+            snapshot_compatible(after.spec_snapshots(), stored.id(), stored.revision(), stored@.events),
     {
+        history_store::history::lemma_stored_history_view(stored);
         reveal(resume_ensures);
         reveal(advance_requires);
         reveal(snapshot_compatible);
+        reveal(runtime_frame);
+        reveal(cursor_cache_unchanged);
+        reveal(cursor_consumed);
     }
 
     pub proof fn lemma_advance_result_facts(
@@ -153,16 +218,28 @@ pub mod verify {
         requires advance_ensures(before, after, start, cursor, bindings, stored,
             target_len, batch_size, result),
         ensures runtime_wf(after), runtime_frame(before, after),
+            result != Err(HistoryError::WrongHistoryOwner),
+            batch_size > 0 && cursor_consumed(start) <= target_len && target_len <= stored@.events.len()
+                ==> language::no_internal_error(result),
             after.spec_store() == before.spec_store(),
+            after.spec_snapshots() == before.spec_snapshots().insert(
+                (stored.id(), stored.revision()), stored@.events),
+            snapshot_compatible(after.spec_snapshots(), stored.id(), stored.revision(), stored@.events),
+            advance_requires(after, cursor, bindings, stored),
             result is Err ==> cursor_consumed(cursor) == cursor_consumed(start)
                 && cursor_cache_unchanged(before, after),
             result matches Ok(None) ==> cursor_consumed(cursor) < target_len,
-            result matches Ok(Some(_)) ==> cursor_consumed(cursor) == target_len,
+            result matches Ok(Some(answer)) ==> cursor_consumed(cursor) == target_len
+                && answer == runtime_accepts(before, bindings@, stored@.events.take(target_len as int)),
     {
+        history_store::history::lemma_stored_history_view(stored);
         reveal(advance_ensures);
         reveal(runtime_frame);
         reveal(cursor_cache_unchanged);
         reveal(cursor_consumed);
+        reveal(advance_requires);
+        reveal(snapshot_compatible);
+        reveal(runtime_accepts);
     }
 
     pub open(crate) spec fn root_cursor_matches(runtime: RuleRuntime, cursor: BatchCursor) -> bool {
@@ -173,13 +250,53 @@ pub mod verify {
         cursor.consumed as nat
     }
 
-    pub(crate) type HistorySnapshots = Map<(usize, u64), Seq<language::EventView>>;
+    /// Numeric event snapshots keyed by immutable history identity and revision.
+    pub type HistorySnapshots = Map<(usize, u64), Seq<language::EventView>>;
 
-    pub(crate) open spec fn snapshot_compatible(
+    /// Reobserving a revision may extend, but cannot replace, its retained prefix.
+    pub closed spec fn snapshot_compatible(
         snapshots: HistorySnapshots, history: usize, revision: u64, events: Seq<language::EventView>,
     ) -> bool {
         !snapshots.contains_key((history, revision))
             || snapshots[(history, revision)].is_prefix_of(events)
+    }
+
+    pub proof fn lemma_snapshot_compatible_intro(
+        snapshots: HistorySnapshots, history: usize, revision: u64, events: Seq<language::EventView>,
+    )
+        requires !snapshots.contains_key((history, revision))
+            || snapshots[(history, revision)].is_prefix_of(events),
+        ensures snapshot_compatible(snapshots, history, revision, events),
+    {
+        reveal(snapshot_compatible);
+    }
+
+    pub proof fn lemma_snapshot_compatible_elim(
+        snapshots: HistorySnapshots, history: usize, revision: u64, events: Seq<language::EventView>,
+    )
+        requires snapshot_compatible(snapshots, history, revision, events),
+        ensures !snapshots.contains_key((history, revision))
+            || snapshots[(history, revision)].is_prefix_of(events),
+    {
+        reveal(snapshot_compatible);
+    }
+
+    /// Actual lifecycle receipts justify reuse even when other writers intervene.
+    pub proof fn lemma_snapshot_compatible_lifecycle(
+        snapshots: HistorySnapshots, stored: StoredHistory,
+        tracked snapshot: &raw::Snapshot, tracked lifecycle: &raw::Lifecycle,
+    )
+        requires lifecycle.wf(), lifecycle.state() == stored@, snapshot.id() == lifecycle.id(),
+            snapshots.contains_key((stored.id(), stored.revision())) ==>
+                snapshot.value().revision == stored@.revision
+                    && snapshot.value().events == snapshots[(stored.id(), stored.revision())],
+        ensures snapshot_compatible(snapshots, stored.id(), stored.revision(), stored@.events),
+    {
+        history_store::history::lemma_stored_history_view(stored);
+        if snapshots.contains_key((stored.id(), stored.revision())) {
+            lifecycle.validate(snapshot);
+        }
+        lemma_snapshot_compatible_intro(snapshots, stored.id(), stored.revision(), stored@.events);
     }
 
     pub(crate) open spec fn cursor_matches_snapshot(
@@ -352,6 +469,9 @@ impl RuleRuntime {
     #[cfg(verus_keep_ghost)]
     verus! {
         pub open(crate) spec fn spec_store(&self) -> Arc<HistoryStore> { self.store }
+
+        /// Read-only observations used to establish compatibility before evaluation.
+        pub open(crate) spec fn spec_snapshots(&self) -> verify::HistorySnapshots { self.snapshots@ }
     }
 
     /// The numeric store whose records name this runtime's cursor keys.
@@ -370,7 +490,10 @@ impl RuleRuntime {
         }
     }
 
-    #[verus_spec(result => ensures constructor_result(result, *store, *template))]
+    #[verus_spec(result => ensures constructor_result(result, *store, *template),
+        result != Err(HistoryError::WrongHistoryOwner),
+        junco_core::flat::verify::structural_wf(*template) ==> language::no_internal_error(result)
+            && !(result matches Err(HistoryError::InvalidPolicy { .. }))) ]
     pub fn new<L: Limits>(
         store: &Arc<HistoryStore>,
         template: &junco_core::flat::FlatPair<u64>,
@@ -423,6 +546,8 @@ impl RuleRuntime {
             runtime_wf(*final(self)),
             progress::pair_frame(old(self).pair, final(self).pair),
             final(self).spec_store() == old(self).spec_store(),
+            result != Err(HistoryError::WrongHistoryOwner),
+            language::no_internal_error(result),
             result is Err ==> final(self).cursors@ == old(self).cursors@,
             final(self).snapshots@ == old(self).snapshots@
                 || final(self).snapshots@ == old(self).snapshots@.insert((stored.id(), stored.revision()),
@@ -464,6 +589,7 @@ impl RuleRuntime {
         let target = stored.len();
         let mut cursor = self.resume_cursor(&bindings, stored, target);
         proof! {
+            lemma_resume_can_advance(entry, *self, cursor, bindings, *stored, target);
             assert(self.snapshots@ == initial_snapshots.insert((stored.id(), stored.revision()),
                 history_store::store::verify::events_view(raw::stored_events(&stored))));
         }
@@ -595,6 +721,7 @@ impl RuleRuntime {
         requires advance_requires(*old(self), *old(cursor), *bindings, *stored),
         ensures advance_ensures(*old(self), *final(self), *old(cursor), *final(cursor),
             *bindings, *stored, target_len, batch_size, result),
+            result != Err(HistoryError::WrongHistoryOwner),
     )]
     pub fn advance_cursor<L: Limits>(
         &mut self,
@@ -611,6 +738,7 @@ impl RuleRuntime {
         proof_decl! { let ghost entry = self.pair; let ghost entry_cursors = self.cursors@; let ghost start = *cursor; }
         proof! {
             let events = history_store::store::verify::events_view(history_store::history::verify::stored_events(&stored));
+            lemma_snapshot_compatible_elim(self.snapshots@, history, stored.revision(), events);
             if cursor.consumed == 0 && cursor.residual == self.pair.root {
                 assert(events.take(0) =~= Seq::<language::EventView>::empty());
                 assert forall|word: Seq<language::EventView>| model::regex_lang(self.pair.store.graph(), bindings@, cursor.residual@, word)
@@ -774,6 +902,9 @@ impl BatchCursor {
         ensures
             crate::progress::verify::pair_wf(*final(pair)),
             crate::progress::verify::pair_frame(*old(pair), *final(pair)),
+            result != Err(HistoryError::WrongHistoryOwner),
+            batch_size > 0 && old(self).consumed <= target_len && target_len <= events@.len()
+                ==> language::no_internal_error(result),
             result is Err ==> final(self).consumed == old(self).consumed
                 && final(self).residual == old(self).residual,
             result is Ok ==> old(self).consumed <= final(self).consumed

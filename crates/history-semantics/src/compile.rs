@@ -10,6 +10,8 @@ use history_syntax::syntax::Component;
 use junco_core::error::HistoryError;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
 #[cfg(verus_keep_ghost)]
+use junco_core::flat::verify as flat;
+#[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
 use junco_core::kernel::*;
 use junco_core::limits::Limits;
@@ -85,8 +87,11 @@ impl RuleRuntime {
 #[verus_verify]
 impl CompiledPair {
     #[verus_verify]
-    #[verus_spec(result => ensures result matches Ok(value)
-        ==> (id as nat) < values@.len() && value == values@[id as int])]
+    #[verus_spec(result => ensures
+        result != Err(HistoryError::WrongHistoryOwner),
+        !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        (id as nat) < values@.len() ==> language::no_internal_error(result),
+        result matches Ok(value) ==> (id as nat) < values@.len() && value == values@[id as int])]
     #[allow(
         clippy::option_if_let_else,
         reason = "Explicit matches preserve the Verus proof structure"
@@ -104,7 +109,12 @@ impl CompiledPair {
     }
 
     #[verus_verify]
-    #[verus_spec(result => ensures result matches Ok(found) ==> {
+    #[verus_spec(result => ensures
+        result != Err(HistoryError::WrongHistoryOwner),
+        !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        (forall|i: int| 0 <= i < ids@.len() ==> #[trigger] ids@[i] < values@.len())
+            ==> language::no_internal_error(result),
+        result matches Ok(found) ==> {
         found@.len() == ids@.len()
         && forall|i: int| 0 <= i < ids@.len()
             ==> #[trigger] ids@[i] < values@.len() && found@[i] == values@[ids@[i] as int]
@@ -155,7 +165,11 @@ impl CompiledPair {
         reason = "Separate lowering loops retain their proof-local index bindings"
     )]
     #[verus_verify]
-    #[verus_spec(result => ensures result matches Ok(pair) ==> {
+    #[verus_spec(result => ensures
+        result != Err(HistoryError::WrongHistoryOwner),
+        !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        flat::structural_wf(*template) ==> language::no_internal_error(result),
+        result matches Ok(pair) ==> {
         crate::progress::verify::pair_wf(pair)
         && forall|theta: language::Subst, word: Seq<language::EventView>| language::event_wf(theta)
             ==> model::regex_lang(pair.store.graph(), theta, pair.root@, word)
@@ -185,7 +199,8 @@ impl CompiledPair {
             let mut index = 0;
             #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant index <= template.tests@.len(), tests@.len() == index,
-                kernel.valid_store(), model::graph_wf(kernel.graph()),
+                kernel.valid_store(), kernel.errors_are_non_invariant(), model::graph_wf(kernel.graph()),
+                kernel.errors_are_non_invalid_policy(),
                 kernel.restoration() == restoration,
                 test_maps(kernel.graph(), *template, tests@),
                 regex_maps(kernel.graph(), *template, regexes@), regexes@.len() == 0,
@@ -199,7 +214,12 @@ impl CompiledPair {
                 };
                 proof_decl! { let ghost before = kernel.graph(); }
                 proof_decl! { let ghost mut selected_ids = Seq::<TestId>::empty(); }
-                proof! { assert(*test == template.tests@[index as int]); }
+                proof! {
+                    assert(*test == template.tests@[index as int]);
+                    if flat::structural_wf(*template) {
+                        assert(flat::test_wf(template.head@, *test, index as nat));
+                    }
+                }
                 let id = match test {
                     FlatTest::Bool(value) => {
                         if *value {
@@ -271,7 +291,8 @@ impl CompiledPair {
             let mut index = 0;
             #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant index <= template.regexes@.len(), regexes@.len() == index,
-                kernel.valid_store(), model::graph_wf(kernel.graph()),
+                kernel.valid_store(), kernel.errors_are_non_invariant(), model::graph_wf(kernel.graph()),
+                kernel.errors_are_non_invalid_policy(),
                 kernel.restoration() == restoration,
                 test_maps(kernel.graph(), *template, tests@), tests@.len() == template.tests@.len(),
                 regex_maps(kernel.graph(), *template, regexes@),
@@ -285,7 +306,12 @@ impl CompiledPair {
                 };
                 proof_decl! { let ghost before = kernel.graph(); }
                 proof_decl! { let ghost mut selected_ids = Seq::<RegexId>::empty(); }
-                proof! { assert(*regex == template.regexes@[index as int]); }
+                proof! {
+                    assert(*regex == template.regexes@[index as int]);
+                    if flat::structural_wf(*template) {
+                        assert(flat::regex_wf(*regex, index as nat, template.tests@.len()));
+                    }
+                }
                 let id = match regex {
                     FlatRegex::Empty => kernel.constants().empty,
                     FlatRegex::All => kernel.constants().all,
@@ -421,8 +447,11 @@ impl CompiledPair {
         reason = "Term fields mirror the matched Verus model variants"
     )]
     #[verus_verify]
-    #[verus_spec(result => ensures result matches Ok(answer)
-        ==> answer == model::primitive_holds(bindings@, primitive@, event@))]
+    #[verus_spec(result => ensures
+        result != Err(HistoryError::WrongHistoryOwner),
+        language::no_internal_error(result),
+        !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        result matches Ok(answer) ==> answer == model::primitive_holds(bindings@, primitive@, event@))]
 
     pub(crate) fn classify<L: Limits>(
         primitive: Primitive,
@@ -628,33 +657,9 @@ pub mod verify {
             assert(children[i] < ids.len());
             assert(test_correct(g, template, children[i] as nat, ids[children[i] as int]));
         }
-        if and {
-            if norm::test_combo(g, theta, selected, event, and) {
-                assert forall|i: int| 0 <= i < children.len() implies
-                    children[i] < ids.len() && source_test(template, children[i] as nat, theta, event) by {
-                    assert(model::test_holds(theta, model::lift_test(g, selected[i]@), event));
-                }
-            }
-            if forall|i: int| 0 <= i < children.len()
-                ==> children[i] < ids.len() && source_test(template, children[i] as nat, theta, event) {
-                assert forall|i: int| 0 <= i < selected.len() implies
-                    model::test_holds(theta, model::lift_test(g, selected[i]@), event) by {
-                    assert(children[i] < ids.len() && source_test(template, children[i] as nat, theta, event));
-                }
-            }
-        } else {
-            if norm::test_combo(g, theta, selected, event, and) {
-                let i = choose|i: int| 0 <= i < selected.len()
-                    && model::test_holds(theta, model::lift_test(g, selected[i]@), event);
-                assert(children[i] < ids.len() && source_test(template, children[i] as nat, theta, event));
-            }
-            if exists|i: int| 0 <= i < children.len()
-                && children[i] < ids.len() && source_test(template, children[i] as nat, theta, event) {
-                let i = choose|i: int| 0 <= i < children.len()
-                    && children[i] < ids.len() && source_test(template, children[i] as nat, theta, event);
-                assert(model::test_holds(theta, model::lift_test(g, selected[i]@), event));
-            }
-        }
+        norm::lemma_combo_pointwise(children.len(),
+            |i: int| model::test_holds(theta, model::lift_test(g, selected[i]@), event),
+            |i: int| children[i] < ids.len() && source_test(template, children[i] as nat, theta, event), and);
     }
 
     pub(crate) proof fn regex_set_transfer(g: model::Graph, template: FlatPair<u64>,
@@ -680,33 +685,9 @@ pub mod verify {
             assert(children[i] < ids.len());
             assert(regex_correct(g, template, children[i] as nat, ids[children[i] as int]));
         }
-        if intersect {
-            if norm::regex_combo(g, theta, selected, word, intersect) {
-                assert forall|i: int| 0 <= i < children.len() implies
-                    children[i] < ids.len() && source_regex(template, children[i] as nat, theta, word) by {
-                    assert(model::regex_lang(g, theta, selected[i]@, word));
-                }
-            }
-            if forall|i: int| 0 <= i < children.len()
-                ==> children[i] < ids.len() && source_regex(template, children[i] as nat, theta, word) {
-                assert forall|i: int| 0 <= i < selected.len() implies
-                    model::regex_lang(g, theta, selected[i]@, word) by {
-                    assert(children[i] < ids.len() && source_regex(template, children[i] as nat, theta, word));
-                }
-            }
-        } else {
-            if norm::regex_combo(g, theta, selected, word, intersect) {
-                let i = choose|i: int| 0 <= i < selected.len()
-                    && model::regex_lang(g, theta, selected[i]@, word);
-                assert(children[i] < ids.len() && source_regex(template, children[i] as nat, theta, word));
-            }
-            if exists|i: int| 0 <= i < children.len()
-                && children[i] < ids.len() && source_regex(template, children[i] as nat, theta, word) {
-                let i = choose|i: int| 0 <= i < children.len()
-                    && children[i] < ids.len() && source_regex(template, children[i] as nat, theta, word);
-                assert(model::regex_lang(g, theta, selected[i]@, word));
-            }
-        }
+        norm::lemma_combo_pointwise(children.len(),
+            |i: int| model::regex_lang(g, theta, selected[i]@, word),
+            |i: int| children[i] < ids.len() && source_regex(template, children[i] as nat, theta, word), intersect);
     }
 
     pub(crate) proof fn regex_concat_transfer(g: model::Graph, template: FlatPair<u64>,

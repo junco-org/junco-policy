@@ -218,7 +218,7 @@ pub(crate) fn cached_decision<L: Limits>(
     target_len: usize, batch_size: usize, limits: &mut L, world: &mut ObservationWorld,
 ) -> (result: KernelResult<bool>)
     requires cache::cursor_cache_wf(old(runtime).pair, old(runtime).cursors@, old(runtime).snapshots@),
-        cache::snapshot_compatible(old(runtime).snapshots@, stored.id(), (stored@.revision as u64),
+        cache::snapshot_compatible(old(runtime).snapshots@, stored.id(), stored.revision(),
             stored@.events),
         language::event_wf(bindings@), batch_size > 0, target_len <= stored@.events.len(),
     ensures cache::cursor_cache_wf(final(runtime).pair, final(runtime).cursors@, final(runtime).snapshots@),
@@ -245,15 +245,18 @@ pub(crate) fn cached_decision<L: Limits>(
             progress::pair_wf(entry),
             cache::cursor_cache_wf(runtime.pair, runtime.cursors@, runtime.snapshots@),
             progress::pair_frame(entry, runtime.pair),
-            runtime.snapshots@.contains_key((stored.id(), (stored@.revision as u64))),
-            runtime.snapshots@[(stored.id(), (stored@.revision as u64))] == stored@.events,
-            cache::batch_matches_snapshot(runtime.pair, cursor, stored.id(), (stored@.revision as u64),
+            runtime.snapshots@.contains_key((stored.id(), stored.revision())),
+            runtime.snapshots@[(stored.id(), stored.revision())] == stored@.events,
+            cache::batch_matches_snapshot(runtime.pair, cursor, stored.id(), stored.revision(),
                 *bindings, runtime.snapshots@),
             cursor.consumed <= target_len, target_len <= stored@.events.len(),
             language::event_wf(bindings@), batch_size > 0,
         decreases target_len - cursor.consumed,
     {
-        proof { history_store::history::lemma_stored_history_view(*stored); }
+        proof {
+            history_store::history::lemma_stored_history_view(*stored);
+            cache::lemma_snapshot_compatible_intro(runtime.snapshots@, stored.id(), stored.revision(), stored@.events);
+        }
         let ghost batch_entry = runtime.pair;
         let ghost consumed = cursor.consumed;
         let result = runtime.advance_cursor(&mut cursor, bindings, stored,
@@ -300,6 +303,10 @@ pub(crate) fn template_cached_decision<L: Limits>(
     reveal(cache::constructor_result);
     reveal(cache::runtime_wf);
     let mut runtime = RuleRuntime::new(store, template, precompile, limits, world)?;
+    proof {
+        history_store::history::lemma_stored_history_view(*stored);
+        cache::lemma_constructor_snapshot_compatible(runtime, *store, *template, *stored);
+    }
     cached_decision(&mut runtime, bindings, stored, target_len, batch_size, limits, world)
 }
 

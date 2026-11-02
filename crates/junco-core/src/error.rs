@@ -69,6 +69,7 @@ impl HistoryError {
 
     #[cfg(feature = "runtime")]
     #[verus_verify]
+    #[verus_spec(result => ensures result is Invariant)]
     #[inline]
     pub const fn normalization_invariant() -> HistoryError {
         HistoryError::Invariant {
@@ -77,6 +78,7 @@ impl HistoryError {
     }
     #[cfg(feature = "runtime")]
     #[verus_verify]
+    #[verus_spec(result => ensures result is Invariant)]
     #[inline]
     pub const fn symbolic_invariant() -> HistoryError {
         HistoryError::Invariant {
@@ -85,6 +87,7 @@ impl HistoryError {
     }
     #[cfg(feature = "runtime")]
     #[verus_verify]
+    #[verus_spec(result => ensures result is Invariant)]
     #[inline]
     pub const fn invalid_truth_assignment() -> HistoryError {
         HistoryError::Invariant {
@@ -110,6 +113,7 @@ impl HistoryError {
     }
     #[cfg(feature = "runtime")]
     #[verus_verify]
+    #[verus_spec(result => ensures result is Invariant)]
     #[inline]
     pub const fn invalid_atom_set() -> HistoryError {
         HistoryError::Invariant {
@@ -118,6 +122,7 @@ impl HistoryError {
     }
     #[cfg(feature = "runtime")]
     #[verus_verify]
+    #[verus_spec(result => ensures result is Invariant)]
     #[inline]
     pub const fn missing_transition_atom() -> HistoryError {
         HistoryError::Invariant {

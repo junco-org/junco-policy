@@ -3,6 +3,8 @@
 use crate::error::HistoryError;
 use crate::limits::Limits;
 use crate::observation::ObservationWorld;
+#[cfg(verus_keep_ghost)]
+use crate::verify::history_specs::no_internal_error;
 use alloc::string::String;
 use alloc::vec::Vec;
 use history_syntax::syntax::{Component, RuleMode};
@@ -522,6 +524,9 @@ impl<C> FlatBuilder<C> {
     #[verus_spec(result => requires old(self).wf(), ensures
         final(self).wf(), final(self).head_view() == old(self).head_view(),
         final(self).regexes_view() == old(self).regexes_view(),
+        no_internal_error(result),
+        verify::test_wf(old(self).head_view(), node, old(self).tests_view().len())
+            ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         match result {
             Ok(id) => id == old(self).tests_view().len()
                 && final(self).tests_view() == old(self).tests_view().push(node),
@@ -566,6 +571,9 @@ impl<C> FlatBuilder<C> {
     #[verus_spec(result => requires old(self).wf(), ensures
         final(self).wf(), final(self).head_view() == old(self).head_view(),
         final(self).tests_view() == old(self).tests_view(),
+        no_internal_error(result),
+        verify::regex_wf(node, old(self).regexes_view().len(), old(self).tests_view().len())
+            ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         match result {
             Ok(id) => id == old(self).regexes_view().len()
                 && final(self).regexes_view() == old(self).regexes_view().push(node),
@@ -605,6 +613,9 @@ impl<C> FlatBuilder<C> {
 
     #[verus_spec(result => requires self.wf(), ensures
         (result is Ok) <==> root < self.regexes_view().len(),
+        no_internal_error(result),
+        root < self.regexes_view().len()
+            ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         match result {
             Ok(pair) => verify::structural_wf(pair) && pair.head@ == self.head_view()
                 && pair.tests@ == self.tests_view() && pair.regexes@ == self.regexes_view()

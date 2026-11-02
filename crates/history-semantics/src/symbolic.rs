@@ -4,6 +4,7 @@
 //! Exact numeric symbolic derivatives and iterative transition-DAG interpretation.
 //! Existing ID extension traits own cache lookup and branch execution; finish tasks
 //! precede reverse child scheduling so each LIFO traversal preserves source order.
+//! Error provenance is conditional on store capabilities; finishing tasks require completed dependencies.
 
 use crate::WorkVec;
 #[cfg(verus_keep_ghost)]
@@ -25,6 +26,8 @@ use junco_core::verify::history_assumptions::KernelStoreSpec;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs as language;
 #[cfg(verus_keep_ghost)]
+use crate::progress::verify as reach;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::{EventView, Subst};
 use junco_core::{loop_try, scan};
 #[cfg(verus_keep_ghost)]
@@ -33,6 +36,30 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 verus! {
 broadcast use junco_core::kernel::verify::group_kernel_views;
+}
+
+#[verus_verify]
+#[verus_spec(result => ensures language::no_internal_error(result), !(result matches Err(HistoryError::InvalidPolicy { .. })),
+    match result {
+        Ok(bytes) => bytes as int == count * vstd::layout::size_of::<Option<TransitionId>>(),
+        Err(error) => error is AllocationFailed && count * vstd::layout::size_of::<Option<TransitionId>>() > usize::MAX,
+    })]
+fn derivative_cache_bytes(count: usize) -> KernelResult<usize> {
+    vstd::layout::layout_for_type_is_valid::<Option<TransitionId>>();
+    match count.checked_mul(core::mem::size_of::<Option<TransitionId>>()) {
+        Some(bytes) => Ok(bytes),
+        None => Err(HistoryError::AllocationFailed),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn derivative_cache_byte_overflow_is_allocation_failure() {
+    let width = core::mem::size_of::<Option<TransitionId>>();
+    assert!(width > 1);
+    let largest = usize::MAX / width;
+    assert_eq!(derivative_cache_bytes(largest), Ok(largest * width));
+    assert_eq!(derivative_cache_bytes(largest + 1), Err(HistoryError::AllocationFailed));
 }
 
 #[verus_verify]
@@ -49,8 +76,14 @@ impl DerivativeFactors {
         requires model::graph_wf(store.graph()), derivative_factors_wf(store.graph(), self.root, self.count as nat, self.concat),
             derivative_tasks_wf(store.graph(), old(tasks).view()),
         ensures derivative_tasks_wf(store.graph(), final(tasks).view()),
+            store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+            store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             old(tasks).view().is_prefix_of(final(tasks).view()),
-            result is Ok ==> final(tasks).view().len() <= old(tasks).view().len() + self.count,
+            final(tasks).view().len() <= old(tasks).view().len() + self.count,
+            result is Ok && !self.concat ==> final(tasks).view().len() == old(tasks).view().len() + self.count,
+            result is Ok ==> forall|i: nat| i < self.count && (!self.concat || #[trigger] derivative_prefix(store.graph(), self.root, i))
+                ==> old(tasks).view().len() + i < final(tasks).view().len(),
             forall|j: int| #![trigger final(tasks).view()[j]] old(tasks).view().len() <= j < final(tasks).view().len() ==> final(tasks).view()[j].0@
                 == derivative_children_ids(store.graph(), self.root)[j - old(tasks).view().len()] && !final(tasks).view()[j].1,
     )]
@@ -66,14 +99,25 @@ impl DerivativeFactors {
         proof_decl! { let ghost start = tasks.view(); }
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant i <= self.count, derivative_tasks_wf(store.graph(), tasks.view()),
             model::graph_wf(store.graph()), derivative_factors_wf(store.graph(), self.root, self.count as nat, self.concat),
+            store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+            store.errors_are_non_invariant() && store.valid_store() ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+            store.errors_are_non_invalid_policy() && store.valid_store() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
             model::regex_node_wf_at(store.graph(), store.graph().regexes[self.root@ as int], self.root@),
             prefix == derivative_prefix(store.graph(), self.root, i as nat),
             start == old(tasks).view(), start.is_prefix_of(tasks.view()),
+            tasks.view().len() <= start.len() + self.count,
             forall|j: int| #![trigger tasks.view()[j]] start.len() <= j < tasks.view().len() ==> tasks.view()[j].0@
                 == derivative_children_ids(store.graph(), self.root)[j - start.len()] && !tasks.view()[j].1,
+            forall|j: nat| j < i && (!self.concat || #[trigger] derivative_prefix(store.graph(), self.root, j))
+                ==> start.len() + j < tasks.view().len(),
             invariant_except_break failure is None, tasks.view().len() <= start.len() + i,
                 (!self.concat || prefix) ==> tasks.view().len() == start.len() + i,
-            ensures failure is None ==> tasks.view().len() <= start.len() + self.count,
+            ensures failure is None ==> i == self.count
+                && tasks.view().len() <= start.len() + self.count,
+            failure is None && !self.concat ==> tasks.view().len() == start.len() + self.count,
+            failure is None ==> forall|j: nat| j < self.count
+                && (!self.concat || #[trigger] derivative_prefix(store.graph(), self.root, j))
+                ==> start.len() + j < tasks.view().len(),
             decreases self.count - i))]
         while i < self.count {
             let child = loop_try!(self.root.child(store, i), failure);
@@ -97,13 +141,24 @@ impl DerivativeFactors {
         if let Some(error) = failure {
             return Err(error);
         }
+        proof! {
+            assert(start == old(tasks).view());
+            assert(i == self.count);
+            if !self.concat { assert(tasks.view().len() == start.len() + self.count); }
+            assert forall|j: nat| j < self.count
+                && (!self.concat || #[trigger] derivative_prefix(store.graph(), self.root, j))
+                implies old(tasks).view().len() + j < tasks.view().len() by {}
+        }
         Ok(())
     }
     #[verus_verify]
     #[verus_spec(result =>
         requires model::graph_wf(store.graph()), start <= self.count,
             self.root@ < store.graph().regexes.len(), self.count == derivative_children_ids(store.graph(), self.root).len(),
-        ensures match result { Ok(suffix) =>
+        ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+            store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            match result { Ok(suffix) =>
             norm::regex_ids_valid(store.graph(), suffix.view())
             && model::regex_ids(suffix.view()) == derivative_children_ids(store.graph(), self.root).subrange(start as int, self.count as int),
             Err(_) => true },
@@ -115,6 +170,9 @@ impl DerivativeFactors {
         let mut i = start;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant start <= i <= self.count,
             model::graph_wf(store.graph()), self.root@ < store.graph().regexes.len(),
+            store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+            store.errors_are_non_invariant() && store.valid_store() ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+            store.errors_are_non_invalid_policy() && store.valid_store() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
             self.count == derivative_children_ids(store.graph(), self.root).len(),
             model::regex_node_wf_at(store.graph(), store.graph().regexes[self.root@ as int], self.root@),
             norm::regex_ids_valid(store.graph(), suffix.view()),
@@ -156,8 +214,16 @@ impl DerivativeFactors {
             prefix == derivative_prefix(old(store).graph(), self.root, index as nat),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && derivative_dependencies_complete(old(store).graph(), self.root, cache@) ==> language::no_internal_error(result),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), cache@),
+            derivative_dependencies_complete(old(store).graph(), self.root, cache@)
+                == derivative_dependencies_complete(final(store).graph(), self.root, cache@),
             match result { Ok(next) => next == derivative_prefix(final(store).graph(), self.root, index as nat + 1)
                 && derivative_results(final(store).graph(), self.root, self.concat, index as nat + 1, final(results).view()), Err(_) => true },
     )]
@@ -171,9 +237,14 @@ impl DerivativeFactors {
     ) -> KernelResult<bool> {
         proof_decl! { let ghost before = store.graph(); let ghost prior_results = results.view(); }
         proof! { derivative_frame(store.graph()); model::lemma_graph_regex_wf(store.graph(), self.root@); }
+        proof! { derivative_dependency_frame(store.graph(), self.root); }
         store.checkpoint()?;
         let child = self.root.child(store, index)?;
         if !self.concat || prefix {
+            proof! {
+                assert(derivative_children_ids(store.graph(), self.root)[index as int] == child@);
+                assert(derivative_dependency(store.graph(), self.root, child@));
+            }
             let d = RegexId::cached(cache, child)?;
             if self.concat {
                 let start = match index.checked_add(1) {
@@ -210,6 +281,12 @@ impl DerivativeFactors {
             },
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && derivative_dependencies_complete(old(store).graph(), self.root, cache@) ==> language::no_internal_error(result),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), cache@),
             match result { Ok(out) => derivative_correct(final(store).graph(), self.root@, out), Err(_) => true },
@@ -222,14 +299,22 @@ impl DerivativeFactors {
     ) -> KernelResult<TransitionId> {
         proof_decl! { let ghost entry = store.graph(); }
         proof! { derivative_frame(store.graph()); }
+        proof! { derivative_dependency_frame(entry, self.root); }
         let mut results = WorkVec::new();
         let mut state = Ok(true);
         scan!(state,index,self.count,state.is_ok(),prior=>self.child_step(store,cache,index,&mut results,prior);
             invariant index <= self.count, model::graph_extends(entry, store.graph()), model::graph_wf(store.graph()), store.valid_store(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).errors_are_non_invalid_policy() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
+                old(store).errors_are_non_invariant() && derivative_dependencies_complete(entry, self.root, cache@) ==> language::no_internal_error(state),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
                 model::graph_wf(entry), self.root@ < entry.regexes.len(),
                 derivative_cache_wf(store.graph(), cache@), derivative_factors_wf(store.graph(), self.root, self.count as nat, self.concat),
                 store.graph().regexes[self.root@ as int] == entry.regexes[self.root@ as int],
+                derivative_dependencies_complete(entry, self.root, cache@) == derivative_dependencies_complete(store.graph(), self.root, cache@),
                 match state { Ok(prefix) => prefix == derivative_prefix(store.graph(), self.root, index as nat)
                     && derivative_results(store.graph(), self.root, self.concat, index as nat, results.view()), Err(_) => true },
             decreases self.count - index);
@@ -259,9 +344,21 @@ impl DerivativeFactors {
             },
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && (!finish || derivative_dependencies_complete(old(store).graph(), self.root, old(cache)@)) ==> language::no_internal_error(result),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(), final(cache)@ == old(cache)@,
             derivative_cache_wf(final(store).graph(), final(cache)@), derivative_tasks_wf(final(store).graph(), final(tasks).view()),
-            match result { Ok(Some(out)) => derivative_correct(final(store).graph(), self.root@, out), _ => true },
+            match result { Ok(Some(out)) => derivative_correct(final(store).graph(), self.root@, out)
+                && out@ < final(store).graph().transitions.len(), _ => true },
+            result matches Ok(Some(_)) ==> final(tasks).view() == old(tasks).view(),
+            old(tasks).view().is_prefix_of(final(tasks).view()),
+            forall|bound: nat| self.root@ <= bound && derivative_tasks_bounded(old(tasks).view(), bound)
+                ==> derivative_tasks_bounded(final(tasks).view(), bound),
+            result == Ok(None) ==> derivative_scheduled(old(store).graph(), self.root, old(tasks).view(), final(tasks).view()),
             result is Ok ==> final(tasks).view() == old(tasks).view()
                 || (derivative_tasks_wf(old(store).graph(), final(tasks).view())
                     && derivative_work(old(store).graph(), final(tasks).view())
@@ -275,13 +372,66 @@ impl DerivativeFactors {
         finish: bool,
         tasks: &mut WorkVec<(RegexId, bool)>,
     ) -> KernelResult<Option<TransitionId>> {
-        proof! { derivative_frame(store.graph()); }
+        proof! { derivative_frame(store.graph()); model::lemma_graph_regex_wf(store.graph(), self.root@); }
         if finish {
             Ok(Some(self.derive(store, cache, intersect)?))
         } else {
             tasks.push((self.root, true));
-            self.schedule(store, tasks)?;
-            proof! { derivative_lemma_work_branch(store.graph(), self.root, old(tasks).view(), tasks.view()); }
+            proof_decl! { let ghost scheduled_from = tasks.view(); }
+            proof! { assert(scheduled_from == old(tasks).view().push((self.root, true))); }
+            let scheduled = self.schedule(store, tasks);
+            proof! {
+                broadcast use vstd::seq::group_seq_lemmas;
+                assert(scheduled_from.is_prefix_of(tasks.view()));
+                assert forall|j: int| 0 <= j < scheduled_from.len()
+                    implies tasks.view()[j] == scheduled_from[j] by {}
+                assert forall|bound: nat| self.root@ <= bound && derivative_tasks_bounded(old(tasks).view(), bound)
+                    implies derivative_tasks_bounded(tasks.view(), bound) by {
+                    assert forall|j: int| 0 <= j < tasks.view().len() implies tasks.view()[j].0@ <= bound by {
+                        if j < old(tasks).view().len() {
+                            assert(scheduled_from[j] == old(tasks).view()[j]);
+                            assert(tasks.view()[j] == scheduled_from[j]);
+                            assert(tasks.view()[j] == old(tasks).view()[j]);
+                        } else if j == old(tasks).view().len() {
+                            assert(scheduled_from[j] == (self.root, true));
+                            assert(tasks.view()[j] == scheduled_from[j]);
+                            assert(tasks.view()[j].0 == self.root);
+                        } else {
+                            let i = j - old(tasks).view().len() - 1;
+                            assert(0 <= i < self.count);
+                            assert(i < derivative_children_ids(store.graph(), self.root).len());
+                            assert(tasks.view()[j].0@ == derivative_children_ids(store.graph(), self.root)[i]);
+                        }
+                    }
+                }
+            }
+            scheduled?;
+            proof! {
+                broadcast use vstd::seq::group_seq_lemmas;
+                derivative_lemma_work_branch(store.graph(), self.root, old(tasks).view(), tasks.view());
+                assert(old(tasks).view() =~= tasks.view().take(old(tasks).view().len() as int));
+                assert(scheduled_from[old(tasks).view().len() as int] == (self.root, true));
+                assert(tasks.view()[old(tasks).view().len() as int]
+                    == scheduled_from[old(tasks).view().len() as int]);
+                assert(tasks.view()[old(tasks).view().len() as int] == (self.root, true));
+                assert forall|i: int| old(tasks).view().len() < i < tasks.view().len()
+                    implies !tasks.view()[i].1 by {}
+                assert forall|child: nat| derivative_dependency(store.graph(), self.root, child)
+                    implies exists|j: int| old(tasks).view().len() < j < tasks.view().len() && tasks.view()[j].0@ == child by {
+                    let i = choose|i: int| 0 <= i < self.count && derivative_children_ids(store.graph(), self.root)[i] == child
+                        && (!self.concat || derivative_prefix(store.graph(), self.root, i as nat));
+                    let j = old(tasks).view().len() + 1 + i;
+                    if self.concat {
+                        assert(derivative_prefix(store.graph(), self.root, i as nat));
+                        assert(scheduled_from.len() + (i as nat) < tasks.view().len());
+                    } else {
+                        assert(tasks.view().len() == scheduled_from.len() + self.count);
+                    }
+                    assert(scheduled_from.len() + i < tasks.view().len());
+                    assert(tasks.view()[j].0@ == derivative_children_ids(store.graph(), self.root)[i]);
+                    assert(tasks.view()[j].0@ == child);
+                }
+            }
             Ok(None)
         }
     }
@@ -292,6 +442,9 @@ pub(crate) trait RegexDerivative: Sized {
         ensures match result {
             Ok(out) => id@ < cache@.len() && cache@[id@ as int] == Some(out), Err(_) => true,
         },
+            result != Err(HistoryError::WrongHistoryOwner),
+            cache_complete(cache@, id@) ==> language::no_internal_error(result),
+            !(result matches Err(HistoryError::InvalidPolicy { .. })),
     {
         match cache.get(id.index()?) {
             Some(Some(value)) => Ok(*value),
@@ -310,6 +463,19 @@ pub(crate) trait RegexDerivative: Sized {
             derivative_cache_wf(old(store).graph(), old(cache)@), derivative_tasks_wf(old(store).graph(), old(tasks).view()),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && this@ < usize::MAX && (!finish || derivative_dependencies_complete(old(store).graph(), this, old(cache)@)) ==> language::no_internal_error(result),
+            cache_completions_preserved(old(cache)@, final(cache)@),
+            old(tasks).view().is_prefix_of(final(tasks).view()),
+            forall|bound: nat| this@ <= bound && derivative_tasks_bounded(old(tasks).view(), bound)
+                ==> derivative_tasks_bounded(final(tasks).view(), bound),
+            result is Ok ==> cache_complete(final(cache)@, this@) || tasks_contain(final(tasks).view(), this@),
+            derivative_tasks_ready(old(store).graph(), old(tasks).view().push((this, finish)), old(cache)@) && result is Ok
+                ==> derivative_tasks_ready(final(store).graph(), final(tasks).view(), final(cache)@),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), final(cache)@), derivative_tasks_wf(final(store).graph(), final(tasks).view()),
             result is Ok ==> derivative_work(final(store).graph(), final(tasks).view())
@@ -324,15 +490,72 @@ pub(crate) trait RegexDerivative: Sized {
             derivative_cache_wf(old(store).graph(), old(cache)@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && this@ < usize::MAX ==> language::no_internal_error(result),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), final(cache)@),
             match result { Ok(out) => derivative_correct(final(store).graph(), this@, out), Err(_) => true };
 }
 }
 
-#[verus_verify]
+verus! {
+fn grow_derivative_cache<G: KernelStore>(
+    this: RegexId, store: &mut G, cache: &mut Vec<Option<TransitionId>>,
+) -> (result: KernelResult<()>)
+    requires model::graph_wf(old(store).graph()), old(store).valid_store(),
+        derivative_cache_wf(old(store).graph(), old(cache)@),
+    ensures final(store).graph() == old(store).graph(), final(store).valid_store(),
+        final(store).restoration() == old(store).restoration(),
+        final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+        final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+        final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+        old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+        old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        old(store).errors_are_non_invariant() && this@ < usize::MAX ==> language::no_internal_error(result),
+        derivative_cache_wf(final(store).graph(), final(cache)@),
+        old(cache)@.is_prefix_of(final(cache)@),
+        forall|i: int| 0 <= i < old(cache)@.len() ==> final(cache)@[i] == old(cache)@[i],
+        forall|i: int| old(cache)@.len() <= i < final(cache)@.len() ==> final(cache)@[i] is None,
+        result is Err ==> final(cache)@ == old(cache)@,
+        result is Ok ==> this@ < final(cache)@.len()
+            && final(cache)@.len() == if old(cache)@.len() > this@ { old(cache)@.len() } else { this@ + 1 },
+{
+    hide(derivative_cache_wf); hide(derivative_correct);
+    let ghost before = cache@;
+    store.checkpoint()?;
+    let required = match this.index()?.checked_add(1) {
+        Some(value) => value,
+        None => return Err(HistoryError::symbolic_invariant()),
+    };
+    if required > cache.len() {
+        let extra = match required.checked_sub(cache.len()) {
+            Some(value) => value,
+            None => return Err(HistoryError::symbolic_invariant()),
+        };
+        let bytes = derivative_cache_bytes(extra)?;
+        store.reserve_derivatives(cache, extra)?;
+        store.charge_aux(bytes)?;
+        cache.resize(required, None);
+    }
+    proof {
+        derivative_cache_prefix_facts(before, cache@);
+        reveal(derivative_cache_wf);
+        assert forall|i: int| 0 <= i < cache@.len() implies match #[trigger] cache@[i] {
+            Some(out) => derivative_correct(store.graph(), i as nat, out), None => true,
+        } by {
+            if i < before.len() { assert(cache@[i] == before[i]); }
+            else { assert(cache@[i] is None); }
+        }
+    }
+    Ok(())
+}
+
 impl RegexDerivative for RegexId {
-    #[verus_verify]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
 
     fn derivative_step<G: KernelStore>(
         this: RegexId,
@@ -341,42 +564,30 @@ impl RegexDerivative for RegexId {
         finish: bool,
         tasks: &mut WorkVec<(RegexId, bool)>,
     ) -> KernelResult<()> {
+        hide(derivative_cache_wf); hide(derivative_tasks_wf);
+        hide(derivative_correct);
+        hide(derivative_tasks_ready); hide(derivative_scheduled);
+        hide(derivative_dependencies_complete); hide(derivative_dependency);
+        hide(vstd::seq::lemma_seq_subrange_index);
+        hide(vstd::seq::lemma_seq_two_subranges_index);
         proof_decl! { let ghost before = store.graph(); let ghost prior_tasks = tasks.view(); }
-        proof! { derivative_frame(store.graph()); model::lemma_graph_regex_wf(store.graph(), this@); derivative_constants(store.graph()); }
-        store.checkpoint()?;
-        proof_decl! { let ghost cache_before = cache@; let ghost growth_graph = store.graph(); }
-        let required = match this.index()?.checked_add(1) {
-            Some(v) => v,
-            None => return Err(HistoryError::symbolic_invariant()),
-        };
-        if required > cache.len() {
-            let extra = match required.checked_sub(cache.len()) {
-                Some(v) => v,
-                None => return Err(HistoryError::symbolic_invariant()),
-            };
-            let bytes = match extra.checked_mul(core::mem::size_of::<Option<TransitionId>>()) {
-                Some(v) => v,
-                None => return Err(HistoryError::symbolic_invariant()),
-            };
-            // Reservations preserve logical cache contents; publish monotone charge before resizing.
-            store.reserve_derivatives(cache, extra)?;
-            store.charge_aux(bytes)?;
-            cache.resize(required, None);
-            proof! {
-                assert forall|i: int| 0 <= i < cache@.len() implies match #[trigger] cache@[i] {
-                    Some(out) => derivative_correct(store.graph(), i as nat, out), None => true,
-                } by {
-                    if i >= cache_before.len() { assert(cache@[i] is None); }
-                    else { assert(cache@[i] == cache_before[i]); }
-                }
-            }
-        }
         proof! {
-            assert(store.graph() == growth_graph);
-            assert(cache_before.is_prefix_of(cache@));
-            assert forall|i: int| cache_before.len() <= i < cache@.len() implies cache@[i] is None by {}
-            assert(this@ < cache@.len());
-            assert(cache@.len() == if cache_before.len() > this@ { cache_before.len() } else { this@ + 1 });
+            assert forall|i: int| 0 <= i < prior_tasks.len() implies prior_tasks.subrange(0, prior_tasks.len() as int)[i] == prior_tasks[i] by {
+                vstd::seq::lemma_seq_subrange_index(prior_tasks, 0, prior_tasks.len() as int, i);
+            }
+            assert(prior_tasks =~= prior_tasks.subrange(0, prior_tasks.len() as int));
+            assert(prior_tasks.is_prefix_of(prior_tasks));
+        }
+        proof! { norm::graph_lemma_extends_refl(store.graph()); }
+        proof! {
+            derivative_frame(store.graph()); model::lemma_graph_regex_wf(store.graph(), this@); derivative_constants(store.graph());
+        }
+        proof_decl! { let ghost cache_before = cache@; let ghost growth_graph = store.graph(); }
+        grow_derivative_cache(this, store, cache)?;
+        proof! {
+            if derivative_dependencies_complete(before, this, cache_before) {
+                derivative_cache_extend_dependencies(before, this, cache_before, cache@);
+            }
         }
         let index = this.index()?;
         let pending = match cache.get(index) {
@@ -386,22 +597,37 @@ impl RegexDerivative for RegexId {
         };
         if pending {
             let c = store.constants();
-            proof! { derivative_step_future(store.graph(), this, cache@); }
             let out = match this.head(store)? {
-                RegexHead::Empty | RegexHead::Epsilon => Some(c.transition_empty),
-                RegexHead::All => Some(c.transition_all),
-                RegexHead::Test(test) => Some(TransitionId::if_then_else(
-                    store,
-                    test,
-                    c.transition_epsilon,
-                    c.transition_empty,
-                )?),
+                RegexHead::Empty | RegexHead::Epsilon => {
+                    proof! { derivative_native_correct(store.graph(), this, cache@, c.transition_empty); }
+                    Some(c.transition_empty)
+                }
+                RegexHead::All => {
+                    proof! { derivative_native_correct(store.graph(), this, cache@, c.transition_all); }
+                    Some(c.transition_all)
+                }
+                RegexHead::Test(test) => {
+                    let out = TransitionId::if_then_else(store, test, c.transition_epsilon, c.transition_empty)?;
+                    proof! { derivative_graph_frame(growth_graph, store.graph(), this); }
+                    proof! { derivative_test_correct(store.graph(), this, test, cache@, out, c.transition_epsilon, c.transition_empty); }
+                    Some(out)
+                }
                 RegexHead::Star(inner) => {
                     if finish {
+                        proof! {
+                            if derivative_dependencies_complete(before, this, cache_before) {
+                                derivative_unary_complete(before, this, inner, cache@);
+                            }
+                        }
                         let d = Self::cached(cache, inner)?;
-                        Some(TransitionId::append(d, store, &[this])?)
+                        proof! { derivative_cached_bound(store.graph(), cache@, inner, d); }
+                        let out = TransitionId::append(d, store, &[this])?;
+                        proof! { derivative_graph_frame(growth_graph, store.graph(), this); }
+                        proof! { derivative_native_correct(store.graph(), this, cache@, out); }
+                        Some(out)
                     } else {
                         tasks.push((this, true));
+                        proof! { derivative_unary_scheduled(before, this, prior_tasks, inner); }
                         tasks.push((inner, false));
                         proof! { derivative_lemma_work_unary(store.graph(), this, prior_tasks, inner); }
                         None
@@ -409,10 +635,20 @@ impl RegexDerivative for RegexId {
                 }
                 RegexHead::Not(inner) => {
                     if finish {
+                        proof! {
+                            if derivative_dependencies_complete(before, this, cache_before) {
+                                derivative_unary_complete(before, this, inner, cache@);
+                            }
+                        }
                         let d = Self::cached(cache, inner)?;
-                        Some(TransitionId::not(d, store)?)
+                        proof! { derivative_cached_bound(store.graph(), cache@, inner, d); }
+                        let out = TransitionId::not(d, store)?;
+                        proof! { derivative_graph_frame(growth_graph, store.graph(), this); }
+                        proof! { derivative_native_correct(store.graph(), this, cache@, out); }
+                        Some(out)
                     } else {
                         tasks.push((this, true));
+                        proof! { derivative_unary_scheduled(before, this, prior_tasks, inner); }
                         tasks.push((inner, false));
                         proof! { derivative_lemma_work_unary(store.graph(), this, prior_tasks, inner); }
                         None
@@ -438,29 +674,35 @@ impl RegexDerivative for RegexId {
                 .branch(store, cache, false, finish, tasks)?,
             };
             if let Some(out) = out {
-                proof! {
-                    derivative_constants(store.graph());
-                    assert(derivative_native_result(store.graph(), this, cache@, out));
-                    assert(derivative_correct(store.graph(), this@, out));
-                }
+                proof! { assert(derivative_correct(store.graph(), this@, out)); }
                 let slots = cache.as_mut_slice();
                 match slots.get_mut(index) {
                     Some(slot) => *slot = Some(out),
                     None => return Err(HistoryError::symbolic_invariant()),
                 }
                 proof! {
-                    assert forall|i: int| 0 <= i < cache@.len() implies match #[trigger] cache@[i] {
-                        Some(t) => derivative_correct(store.graph(), i as nat, t), None => true,
-                    } by { if i == index { assert(cache@[i] == Some(out)); } }
+                    assert(derivative_cache_wf(store.graph(), cache@)) by {
+                        reveal(derivative_cache_wf);
+                        assert forall|i: int| 0 <= i < cache@.len() implies match #[trigger] cache@[i] {
+                            Some(t) => derivative_correct(store.graph(), i as nat, t), None => true,
+                        } by { if i == index { assert(cache@[i] == Some(out)); } }
+                    }
                 }
             }
         }
         proof! {
             derivative_lemma_step_post(before, store.graph(), this, finish, prior_tasks, tasks.view());
+            assert(cache_completions_preserved(cache_before, cache@));
+            assert(tasks.view() == prior_tasks && cache_complete(cache@, this@) || derivative_scheduled(before, this, prior_tasks, tasks.view()));
+            if derivative_scheduled(before, this, prior_tasks, tasks.view()) {
+                derivative_scheduled_facts(before, this, prior_tasks, tasks.view());
+            }
+            if derivative_tasks_ready(before, prior_tasks.push((this, finish)), cache_before) {
+                derivative_ready_after_step(before, store.graph(), this, finish, prior_tasks, tasks.view(), cache_before, cache@);
+            }
         }
         Ok(())
     }
-    #[verus_verify]
 
     fn derivative<G: KernelStore>(
         this: RegexId,
@@ -471,17 +713,30 @@ impl RegexDerivative for RegexId {
         let mut tasks = WorkVec::new();
         tasks.push((this, false));
         let mut state = Ok(());
+        proof! { assert(tasks.view()[0].0 == this); assert(tasks_contain(tasks.view(), this@)); }
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant model::graph_extends(entry, store.graph()), model::graph_wf(entry),
             store.restoration() == old(store).restoration(),
+            store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+            store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && this@ < usize::MAX ==> language::no_internal_error(state),
+            state is Ok ==> derivative_tasks_ready(store.graph(), tasks.view(), cache@),
+            state is Ok ==> cache_complete(cache@, this@) || tasks_contain(tasks.view(), this@),
+            old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(store.graph()), store.valid_store(), this@ < store.graph().regexes.len(),
             derivative_cache_wf(store.graph(), cache@), derivative_tasks_wf(store.graph(), tasks.view()),
+            derivative_tasks_bounded(tasks.view(), this@),
             decreases if state is Ok { derivative_work(store.graph(), tasks.view()) + 1 } else { 0 }))]
         while !tasks.is_empty() && state.is_ok() {
             proof! { derivative_extends(entry, store.graph()); }
             proof_decl! { let ghost pending = tasks.view(); }
             state = match tasks.pop() {
                 Some((id, finish)) => {
-                    proof! { assert(pending =~= tasks.view().push((id, finish))); }
+                    proof! {
+                        assert(pending =~= tasks.view().push((id, finish)));
+                        derivative_ready_top(store.graph(), pending, cache@);
+                    }
                     RegexId::derivative_step(id, store, cache, finish, &mut tasks)
                 }
                 None => Err(HistoryError::symbolic_invariant()),
@@ -491,9 +746,12 @@ impl RegexDerivative for RegexId {
         Self::cached(cache, this)
     }
 }
+}
 #[verus_verify]
 pub(crate) trait AtomTruth: Sized {
-    #[verus_spec(result => ensures result.is_ok() == assignment_valid(this@.len(), words@))]
+    #[verus_spec(result => ensures result.is_ok() == assignment_valid(this@.len(), words@),
+        result != Err(HistoryError::WrongHistoryOwner), assignment_valid(this@.len(), words@) ==> language::no_internal_error(result),
+        !(result matches Err(HistoryError::InvalidPolicy { .. })))]
     fn validate_assignment(this: &AtomSet, words: &[u64]) -> KernelResult<()>;
 
     #[verus_spec(result =>
@@ -501,6 +759,13 @@ pub(crate) trait AtomTruth: Sized {
             match previous { Some(i) => positive_atom_at(old(store).graph(), this@, primitive@, i), None => true },
         ensures final(store).graph() == old(store).graph(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && old(store).valid_store() && index < this@.len() ==> language::no_internal_error(result),
+            result == Ok(None) ==> previous is None && !positive_atom_at(final(store).graph(), this@, primitive@, index),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             final(store).valid_store() == old(store).valid_store(),
             match result { Ok(Some(i)) => positive_atom_at(final(store).graph(), this@, primitive@, i), _ => true },
     )]
@@ -518,6 +783,13 @@ pub(crate) trait AtomTruth: Sized {
             old(store).graph().tests[id@ as int] == model::TestNode::Atom(primitive@, positive),
         ensures final(store).graph() == old(store).graph(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && old(store).valid_store() && model::graph_wf(old(store).graph())
+                && reach::has_positive(old(store).graph(), this@, primitive@) ==> language::no_internal_error(result),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             final(store).valid_store() == old(store).valid_store(),
             match result { Ok(i) => positive_atom_at(final(store).graph(), this@, primitive@, i), Err(_) => true },
     )]
@@ -532,7 +804,8 @@ pub(crate) trait AtomTruth: Sized {
     #[verus_spec(result => ensures match result {
         Ok(value) => index / 64 < words@.len() && value == truth_word_bit(words@, index as nat),
         Err(_) => index / 64 >= words@.len(),
-    })]
+    }, result != Err(HistoryError::WrongHistoryOwner), index / 64 < words@.len() ==> language::no_internal_error(result),
+        !(result matches Err(HistoryError::InvalidPolicy { .. })))]
     fn truth(words: &[u64], index: usize) -> KernelResult<bool>;
 }
 
@@ -617,6 +890,15 @@ impl AtomTruth for AtomSet {
                     assert(model::test_ids(this@)[i] == this@[i]@);
                     assert(model::test_ids(this@)[j] == this@[j]@);
                 }
+                if model::graph_wf(store.graph()) && reach::has_positive(store.graph(), this@, primitive@) {
+                    model::lemma_graph_wf_elim(store.graph());
+                    let i = choose|i: int| 0 <= i < this@.len() && this@[i]@ < store.graph().tests.len()
+                        && store.graph().tests[this@[i]@ as int] == model::TestNode::Atom(primitive@, true);
+                    assert(store.graph().tests[this@[i]@ as int] == store.graph().tests[id@ as int]);
+                    assert(this@[i]@ == id@);
+                    assert(this@[i] == id);
+                    assert(this@.contains(id));
+                }
             }
             return match this.ids().binary_search(&id) {
                 Ok(index) => Ok(index),
@@ -624,14 +906,35 @@ impl AtomTruth for AtomSet {
             };
         }
         let mut state = Ok(None);
-        scan!(state,index,this.ids().len(),state.is_ok(),previous=>AtomSet::positive_step(this,store,primitive,index,previous);
-            invariant store.graph() == old(store).graph(),
+        let count = this.ids().len();
+        scan!(state,index,count,state.is_ok(),previous=>AtomSet::positive_step(this,store,primitive,index,previous);
+            invariant count == this@.len(), store.graph() == old(store).graph(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
+                index <= this@.len(), state == Ok(None) ==> forall|j: usize| j < index ==> !positive_atom_at(store.graph(), this@, primitive@, j),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
                 store.valid_store() == old(store).valid_store(), model::atom_ids_wf(store.graph(), this@),
                 match state { Ok(Some(i)) => positive_atom_at(store.graph(), this@, primitive@, i), _ => true },
+                ensures state == Ok(None) ==> forall|j: usize| j < this@.len() ==> !positive_atom_at(store.graph(), this@, primitive@, j),
                 decreases this@.len() - index,
         );
         let selected = state?;
+        proof! {
+            if selected is None && reach::has_positive(store.graph(), this@, primitive@) {
+                let i = choose|i: int| 0 <= i < this@.len() && this@[i]@ < store.graph().tests.len()
+                    && store.graph().tests[this@[i]@ as int] == model::TestNode::Atom(primitive@, true);
+                assert(i <= usize::MAX);
+                let index = i as usize;
+                assert(index as int == i);
+                assert(positive_atom_at(store.graph(), this@, primitive@, index));
+                assert(state == Ok(None));
+                assert(false);
+            }
+        }
         match selected {
             Some(index) => Ok(index),
             None => Err(HistoryError::missing_transition_atom()),
@@ -683,6 +986,13 @@ pub(crate) trait TestEvaluate: Sized {
             store.graph().tests[id@ as int] == (if and { model::TestNode::And(test_children(store.graph(), id)) } else { model::TestNode::Or(test_children(store.graph(), id)) }),
             count == test_children(store.graph(), id).len(), test_tasks_wf(store.graph(), old(tasks).view()),
         ensures test_tasks_wf(store.graph(), final(tasks).view()),
+            store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+            store.errors_are_non_invariant() && store.valid_store() && (!finish || count <= old(values).view().len()) ==> language::no_internal_error(result),
+            store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            result is Ok ==> test_stack_result(store.graph(), old(tasks).view().push((id, finish)), old(values).view().len())
+                == test_stack_result(store.graph(), final(tasks).view(), final(values).view().len()),
+            forall|atoms: Seq<TestId>| test_tasks_covered(store.graph(), old(tasks).view().push((id, finish)), atoms) && result is Ok
+                ==> test_tasks_covered(store.graph(), final(tasks).view(), atoms),
             result.is_ok() ==> forall|theta: Subst, event: EventView|
                 test_run(store.graph(), old(tasks).view().push((id, finish)), old(values).view(), theta, event)
                     == test_run(store.graph(), final(tasks).view(), final(values).view(), theta, event),
@@ -696,6 +1006,10 @@ pub(crate) trait TestEvaluate: Sized {
             let mut i = 0;
             #[cfg_attr(verus_keep_ghost, verus_spec(
                 invariant i <= count, i <= old(values).view().len(),
+                    store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                    store.errors_are_non_invariant() && store.valid_store() && count <= old(values).view().len()
+                        ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+                    store.errors_are_non_invalid_policy() && store.valid_store() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
                     values.view() == old(values).view().take(old(values).view().len() - i),
                     out == bool_fold(old(values).view().skip(old(values).view().len() - i), and),
                 ensures failure.is_none() ==> i == count,
@@ -726,6 +1040,8 @@ pub(crate) trait TestEvaluate: Sized {
             }
             values.push(out);
             proof! {
+                test_stack_task(store.graph(), old(tasks).view(), (id, true), old(values).view().len());
+                assert(values.view().len() == old(values).view().len() - count + 1);
                 assert(old(tasks).view().push((id, finish)).drop_last() =~= old(tasks).view());
                 assert forall|theta: Subst, event: EventView|
                     test_run(store.graph(), old(tasks).view().push((id, finish)), old(values).view(), theta, event)
@@ -741,6 +1057,9 @@ pub(crate) trait TestEvaluate: Sized {
             let mut remaining = count;
             #[cfg_attr(verus_keep_ghost, verus_spec(
                 invariant remaining <= count, model::graph_wf(store.graph()), id@ < store.graph().tests.len(),
+                    store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+                    store.errors_are_non_invariant() && store.valid_store() ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+                    store.errors_are_non_invalid_policy() && store.valid_store() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
                     count == test_children(store.graph(), id).len(), test_tasks_wf(store.graph(), scheduled_base),
                     test_tasks_wf(store.graph(), tasks.view()),
                     failure.is_none() ==> tasks.view() == scheduled_base + child_test_tasks(store.graph(), id, remaining as nat),
@@ -771,12 +1090,35 @@ pub(crate) trait TestEvaluate: Sized {
                 return Err(error);
             }
             proof! {
+                test_stack_children(store.graph(), id, 0, old(tasks).view().push((id, true)), old(values).view().len());
+                test_stack_task(store.graph(), old(tasks).view(), (id, false), old(values).view().len());
+                test_stack_task(store.graph(), old(tasks).view(), (id, true), (old(values).view().len() + count) as nat);
+                assert(tasks.view() == old(tasks).view().push((id, true)) + child_test_tasks(store.graph(), id, 0));
                 assert forall|theta: Subst, event: EventView|
                     test_run(store.graph(), old(tasks).view().push((id, finish)), old(values).view(), theta, event)
                         == test_run(store.graph(), tasks.view(), values.view(), theta, event) by {
                     test_expand(store.graph(), id, old(tasks).view(), old(values).view(), theta, event);
                 }
                 test_lemma_eval_branch_work(store.graph(), id, old(tasks).view());
+            }
+        }
+        proof! {
+            assert forall|atoms: Seq<TestId>| test_tasks_covered(store.graph(), old(tasks).view().push((id, finish)), atoms)
+                implies test_tasks_covered(store.graph(), tasks.view(), atoms) by {
+                assert(old(tasks).view().push((id, finish))[old(tasks).view().len() as int] == (id, finish));
+                assert(test_atoms_covered(store.graph(), id@, atoms));
+                test_coverage_children(store.graph(), id, atoms);
+                assert forall|i: int| 0 <= i < tasks.view().len() implies test_atoms_covered(store.graph(), tasks.view()[i].0@, atoms) by {
+                    if i < old(tasks).view().len() {
+                        assert(tasks.view()[i] == old(tasks).view()[i]);
+                        assert(old(tasks).view().push((id, finish))[i] == old(tasks).view()[i]);
+                    } else if i == old(tasks).view().len() {
+                        assert(tasks.view()[i].0 == id);
+                    } else {
+                        let j = test_children(store.graph(), id).len() - 1 - (i - old(tasks).view().len() - 1);
+                        assert(tasks.view()[i].0@ == test_children(store.graph(), id)[j]);
+                    }
+                }
             }
         }
         Ok(())
@@ -795,6 +1137,19 @@ pub(crate) trait TestEvaluate: Sized {
             model::atom_ids_wf(old(store).graph(), atoms@), test_tasks_wf(old(store).graph(), old(tasks).view()),
         ensures final(store).graph() == old(store).graph(), final(store).valid_store() == old(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && old(store).valid_store() && test_atoms_covered(old(store).graph(), this@, atoms@)
+                && assignment_valid(atoms@.len(), words@)
+                && test_stack_result(old(store).graph(), old(tasks).view().push((this, finish)), old(values).view().len()) is Some
+                ==> language::no_internal_error(result),
+            result is Ok ==> test_stack_result(old(store).graph(), old(tasks).view().push((this, finish)), old(values).view().len())
+                == test_stack_result(final(store).graph(), final(tasks).view(), final(values).view().len()),
+            test_tasks_covered(old(store).graph(), old(tasks).view().push((this, finish)), atoms@) && result is Ok
+                ==> test_tasks_covered(final(store).graph(), final(tasks).view(), atoms@),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             test_tasks_wf(final(store).graph(), final(tasks).view()),
             result.is_ok() ==> forall|theta: Subst, event: EventView|
                 truth_words_realize(final(store).graph(), atoms@, words@, theta, event) ==>
@@ -813,6 +1168,13 @@ pub(crate) trait TestEvaluate: Sized {
             model::atom_ids_wf(old(store).graph(), atoms@),
         ensures final(store).graph() == old(store).graph(), final(store).valid_store() == old(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && old(store).valid_store() && test_atoms_covered(old(store).graph(), this@, atoms@)
+                && assignment_valid(atoms@.len(), words@) ==> language::no_internal_error(result),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             result matches Ok(value) ==> forall|theta: Subst, event: EventView|
                 truth_words_realize(final(store).graph(), atoms@, words@, theta, event) ==>
                     value == model::test_holds(theta, model::lift_test(final(store).graph(), this@), event);
@@ -837,7 +1199,16 @@ impl TestEvaluate for TestId {
             TestHead::True => values.push(true),
             TestHead::False => values.push(false),
             TestHead::Atom(primitive, positive) => {
+                proof! {
+                    if test_atoms_covered(store.graph(), this@, atoms@) {
+                        assert(reach::test_reaches_primitive(store.graph(), this@, primitive@));
+                        assert(reach::has_positive(store.graph(), atoms@, primitive@));
+                    }
+                }
                 let index = AtomSet::positive_index(atoms, store, this, primitive, positive)?;
+                proof! {
+                    if assignment_valid(atoms@.len(), words@) { assignment_index_bound(atoms@.len(), words@, index); }
+                }
                 let value = AtomSet::truth(words, index)?;
                 values.push(if positive { value } else { !value });
                 proof! {
@@ -876,6 +1247,10 @@ impl TestEvaluate for TestId {
         tasks.push((this, false));
         let mut state = Ok(());
         proof! {
+            test_stack_task(store.graph(), Seq::empty(), (this, false), 0);
+            assert(test_stack_result(store.graph(), Seq::empty(), 1) == Some(1));
+            assert(tasks.view() == seq![(this, false)]);
+            assert(test_stack_result(store.graph(), tasks.view(), 0) == Some(1));
             assert forall|theta: Subst, event: EventView|
                 test_run(store.graph(), tasks.view(), values.view(), theta, event)
                     == Some(seq![model::test_holds(theta, model::lift_test(store.graph(), this@), event)]) by {
@@ -886,6 +1261,15 @@ impl TestEvaluate for TestId {
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant store.graph() == old(store).graph(), store.valid_store() == old(store).valid_store(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
+                old(store).errors_are_non_invariant() && old(store).valid_store() && test_atoms_covered(store.graph(), this@, atoms@)
+                    && assignment_valid(atoms@.len(), words@) ==> language::no_internal_error(state),
+                state is Ok ==> test_stack_result(store.graph(), tasks.view(), values.view().len()) == Some(1),
+                test_atoms_covered(store.graph(), this@, atoms@) && state is Ok ==> test_tasks_covered(store.graph(), tasks.view(), atoms@),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
                 model::graph_wf(store.graph()), model::atom_ids_wf(store.graph(), atoms@), test_tasks_wf(store.graph(), tasks.view()),
                 this@ < store.graph().tests.len(),
                 state.is_ok() ==> forall|theta: Subst, event: EventView|
@@ -912,6 +1296,164 @@ impl TestEvaluate for TestId {
     }
 }
 verus! {
+fn collect_append_factors<G: KernelStore>(
+    store: &G, root: TransitionId, head: RegexId, count: usize, xs: &mut WorkVec<RegexId>,
+) -> (result: KernelResult<()>)
+    requires model::graph_wf(store.graph()), store.valid_store(), root@ < store.graph().transitions.len(),
+        store.graph().transitions[root@ as int] is Append, head@ < store.graph().regexes.len(),
+        count == transition_suffix(store.graph(), root).len(), old(xs).view().len() == 0,
+    ensures norm::regex_ids_valid(store.graph(), final(xs).view()),
+        store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+        store.errors_are_non_invariant() ==> language::no_internal_error(result),
+        store.errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        result is Ok ==> model::regex_ids(final(xs).view()) == seq![head@] + transition_suffix(store.graph(), root),
+{
+    proof { model::lemma_graph_transition_wf(store.graph(), root@); }
+    xs.push(head);
+    let mut failure = None;
+    let mut i = 0;
+    while i < count
+        invariant i <= count, model::graph_wf(store.graph()), store.valid_store(),
+            root@ < store.graph().transitions.len(), store.graph().transitions[root@ as int] is Append,
+            head@ < store.graph().regexes.len(), count == transition_suffix(store.graph(), root).len(),
+            model::transition_node_wf_at(store.graph(), store.graph().transitions[root@ as int], root@),
+            store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
+            store.errors_are_non_invariant() ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+            store.errors_are_non_invalid_policy() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
+            norm::regex_ids_valid(store.graph(), xs.view()),
+            model::regex_ids(xs.view()) == seq![head@] + transition_suffix(store.graph(), root).take(i as int),
+        ensures failure is None ==> i == count,
+        decreases count - i,
+    {
+        let child = loop_try!(root.suffix_child(store, i), failure);
+        proof {
+            assert(child@ == transition_suffix(store.graph(), root)[i as int]);
+            assert(child@ < store.graph().regexes.len());
+        }
+        let ghost previous = xs.view();
+        xs.push(child);
+        proof {
+            norm::regex_ids_push(previous, child);
+            assert(transition_suffix(store.graph(), root).take(i as int + 1)
+                =~= transition_suffix(store.graph(), root).take(i as int).push(child@));
+        }
+        i = i.saturating_add(1);
+    }
+    if let Some(error) = failure { return Err(error); }
+    proof { assert(transition_suffix(store.graph(), root).take(count as int) =~= transition_suffix(store.graph(), root)); }
+    Ok(())
+}
+
+#[verifier::spinoff_prover]
+fn interpret_not<G: KernelStore>(
+    store: &mut G, root: TransitionId, inner: TransitionId, finish: bool,
+    tasks: &mut WorkVec<(TransitionId, bool)>, values: &mut WorkVec<RegexId>,
+) -> (result: KernelResult<()>)
+    requires model::graph_wf(old(store).graph()), old(store).valid_store(), root@ < old(store).graph().transitions.len(),
+        old(store).graph().transitions[root@ as int] == model::TransitionNode::Not(inner@),
+        interp_tasks_wf(old(store).graph(), old(tasks).view()), norm::regex_ids_valid(old(store).graph(), old(values).view()),
+    ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
+        final(store).restoration() == old(store).restoration(),
+        final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+        final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+        final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+        old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+        old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        old(store).errors_are_non_invariant() && (!finish || old(values).view().len() > 0) ==> language::no_internal_error(result),
+        interp_tasks_wf(final(store).graph(), final(tasks).view()), norm::regex_ids_valid(final(store).graph(), final(values).view()),
+        result is Ok ==> (if finish {
+            final(tasks).view() == old(tasks).view() && final(values).view().len() == old(values).view().len()
+        } else {
+            final(tasks).view() == old(tasks).view().push((root, true)).push((inner, false)) && final(values).view() == old(values).view()
+        }),
+        result is Ok ==> interp_work(final(store).graph(), final(tasks).view())
+            < interp_work(old(store).graph(), old(tasks).view().push((root, finish))),
+        result is Ok ==> final(tasks).view() == old(tasks).view()
+            || (interp_tasks_wf(old(store).graph(), final(tasks).view())
+                && interp_work(old(store).graph(), final(tasks).view())
+                    < interp_work(old(store).graph(), old(tasks).view().push((root, finish)))),
+        result is Ok ==> interp_stack_result(old(store).graph(), old(tasks).view().push((root, finish)), old(values).view().len())
+            == interp_stack_result(final(store).graph(), final(tasks).view(), final(values).view().len()),
+        forall|atoms: Seq<TestId>| interp_tasks_covered(old(store).graph(), old(tasks).view().push((root, finish)), atoms) && result is Ok
+            ==> interp_tasks_covered(final(store).graph(), final(tasks).view(), atoms),
+        result is Ok ==> forall|theta: Subst, event: EventView| language::event_wf(theta)
+            ==> interp_results_equiv(model::gsem(theta),
+                interp_run(old(store).graph(), old(tasks).view().push((root, finish)), lifted_values(old(store).graph(), old(values).view()), theta, event),
+                interp_run(final(store).graph(), final(tasks).view(), lifted_values(final(store).graph(), final(values).view()), theta, event)),
+{
+    hide(interp_run); hide(interp_stack_result); hide(interp_tasks_covered);
+    hide(reach::atoms_wf); hide(test_atoms_covered);
+    hide(language::lang); hide(language::interp_transition);
+    hide(model::test_holds); hide(model::lift_transition); hide(model::lift_regex);
+    let ghost before = store.graph();
+    let ghost pending = tasks.view();
+    let ghost prior = values.view();
+    proof {
+        norm::graph_lemma_extends_refl(before);
+        model::lemma_graph_transition_wf(before, root@);
+        interp_stack_task(before, pending, (root, finish), prior.len());
+    }
+    if finish {
+        let value = match values.pop() {
+            Some(value) => value,
+            None => return Err(HistoryError::symbolic_invariant()),
+        };
+        values.push(RegexId::not(value, store)?);
+        proof {
+            lifted_values_stable(before, store.graph(), prior);
+            store.graph().transitions.lemma_prefix_index_eq(before.transitions);
+            assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
+                interp_results_equiv(model::gsem(theta),
+                    interp_run(store.graph(), pending.push((root, finish)), lifted_values(store.graph(), prior), theta, event),
+                    interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
+                assert forall|word: Seq<EventView>| language::lang(model::gsem(theta), language::Regex::Not(Box::new(model::lift_regex(store.graph(), value@))), word)
+                    == model::regex_lang(store.graph(), theta, values.view().last()@, word) by {
+                    norm::regex_language_unfold(model::gsem(theta), language::Regex::Not(Box::new(model::lift_regex(store.graph(), value@))), word);
+                }
+                assert(lifted_values(store.graph(), values.view()) =~= lifted_values(store.graph(), prior).drop_last().push(model::lift_regex(store.graph(), values.view().last()@)));
+                interp_value_reduction(store.graph(), root, finish, pending, lifted_values(store.graph(), prior), lifted_values(store.graph(), values.view()), theta, event);
+            }
+        }
+    } else {
+        tasks.push((root, true));
+        tasks.push((inner, false));
+        proof {
+            interp_stack_task(store.graph(), pending.push((root, true)), (inner, false), prior.len());
+            interp_stack_task(store.graph(), pending, (root, true), prior.len() + 1);
+            assert forall|theta: Subst, event: EventView| interp_run(store.graph(), pending.push((root, finish)), lifted_values(store.graph(), prior), theta, event)
+                == interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event) by {
+                interp_expand_unary(store.graph(), root, inner, pending, lifted_values(store.graph(), prior), theta, event);
+            }
+            interp_lemma_work_unary(store.graph(), root, pending, inner);
+        }
+    }
+    proof {
+        interp_lemma_step_post(before, store.graph(), root, finish, pending, tasks.view());
+        interp_stack_stable(before, store.graph(), pending.push((root, finish)), prior.len());
+        interp_stack_task(store.graph(), pending, (root, finish), prior.len());
+        assert forall|atoms: Seq<TestId>| interp_tasks_covered(before, pending.push((root, finish)), atoms)
+            implies interp_tasks_covered(store.graph(), tasks.view(), atoms) by {
+            interp_coverage_pop(before, pending, (root, finish), atoms);
+            interp_coverage_stable(before, store.graph(), pending, atoms);
+            if !finish {
+                transition_coverage_children(before, root, atoms);
+                assert(reach::transition_edges(before, root@) == seq![inner@]);
+                assert(reach::transition_edges(before, root@)[0] == inner@);
+                assert(reach::atoms_wf(before, inner@, atoms));
+                interp_coverage_push(before, pending, (root, true), atoms);
+                interp_coverage_push(before, pending.push((root, true)), (inner, false), atoms);
+            }
+        }
+        assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
+            interp_results_equiv(model::gsem(theta),
+                interp_run(before, pending.push((root, finish)), lifted_values(before, prior), theta, event),
+                interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
+            interp_same_configuration_extends(before, store.graph(), pending.push((root, finish)), prior, theta, event);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) trait TransitionInterpret: Sized {
     #[allow(
         clippy::option_if_let_else,
@@ -932,6 +1474,16 @@ pub(crate) trait TransitionInterpret: Sized {
             norm::regex_ids_valid(old(store).graph(), old(values).view()),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && (!finish || count <= old(values).view().len()) ==> language::no_internal_error(result),
+            result is Ok ==> interp_stack_result(old(store).graph(), old(tasks).view().push((id, finish)), old(values).view().len())
+                == interp_stack_result(final(store).graph(), final(tasks).view(), final(values).view().len()),
+            forall|atoms: Seq<TestId>| interp_tasks_covered(old(store).graph(), old(tasks).view().push((id, finish)), atoms) && result is Ok
+                ==> interp_tasks_covered(final(store).graph(), final(tasks).view(), atoms),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             interp_tasks_wf(final(store).graph(), final(tasks).view()), norm::regex_ids_valid(final(store).graph(), final(values).view()),
             result.is_ok() ==> forall|theta: Subst, event: EventView| language::event_wf(theta) ==>
                 interp_results_equiv(model::gsem(theta),
@@ -958,6 +1510,8 @@ pub(crate) trait TransitionInterpret: Sized {
             values.truncate(start);
             values.push(out);
             proof! {
+                interp_stack_task(store.graph(), old(tasks).view(), (id, true), old(values).view().len());
+                assert(values.view().len() == old(values).view().len() - count + 1);
                 assert forall|theta: Subst| language::event_wf(theta) implies
                     regex_stack_equiv(model::gsem(theta), lifted_values(store.graph(), values.view()),
                         lifted_values(store.graph(), old(values).view().take(old(values).view().len() - count)).push(
@@ -1006,6 +1560,12 @@ pub(crate) trait TransitionInterpret: Sized {
             #[cfg_attr(verus_keep_ghost, verus_spec(
                 invariant remaining <= count, model::graph_wf(store.graph()), id@ < store.graph().transitions.len(),
                     store.graph() == before, store.valid_store(), store.restoration() == old(store).restoration(),
+                    store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                    store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                    store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                    old(store).errors_are_non_invalid_policy() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
+                    old(store).errors_are_non_invariant() ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+                    old(store).errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
                     norm::regex_ids_valid(store.graph(), values.view()),
                     count == transition_children(store.graph(), id).len(), interp_tasks_wf(store.graph(), scheduled_base),
                     interp_tasks_wf(store.graph(), tasks.view()),
@@ -1037,6 +1597,10 @@ pub(crate) trait TransitionInterpret: Sized {
                 return Err(error);
             }
             proof! {
+                interp_stack_children(store.graph(), id, 0, old(tasks).view().push((id, true)), old(values).view().len());
+                interp_stack_task(store.graph(), old(tasks).view(), (id, false), old(values).view().len());
+                interp_stack_task(store.graph(), old(tasks).view(), (id, true), (old(values).view().len() + count) as nat);
+                assert(tasks.view() == old(tasks).view().push((id, true)) + child_interp_tasks(store.graph(), id, 0));
                 assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
                     interp_results_equiv(model::gsem(theta),
                         interp_run(before, old(tasks).view().push((id, finish)), lifted_values(before, old(values).view()), theta, event),
@@ -1044,6 +1608,27 @@ pub(crate) trait TransitionInterpret: Sized {
                     interp_expand_set(store.graph(), id, old(tasks).view(), lifted_values(store.graph(), old(values).view()), theta, event);
                 }
                 interp_lemma_work_branch(store.graph(), id, old(tasks).view());
+            }
+        }
+        proof! {
+            interp_stack_stable(before, store.graph(), old(tasks).view().push((id, finish)), old(values).view().len());
+            assert forall|atoms: Seq<TestId>| interp_tasks_covered(before, old(tasks).view().push((id, finish)), atoms)
+                implies interp_tasks_covered(store.graph(), tasks.view(), atoms) by {
+                interp_coverage_stable(before, store.graph(), old(tasks).view().push((id, finish)), atoms);
+                assert(old(tasks).view().push((id, finish))[old(tasks).view().len() as int] == (id, finish));
+                assert(reach::atoms_wf(store.graph(), id@, atoms));
+                transition_coverage_children(store.graph(), id, atoms);
+                assert forall|i: int| 0 <= i < tasks.view().len() implies reach::atoms_wf(store.graph(), tasks.view()[i].0@, atoms) by {
+                    if i < old(tasks).view().len() {
+                        assert(tasks.view()[i] == old(tasks).view()[i]);
+                        assert(old(tasks).view().push((id, finish))[i] == old(tasks).view()[i]);
+                    } else if i == old(tasks).view().len() {
+                        assert(tasks.view()[i].0 == id);
+                    } else {
+                        let j = transition_children(store.graph(), id).len() - 1 - (i - old(tasks).view().len() - 1);
+                        assert(tasks.view()[i].0@ == transition_children(store.graph(), id)[j]);
+                    }
+                }
             }
         }
         Ok(())
@@ -1063,6 +1648,19 @@ pub(crate) trait TransitionInterpret: Sized {
             norm::regex_ids_valid(old(store).graph(), old(values).view()),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && reach::atoms_wf(old(store).graph(), this@, atoms@)
+                && assignment_valid(atoms@.len(), words@)
+                && interp_stack_result(old(store).graph(), old(tasks).view().push((this, finish)), old(values).view().len()) is Some
+                ==> language::no_internal_error(result),
+            result is Ok ==> interp_stack_result(old(store).graph(), old(tasks).view().push((this, finish)), old(values).view().len())
+                == interp_stack_result(final(store).graph(), final(tasks).view(), final(values).view().len()),
+            interp_tasks_covered(old(store).graph(), old(tasks).view().push((this, finish)), atoms@) && result is Ok
+                ==> interp_tasks_covered(final(store).graph(), final(tasks).view(), atoms@),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             interp_tasks_wf(final(store).graph(), final(tasks).view()), norm::regex_ids_valid(final(store).graph(), final(values).view()),
             result.is_ok() ==> interp_machine_relation(old(store).graph(), final(store).graph(), old(tasks).view().push((this, finish)), final(tasks).view(), old(values).view(), final(values).view(), atoms@, words@),
             result.is_ok() ==> interp_work(final(store).graph(), final(tasks).view())
@@ -1078,6 +1676,13 @@ pub(crate) trait TransitionInterpret: Sized {
             model::atom_ids_wf(old(store).graph(), atoms@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()), model::graph_wf(final(store).graph()), final(store).valid_store(),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() && reach::atoms_wf(old(store).graph(), this@, atoms@)
+                && assignment_valid(atoms@.len(), truth_words@) ==> language::no_internal_error(result),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             result matches Ok(id) ==> id@ < final(store).graph().regexes.len()
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>|
                     language::event_wf(theta) && truth_words_realize(old(store).graph(), atoms@, truth_words@, theta, event) ==>
@@ -1093,7 +1698,7 @@ impl TransitionInterpret for TransitionId {
         clippy::shadow_unrelated,
         reason = "Preserve the existing Verus-verified match arms and local bindings."
     )]
-    #[verus_verify]
+    verus! {
 
     fn interpret_step<G: KernelStore>(
         this: TransitionId,
@@ -1104,8 +1709,20 @@ impl TransitionInterpret for TransitionId {
         tasks: &mut WorkVec<(TransitionId, bool)>,
         values: &mut WorkVec<RegexId>,
     ) -> KernelResult<()> {
+        hide(interp_stack_result); hide(interp_tasks_covered);
+        hide(interp_run);
+        hide(reach::atoms_wf); hide(test_atoms_covered);
+        hide(language::lang); hide(language::interp_transition);
+        hide(model::test_holds); hide(model::lift_transition); hide(model::lift_regex);
         proof_decl! { let ghost before = store.graph(); let ghost pending = tasks.view(); let ghost prior = values.view(); }
-        proof! { model::lemma_graph_transition_wf(store.graph(), this@); norm::transition_unfold(store.graph(), this@); }
+        proof! { model::lemma_graph_transition_wf(store.graph(), this@); }
+        proof! {
+            interp_stack_task(before, pending, (this, finish), prior.len());
+            if interp_tasks_covered(before, pending.push((this, finish)), atoms@) {
+                interp_coverage_pop(before, pending, (this, finish), atoms@);
+            }
+            if reach::atoms_wf(store.graph(), this@, atoms@) { transition_coverage_children(store.graph(), this, atoms@); }
+        }
         store.checkpoint()?;
         match this.head(store)? {
             TransitionHead::Const(r) => {
@@ -1115,12 +1732,20 @@ impl TransitionInterpret for TransitionId {
                         interp_results_equiv(model::gsem(theta),
                             interp_run(store.graph(), pending.push((this, finish)), lifted_values(store.graph(), prior), theta, event),
                             interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
+                        norm::transition_unfold(store.graph(), this@);
                         language::lemma_interp_const(model::gsem(theta), event, model::lift_regex(store.graph(), r@));
                         interp_value_reduction(store.graph(), this, finish, pending, lifted_values(store.graph(), prior), lifted_values(store.graph(), values.view()), theta, event);
                     }
                 }
             }
             TransitionHead::If(test, a, b) => {
+                proof! {
+                    if reach::atoms_wf(before, this@, atoms@) {
+                        assert(reach::transition_tests(before, this@) == seq![test@]);
+                        assert(reach::transition_tests(before, this@)[0] == test@);
+                        assert(test_atoms_covered(before, test@, atoms@));
+                    }
+                }
                 let chosen = if TestId::evaluate(test, store, atoms, words)? {
                     a
                 } else {
@@ -1128,6 +1753,14 @@ impl TransitionInterpret for TransitionId {
                 };
                 tasks.push((chosen, false));
                 proof! {
+                    interp_stack_task(store.graph(), pending, (chosen, false), prior.len());
+                    if interp_tasks_covered(before, pending.push((this, finish)), atoms@) {
+                        assert(reach::transition_edges(before, this@) == seq![a@, b@]);
+                        if chosen == a { assert(reach::transition_edges(before, this@)[0] == chosen@); }
+                        else { assert(reach::transition_edges(before, this@)[1] == chosen@); }
+                        assert(reach::atoms_wf(before, chosen@, atoms@));
+                        interp_coverage_push(before, pending, (chosen, false), atoms@);
+                    }
                     assert forall|theta: Subst, event: EventView|
                         language::event_wf(theta) && truth_words_realize(before, atoms@, words@, theta, event) implies
                             interp_results_equiv(model::gsem(theta),
@@ -1144,40 +1777,7 @@ impl TransitionInterpret for TransitionId {
             TransitionHead::Intersect(n) => {
                 Self::interpret_branch(store, this, n, true, finish, tasks, values)?
             }
-            TransitionHead::Not(inner) => {
-                if finish {
-                    let inner = match values.pop() {
-                        Some(v) => v,
-                        None => return Err(HistoryError::symbolic_invariant()),
-                    };
-                    values.push(RegexId::not(inner, store)?);
-                    proof! {
-                        lifted_values_stable(before, store.graph(), prior);
-                        assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
-                            interp_results_equiv(model::gsem(theta),
-                                interp_run(store.graph(), pending.push((this, finish)), lifted_values(store.graph(), prior), theta, event),
-                                interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
-                            assert forall|word: Seq<EventView>| language::lang(model::gsem(theta), language::Regex::Not(Box::new(model::lift_regex(store.graph(), inner@))), word)
-                                == model::regex_lang(store.graph(), theta, values.view().last()@, word) by {
-                                norm::regex_language_unfold(model::gsem(theta), language::Regex::Not(Box::new(model::lift_regex(store.graph(), inner@))), word);
-                            }
-                            assert(lifted_values(store.graph(), values.view()) =~= lifted_values(store.graph(), prior).drop_last().push(model::lift_regex(store.graph(), values.view().last()@)));
-                            interp_value_reduction(store.graph(), this, finish, pending, lifted_values(store.graph(), prior), lifted_values(store.graph(), values.view()), theta, event);
-                        }
-                    }
-                } else {
-                    tasks.push((this, true));
-                    tasks.push((inner, false));
-                    proof! {
-                        assert forall|theta: Subst, event: EventView|
-                            interp_run(store.graph(), pending.push((this, finish)), lifted_values(store.graph(), prior), theta, event)
-                                == interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event) by {
-                            interp_expand_unary(store.graph(), this, inner, pending, lifted_values(store.graph(), prior), theta, event);
-                        }
-                        interp_lemma_work_unary(store.graph(), this, pending, inner);
-                    }
-                }
-            }
+            TransitionHead::Not(inner) => interpret_not(store, this, inner, finish, tasks, values)?,
             TransitionHead::Append(inner, n) => {
                 if finish {
                     let head = match values.pop() {
@@ -1186,77 +1786,24 @@ impl TransitionInterpret for TransitionId {
                     };
                     proof! { model::lemma_graph_transition_wf(store.graph(), this@); }
                     let mut xs = WorkVec::new();
-                    xs.push(head);
-                    let mut failure = None;
-                    let mut i = 0;
-                    #[cfg_attr(verus_keep_ghost, verus_spec(
-                        invariant i <= n, model::graph_wf(store.graph()), this@ < store.graph().transitions.len(), head@ < store.graph().regexes.len(),
-                            store.graph() == before, store.valid_store(), store.restoration() == old(store).restoration(),
-                            interp_tasks_wf(store.graph(), tasks.view()), norm::regex_ids_valid(store.graph(), values.view()),
-                            tasks.view() == pending, values.view() == prior.drop_last(), prior.len() > 0, prior.last() == head,
-                            n == transition_suffix(store.graph(), this).len(), norm::regex_ids_valid(store.graph(), xs.view()),
-                            model::regex_ids(xs.view()) == seq![head@] + transition_suffix(store.graph(), this).take(i as int),
-                        ensures failure.is_none() ==> i == n,
-                        decreases n - i,
-                    ))]
-                    while i < n {
-                        let child = loop_try!(this.suffix_child(store, i), failure);
-                        proof! {
-                            model::lemma_graph_transition_wf(store.graph(), this@);
-                            assert(child@ == transition_suffix(store.graph(), this)[i as int]);
-                            assert(child@ < store.graph().regexes.len());
-                        }
-                        proof_decl! { let ghost previous = xs.view(); }
-                        xs.push(child);
-                        proof! {
-                            norm::regex_ids_push(previous, child);
-                            assert(transition_suffix(store.graph(), this).take(i as int + 1)
-                                =~= transition_suffix(store.graph(), this).take(i as int).push(child@));
-                        }
-                        i = i.saturating_add(1);
-                    }
-                    if let Some(error) = failure {
-                        return Err(error);
-                    }
-                    proof! {
-                        assert(transition_suffix(before, this).take(n as int) =~= transition_suffix(before, this));
-                        assert(model::regex_ids(xs.view()) == seq![head@] + transition_suffix(before, this));
-                    }
+                    collect_append_factors(store, this, head, n, &mut xs)?;
                     values.push(RegexId::concat(store, &xs)?);
                     proof! {
-                        assert(before.transitions[this@ as int] == store.graph().transitions[this@ as int]);
-                        assert(transition_suffix(store.graph(), this) == transition_suffix(before, this));
-                        lifted_values_stable(before, store.graph(), prior);
-                        interp_append_ids(store.graph(), xs.view(), head, transition_suffix(store.graph(), this));
-                        regex_concat_ids(store.graph(), xs.view());
-                        assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
-                            interp_results_equiv(model::gsem(theta),
-                                interp_run(store.graph(), pending.push((this, finish)), lifted_values(store.graph(), prior), theta, event),
-                                interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
-                            assert forall|word: Seq<EventView>| model::regex_lang(store.graph(), theta, values.view().last()@, word)
-                                == language::lang(model::gsem(theta), language::Regex::Concat(seq![model::lift_regex(store.graph(), head@)]
-                                    + model::lift_regexes(store.graph(), transition_suffix(store.graph(), this))), word) by {
-                                reveal(norm::concat_combo);
-                            }
-                            assert(lifted_values(store.graph(), values.view()) =~= lifted_values(store.graph(), prior).drop_last().push(model::lift_regex(store.graph(), values.view().last()@)));
-                            assert(prior.len() > 0 && prior.last() == head);
-                            assert(lifted_values(store.graph(), prior).last() == model::lift_regex(store.graph(), head@));
-                            assert forall|i: int, word: Seq<EventView>| 0 <= i < prior.len() implies
-                                language::lang(model::gsem(theta), interp_action(store.graph(), (this, finish), lifted_values(store.graph(), prior), theta, event)->Some_0[i], word)
-                                    == language::lang(model::gsem(theta), lifted_values(store.graph(), values.view())[i], word) by {
-                                if i == prior.len() - 1 {
-                                    assert(model::regex_lang(store.graph(), theta, values.view().last()@, word)
-                                        == language::lang(model::gsem(theta), language::Regex::Concat(seq![model::lift_regex(store.graph(), head@)]
-                                            + model::lift_regexes(store.graph(), transition_suffix(store.graph(), this))), word));
-                                }
-                            }
-                            interp_value_reduction(store.graph(), this, finish, pending, lifted_values(store.graph(), prior), lifted_values(store.graph(), values.view()), theta, event);
-                        }
+                        interp_append_finish(before, store.graph(), this, pending, prior, head, xs.view(), values.view());
                     }
                 } else {
                     tasks.push((this, true));
                     tasks.push((inner, false));
                     proof! {
+                        interp_stack_task(store.graph(), pending.push((this, true)), (inner, false), prior.len());
+                        interp_stack_task(store.graph(), pending, (this, true), prior.len() + 1);
+                        if interp_tasks_covered(before, pending.push((this, finish)), atoms@) {
+                            assert(reach::transition_edges(before, this@) == seq![inner@]);
+                            assert(reach::transition_edges(before, this@)[0] == inner@);
+                            assert(reach::atoms_wf(before, inner@, atoms@));
+                            interp_coverage_push(before, pending, (this, true), atoms@);
+                            interp_coverage_push(before, pending.push((this, true)), (inner, false), atoms@);
+                        }
                         assert forall|theta: Subst, event: EventView|
                             interp_run(store.graph(), pending.push((this, finish)), lifted_values(store.graph(), prior), theta, event)
                                 == interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event) by {
@@ -1276,8 +1823,16 @@ impl TransitionInterpret for TransitionId {
                 interp_same_configuration_extends(before, store.graph(), pending.push((this, finish)), prior, theta, event);
             }
             interp_lemma_step_post(before, store.graph(), this, finish, pending, tasks.view());
+            interp_stack_stable(before, store.graph(), pending.push((this, finish)), prior.len());
+            interp_stack_task(store.graph(), pending, (this, finish), prior.len());
+            if interp_tasks_covered(before, pending.push((this, finish)), atoms@) {
+                interp_coverage_stable(before, store.graph(), pending.push((this, finish)), atoms@);
+                interp_coverage_stable(before, store.graph(), pending, atoms@);
+                assert(interp_tasks_covered(store.graph(), tasks.view(), atoms@));
+            }
         }
         Ok(())
+    }
     }
     #[allow(
         clippy::option_if_let_else,
@@ -1300,6 +1855,12 @@ impl TransitionInterpret for TransitionId {
         tasks.push((this, false));
         let mut state = Ok(());
         proof! {
+            assert(tasks.view() == seq![(this, false)]);
+            assert(values.view().len() == 0);
+            assert(interp_stack_needed(store.graph(), (this, false)) == 0);
+            assert(interp_stack_result(store.graph(), Seq::empty(), 1) == Some(1));
+            interp_stack_task(store.graph(), Seq::empty(), (this, false), 0);
+            assert(interp_stack_result(store.graph(), tasks.view(), 0) == Some(1));
             assert forall|theta: Subst, event: EventView|
                 interp_results_equiv(model::gsem(theta),
                     interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event),
@@ -1311,6 +1872,15 @@ impl TransitionInterpret for TransitionId {
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant model::graph_extends(entry, store.graph()), model::graph_wf(store.graph()), store.valid_store(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).errors_are_non_invalid_policy() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
+                old(store).errors_are_non_invariant() && reach::atoms_wf(entry, this@, atoms@) ==> language::no_internal_error(state),
+                assignment_valid(atoms@.len(), truth_words@),
+                state is Ok ==> interp_stack_result(store.graph(), tasks.view(), values.view().len()) == Some(1),
+                reach::atoms_wf(entry, this@, atoms@) && state is Ok ==> interp_tasks_covered(store.graph(), tasks.view(), atoms@),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
                 model::graph_wf(entry), model::atom_ids_wf(entry, atoms@), this@ < entry.transitions.len(),
                 model::atom_ids_wf(store.graph(), atoms@), interp_tasks_wf(store.graph(), tasks.view()), norm::regex_ids_valid(store.graph(), values.view()),
                 state.is_ok() ==> forall|theta: Subst, event: EventView|
@@ -1369,6 +1939,191 @@ pub(crate) mod verify {
     use super::*;
     verus! {
             broadcast use junco_core::kernel::verify::group_kernel_views;
+
+    /// Stack availability is independent of whether a truth word has a realizing event.
+    pub open spec fn test_stack_result(g: model::Graph, tasks: Seq<(TestId, bool)>, depth: nat) -> Option<nat>
+        decreases tasks.len(),
+    {
+        if tasks.len() == 0 { Some(depth) } else {
+            let task = tasks.last();
+            let needed = if task.1 { test_children(g, task.0).len() } else { 0 };
+            if depth < needed { None }
+            else { test_stack_result(g, tasks.drop_last(), (depth - needed + 1) as nat) }
+        }
+    }
+
+    pub proof fn test_stack_task(g: model::Graph, pending: Seq<(TestId, bool)>, task: (TestId, bool), depth: nat)
+        ensures test_stack_result(g, pending.push(task), depth) == {
+            let needed = if task.1 { test_children(g, task.0).len() } else { 0 };
+            if depth < needed { None } else { test_stack_result(g, pending, (depth - needed + 1) as nat) }
+        },
+    {
+        assert(pending.push(task).drop_last() =~= pending);
+    }
+
+    pub open spec fn interp_stack_needed(g: model::Graph, task: (TransitionId, bool)) -> nat {
+        if !task.1 { 0 } else {
+            match g.transitions[task.0@ as int] {
+                model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => cs.len(),
+                model::TransitionNode::Not(_) | model::TransitionNode::Append(_, _) => 1,
+                _ => 0,
+            }
+        }
+    }
+
+    pub open spec fn interp_stack_result(g: model::Graph, tasks: Seq<(TransitionId, bool)>, depth: nat) -> Option<nat>
+        decreases tasks.len(),
+    {
+        if tasks.len() == 0 { Some(depth) } else {
+            let needed = interp_stack_needed(g, tasks.last());
+            if depth < needed { None }
+            else { interp_stack_result(g, tasks.drop_last(), (depth - needed + 1) as nat) }
+        }
+    }
+
+    pub proof fn interp_stack_task(g: model::Graph, pending: Seq<(TransitionId, bool)>, task: (TransitionId, bool), depth: nat)
+        ensures interp_stack_result(g, pending.push(task), depth) == {
+            let needed = interp_stack_needed(g, task);
+            if depth < needed { None } else { interp_stack_result(g, pending, (depth - needed + 1) as nat) }
+        },
+    {
+        assert(pending.push(task).drop_last() =~= pending);
+    }
+
+    pub proof fn test_stack_children(g: model::Graph, id: TestId, remaining: nat, pending: Seq<(TestId, bool)>, depth: nat)
+        requires remaining <= test_children(g, id).len(),
+        ensures test_stack_result(g, pending + child_test_tasks(g, id, remaining), depth)
+            == test_stack_result(g, pending, (depth + test_children(g, id).len() - remaining) as nat),
+        decreases test_children(g, id).len() - remaining,
+    {
+        let children = child_test_tasks(g, id, remaining);
+        if remaining < test_children(g, id).len() {
+            assert(children.drop_last() =~= child_test_tasks(g, id, remaining + 1));
+            assert(!children.last().1);
+            assert((pending + children).drop_last() =~= pending + children.drop_last());
+            test_stack_children(g, id, remaining + 1, pending, depth + 1);
+        } else { assert(children =~= Seq::empty()); }
+    }
+
+    pub proof fn interp_stack_children(g: model::Graph, id: TransitionId, remaining: nat, pending: Seq<(TransitionId, bool)>, depth: nat)
+        requires remaining <= transition_children(g, id).len(),
+        ensures interp_stack_result(g, pending + child_interp_tasks(g, id, remaining), depth)
+            == interp_stack_result(g, pending, (depth + transition_children(g, id).len() - remaining) as nat),
+        decreases transition_children(g, id).len() - remaining,
+    {
+        let children = child_interp_tasks(g, id, remaining);
+        if remaining < transition_children(g, id).len() {
+            assert(children.drop_last() =~= child_interp_tasks(g, id, remaining + 1));
+            assert(!children.last().1);
+            assert((pending + children).drop_last() =~= pending + children.drop_last());
+            interp_stack_children(g, id, remaining + 1, pending, depth + 1);
+        } else { assert(children =~= Seq::empty()); }
+    }
+
+    pub proof fn interp_stack_stable(before: model::Graph, after: model::Graph, tasks: Seq<(TransitionId, bool)>, depth: nat)
+        requires model::graph_extends(before, after), interp_tasks_wf(before, tasks),
+        ensures interp_stack_result(before, tasks, depth) == interp_stack_result(after, tasks, depth),
+            tasks.len() > 0 ==> interp_stack_needed(before, tasks.last()) == interp_stack_needed(after, tasks.last()),
+        decreases tasks.len(),
+    {
+        if tasks.len() > 0 {
+            let needed = interp_stack_needed(before, tasks.last());
+            assert(before.transitions[tasks.last().0@ as int] == after.transitions[tasks.last().0@ as int]);
+            if needed <= depth { interp_stack_stable(before, after, tasks.drop_last(), (depth - needed + 1) as nat); }
+        }
+    }
+
+    pub open spec fn test_atoms_covered(g: model::Graph, root: nat, atoms: Seq<TestId>) -> bool {
+        forall|p: model::Primitive| reach::test_reaches_primitive(g, root, p) ==> reach::has_positive(g, atoms, p)
+    }
+
+    pub open spec fn test_tasks_covered(g: model::Graph, tasks: Seq<(TestId, bool)>, atoms: Seq<TestId>) -> bool {
+        forall|i: int| 0 <= i < tasks.len() ==> test_atoms_covered(g, tasks[i].0@, atoms)
+    }
+
+    pub open spec fn interp_tasks_covered(g: model::Graph, tasks: Seq<(TransitionId, bool)>, atoms: Seq<TestId>) -> bool {
+        forall|i: int| 0 <= i < tasks.len() ==> reach::atoms_wf(g, tasks[i].0@, atoms)
+    }
+
+    pub proof fn test_coverage_children(g: model::Graph, root: TestId, atoms: Seq<TestId>)
+        requires model::graph_wf(g), root@ < g.tests.len(), test_atoms_covered(g, root@, atoms),
+        ensures forall|i: int| 0 <= i < test_children(g, root).len()
+            ==> test_atoms_covered(g, test_children(g, root)[i], atoms),
+    {
+        model::lemma_graph_test_wf(g, root@);
+        assert forall|i: int| 0 <= i < test_children(g, root).len()
+            implies test_atoms_covered(g, test_children(g, root)[i], atoms) by {
+            assert forall|p: model::Primitive| reach::test_reaches_primitive(g, test_children(g, root)[i], p)
+                implies reach::has_positive(g, atoms, p) by {
+                assert(reach::test_edges(g, root@)[i] == test_children(g, root)[i]);
+                assert(reach::test_reaches_primitive(g, root@, p));
+            }
+        }
+    }
+
+    pub proof fn transition_coverage_children(g: model::Graph, root: TransitionId, atoms: Seq<TestId>)
+        requires model::graph_wf(g), root@ < g.transitions.len(), reach::atoms_wf(g, root@, atoms),
+        ensures (forall|i: int| 0 <= i < reach::transition_edges(g, root@).len()
+                ==> reach::atoms_wf(g, reach::transition_edges(g, root@)[i], atoms)),
+            forall|i: int| 0 <= i < reach::transition_tests(g, root@).len()
+                ==> test_atoms_covered(g, reach::transition_tests(g, root@)[i], atoms),
+    {
+        model::lemma_graph_transition_wf(g, root@);
+        assert forall|i: int| 0 <= i < reach::transition_edges(g, root@).len()
+            implies reach::atoms_wf(g, reach::transition_edges(g, root@)[i], atoms) by {
+            assert forall|p: model::Primitive| reach::transition_reaches_primitive(g, reach::transition_edges(g, root@)[i], p)
+                implies reach::has_positive(g, atoms, p) by {
+                assert(reach::transition_reaches_primitive(g, root@, p));
+            }
+        }
+        assert forall|i: int| 0 <= i < reach::transition_tests(g, root@).len()
+            implies test_atoms_covered(g, reach::transition_tests(g, root@)[i], atoms) by {
+            assert forall|p: model::Primitive| reach::test_reaches_primitive(g, reach::transition_tests(g, root@)[i], p)
+                implies reach::has_positive(g, atoms, p) by {
+                assert(reach::transition_reaches_primitive(g, root@, p));
+            }
+        }
+    }
+
+    pub proof fn interp_coverage_stable(before: model::Graph, after: model::Graph, tasks: Seq<(TransitionId, bool)>, atoms: Seq<TestId>)
+        requires model::graph_wf(before), model::graph_extends(before, after), interp_tasks_wf(before, tasks),
+            interp_tasks_covered(before, tasks, atoms),
+        ensures interp_tasks_covered(after, tasks, atoms),
+    {
+        assert forall|i: int| 0 <= i < tasks.len() implies reach::atoms_wf(after, tasks[i].0@, atoms) by {
+            reach::lemma_atoms_wf_extends(before, after, tasks[i].0@, atoms);
+        }
+    }
+
+    pub proof fn interp_coverage_push(g: model::Graph, tasks: Seq<(TransitionId, bool)>, task: (TransitionId, bool), atoms: Seq<TestId>)
+        requires interp_tasks_covered(g, tasks, atoms), reach::atoms_wf(g, task.0@, atoms),
+        ensures interp_tasks_covered(g, tasks.push(task), atoms),
+    {
+        assert forall|i: int| 0 <= i < tasks.push(task).len() implies reach::atoms_wf(g, tasks.push(task)[i].0@, atoms) by {
+            if i < tasks.len() { assert(tasks.push(task)[i] == tasks[i]); }
+            else { assert(tasks.push(task)[i] == task); }
+        }
+    }
+
+    pub proof fn interp_coverage_pop(g: model::Graph, tasks: Seq<(TransitionId, bool)>, task: (TransitionId, bool), atoms: Seq<TestId>)
+        requires interp_tasks_covered(g, tasks.push(task), atoms),
+        ensures interp_tasks_covered(g, tasks, atoms), reach::atoms_wf(g, task.0@, atoms),
+    {
+        assert(tasks.push(task)[tasks.len() as int] == task);
+        assert forall|i: int| 0 <= i < tasks.len() implies reach::atoms_wf(g, tasks[i].0@, atoms) by {
+            assert(tasks.push(task)[i] == tasks[i]);
+        }
+    }
+
+    pub proof fn assignment_index_bound(count: nat, words: Seq<u64>, index: usize)
+        requires assignment_valid(count, words), index < count,
+        ensures index / 64 < words.len(),
+    {
+        vstd::arithmetic::div_mod::lemma_fundamental_div_mod(index as int, 64);
+        vstd::arithmetic::div_mod::lemma_fundamental_div_mod((count + 63) as int, 64);
+        assert(index / 64 * 64 <= index);
+        assert((count + 63) / 64 * 64 > count - 1);
+    }
             pub open spec fn truth_word_bit(words: Seq<u64>, index: nat) -> bool {
                 index / 64 < words.len()
                     && ((words[(index / 64) as int] >> ((index % 64) as u32)) & 1u64) != 0
@@ -1469,8 +2224,190 @@ pub(crate) mod verify {
         }
     }
 
+    pub proof fn derivative_cached_bound(g: model::Graph, cache: Seq<Option<TransitionId>>, id: RegexId, out: TransitionId)
+        requires derivative_cache_wf(g, cache), id@ < cache.len(), cache[id@ as int] == Some(out),
+        ensures out@ < g.transitions.len(),
+    {}
+
+    pub proof fn derivative_cache_prefix_facts(before: Seq<Option<TransitionId>>, after: Seq<Option<TransitionId>>)
+        requires before.len() <= after.len(), before == after || before == after.subrange(0, before.len() as int),
+        ensures before.is_prefix_of(after),
+            forall|i: int| 0 <= i < before.len() ==> after[i] == before[i],
+    {}
+
+    pub proof fn derivative_test_correct(g: model::Graph, root: RegexId, test: TestId, cache: Seq<Option<TransitionId>>, out: TransitionId,
+        then_id: TransitionId, else_id: TransitionId)
+        requires model::graph_wf(g), root@ < g.regexes.len(), derivative_cache_wf(g, cache), out@ < g.transitions.len(),
+            g.regexes[root@ as int].kind == model::RegexKindNode::Test(test@),
+            then_id@ == g.constants.transition_epsilon, else_id@ == g.constants.transition_empty,
+            forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+                ==> norm::transition_lang(g, theta, out, event, word) == norm::transition_if_combo(g, theta, test,
+                    then_id, else_id, event, word),
+        ensures derivative_correct(g, root@, out),
+    {
+        derivative_constants(g);
+        assert(derivative_native_result(g, root, cache, out));
+        derivative_native_correct(g, root, cache, out);
+    }
+
+    pub proof fn derivative_graph_frame(before: model::Graph, after: model::Graph, root: RegexId)
+        requires model::graph_extends(before, after), root@ < before.regexes.len(),
+        ensures root@ < after.regexes.len(), after.regexes[root@ as int] == before.regexes[root@ as int],
+            after.constants == before.constants,
+    {}
+
     pub open spec fn derivative_tasks_wf(g: model::Graph, tasks: Seq<(RegexId, bool)>) -> bool {
         forall|i: int| 0 <= i < tasks.len() ==> #[trigger] tasks[i].0@ < g.regexes.len()
+    }
+
+    pub open spec fn derivative_tasks_bounded(tasks: Seq<(RegexId, bool)>, bound: nat) -> bool {
+        forall|i: int| 0 <= i < tasks.len() ==> tasks[i].0@ <= bound
+    }
+
+    pub open spec fn cache_complete(cache: Seq<Option<TransitionId>>, id: nat) -> bool {
+        id < cache.len() && cache[id as int] is Some
+    }
+
+    pub open spec fn cache_completions_preserved(before: Seq<Option<TransitionId>>, after: Seq<Option<TransitionId>>) -> bool {
+        forall|id: nat| cache_complete(before, id) ==> cache_complete(after, id)
+    }
+
+    pub open spec fn tasks_contain(tasks: Seq<(RegexId, bool)>, id: nat) -> bool {
+        exists|i: int| 0 <= i < tasks.len() && tasks[i].0@ == id
+    }
+
+    pub open spec fn derivative_dependency(g: model::Graph, root: RegexId, child: nat) -> bool {
+        match g.regexes[root@ as int].kind {
+            model::RegexKindNode::Star(id) | model::RegexKindNode::Not(id) => child == id,
+            model::RegexKindNode::Union(cs) | model::RegexKindNode::Intersect(cs) => cs.contains(child),
+            model::RegexKindNode::Concat(cs) => exists|i: int| 0 <= i < cs.len() && cs[i] == child
+                && derivative_prefix(g, root, i as nat),
+            _ => false,
+        }
+    }
+
+    pub open spec fn derivative_dependencies_complete(g: model::Graph, root: RegexId, cache: Seq<Option<TransitionId>>) -> bool {
+        forall|child: nat| derivative_dependency(g, root, child) ==> cache_complete(cache, child)
+    }
+
+    pub proof fn derivative_cache_extend_dependencies(g: model::Graph, root: RegexId,
+        before: Seq<Option<TransitionId>>, after: Seq<Option<TransitionId>>)
+        requires before.is_prefix_of(after), derivative_dependencies_complete(g, root, before),
+        ensures derivative_dependencies_complete(g, root, after),
+    {
+        after.lemma_prefix_index_eq(before);
+        assert forall|child: nat| derivative_dependency(g, root, child) implies cache_complete(after, child) by {
+            assert(cache_complete(before, child));
+            assert(after[child as int] == before[child as int]);
+        }
+    }
+
+    pub proof fn derivative_unary_complete(g: model::Graph, root: RegexId, inner: RegexId, cache: Seq<Option<TransitionId>>)
+        requires derivative_dependencies_complete(g, root, cache),
+            g.regexes[root@ as int].kind == model::RegexKindNode::Star(inner@)
+                || g.regexes[root@ as int].kind == model::RegexKindNode::Not(inner@),
+        ensures cache_complete(cache, inner@),
+    {
+        assert(derivative_dependency(g, root, inner@));
+    }
+
+    pub proof fn derivative_unary_scheduled(g: model::Graph, root: RegexId, pending: Seq<(RegexId, bool)>, inner: RegexId)
+        requires g.regexes[root@ as int].kind == model::RegexKindNode::Star(inner@)
+            || g.regexes[root@ as int].kind == model::RegexKindNode::Not(inner@),
+        ensures derivative_scheduled(g, root, pending, pending.push((root, true)).push((inner, false))),
+    {
+        let tasks = pending.push((root, true)).push((inner, false));
+        assert(pending =~= tasks.subrange(0, pending.len() as int));
+        assert forall|child: nat| derivative_dependency(g, root, child)
+            implies exists|j: int| pending.len() < j < tasks.len() && tasks[j].0@ == child by {
+            assert(child == inner@);
+            assert(tasks[pending.len() as int + 1].0@ == child);
+        }
+    }
+
+    pub proof fn derivative_scheduled_facts(g: model::Graph, root: RegexId, pending: Seq<(RegexId, bool)>, tasks: Seq<(RegexId, bool)>)
+        requires derivative_scheduled(g, root, pending, tasks),
+        ensures pending.is_prefix_of(tasks), tasks_contain(tasks, root@),
+    {
+        assert(tasks[pending.len() as int] == (root, true));
+    }
+
+    /// A finishing task may rely only on a completed cache entry or work above it.
+    pub open spec fn derivative_tasks_ready(g: model::Graph, tasks: Seq<(RegexId, bool)>, cache: Seq<Option<TransitionId>>) -> bool {
+        forall|i: int, child: nat| 0 <= i < tasks.len() && tasks[i].1
+            && derivative_dependency(g, tasks[i].0, child) ==> cache_complete(cache, child)
+                || exists|j: int| i < j < tasks.len() && tasks[j].0@ == child
+    }
+
+    pub open spec fn derivative_scheduled(g: model::Graph, root: RegexId,
+        pending: Seq<(RegexId, bool)>, tasks: Seq<(RegexId, bool)>) -> bool {
+        pending.is_prefix_of(tasks) && pending.len() < tasks.len() && tasks[pending.len() as int] == (root, true)
+            && (forall|i: int| pending.len() < i < tasks.len() ==> !tasks[i].1)
+            && forall|child: nat| derivative_dependency(g, root, child)
+                ==> exists|j: int| pending.len() < j < tasks.len() && tasks[j].0@ == child
+    }
+
+    pub proof fn derivative_ready_top(g: model::Graph, tasks: Seq<(RegexId, bool)>, cache: Seq<Option<TransitionId>>)
+        requires tasks.len() > 0, derivative_tasks_ready(g, tasks, cache),
+        ensures tasks.last().1 ==> derivative_dependencies_complete(g, tasks.last().0, cache),
+    {
+        assert forall|child: nat| tasks.last().1 && derivative_dependency(g, tasks.last().0, child)
+            implies cache_complete(cache, child) by {
+            assert(tasks[tasks.len() - 1] == tasks.last());
+        }
+    }
+
+    pub proof fn derivative_ready_after_step(before: model::Graph, after: model::Graph, root: RegexId, finish: bool,
+        pending: Seq<(RegexId, bool)>, tasks: Seq<(RegexId, bool)>, cache0: Seq<Option<TransitionId>>, cache1: Seq<Option<TransitionId>>)
+        requires model::graph_wf(before), model::graph_extends(before, after), root@ < before.regexes.len(),
+            derivative_tasks_wf(before, pending), derivative_tasks_ready(before, pending.push((root, finish)), cache0),
+            cache_completions_preserved(cache0, cache1),
+            tasks == pending && cache_complete(cache1, root@) || derivative_scheduled(before, root, pending, tasks),
+        ensures derivative_tasks_ready(after, tasks, cache1),
+    {
+        let queued = pending.push((root, finish));
+        after.regexes.lemma_prefix_index_eq(before.regexes);
+        if tasks != pending { tasks.lemma_prefix_index_eq(pending); }
+        assert forall|i: int, child: nat| 0 <= i < tasks.len() && tasks[i].1
+            && derivative_dependency(after, tasks[i].0, child) implies cache_complete(cache1, child)
+                || exists|j: int| i < j < tasks.len() && tasks[j].0@ == child by {
+            if i < pending.len() {
+                assert(tasks[i] == pending[i]);
+                assert(queued[i] == pending[i]);
+                assert(queued[i].1);
+                derivative_factor_stable(before, after, pending[i].0);
+                assert(before.regexes[pending[i].0@ as int] == after.regexes[pending[i].0@ as int]);
+                assert(derivative_dependency(before, queued[i].0, child));
+                if cache_complete(cache0, child) {
+                    assert(cache_complete(cache1, child));
+                } else {
+                    assert(exists|j: int| i < j < queued.len() && queued[j].0@ == child);
+                    let j = choose|j: int| i < j < queued.len() && queued[j].0@ == child;
+                    if j < pending.len() {
+                        assert(queued[j] == pending[j]);
+                        assert(tasks[j] == pending[j]);
+                        assert(exists|k: int| i < k < tasks.len() && tasks[k].0@ == child);
+                    } else {
+                        assert(j == pending.len());
+                        assert(child == root@);
+                        if tasks == pending { assert(cache_complete(cache1, child)); }
+                        else {
+                            assert(tasks[pending.len() as int] == (root, true));
+                            assert(exists|k: int| i < k < tasks.len() && tasks[k].0@ == child);
+                        }
+                    }
+                }
+            } else {
+                assert(tasks != pending);
+                assert(i == pending.len());
+                assert(tasks[i] == (root, true));
+                derivative_factor_stable(before, after, root);
+                assert(before.regexes[root@ as int] == after.regexes[root@ as int]);
+                assert(derivative_dependency(before, root, child));
+                let j = choose|j: int| pending.len() < j < tasks.len() && tasks[j].0@ == child;
+                assert(i < j);
+            }
+        }
     }
 
     pub open spec fn derivative_node_work(g: model::Graph, id: nat) -> nat
@@ -1821,6 +2758,19 @@ pub(crate) mod verify {
                     ==> derivative_results(next, root, concat, count, results))
             && (forall|after: model::Graph| model::graph_extends(next, after) ==> model::graph_extends(g, after))) by {
             derivative_extends(g, next);
+        }
+    }
+
+    pub proof fn derivative_dependency_frame(g: model::Graph, root: RegexId)
+        requires model::graph_wf(g), root@ < g.regexes.len(),
+        ensures forall|next: model::Graph, cache: Seq<Option<TransitionId>>| model::graph_extends(g, next)
+            ==> derivative_dependencies_complete(g, root, cache) == derivative_dependencies_complete(next, root, cache),
+    {
+        assert forall|next: model::Graph, cache: Seq<Option<TransitionId>>| model::graph_extends(g, next)
+            implies derivative_dependencies_complete(g, root, cache) == derivative_dependencies_complete(next, root, cache) by {
+            derivative_factor_stable(g, next, root);
+            assert(g.regexes[root@ as int] == next.regexes[root@ as int]);
+            assert forall|child: nat| derivative_dependency(g, root, child) == derivative_dependency(next, root, child) by {}
         }
     }
 
@@ -3098,6 +4048,71 @@ pub(crate) mod verify {
     pub proof fn regex_concat_ids(g: model::Graph, ids: Seq<RegexId>)
         ensures model::lift_regexes(g, model::regex_ids(ids)) == lifted_values(g, ids),
     { assert(model::lift_regexes(g, model::regex_ids(ids)) =~= lifted_values(g, ids)); }
+
+    #[verifier::spinoff_prover]
+    pub proof fn interp_append_finish(
+        before: model::Graph, after: model::Graph, root: TransitionId,
+        pending: Seq<(TransitionId, bool)>, prior: Seq<RegexId>, head: RegexId,
+        xs: Seq<RegexId>, values: Seq<RegexId>,
+    )
+        requires model::graph_wf(before), model::graph_wf(after), model::graph_extends(before, after),
+            root@ < before.transitions.len(), before.transitions[root@ as int] is Append,
+            interp_tasks_wf(before, pending), norm::regex_ids_valid(before, prior),
+            prior.len() > 0, prior.last() == head, values.len() == prior.len(),
+            values == prior.drop_last().push(values.last()), values.last()@ < after.regexes.len(),
+            model::regex_ids(xs) == seq![head@] + transition_suffix(before, root),
+            forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
+                ==> #[trigger] model::regex_lang(after, theta, values.last()@, word) == norm::concat_combo(after, theta, xs, word),
+        ensures norm::regex_ids_valid(after, values),
+            interp_stack_result(before, pending.push((root, true)), prior.len())
+                == interp_stack_result(after, pending, values.len()),
+            forall|theta: Subst, event: EventView| language::event_wf(theta)
+                ==> interp_results_equiv(model::gsem(theta),
+                    interp_run(before, pending.push((root, true)), lifted_values(before, prior), theta, event),
+                    interp_run(after, pending, lifted_values(after, values), theta, event)),
+    {
+        hide(language::lang); hide(language::interp_transition); hide(interp_run);
+        hide(model::test_holds); hide(model::lift_transition); hide(model::lift_regex);
+        after.transitions.lemma_prefix_index_eq(before.transitions);
+        assert(before.transitions[root@ as int] == after.transitions[root@ as int]);
+        assert(transition_suffix(before, root) == transition_suffix(after, root));
+        lifted_values_stable(before, after, prior);
+        interp_append_ids(after, xs, head, transition_suffix(after, root));
+        regex_concat_ids(after, xs);
+        assert forall|i: int| 0 <= i < values.len() implies values[i]@ < after.regexes.len() by {
+            if i < prior.len() - 1 { assert(values[i] == prior[i]); }
+            else { assert(values[i] == values.last()); }
+        }
+        assert(interp_tasks_wf(before, pending.push((root, true))));
+        interp_stack_stable(before, after, pending.push((root, true)), prior.len());
+        interp_stack_task(after, pending, (root, true), prior.len());
+        assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
+            interp_results_equiv(model::gsem(theta),
+                interp_run(before, pending.push((root, true)), lifted_values(before, prior), theta, event),
+                interp_run(after, pending, lifted_values(after, values), theta, event)) by {
+            interp_same_configuration_extends(before, after, pending.push((root, true)), prior, theta, event);
+            assert forall|word: Seq<EventView>| model::regex_lang(after, theta, values.last()@, word)
+                == language::lang(model::gsem(theta), language::Regex::Concat(seq![model::lift_regex(after, head@)]
+                    + model::lift_regexes(after, transition_suffix(after, root))), word) by {
+                reveal(norm::concat_combo);
+                assert(model::regex_lang(after, theta, values.last()@, word) == norm::concat_combo(after, theta, xs, word));
+                assert(model::lift_regexes(after, model::regex_ids(xs)) == lifted_values(after, xs));
+                assert(lifted_values(after, xs) == seq![model::lift_regex(after, head@)] + model::lift_regexes(after, transition_suffix(after, root)));
+            }
+            assert(lifted_values(after, values) =~= lifted_values(after, prior).drop_last().push(model::lift_regex(after, values.last()@)));
+            assert(lifted_values(after, prior).last() == model::lift_regex(after, head@));
+            assert forall|i: int, word: Seq<EventView>| 0 <= i < prior.len() implies
+                language::lang(model::gsem(theta), interp_action(after, (root, true), lifted_values(after, prior), theta, event)->Some_0[i], word)
+                    == language::lang(model::gsem(theta), lifted_values(after, values)[i], word) by {
+                if i == prior.len() - 1 {
+                    assert(model::regex_lang(after, theta, values.last()@, word)
+                        == language::lang(model::gsem(theta), language::Regex::Concat(seq![model::lift_regex(after, head@)]
+                            + model::lift_regexes(after, transition_suffix(after, root))), word));
+                }
+            }
+            interp_value_reduction(after, root, true, pending, lifted_values(after, prior), lifted_values(after, values), theta, event);
+        }
+    }
 
 
     pub proof fn interp_root_stable(before: model::Graph, after: model::Graph, root: TransitionId)

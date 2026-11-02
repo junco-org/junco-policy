@@ -67,7 +67,8 @@ impl GraphCaches {
     }
     // Concrete LRU leaves expose semantic keys and membership, not policy semantics.
     #[verus_verify(external_body)]
-    #[verus_spec(result => ensures result matches Some(cache) ==> successor_cache_view(cache) == Map::<ClassKey, RegexId>::empty())]
+    #[verus_spec(result => ensures result is Some,
+        result matches Some(cache) ==> successor_cache_view(cache) == Map::<ClassKey, RegexId>::empty())]
     pub fn successor_cache() -> Option<LruCache<EventClass, RegexId>> {
         usize::try_from(SUCCESSOR_CAPACITY)
             .ok()
@@ -147,8 +148,13 @@ pub struct CursorCache {
 }
 #[verus_verify]
 impl CursorCache {
-    #[verus_spec(result => ensures result matches Ok(cache) ==> cache@ == Seq::<HistoryCursor>::empty()
-        && cursor_cache_wf(cache@))]
+    /// Construction can fail only during reservation or host memory enforcement;
+    /// publishing cursors uses the reserved storage and has no fallible result.
+    #[verus_spec(result => ensures
+        result != Err(HistoryError::WrongHistoryOwner),
+        junco_core::verify::history_specs::no_internal_error(result),
+        result matches Err(error) ==> error is AllocationFailed || error is Limit,
+        result matches Ok(cache) ==> cache@ == Seq::<HistoryCursor>::empty() && cursor_cache_wf(cache@))]
     pub fn new<L: Limits>(
         limits: &mut L,
         world: &mut ObservationWorld,

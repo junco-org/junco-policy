@@ -5,32 +5,122 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 
 use super::atoms::{PRINCIPAL_VAR, RESOURCE_VAR};
 use history_syntax::{ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode};
+use vstd::prelude::*;
+#[cfg(verus_keep_ghost)]
+use history_syntax::verify::dsl::{HeadView, PatternView};
+#[cfg(verus_keep_ghost)]
+use vstd::view::DeepView;
+#[cfg(verus_keep_ghost)]
+use self::verify::{diagnostic_identity, policy_rule_source, policy_rule_diagnostic};
 
 /// Renders a violated rule's `(failed_precondition, allowed_fixes)` from the policy's context.
+#[cfg(not(verus_keep_ghost))]
 pub type Diagnostic<C> = Box<dyn Fn(&C) -> (String, Vec<String>)>;
+#[cfg(verus_keep_ghost)]
+pub type Diagnostic<C> = NativeDiagnostic<C>;
 
 /// One trace-policy rule paired with the diagnostic its violation surfaces.
+#[verus_verify(external_body)]
+#[cfg_attr(verus_keep_ghost, verifier::reject_recursive_types(E))]
+#[cfg_attr(verus_keep_ghost, verifier::reject_recursive_types(C))]
 pub struct PolicyRule<E: Event, C> {
     pub rule: Rule<E>,
     pub diagnostic: Diagnostic<C>,
 }
 
+// Only callback storage is opaque; the raw payload avoids a recursive ghost alias.
+#[doc(hidden)]
+#[verus_verify(external_body)]
+#[cfg_attr(verus_keep_ghost, verifier::reject_recursive_types(C))]
+pub struct NativeDiagnostic<C> {
+    pub(crate) inner: Box<dyn Fn(&C) -> (String, Vec<String>)>,
+}
+
+#[cfg(verus_keep_ghost)]
+verus! {
+impl<C> NativeDiagnostic<C> {
+    // Equality witness only: no freshness or uniqueness is assumed.
+    pub uninterp spec fn id(&self) -> int;
+}
+
+pub mod verify {
+    use super::*;
+
+    pub uninterp spec fn policy_rule_source<E: Event, C>(item: PolicyRule<E, C>) -> Rule<E>;
+    pub uninterp spec fn policy_rule_diagnostic<E: Event, C>(item: PolicyRule<E, C>) -> int;
+
+    // Identity of the supplied native Box only; no freshness or output law.
+    pub open spec fn diagnostic_identity<C>(diagnostic: Diagnostic<C>) -> int {
+        diagnostic.id()
+    }
+
+    pub uninterp spec fn diagnostic_output<C>(id: int, context: C,
+        failed: Seq<char>, fixes: Seq<Seq<char>>) -> bool;
+}
+}
+
+/// Stores the supplied callback in the same single Box used by native diagnostics.
+#[doc(hidden)]
+#[verus_verify]
+#[verus_verify(external_body)]
+#[verus_spec(result => requires
+    forall|argument: &C| call_requires(diagnostic, (argument,)),
+    ensures forall|value: C, output: (String, Vec<String>)|
+        verify::diagnostic_output(diagnostic_identity(result), value,
+            output.0@, output.1.deep_view()) ==>
+            exists|argument: &C| *argument == value
+                && call_ensures(diagnostic, (argument,), output))]
+pub fn diagnostic_from_fn<C, F: Fn(&C) -> (String, Vec<String>) + 'static>(
+    diagnostic: F,
+) -> Diagnostic<C> {
+    #[cfg(verus_keep_ghost)]
+    { NativeDiagnostic { inner: Box::new(diagnostic) } }
+    #[cfg(not(verus_keep_ghost))]
+    { Box::new(diagnostic) }
+}
+
+// The sole trusted constructor operation is native source/callback field storage.
+#[verus_verify]
+#[verus_verify(external_body)]
+#[verus_spec(result => ensures policy_rule_source(result) == rule,
+    policy_rule_diagnostic(result) == diagnostic_identity(diagnostic))]
+pub(crate) fn pack_policy_rule<E: Event, C>(
+    rule: Rule<E>, diagnostic: Diagnostic<C>,
+) -> PolicyRule<E, C> {
+    PolicyRule { rule, diagnostic }
+}
+
 /// Builds a `Forbid` rule with an action-constant head over the acting principal and resource.
+#[verus_verify]
+#[verus_spec(result => ensures
+    policy_rule_source(result).mode == RuleMode::Forbid,
+    policy_rule_source(result).head@ == (HeadView {
+        principal: PatternView::Variable(seq!['p']),
+        action: PatternView::Constant(action),
+        resource: PatternView::Variable(seq!['r']),
+    }),
+    policy_rule_source(result).tail == tail,
+    policy_rule_diagnostic(result) == diagnostic_identity(diagnostic),
+)]
 pub fn forbid<E: Event, C>(
     action: E::Action,
     tail: RegexExpr<E>,
     diagnostic: Diagnostic<C>,
 ) -> PolicyRule<E, C> {
-    PolicyRule {
-        rule: Rule::new(
-            RuleMode::Forbid,
-            Head::new(
-                ComponentPattern::variable(PRINCIPAL_VAR),
-                ComponentPattern::constant(action),
-                ComponentPattern::variable(RESOURCE_VAR),
-            ),
-            tail,
-        ),
-        diagnostic,
+    proof! {
+        reveal_strlit("p");
+        reveal_strlit("r");
+        assert(PRINCIPAL_VAR@ == seq!['p']);
+        assert(RESOURCE_VAR@ == seq!['r']);
     }
+    let rule = Rule::new(
+        RuleMode::Forbid,
+        Head::new(
+            ComponentPattern::Variable(String::from_str(PRINCIPAL_VAR)),
+            ComponentPattern::Constant(action),
+            ComponentPattern::Variable(String::from_str(RESOURCE_VAR)),
+        ),
+        tail,
+    );
+    pack_policy_rule(rule, diagnostic)
 }

@@ -35,6 +35,8 @@ use smallvec::SmallVec;
 use verify::*;
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
+use vstd::std_specs::cmp::OrdSpec;
+#[cfg(verus_keep_ghost)]
 verus! {
 broadcast use junco_core::kernel::verify::group_kernel_views;
 }
@@ -76,10 +78,28 @@ pub(crate) struct CompiledPair {
 }
 #[verus_verify]
 impl CompiledPair {
+    // Individually representable byte counts can overflow when combined.
+    #[verus_verify]
+    #[verus_spec(result => ensures language::no_internal_error(result),
+        !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        result matches Err(error) ==> error is AllocationFailed || error is GraphLimit,
+        result matches Ok(bytes) ==> bytes as int ==
+            growth * vstd::layout::size_of::<Option<AtomSet>>()
+                + count * vstd::layout::size_of::<TestId>())]
+    fn atom_payload_bytes(growth: usize, count: usize) -> KernelResult<usize> {
+        sequence_bytes::<Option<AtomSet>>(growth)?
+            .checked_add(sequence_bytes::<TestId>(count)?)
+            .ok_or(HistoryError::AllocationFailed)
+    }
+
     // Borrow only the atom slice so callers can mutate the disjoint graph store.
     #[verus_verify]
     #[verus_spec(result =>
-        ensures result matches Ok(set) ==> transition@ < atoms@.len() && atoms@[transition@ as int] == Some(*set),
+        ensures result != Err(HistoryError::WrongHistoryOwner),
+            !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            transition@ < atoms@.len() && atoms@[transition@ as int] is Some
+                ==> language::no_internal_error(result),
+            result matches Ok(set) ==> transition@ < atoms@.len() && atoms@[transition@ as int] == Some(*set),
     )]
     fn cached_atoms(atoms: &[Option<AtomSet>], transition: TransitionId) -> KernelResult<&AtomSet> {
         match atoms.get(transition.index()?) {
@@ -126,6 +146,9 @@ impl CompiledPair {
     #[verus_spec(result =>
         requires pair_wf(*old(self)), residual@ < (*old(self)).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
+            result != Err(HistoryError::WrongHistoryOwner),
+            language::no_internal_error(result),
+            !(result matches Err(HistoryError::InvalidPolicy { .. })),
             (*final(self)).store.graph() == (*old(self)).store.graph(),
             result matches Ok(answer) ==> answer == language::nullable(model::lift_regex((*final(self)).store.graph(), residual@)),
     )]
@@ -153,17 +176,21 @@ impl CompiledPair {
         kernel.limits.checkpoint().map_err(HistoryError::from)?;
         Ok(answer)
     }
+    verus! {
     /// Folds `events` into `residual`: the result denotes `events⁻¹ L(residual)`
     /// under `bindings`. Errors publish no residual.
     #[allow(
         clippy::indexing_slicing,
         reason = "The loop condition and invariant bound the event index."
     )]
-    #[verus_verify]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[verus_spec(result =>
         requires pair_wf(*old(self)),
             residual@ < (*old(self)).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
+            result != Err(HistoryError::WrongHistoryOwner),
+            language::no_internal_error(result),
+            !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result matches Ok(out) ==> residual_folds(*final(self), bindings@, residual, history_store::store::verify::events_view(events@), out),
     )]
     pub(crate) fn fold<L: Limits>(
@@ -174,6 +201,11 @@ impl CompiledPair {
         limits: &mut L,
         world: &mut ObservationWorld,
     ) -> KernelResult<RegexId> {
+            hide(language::lang);
+            hide(model::regex_lang);
+            hide(model::lift_regex);
+            hide(model::lift_transition);
+            hide(model::test_holds);
         proof_decl! { let ghost entry = *self; let ghost from = residual; }
         let mut residual = residual;
         proof! {
@@ -185,10 +217,14 @@ impl CompiledPair {
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant pair_wf(entry), pair_wf(*self), pair_frame(entry, *self),
+                failure matches Some(error) ==> error != HistoryError::WrongHistoryOwner
+                    && !(error is Invariant) && !(error is InvalidPolicy),
                 index <= events@.len(),
                 residual_folds(*self, bindings@, from, history_store::store::verify::events_view(events@).take(index as int), residual),
                 history_store::store::verify::events_view(events@).take(events@.len() as int) == history_store::store::verify::events_view(events@),
             ensures pair_wf(*self), pair_frame(entry, *self),
+                failure matches Some(error) ==> error != HistoryError::WrongHistoryOwner
+                    && !(error is Invariant) && !(error is InvalidPolicy),
                 failure is Some || residual_folds(*self, bindings@, from, history_store::store::verify::events_view(events@), residual),
             decreases events@.len() - index,
         ))]
@@ -225,6 +261,10 @@ impl CompiledPair {
                 {
                     self.work.derivative_misses = self.work.derivative_misses.saturating_add(1);
                 }
+            }
+            proof! {
+                self.store.lemma_node_count_bounds();
+                assert(residual@ < usize::MAX);
             }
             let derivative_result = {
                 let mut kernel = RuntimeKernel {
@@ -271,11 +311,15 @@ impl CompiledPair {
         }
         Ok(residual)
     }
+    }
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
     #[verus_verify]
     #[verus_spec(result =>
         requires pair_wf(*old(self)), transition@ < old(self).store.graph().transitions.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
+            result != Err(HistoryError::WrongHistoryOwner),
+            language::no_internal_error(result),
+            !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result is Ok ==> has_atoms(*final(self), transition),
     )]
     fn ensure_atoms<L: Limits>(
@@ -302,13 +346,20 @@ impl CompiledPair {
             lemma_pair_symbolic_frame(entry, *self);
         }
         let atoms = atoms?;
+        proof! {
+            self.store.lemma_node_count_bounds();
+            assert(index == transition@);
+            assert(index < usize::MAX);
+        }
         let needed = index
             .checked_add(1)
-            .ok_or_else(|| HistoryError::invariant("atom table length overflow"))?;
+            .ok_or_else(verus_exec_expr! {
+                || -> (error: HistoryError)
+                    ensures error is Invariant,
+                { HistoryError::invariant("atom table length overflow") }
+            })?;
         let growth = needed.saturating_sub(self.caches.atoms.len());
-        let bytes = sequence_bytes::<Option<AtomSet>>(growth)?
-            .checked_add(sequence_bytes::<TestId>(atoms.ids().len())?)
-            .ok_or_else(|| HistoryError::invariant("atom payload overflow"))?;
+        let bytes = Self::atom_payload_bytes(growth, atoms.ids().len())?;
         let projected = self.store.projected(bytes)?;
         proof_decl! { let ghost reserved_pair = *self; }
         let reserved = world.try_reserve_vec(&mut self.caches.atoms, growth);
@@ -322,6 +373,7 @@ impl CompiledPair {
                 prior_atoms.is_prefix_of(self.caches.atoms@),
                 forall|i: int| prior_atoms.len() <= i < self.caches.atoms@.len() ==> self.caches.atoms@[i] is None,
                 index == transition@, transition@ < self.store.graph().transitions.len(),
+                needed == index + 1,
                 atoms_wf(self.store.graph(), transition@, atoms@),
                 successor_entries((*self).caches.successors) == successor_entries(entry.caches.successors),
                 self.caches.atoms@.len() <= needed || self.caches.atoms@ == prior_atoms,
@@ -362,7 +414,11 @@ impl CompiledPair {
         let atom_slots = self.caches.atoms.as_mut_slice();
         let slot = atom_slots
             .get_mut(index)
-            .ok_or_else(|| HistoryError::invariant("invalid atom table slot"))?;
+            .ok_or_else(verus_exec_expr! {
+                || -> (error: HistoryError)
+                    ensures error is Invariant,
+                { HistoryError::invariant("invalid atom table slot") }
+            })?;
         *slot = Some(atoms);
         proof! {
             assert forall|key: ClassKey| successor_entries((*self).caches.successors).contains_key(key) implies
@@ -393,6 +449,9 @@ impl CompiledPair {
         requires pair_wf(*old(self)), transition@ < old(self).store.graph().transitions.len(),
             residual@ < old(self).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
+            result != Err(HistoryError::WrongHistoryOwner),
+            language::no_internal_error(result),
+            !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result is Ok ==> has_guard(*final(self), residual),
     )]
     /// Stores `residual`'s self-loop guard for `transition` once per residual.
@@ -435,9 +494,18 @@ impl CompiledPair {
         };
         proof_decl! { let ghost guard = Guard { transition, mask }; let ghost certified = *self; }
         proof! { assert(guard_wf(self.store.graph(), self.caches.atoms@, index as int, guard)); }
+        proof! {
+            self.store.lemma_node_count_bounds();
+            assert(index == residual@);
+            assert(index < usize::MAX);
+        }
         let needed = index
             .checked_add(1)
-            .ok_or_else(|| HistoryError::invariant("guard table length overflow"))?;
+            .ok_or_else(verus_exec_expr! {
+                || -> (error: HistoryError)
+                    ensures error is Invariant,
+                { HistoryError::invariant("guard table length overflow") }
+            })?;
         let growth = needed.saturating_sub(self.caches.guards.len());
         let projected = self
             .store
@@ -468,7 +536,11 @@ impl CompiledPair {
         let guard_slots = self.caches.guards.as_mut_slice();
         let slot = guard_slots
             .get_mut(index)
-            .ok_or_else(|| HistoryError::invariant("invalid guard table slot"))?;
+            .ok_or_else(verus_exec_expr! {
+                || -> (error: HistoryError)
+                    ensures error is Invariant,
+                { HistoryError::invariant("invalid guard table slot") }
+            })?;
         *slot = Some(Guard { transition, mask });
         proof! {
             assert forall|r: int| 0 <= r < self.caches.guards@.len() && self.caches.guards@[r] is Some
@@ -493,6 +565,9 @@ impl CompiledPair {
             transition@ < old(self).store.graph().transitions.len(),
             residual@ < old(self).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
+            result != Err(HistoryError::WrongHistoryOwner),
+            language::no_internal_error(result),
+            !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).caches.atoms@ == old(self).caches.atoms@, final(self).caches.guards@ == old(self).caches.guards@,
             result matches Ok(mask) ==> guard_wf(final(self).store.graph(), final(self).caches.atoms@, residual@ as int, Guard { transition, mask }),
     )]
@@ -525,6 +600,7 @@ impl CompiledPair {
                 has_atoms(*self, transition), atoms@ == self.caches.atoms@[transition@ as int].unwrap()@,
                 transition@ < self.store.graph().transitions.len(), residual@ < self.store.graph().regexes.len(),
                 count == atoms@.len(), 1 <= count <= 8, classes == (1u64 << (count as u32)), minterm <= classes,
+                atoms_wf(self.store.graph(), transition@, atoms@),
                 mask == 0 || forall|w: u64| w < minterm && (w & mask) != mask
                     ==> #[trigger] guard_class_covered(self.store.graph(), atoms@, residual, transition, w),
             ensures mask == 0 || minterm == classes,
@@ -534,6 +610,10 @@ impl CompiledPair {
             limits.checkpoint().map_err(HistoryError::from)?;
             let words = [minterm];
             proof_decl! { let ghost before = *self; }
+            proof! {
+                lemma_single_truth_word(count, minterm);
+                assert(words@ =~= seq![minterm]);
+            }
             let successor = {
                 let mut kernel = RuntimeKernel {
                     store: &mut self.store,
@@ -608,6 +688,9 @@ impl CompiledPair {
         requires pair_wf(*old(self)), has_guard(*old(self), residual),
             transition@ < old(self).store.graph().transitions.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
+            result != Err(HistoryError::WrongHistoryOwner),
+            language::no_internal_error(result),
+            !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).caches.atoms@ == old(self).caches.atoms@, final(self).caches.guards@ == old(self).caches.guards@,
             successor_entries((*final(self)).caches.successors) == successor_entries((*old(self)).caches.successors),
             result matches Ok(true) ==> instantiation_result(*final(self), transition, bindings@, *event, residual),
@@ -639,9 +722,12 @@ impl CompiledPair {
         let mut index = 0_usize;
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant pair_wf(*self), pair_frame(entry, *self),
+                failure matches Some(error) ==> error != HistoryError::WrongHistoryOwner
+                    && !(error is Invariant) && !(error is InvalidPolicy),
                 self.store.graph() == entry.store.graph(), self.caches.derivatives@ == entry.caches.derivatives@,
                 successor_entries((*self).caches.successors) == successor_entries(entry.caches.successors), self.caches.atoms@ == entry.caches.atoms@, self.caches.guards@ == entry.caches.guards@,
                 index <= atoms@.len(), has_atoms(*self, transition), atoms@ == self.caches.atoms@[transition@ as int].unwrap()@,
+                atoms_wf(self.store.graph(), transition@, atoms@),
                 has_guard(*self, residual), self.caches.guards@[residual@ as int] == Some(guard), guard.transition == transition, guard.mask != 0,
                 masks@ == seq![guard.mask],
                 hit ==> instantiation_result(*self, transition, bindings@, *event, residual),
@@ -660,6 +746,10 @@ impl CompiledPair {
                         .ok_or_else(|| HistoryError::invariant("invalid primitive atom index")),
                     failure
                 );
+                proof! {
+                    assert(*id == atoms@[index as int]);
+                    assert(self.store.graph().tests[id@ as int] matches model::TestNode::Atom(_, true));
+                }
                 let primitive = {
                     let kernel = RuntimeKernel {
                         store: &mut self.store,
@@ -712,6 +802,9 @@ impl CompiledPair {
     #[verus_spec(result =>
         requires pair_wf(*old(self)), transition@ < old(self).store.graph().transitions.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
+            result != Err(HistoryError::WrongHistoryOwner),
+            language::no_internal_error(result),
+            !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result matches Ok(id) ==> instantiation_result(*final(self), transition, bindings@, *event, id),
     )]
     fn instantiate<L: Limits>(
@@ -745,22 +838,41 @@ impl CompiledPair {
             self.work.event_classes = self.work.event_classes.saturating_add(1);
         }
         let atoms = Self::cached_atoms(self.caches.atoms.as_slice(), transition)?;
+        proof! {
+            self.store.lemma_node_count_bounds();
+            lemma_atom_count_bound(self.store.graph(), atoms@);
+            assert(atoms@.len() + 63 <= usize::MAX);
+        }
         let word_count = atoms
             .ids()
             .len()
             .checked_add(63)
-            .ok_or_else(|| HistoryError::invariant("truth word length overflow"))?
+            .ok_or_else(verus_exec_expr! {
+                || -> (error: HistoryError)
+                    ensures error is Invariant,
+                { HistoryError::invariant("truth word length overflow") }
+            })?
             .checked_div(64)
-            .ok_or_else(|| HistoryError::invariant("invalid truth word divisor"))?;
+            .ok_or_else(verus_exec_expr! {
+                || -> (error: HistoryError)
+                    ensures error is Invariant,
+                { HistoryError::invariant("invalid truth word divisor") }
+            })?;
         let mut words: SmallVec<[u64; 2]> = SmallVec::new();
         allocation(world.try_reserve_words(&mut words, word_count))?;
         words.resize(word_count, 0);
-        proof! { lemma_zero_truth_words(words.view()); }
+        proof! {
+            lemma_zero_truth_words(words.view(), atoms@.len());
+        }
         let mut failure = None;
         let mut index = 0_usize;
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant pair_wf(*self), pair_frame(entry, *self),
+                failure matches Some(error) ==> error != HistoryError::WrongHistoryOwner
+                    && !(error is Invariant) && !(error is InvalidPolicy),
                 index <= atoms@.len(), words.view().len() == word_count,
+                atoms@.len() + 63 <= usize::MAX, word_count == (atoms@.len() + 63) / 64,
+                symbolic::verify::assignment_valid(atoms@.len(), words.view()),
                 self.store.graph() == classified.store.graph(), self.caches.derivatives@ == classified.caches.derivatives@,
                 successor_entries((*self).caches.successors) == successor_entries(classified.caches.successors), self.caches.atoms@ == classified.caches.atoms@,
                 has_atoms(*self, transition), atom_cache_wf(self.store.graph(), self.caches.atoms@),
@@ -773,13 +885,26 @@ impl CompiledPair {
             decreases atoms@.len() - index,
         ))]
         while index < atoms.ids().len() {
+            proof! {
+                assert(index / 64 < word_count);
+                assert(index % 64 < 64);
+                assert(index < usize::MAX);
+            }
             let id = loop_try!(
                 atoms
                     .ids()
                     .get(index)
-                    .ok_or_else(|| HistoryError::invariant("invalid primitive atom index")),
+                    .ok_or_else(verus_exec_expr! {
+                        || -> (error: HistoryError)
+                            ensures error is Invariant,
+                        { HistoryError::invariant("invalid primitive atom index") }
+                    }),
                 failure
             );
+            proof! {
+                assert(*id == atoms@[index as int]);
+                assert(self.store.graph().tests[id@ as int] matches model::TestNode::Atom(_, true));
+            }
             proof_decl! { let ghost before_words = words.view(); }
             loop_try!(limits.checkpoint().map_err(HistoryError::from), failure);
             let primitive = {
@@ -803,14 +928,22 @@ impl CompiledPair {
                 let word_index = loop_try!(
                     index
                         .checked_div(64)
-                        .ok_or_else(|| HistoryError::invariant("invalid truth word divisor")),
+                        .ok_or_else(verus_exec_expr! {
+                            || -> (error: HistoryError)
+                                ensures error is Invariant,
+                            { HistoryError::invariant("invalid truth word divisor") }
+                        }),
                     failure
                 );
                 let bit = loop_try!(
                     u32::try_from(loop_try!(
                         index
                             .checked_rem(64)
-                            .ok_or_else(|| HistoryError::invariant("invalid truth bit divisor")),
+                            .ok_or_else(verus_exec_expr! {
+                                || -> (error: HistoryError)
+                                    ensures error is Invariant,
+                                { HistoryError::invariant("invalid truth bit divisor") }
+                            }),
                         failure
                     ),)
                     .map_err(|_| HistoryError::invariant("invalid truth bit")),
@@ -820,16 +953,27 @@ impl CompiledPair {
                     words
                         .as_mut_slice()
                         .get_mut(word_index)
-                        .ok_or_else(|| HistoryError::invariant("invalid truth word index")),
+                        .ok_or_else(verus_exec_expr! {
+                            || -> (error: HistoryError)
+                                ensures error is Invariant,
+                            { HistoryError::invariant("invalid truth word index") }
+                        }),
                     failure
                 );
                 *truth_word |= loop_try!(
                     1_u64
                         .checked_shl(bit)
-                        .ok_or_else(|| HistoryError::invariant("invalid truth bit")),
+                        .ok_or_else(verus_exec_expr! {
+                            || -> (error: HistoryError)
+                                ensures error is Invariant,
+                            { HistoryError::invariant("invalid truth bit") }
+                        }),
                     failure
                 );
-                proof! { lemma_truth_word_set(before_words, words.view(), index as nat); }
+                proof! {
+                    lemma_truth_word_set(before_words, words.view(), index as nat);
+                    lemma_assignment_set(atoms@.len(), before_words, words.view(), index as nat);
+                }
             }
             index = index.saturating_add(1);
         }
@@ -854,6 +998,10 @@ impl CompiledPair {
     #[verus_spec(result =>
         requires pair_wf(*old(self)), has_atoms(*old(self), key.transition),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
+            result != Err(HistoryError::WrongHistoryOwner),
+            !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            symbolic::verify::assignment_valid(old(self).caches.atoms@[key.transition@ as int].unwrap()@.len(), key.words.view())
+                ==> language::no_internal_error(result),
             final(self).caches.atoms@ == old(self).caches.atoms@,
             result matches Ok(id) ==> successor_entries((*final(self)).caches.successors).contains_key(class_key(key))
                 && successor_entries((*final(self)).caches.successors)[class_key(key)] == id,
@@ -901,7 +1049,11 @@ impl CompiledPair {
         }
         if self.caches.successors.is_none() {
             let cache = GraphCaches::successor_cache()
-                .ok_or_else(|| HistoryError::invariant("invalid successor cache capacity"))?;
+                .ok_or_else(verus_exec_expr! {
+                    || -> (error: HistoryError)
+                        ensures error is Invariant,
+                    { HistoryError::invariant("invalid successor cache capacity") }
+                })?;
             self.caches.successors = Some(cache);
         }
         proof_decl! { let ghost entries = successor_entries((*self).caches.successors); }
@@ -934,6 +1086,9 @@ impl CompiledPair {
     #[verus_spec(result =>
         requires pair_wf(*old(self)),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
+            result != Err(HistoryError::WrongHistoryOwner),
+            language::no_internal_error(result),
+            !(result matches Err(HistoryError::InvalidPolicy { .. })),
     )]
     /// Eagerly builds derivatives, atom sets and successor classes for up to `PRECOMPILE_STATES`
     /// residual states reachable from `root`, depth-first, within the successor cache's capacity;
@@ -970,6 +1125,10 @@ impl CompiledPair {
             }
             states = states.saturating_add(1);
             proof_decl! { let ghost before = *self; }
+            proof! {
+                self.store.lemma_node_count_bounds();
+                assert(residual@ < usize::MAX);
+            }
             let derivative = {
                 let mut kernel = RuntimeKernel {
                     store: &mut self.store,
@@ -1020,10 +1179,19 @@ impl CompiledPair {
                 _ => continue,
             };
             proof_decl! { let ghost base_len = pending.view().len(); }
+            proof! {
+                assert(shift < 64);
+                assert(classes <= 256);
+                assert(shift <= 8) by(bit_vector)
+                    requires classes == (1u64 << shift), shift < 64, classes <= 256;
+                assert(atom_count <= 8);
+            }
             let mut minterm: u64 = 0;
             #[cfg_attr(verus_keep_ghost, verus_spec(
                 invariant pair_wf(*self), pair_frame(entry, *self),
                     entry == *old(self), has_atoms(*self, transition),
+                    atom_count == self.caches.atoms@[transition@ as int].unwrap()@.len(), atom_count <= 8,
+                    classes == (1u64 << (atom_count as u32)),
                     forall|j: int| 0 <= j < pending.view().len() ==> pending.view()[j]@ < self.store.graph().regexes.len(),
                     minterm <= classes, pending.view().len() == base_len + minterm,
                     states <= PRECOMPILE_STATES, used <= SUCCESSOR_CAPACITY,
@@ -1035,6 +1203,15 @@ impl CompiledPair {
                 let mut words: SmallVec<[u64; 2]> = SmallVec::new();
                 if atom_count > 0 {
                     words.push(minterm);
+                }
+                proof! {
+                    if atom_count == 0 {
+                        assert(words.view() =~= Seq::<u64>::empty());
+                        assert(symbolic::verify::assignment_valid(0, words.view()));
+                    } else {
+                        lemma_single_truth_word(atom_count, minterm);
+                        assert(words.view() =~= seq![minterm]);
+                    }
                 }
                 let key = EventClass { transition, words };
                 proof_decl! { let ghost class = class_key(key); }
@@ -1072,6 +1249,13 @@ impl CompiledPair {
         ensures final(store).valid_store(), model::graph_wf(final(store).graph()),
             model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
+            final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+            final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            old(store).errors_are_non_invalid_policy()
+                ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            old(store).errors_are_non_invariant() ==> language::no_internal_error(result),
+            old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             result matches Ok(atoms) ==> atoms_wf(final(store).graph(), root@, atoms@),
     )]
     pub(crate) fn collect_atoms<G: KernelStore>(
@@ -1096,6 +1280,11 @@ impl CompiledPair {
         invariant
             store.valid_store(), model::graph_wf(store.graph()),
             store.restoration() == old(store).restoration(),
+            store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+            store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            forall|j: int| 0 <= j < primitives@.len() ==> primitives@[j]@ < store.graph().tests.len()
+                && #[trigger] store.graph().tests[primitives@[j]@ as int] matches model::TestNode::Atom(_, true),
             model::graph_extends(base, store.graph()),
             base == old(store).graph(),
             work.view() == pending_work,
@@ -1105,6 +1294,11 @@ impl CompiledPair {
         ensures work.view().len() == 0,
             store.valid_store(), model::graph_wf(store.graph()), model::graph_extends(base, store.graph()),
             store.restoration() == old(store).restoration(),
+            store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+            store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+            store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            forall|j: int| 0 <= j < primitives@.len() ==> primitives@[j]@ < store.graph().tests.len()
+                && #[trigger] store.graph().tests[primitives@[j]@ as int] matches model::TestNode::Atom(_, true),
             collector(base, root@, visited(transitions@, tests@), frontier(base, work.view()), found(store.graph(), primitives@)),
         decreases transition_atoms_work(base, work.view()),
     ))]
@@ -1172,7 +1366,15 @@ impl CompiledPair {
                     proof! { model::lemma_graph_transition_wf(base, id@); }
                     let child = match store.transition(id)? {
                         TransitionView::Union(children) | TransitionView::Intersect(children) => {
-                            children.get(index).copied()
+                            let child = children.get(index).copied();
+                            proof! {
+                                vstd::slice::axiom_spec_len(children);
+                                if child is Some {
+                                    assert(index < children@.len());
+                                    assert(index < usize::MAX);
+                                }
+                            }
+                            child
                         }
                         _ => return Err(HistoryError::invariant("invalid transition traversal")),
                     };
@@ -1181,8 +1383,10 @@ impl CompiledPair {
                             assert(model::transition_node_child(base.transitions[id@ as int], index as nat) == Some(child@));
                             assert(child@ < base.transitions.len());
                         }
-                        let next = index.checked_add(1).ok_or_else(|| {
-                            HistoryError::invariant("transition child index overflow")
+                        let next = index.checked_add(1).ok_or_else(verus_exec_expr! {
+                            || -> (error: HistoryError)
+                                ensures error is Invariant,
+                            { HistoryError::invariant("transition child index overflow") }
                         })?;
                         work.push(Walk::TransitionChildren(id, next));
                         work.push(Walk::Transition(child));
@@ -1217,11 +1421,24 @@ impl CompiledPair {
                             store.reserve_atoms(&mut primitives, 1)?;
                             primitives.push(positive);
                             proof! {
-                                lemma_found_extends(before_graph, store.graph(), before_ids);
-                                lemma_found_push(store.graph(), before_ids, positive);
+                                lemma_found_inclusion(before_graph, store.graph(), before_ids, before_ids);
+                                norm::graph_lemma_extends_refl(store.graph());
+                                assert forall|id: TestId| before_ids.contains(id) implies before_ids.push(positive).contains(id) by {
+                                    let j = before_ids.lemma_contains_to_index(id);
+                                    assert(before_ids.push(positive)[j] == id);
+                                }
+                                lemma_found_inclusion(store.graph(), store.graph(), before_ids, before_ids.push(positive));
                                 assert(primitives@[before_ids.len() as int] == positive);
                                 assert(store.graph().tests[positive@ as int] == model::TestNode::Atom(primitive@, true));
                                 assert(has_positive(store.graph(), primitives@, primitive@));
+                                assert forall|j: int| 0 <= j < primitives@.len() implies
+                                    primitives@[j]@ < store.graph().tests.len()
+                                    && #[trigger] store.graph().tests[primitives@[j]@ as int] matches model::TestNode::Atom(_, true) by {
+                                    if j < before_ids.len() {
+                                        assert(primitives@[j] == before_ids[j]);
+                                        assert(before_graph.tests[before_ids[j]@ as int] matches model::TestNode::Atom(_, true));
+                                    } else { assert(j == before_ids.len()); }
+                                }
                             }
                         }
                         TestView::And(_) | TestView::Or(_) => work.push(Walk::TestChildren(id, 0)),
@@ -1231,7 +1448,15 @@ impl CompiledPair {
                     proof! { model::lemma_graph_test_wf(base, id@); }
                     let child = match store.test(id)? {
                         TestView::And(children) | TestView::Or(children) => {
-                            children.get(index).copied()
+                            let child = children.get(index).copied();
+                            proof! {
+                                vstd::slice::axiom_spec_len(children);
+                                if child is Some {
+                                    assert(index < children@.len());
+                                    assert(index < usize::MAX);
+                                }
+                            }
+                            child
                         }
                         _ => return Err(HistoryError::invariant("invalid test traversal")),
                     };
@@ -1242,7 +1467,11 @@ impl CompiledPair {
                         }
                         let next = index
                             .checked_add(1)
-                            .ok_or_else(|| HistoryError::invariant("test child index overflow"))?;
+                            .ok_or_else(verus_exec_expr! {
+                                || -> (error: HistoryError)
+                                    ensures error is Invariant,
+                                { HistoryError::invariant("test child index overflow") }
+                            })?;
                         work.push(Walk::TestChildren(id, next));
                         work.push(Walk::Test(child));
                         proof! { lemma_test_children_walk(base, id, index, child, next); }
@@ -1276,11 +1505,33 @@ impl CompiledPair {
         proof! {
             norm::lemma_multiset_members(collected, sorted);
             lemma_found_membership(store.graph(), collected, sorted);
+            assert forall|i: int, j: int| 0 <= i < j < sorted.len() implies sorted[i]@ <= sorted[j]@ by {
+                assert(!(sorted[i].cmp_spec(&sorted[j]) is Greater));
+            }
+            assert forall|j: int| 0 <= j < sorted.len() implies sorted[j]@ < store.graph().tests.len()
+                && #[trigger] store.graph().tests[sorted[j]@ as int] matches model::TestNode::Atom(_, true) by {
+                assert(collected.contains(sorted[j]));
+                let i = choose|i: int| 0 <= i < collected.len() && collected[i] == sorted[j];
+            }
         }
         primitives.dedup();
         proof! {
             norm::lemma_dedup_properties(sorted);
             lemma_found_membership(store.graph(), sorted, primitives@);
+            norm::lemma_dedup_strict(sorted, |id: TestId| id@);
+            assert forall|i: int, j: int| 0 <= i < j < model::test_ids(primitives@).len()
+                implies model::test_ids(primitives@)[i] < model::test_ids(primitives@)[j] by {
+                assert(model::test_ids(primitives@)[i] == primitives@[i]@);
+                assert(model::test_ids(primitives@)[j] == primitives@[j]@);
+                assert((|id: TestId| id@)(primitives@[i]) < (|id: TestId| id@)(primitives@[j]));
+            }
+            assert(model::strictly_increasing(model::test_ids(primitives@)));
+            assert forall|j: int| 0 <= j < primitives@.len() implies primitives@[j]@ < store.graph().tests.len()
+                && #[trigger] store.graph().tests[primitives@[j]@ as int] matches model::TestNode::Atom(_, true) by {
+                assert(sorted.contains(primitives@[j]));
+                let i = choose|i: int| 0 <= i < sorted.len() && sorted[i] == primitives@[j];
+            }
+            assert(model::atom_ids_wf(store.graph(), primitives@));
             assert forall|p: model::Primitive| transition_reaches_primitive(store.graph(), root@, p)
                 implies has_positive(store.graph(), primitives@, p) by {
                 assert(found(store.graph(), sorted).contains(p));
@@ -1344,6 +1595,65 @@ pub(crate) mod verify {
         pub open spec fn atoms_wf(g: model::Graph, root: nat, ids: Seq<TestId>) -> bool {
             model::atom_ids_wf(g, ids) && forall|p: model::Primitive|
                 transition_reaches_primitive(g, root, p) ==> has_positive(g, ids, p)
+        }
+
+        proof fn lemma_atom_id_index(ids: Seq<TestId>, index: int)
+            requires model::strictly_increasing(model::test_ids(ids)), 0 <= index < ids.len(),
+            ensures index <= ids[index]@,
+            decreases index,
+        {
+            if index > 0 {
+                lemma_atom_id_index(ids, index - 1);
+                assert(model::test_ids(ids)[index - 1] < model::test_ids(ids)[index]);
+                assert(model::test_ids(ids)[index - 1] == ids[index - 1]@);
+                assert(model::test_ids(ids)[index] == ids[index]@);
+                assert(ids[index - 1]@ < ids[index]@);
+            }
+        }
+
+        pub(super) proof fn lemma_atom_count_bound(g: model::Graph, ids: Seq<TestId>)
+            requires model::atom_ids_wf(g, ids),
+            ensures ids.len() <= u32::MAX as nat + 1, ids.len() <= g.tests.len(),
+        {
+            if ids.len() > 0 {
+                let last = ids.len() as int - 1;
+                lemma_atom_id_index(ids, last);
+                TestId::lemma_view(ids[last]);
+                assert(ids.len() <= u32::MAX as nat + 1);
+                assert(ids[last]@ < g.tests.len()
+                    && g.tests[ids[last]@ as int] matches model::TestNode::Atom(_, true));
+            }
+        }
+
+        pub(super) proof fn lemma_single_truth_word(count: usize, word: u64)
+            requires 1 <= count <= 8, word < (1u64 << (count as u32)),
+            ensures symbolic::verify::assignment_valid(count as nat, seq![word]),
+        {
+            let shift = count as u32;
+            assert((word >> shift) == 0u64) by(bit_vector)
+                requires word < (1u64 << shift), 1 <= shift <= 8;
+        }
+
+        pub(super) proof fn lemma_assignment_set(count: nat, before: Seq<u64>, after: Seq<u64>, index: nat)
+            requires symbolic::verify::assignment_valid(count, before), index < count,
+                after == before.update((index / 64) as int,
+                    before[(index / 64) as int] | (1u64 << ((index % 64) as u32))),
+            ensures symbolic::verify::assignment_valid(count, after),
+        {
+            assert(index / 64 < before.len());
+            if count % 64 != 0 {
+                let last = before.len() as int - 1;
+                if index / 64 == last {
+                    let value = before[last];
+                    let bit = (index % 64) as u32;
+                    let shift = (count % 64) as u32;
+                    assert(bit < shift);
+                    assert(((value | (1u64 << bit)) >> shift) == 0u64) by(bit_vector)
+                        requires (value >> shift) == 0u64, bit < shift, shift < 64;
+                } else {
+                    assert(after[last] == before[last]);
+                }
+            }
         }
         pub open spec fn found(g: model::Graph, ids: Seq<TestId>) -> ISet<model::Primitive> {
             ISet::new(|p: model::Primitive| has_positive(g, ids, p))
@@ -1496,26 +1806,21 @@ pub(crate) mod verify {
             reveal(vstd::laws_cmp::obeys_cmp_ord);
         }
 
-        pub proof fn lemma_found_extends(a: model::Graph, b: model::Graph, ids: Seq<TestId>)
+        pub(crate) proof fn lemma_found_inclusion(a: model::Graph, b: model::Graph, left: Seq<TestId>, right: Seq<TestId>)
             requires model::graph_extends(a, b),
-            ensures found(a, ids).subset_of(found(b, ids)),
+                forall|id: TestId| left.contains(id) ==> right.contains(id),
+            ensures found(a, left).subset_of(found(b, right)),
         {
-            assert forall|p: model::Primitive| found(a, ids).contains(p) implies found(b, ids).contains(p) by {
-                let j = choose|j: int| 0 <= j < ids.len() && ids[j]@ < a.tests.len()
-                    && a.tests[ids[j]@ as int] == model::TestNode::Atom(p, true);
-                assert(b.tests[ids[j]@ as int] == model::TestNode::Atom(p, true));
+            assert forall|p: model::Primitive| found(a, left).contains(p) implies found(b, right).contains(p) by {
+                let j = choose|j: int| 0 <= j < left.len() && left[j]@ < a.tests.len()
+                    && a.tests[left[j]@ as int] == model::TestNode::Atom(p, true);
+                assert(left.contains(left[j]));
+                assert(right.contains(left[j]));
+                let k = right.lemma_contains_to_index(left[j]);
+                assert(b.tests[right[k]@ as int] == model::TestNode::Atom(p, true));
             }
         }
 
-        pub proof fn lemma_found_push(g: model::Graph, ids: Seq<TestId>, id: TestId)
-            ensures found(g, ids).subset_of(found(g, ids.push(id))),
-        {
-            assert forall|p: model::Primitive| found(g, ids).contains(p) implies found(g, ids.push(id)).contains(p) by {
-                let j = choose|j: int| 0 <= j < ids.len() && ids[j]@ < g.tests.len()
-                    && g.tests[ids[j]@ as int] == model::TestNode::Atom(p, true);
-                assert(ids.push(id)[j] == ids[j]);
-            }
-        }
 
         pub(super) open spec fn walk_wf(g: model::Graph, task: Walk) -> bool {
             match task {
@@ -1731,20 +2036,9 @@ pub(crate) mod verify {
             requires forall|id: TestId| a.contains(id) <==> b.contains(id),
             ensures found(g, a) == found(g, b),
         {
-            assert forall|p: model::Primitive| found(g, a).contains(p) == found(g, b).contains(p) by {
-                if found(g, a).contains(p) {
-                    let j = choose|j: int| 0 <= j < a.len() && a[j]@ < g.tests.len()
-                        && g.tests[a[j]@ as int] == model::TestNode::Atom(p, true);
-                    assert(a.contains(a[j]));
-                    let k = choose|k: int| 0 <= k < b.len() && b[k] == a[j];
-                }
-                if found(g, b).contains(p) {
-                    let j = choose|j: int| 0 <= j < b.len() && b[j]@ < g.tests.len()
-                        && g.tests[b[j]@ as int] == model::TestNode::Atom(p, true);
-                    assert(b.contains(b[j]));
-                    let k = choose|k: int| 0 <= k < a.len() && a[k] == b[j];
-                }
-            }
+            norm::graph_lemma_extends_refl(g);
+            lemma_found_inclusion(g, g, a, b);
+            lemma_found_inclusion(g, g, b, a);
             assert(found(g, a) =~= found(g, b));
         }
 
@@ -1765,7 +2059,7 @@ pub(crate) mod verify {
             requires model::graph_wf(a), model::graph_extends(a, b), root < a.transitions.len(), atoms_wf(a, root, ids),
             ensures atoms_wf(b, root, ids),
         {
-            lemma_found_extends(a, b, ids);
+            lemma_found_inclusion(a, b, ids, ids);
             assert forall|j: int| 0 <= j < ids.len() implies ids[j]@ < b.tests.len()
                 && (b.tests[ids[j]@ as int] matches model::TestNode::Atom(_, true)) by {
                 assert(a.tests[ids[j]@ as int] == b.tests[ids[j]@ as int]);
@@ -1924,10 +2218,18 @@ pub(crate) mod verify {
 
 
 
-    pub(super) proof fn lemma_zero_truth_words(words: Seq<u64>)
+    pub(super) proof fn lemma_zero_truth_words(words: Seq<u64>, count: nat)
         requires forall|i: int| 0 <= i < words.len() ==> words[i] == 0,
+            count + 63 <= usize::MAX, words.len() == (count + 63) / 64,
         ensures forall|j: nat| !symbolic::verify::truth_word_bit(words, j),
+            symbolic::verify::assignment_valid(count, words),
     {
+        if count % 64 != 0 {
+            assert(words.len() > 0);
+            assert(words.last() == 0u64);
+            let shift = (count % 64) as u32;
+            assert((0u64 >> shift) == 0u64) by(bit_vector);
+        }
         assert forall|j: nat| !symbolic::verify::truth_word_bit(words, j) by {
             if j / 64 < words.len() {
                 let bit = (j % 64) as u32;
@@ -2315,6 +2617,17 @@ mod tests {
     use history_syntax::syntax::Component;
     use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
     use junco_core::limits::Unmetered;
+
+    #[test]
+    fn atom_payload_byte_sum_overflow_is_allocation_failure() {
+        let growth = usize::MAX / core::mem::size_of::<Option<AtomSet>>();
+        let count = usize::MAX / core::mem::size_of::<TestId>();
+        assert!(matches!(
+            CompiledPair::atom_payload_bytes(growth, count),
+            Err(HistoryError::AllocationFailed)
+        ));
+        assert_eq!(CompiledPair::atom_payload_bytes(0, 0), Ok(0));
+    }
 
     fn template(regexes: Vec<FlatRegex>) -> FlatPair<u64> {
         FlatPair {

@@ -11,6 +11,8 @@ use crate::verify::history_assumptions::*;
 #[cfg(verus_keep_ghost)]
 use verify::*;
 #[cfg(verus_keep_ghost)]
+use crate::verify::history_specs::no_internal_error;
+#[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
 
 pub type KernelResult<T> = core::result::Result<T, HistoryError>;
@@ -84,6 +86,7 @@ macro_rules! id {
             }
 
             #[verus_spec(result => ensures
+                                                self@ > usize::MAX || no_internal_error(result),
                                                 match result {
                                                     Ok(index) => index as nat == self@,
                                                     Err(error) => self@ > usize::MAX as nat && error is Invariant,
@@ -96,6 +99,7 @@ macro_rules! id {
                 }
             }
             #[verus_spec(result => ensures
+                                                no_internal_error(result),
                                                 match result {
                                                     Ok(id) => id@ == index as nat,
                                                     Err(error) => index as nat > u32::MAX as nat && error is GraphLimit,
@@ -375,6 +379,9 @@ pub struct Constants {
     pub transition_all: TransitionId,
     pub transition_epsilon: TransitionId,
 }
+/// Store-backed graph operations. In verified code, error exclusions are opt-in
+/// through `KernelStoreSpec`; custom stores retain arbitrary errors by default.
+#[cfg(not(verus_keep_ghost))]
 pub trait KernelStore {
     fn checkpoint(&mut self) -> KernelResult<()>;
     fn charge_aux(&mut self, bytes: usize) -> KernelResult<()>;
@@ -391,6 +398,127 @@ pub trait KernelStore {
     fn intern_test(&mut self, node: TestView<'_>) -> KernelResult<TestId>;
     fn intern_regex(&mut self, kind: RegexKindView<'_>, nullable: bool) -> KernelResult<RegexId>;
     fn intern_transition(&mut self, node: TransitionView<'_>) -> KernelResult<TransitionId>;
+}
+
+#[cfg(verus_keep_ghost)]
+verus! {
+pub trait KernelStore: KernelStoreSpec {
+    fn checkpoint(&mut self) -> (r: KernelResult<()>)
+        ensures final(self).graph() == old(self).graph(),
+            final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
+            final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
+            final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
+            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_internal_error(r),
+            old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
+            final(self).valid_store() == old(self).valid_store(), final(self).restoration() == old(self).restoration();
+    fn charge_aux(&mut self, bytes: usize) -> (r: KernelResult<()>)
+        ensures final(self).graph() == old(self).graph(),
+            final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
+            final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
+            final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
+            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_internal_error(r),
+            old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
+            old(self).valid_store() ==> final(self).valid_store(), final(self).restoration() == old(self).restoration();
+    fn reserve_derivatives(&mut self, values: &mut Vec<Option<TransitionId>>, additional: usize)
+        -> (r: KernelResult<()>)
+        ensures final(self).graph() == old(self).graph(), final(values)@ == old(values)@,
+            final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
+            final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
+            final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
+            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_internal_error(r),
+            old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
+            final(self).valid_store() == old(self).valid_store(), final(self).restoration() == old(self).restoration();
+    fn reserve_atoms(&mut self, values: &mut Vec<TestId>, additional: usize)
+        -> (r: KernelResult<()>)
+        ensures final(self).graph() == old(self).graph(), final(values)@ == old(values)@,
+            final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
+            final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
+            final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
+            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_internal_error(r),
+            old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
+            final(self).valid_store() == old(self).valid_store(), final(self).restoration() == old(self).restoration();
+    fn constants(&self) -> (r: Constants)
+        ensures r@ == self.graph().constants;
+    // Valid production lookups allocate nothing and always find their live node.
+    // Totality is needed by AtomSet validation, which deliberately masks lookup errors.
+    fn test(&self, id: TestId) -> (r: KernelResult<TestView<'_>>)
+        ensures r matches Ok(v) ==> id@ < self.graph().tests.len()
+            && v@ == self.graph().tests[id@ as int],
+            self.errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
+            self.errors_are_non_invariant() && self.valid_store() && id@ < self.graph().tests.len()
+                ==> r is Ok && no_internal_error(r),
+            self.errors_are_non_invalid_policy() && self.valid_store() && id@ < self.graph().tests.len()
+                ==> !(r matches Err(HistoryError::InvalidPolicy { .. }));
+    fn regex(&self, id: RegexId) -> (r: KernelResult<RegexView<'_>>)
+        ensures r matches Ok(v) ==> id@ < self.graph().regexes.len()
+            && v@ == self.graph().regexes[id@ as int],
+            self.errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
+            self.errors_are_non_invariant() && self.valid_store() && id@ < self.graph().regexes.len()
+                ==> r is Ok && no_internal_error(r),
+            self.errors_are_non_invalid_policy() && self.valid_store() && id@ < self.graph().regexes.len()
+                ==> !(r matches Err(HistoryError::InvalidPolicy { .. }));
+    fn transition(&self, id: TransitionId) -> (r: KernelResult<TransitionView<'_>>)
+        ensures r matches Ok(v) ==> id@ < self.graph().transitions.len()
+            && v@ == self.graph().transitions[id@ as int],
+            self.errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
+            self.errors_are_non_invariant() && self.valid_store() && id@ < self.graph().transitions.len()
+                ==> r is Ok && no_internal_error(r),
+            self.errors_are_non_invalid_policy() && self.valid_store() && id@ < self.graph().transitions.len()
+                ==> !(r matches Err(HistoryError::InvalidPolicy { .. }));
+    fn intern_test(&mut self, node: TestView<'_>) -> (r: KernelResult<TestId>)
+        requires old(self).valid_store(), test_node_wf(old(self).graph(), node@),
+        ensures
+            final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
+            final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
+            final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
+            old(self).errors_are_non_invariant() ==> no_internal_error(r),
+            old(self).errors_are_non_invalid_policy() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
+            final(self).restoration() == old(self).restoration(),
+            final(self).valid_store(),
+            graph_extends(old(self).graph(), final(self).graph()),
+            tables_wf(old(self).graph()) ==> tables_wf(final(self).graph()),
+            graph_wf(old(self).graph()) ==> graph_wf(final(self).graph()),
+            r matches Ok(id) ==> id@ < final(self).graph().tests.len()
+                && final(self).graph().tests[id@ as int] == node@;
+    fn intern_regex(&mut self, kind: RegexKindView<'_>, nullable: bool)
+        -> (r: KernelResult<RegexId>)
+        requires old(self).valid_store(), regex_node_wf(old(self).graph(), RegexNode { kind: kind@, nullable }),
+        ensures
+            final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
+            final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
+            final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
+            old(self).errors_are_non_invariant() ==> no_internal_error(r),
+            old(self).errors_are_non_invalid_policy() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
+            final(self).restoration() == old(self).restoration(),
+            final(self).valid_store(),
+            graph_extends(old(self).graph(), final(self).graph()),
+            tables_wf(old(self).graph()) ==> tables_wf(final(self).graph()),
+            graph_wf(old(self).graph()) ==> graph_wf(final(self).graph()),
+            r matches Ok(id) ==> id@ < final(self).graph().regexes.len()
+                && final(self).graph().regexes[id@ as int] == (RegexNode { kind: kind@, nullable });
+    fn intern_transition(&mut self, node: TransitionView<'_>) -> (r: KernelResult<TransitionId>)
+        requires old(self).valid_store(), transition_node_wf(old(self).graph(), node@),
+        ensures
+            final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
+            final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
+            final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
+            old(self).errors_are_non_invariant() ==> no_internal_error(r),
+            old(self).errors_are_non_invalid_policy() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
+            final(self).restoration() == old(self).restoration(),
+            final(self).valid_store(),
+            graph_extends(old(self).graph(), final(self).graph()),
+            tables_wf(old(self).graph()) ==> tables_wf(final(self).graph()),
+            graph_wf(old(self).graph()) ==> graph_wf(final(self).graph()),
+            r matches Ok(id) ==> id@ < final(self).graph().transitions.len()
+                && final(self).graph().transitions[id@ as int] == node@;
+}
 }
 
 #[verus_verify]
@@ -414,6 +542,18 @@ impl AtomSet {
         final(store).graph() == old(store).graph(),
         final(store).valid_store() == old(store).valid_store(),
         final(store).restoration() == old(store).restoration(),
+        final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+        final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+        final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+        old(store).errors_are_non_invariant() && old(store).valid_store()
+            && atom_ids_wf(old(store).graph(), ids@) && index < ids@.len()
+            && previous == (if index == 0 { None } else { Some(ids@[index as int - 1]) })
+            ==> no_internal_error(result),
+        old(store).errors_are_non_invalid_policy() && old(store).valid_store()
+            && atom_ids_wf(old(store).graph(), ids@) && index < ids@.len()
+            && previous == (if index == 0 { None } else { Some(ids@[index as int - 1]) })
+            ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         match result {
             Ok(Some(id)) => index < ids@.len() && id == ids@[index as int]
                 && id@ < final(store).graph().tests.len()
@@ -433,6 +573,17 @@ impl AtomSet {
             Some(v) => *v,
             None => return Err(HistoryError::invalid_atom_set()),
         };
+        proof! {
+            if store.errors_are_non_invariant() && store.valid_store()
+                && atom_ids_wf(store.graph(), ids@) && index < ids@.len()
+                && previous == (if index == 0 { None } else { Some(ids@[index as int - 1]) }) {
+                assert(id@ < store.graph().tests.len());
+                assert(store.graph().tests[id@ as int] matches TestNode::Atom(_, true));
+                if index > 0 {
+                    assert(test_ids(ids@)[index as int - 1] < test_ids(ids@)[index as int]);
+                }
+            }
+        }
         let valid = matches!(id.head(store), Ok(TestHead::Atom(_, true)));
         let unordered = match previous {
             Some(prev) => prev >= id,
@@ -449,6 +600,14 @@ impl AtomSet {
         final(store).graph() == old(store).graph(),
         final(store).valid_store() == old(store).valid_store(),
         final(store).restoration() == old(store).restoration(),
+        final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
+        final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+        final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+        old(store).errors_are_non_invariant() && old(store).valid_store()
+            && atom_ids_wf(old(store).graph(), ids@) ==> no_internal_error(result),
+        old(store).errors_are_non_invalid_policy() && old(store).valid_store()
+            && atom_ids_wf(old(store).graph(), ids@) ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         match result { Ok(atoms) => atoms@ == ids@ && atom_ids_wf(final(store).graph(), atoms@), Err(_) => true },
     )]
     pub fn new<G: KernelStore>(store: &mut G, ids: Vec<TestId>) -> KernelResult<Self> {
@@ -458,6 +617,14 @@ impl AtomSet {
                 store.graph() == old(store).graph(),
                 store.valid_store() == old(store).valid_store(),
                 store.restoration() == old(store).restoration(),
+                store.errors_are_non_owner() == old(store).errors_are_non_owner(),
+                store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
+                store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                old(store).errors_are_non_invariant() && old(store).valid_store()
+                    && atom_ids_wf(old(store).graph(), ids@) ==> no_internal_error(state),
+                old(store).errors_are_non_invalid_policy() && old(store).valid_store()
+                    && atom_ids_wf(old(store).graph(), ids@) ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
+                old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
                 index <= ids.len(),
                 match state {
                     Ok(previous) => atom_prefix_wf(store.graph(), ids@, index as nat)
@@ -509,7 +676,13 @@ pub enum TransitionHead {
 }
 impl TestId {
     #[verus_verify]
-    #[verus_spec(result => ensures match result {
+    #[verus_spec(result => ensures
+        store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+        store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().tests.len()
+            ==> result is Ok && no_internal_error(result),
+        store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().tests.len()
+            ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        match result {
         Ok(head) => self@ < store.graph().tests.len() && head@ == test_node_head(store.graph().tests[self@ as int]),
         Err(_) => true,
     })]
@@ -529,7 +702,13 @@ impl TestId {
 
 impl RegexId {
     #[verus_verify]
-    #[verus_spec(result => ensures match result {
+    #[verus_spec(result => ensures
+        store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+        store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().regexes.len()
+            ==> result is Ok && no_internal_error(result),
+        store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().regexes.len()
+            ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        match result {
         Ok(head) => self@ < store.graph().regexes.len() && head@ == regex_node_head(store.graph().regexes[self@ as int].kind),
         Err(_) => true,
     })]
@@ -550,7 +729,13 @@ impl RegexId {
 
 impl TransitionId {
     #[verus_verify]
-    #[verus_spec(result => ensures match result {
+    #[verus_spec(result => ensures
+        store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+        store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().transitions.len()
+            ==> result is Ok && no_internal_error(result),
+        store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().transitions.len()
+            ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        match result {
         Ok(head) => self@ < store.graph().transitions.len() && head@ == transition_node_head(store.graph().transitions[self@ as int]),
         Err(_) => true,
     })]
@@ -578,7 +763,15 @@ impl TestId {
         reason = "Explicit matches preserve the Verus proof structure"
     )]
     #[verus_verify]
-    #[verus_spec(result => ensures match result {
+    #[verus_spec(result => ensures
+        store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+        store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().tests.len()
+            && test_node_child(store.graph().tests[self@ as int], index as nat) is Some
+            ==> result is Ok && no_internal_error(result),
+        store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().tests.len()
+            && test_node_child(store.graph().tests[self@ as int], index as nat) is Some
+            ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        match result {
         Ok(child) => self@ < store.graph().tests.len() && test_node_child(store.graph().tests[self@ as int], index as nat) == Some(child@),
         Err(_) => true,
     })]
@@ -599,7 +792,15 @@ impl RegexId {
         reason = "Explicit matches preserve the Verus proof structure"
     )]
     #[verus_verify]
-    #[verus_spec(result => ensures match result {
+    #[verus_spec(result => ensures
+        store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+        store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().regexes.len()
+            && regex_node_child(store.graph().regexes[self@ as int].kind, index as nat) is Some
+            ==> result is Ok && no_internal_error(result),
+        store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().regexes.len()
+            && regex_node_child(store.graph().regexes[self@ as int].kind, index as nat) is Some
+            ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        match result {
         Ok(child) => self@ < store.graph().regexes.len() && regex_node_child(store.graph().regexes[self@ as int].kind, index as nat) == Some(child@),
         Err(_) => true,
     })]
@@ -622,7 +823,15 @@ impl TransitionId {
         reason = "Explicit matches preserve the Verus proof structure"
     )]
     #[verus_verify]
-    #[verus_spec(result => ensures match result {
+    #[verus_spec(result => ensures
+        store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+        store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().transitions.len()
+            && transition_node_child(store.graph().transitions[self@ as int], index as nat) is Some
+            ==> result is Ok && no_internal_error(result),
+        store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().transitions.len()
+            && transition_node_child(store.graph().transitions[self@ as int], index as nat) is Some
+            ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        match result {
         Ok(child) => self@ < store.graph().transitions.len() && transition_node_child(store.graph().transitions[self@ as int], index as nat) == Some(child@),
         Err(_) => true,
     })]
@@ -643,7 +852,15 @@ impl TransitionId {
         reason = "Explicit matches preserve the Verus proof structure"
     )]
     #[verus_verify]
-    #[verus_spec(result => ensures match result {
+    #[verus_spec(result => ensures
+        store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
+        store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().transitions.len()
+            && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) is Some
+            ==> result is Ok && no_internal_error(result),
+        store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().transitions.len()
+            && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) is Some
+            ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        match result {
         Ok(child) => self@ < store.graph().transitions.len() && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) == Some(child@),
         Err(_) => true,
     })]
@@ -667,7 +884,7 @@ pub mod verify {
     use vstd::std_specs::cmp::{OrdSpecImpl, PartialEqSpecImpl, PartialOrdSpecImpl};
 
     macro_rules! id_model {
-        ($id:ident) => { verus! {
+        ($id:ident, $ids:ident, $lemma:ident) => { verus! {
             impl View for $id {
                 type V = nat;
                 open(crate) spec fn view(&self) -> nat { self.0 as nat }
@@ -703,11 +920,28 @@ pub mod verify {
                     ensures (#[trigger] id@) <= u32::MAX, id == Self::from_view(id@ as u32),
                 {}
             }
+            pub open spec fn $ids(ids: Seq<$id>) -> Seq<nat> {
+                Seq::new(ids.len(), |i: int| ids[i]@)
+            }
+            pub proof fn $lemma(a: Seq<$id>, b: Seq<$id>)
+                ensures ($ids(a) == $ids(b)) == (a == b),
+            {
+                if $ids(a) == $ids(b) {
+                    assert($ids(a).len() == a.len());
+                    assert($ids(b).len() == b.len());
+                    assert(a.len() == b.len());
+                    assert forall|i: int| 0 <= i < a.len() implies a[i] == b[i] by {
+                        assert($ids(a)[i] == a[i]@);
+                        assert($ids(b)[i] == b[i]@);
+                    }
+                    assert(a =~= b);
+                }
+            }
         }};
     }
-    id_model!(TestId);
-    id_model!(RegexId);
-    id_model!(TransitionId);
+    id_model!(TestId, test_ids, lemma_test_ids_eq);
+    id_model!(RegexId, regex_ids, lemma_regex_ids_eq);
+    id_model!(TransitionId, transition_ids, lemma_transition_ids_eq);
 
     verus! {
 
@@ -808,51 +1042,6 @@ pub mod verify {
         lemma_bindings_view_wf,
     }
 
-    pub open spec fn test_ids(ids: Seq<TestId>) -> Seq<nat> { Seq::new(ids.len(), |i: int| ids[i]@) }
-    pub open spec fn regex_ids(ids: Seq<RegexId>) -> Seq<nat> { Seq::new(ids.len(), |i: int| ids[i]@) }
-    pub open spec fn transition_ids(ids: Seq<TransitionId>) -> Seq<nat> { Seq::new(ids.len(), |i: int| ids[i]@) }
-    pub proof fn lemma_test_ids_eq(a: Seq<TestId>, b: Seq<TestId>)
-        ensures (test_ids(a) == test_ids(b)) == (a == b),
-    {
-        if test_ids(a) == test_ids(b) {
-            assert(test_ids(a).len() == a.len());
-            assert(test_ids(b).len() == b.len());
-            assert(a.len() == b.len());
-            assert forall|i: int| 0 <= i < a.len() implies a[i] == b[i] by {
-                assert(test_ids(a)[i] == a[i]@);
-                assert(test_ids(b)[i] == b[i]@);
-            }
-            assert(a =~= b);
-        }
-    }
-    pub proof fn lemma_regex_ids_eq(a: Seq<RegexId>, b: Seq<RegexId>)
-        ensures (regex_ids(a) == regex_ids(b)) == (a == b),
-    {
-        if regex_ids(a) == regex_ids(b) {
-            assert(regex_ids(a).len() == a.len());
-            assert(regex_ids(b).len() == b.len());
-            assert(a.len() == b.len());
-            assert forall|i: int| 0 <= i < a.len() implies a[i] == b[i] by {
-                assert(regex_ids(a)[i] == a[i]@);
-                assert(regex_ids(b)[i] == b[i]@);
-            }
-            assert(a =~= b);
-        }
-    }
-    pub proof fn lemma_transition_ids_eq(a: Seq<TransitionId>, b: Seq<TransitionId>)
-        ensures (transition_ids(a) == transition_ids(b)) == (a == b),
-    {
-        if transition_ids(a) == transition_ids(b) {
-            assert(transition_ids(a).len() == a.len());
-            assert(transition_ids(b).len() == b.len());
-            assert(a.len() == b.len());
-            assert forall|i: int| 0 <= i < a.len() implies a[i] == b[i] by {
-                assert(transition_ids(a)[i] == a[i]@);
-                assert(transition_ids(b)[i] == b[i]@);
-            }
-            assert(a =~= b);
-        }
-    }
     impl View for TestView<'_> {
         type V = TestNode;
         open spec fn view(&self) -> TestNode {
