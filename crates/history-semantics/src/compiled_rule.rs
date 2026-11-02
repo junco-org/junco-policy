@@ -24,8 +24,10 @@ use history_store::history::verify as raw;
 #[cfg(verus_keep_ghost)]
 use history_store::typed::verify as books;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::{dsl, encoding, flatten as source,
-    history_specs::{no_internal_compile_error, no_internal_error}};
+use junco_core::verify::{
+    dsl, encoding, flatten as source,
+    history_specs::{no_internal_compile_error, no_internal_error},
+};
 #[cfg(verus_keep_ghost)]
 use verify::*;
 

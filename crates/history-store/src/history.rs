@@ -14,9 +14,9 @@
 use self::verify::*;
 use crate::graph::allocation;
 use crate::store::Event;
-use crate::typed::{Store, share_store};
 #[cfg(verus_keep_ghost)]
 use crate::typed::verify as books;
+use crate::typed::{Store, share_store};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
@@ -210,7 +210,6 @@ pub struct History<E: TypedEvent> {
     pub(crate) global_registration: Tracked<crate::store::HistoryKeyReceipt>,
 }
 
-
 #[verus_verify]
 impl<E: TypedEvent> History<E> {
     #[cfg(verus_keep_ghost)]
@@ -252,9 +251,8 @@ impl<E: TypedEvent> History<E> {
             verus_exec_expr! { Tracked(None) },
         )?;
         #[cfg(not(verus_keep_ghost))]
-        let (id, _, _) = store.allocate_history_id_for_resource(
-            Ghost::assume_new(), Tracked::assume_new(),
-        )?;
+        let (id, _, _) =
+            store.allocate_history_id_for_resource(Ghost::assume_new(), Tracked::assume_new())?;
         let numeric = StoredHistory::new(id);
         proof! {
             reveal(<StoredHistory as View>::view);
@@ -525,9 +523,9 @@ impl<E: TypedEvent> History<E> {
             verus_exec_expr! { Tracked(Some(self.registration.borrow())) },
         )?;
         #[cfg(not(verus_keep_ghost))]
-        let (id, _, _) = self.store.allocate_history_id_for_resource(
-            Ghost::assume_new(), Tracked::assume_new(),
-        )?;
+        let (id, _, _) = self
+            .store
+            .allocate_history_id_for_resource(Ghost::assume_new(), Tracked::assume_new())?;
         // Move the copied buffer into the fresh record; no event is copied twice.
         let numeric = StoredHistory {
             events: numeric_events,
@@ -1238,7 +1236,8 @@ mod tests {
     fn fresh_key() -> usize {
         HistoryStore::global()
             .allocate_history_after(0, Ghost::assume_new(), Tracked::assume_new())
-            .unwrap().0
+            .unwrap()
+            .0
     }
 
     fn event() -> Event {

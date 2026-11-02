@@ -1,10 +1,10 @@
 //! Rule-local variable validation over the capability product.
 
 use crate::error::CompileError;
-use alloc::borrow::ToOwned;
-use history_syntax::Component;
 #[cfg(verus_keep_ghost)]
 use crate::verify::history_specs::no_internal_compile_error;
+use alloc::borrow::ToOwned;
+use history_syntax::Component;
 use vstd::prelude::*;
 
 /// Three borrowed head-name slots; names are local to one rule.

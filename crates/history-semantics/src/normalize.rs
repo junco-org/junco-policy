@@ -3303,13 +3303,8 @@ impl TransitionNormalize for TransitionId {
         }
     }
 
-    #[allow(
-        clippy::option_if_let_else,
-        reason = "Explicit matches preserve the Verus proof structure."
-    )]
     verus! {
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
-
     fn collect<G: KernelStore>(
         store: &mut G,
         children: &[Self],

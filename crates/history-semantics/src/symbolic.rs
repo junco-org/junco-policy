@@ -11,6 +11,8 @@ use crate::WorkVec;
 use crate::normalize::verify as norm;
 use crate::normalize::{RegexNormalize, TransitionNormalize};
 #[cfg(verus_keep_ghost)]
+use crate::progress::verify as reach;
+#[cfg(verus_keep_ghost)]
 use crate::verify::history_algebra as algebra;
 #[cfg(verus_keep_ghost)]
 use alloc::boxed::Box;
@@ -25,8 +27,6 @@ use junco_core::observation::SmallVecSpecFns;
 use junco_core::verify::history_assumptions::KernelStoreSpec;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs as language;
-#[cfg(verus_keep_ghost)]
-use crate::progress::verify as reach;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::{EventView, Subst};
 use junco_core::{loop_try, scan};
@@ -59,7 +59,10 @@ fn derivative_cache_byte_overflow_is_allocation_failure() {
     assert!(width > 1);
     let largest = usize::MAX / width;
     assert_eq!(derivative_cache_bytes(largest), Ok(largest * width));
-    assert_eq!(derivative_cache_bytes(largest + 1), Err(HistoryError::AllocationFailed));
+    assert_eq!(
+        derivative_cache_bytes(largest + 1),
+        Err(HistoryError::AllocationFailed)
+    );
 }
 
 #[verus_verify]
@@ -556,7 +559,6 @@ fn grow_derivative_cache<G: KernelStore>(
 
 impl RegexDerivative for RegexId {
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
-
     fn derivative_step<G: KernelStore>(
         this: RegexId,
         store: &mut G,
@@ -1693,11 +1695,6 @@ pub(crate) trait TransitionInterpret: Sized {
 
 #[verus_verify]
 impl TransitionInterpret for TransitionId {
-    #[allow(
-        clippy::semicolon_if_nothing_returned,
-        clippy::shadow_unrelated,
-        reason = "Preserve the existing Verus-verified match arms and local bindings."
-    )]
     verus! {
 
     fn interpret_step<G: KernelStore>(

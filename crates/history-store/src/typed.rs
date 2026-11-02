@@ -16,6 +16,8 @@ use junco_core::flat::FlatPair;
 use junco_core::flatten::ComponentValue;
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
+#[cfg(verus_keep_ghost)]
+use junco_core::verify::history_assumptions::{arc_identity, reference_identity};
 #[cfg(feature = "std")]
 use parking_lot::Mutex;
 #[cfg(not(feature = "std"))]
@@ -25,8 +27,6 @@ use verify::*;
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
-#[cfg(verus_keep_ghost)]
-use junco_core::verify::history_assumptions::{arc_identity, reference_identity};
 
 pub(crate) mod map;
 use map::NativeMap;
@@ -38,6 +38,7 @@ pub type HistoryRegistration =
 pub(crate) type RegistryBirth = vstd::resource::map::GhostPointsTo<usize, vstd::resource::Loc>;
 pub(crate) type StoreIdReceipt =
     vstd::resource::map::GhostPersistentPointsTo<u64, vstd::resource::Loc>;
+#[cfg(verus_keep_ghost)]
 pub(crate) type StoreIdAuth = vstd::resource::map::GhostMapAuth<u64, vstd::resource::Loc>;
 
 // One process allocator across every E, including on targets without AtomicU64.
@@ -507,14 +508,14 @@ impl<E: Event> Store<E> {
             Map::<usize, vstd::resource::Loc>::empty());
         let ghost registry = authority.id();
         let tracked birth = authority.insert(0, registry);
-        let (id, receipt) = allocate_store_id(Ghost(registry))?;
+        let (id, _receipt) = allocate_store_id(Ghost(registry))?;
         let state = Codebooks::new(Ghost(id), Tracked(authority));
         let books = NativeBooks::new(state, Tracked(&birth));
         Ok(Self { id, books, numeric_store: HistoryStore::global(),
             #[cfg(verus_keep_ghost)]
             history_registry: Ghost(registry),
             #[cfg(verus_keep_ghost)]
-            store_id_receipt: receipt,
+            store_id_receipt: _receipt,
             #[cfg(verus_keep_ghost)]
             registry_birth: Tracked(birth),
         })
@@ -539,6 +540,7 @@ impl<E: Event> Store<E> {
             result.value() == self.history_registry@,
     { self.store_id_receipt.borrow() }
 
+    #[cfg(verus_keep_ghost)]
     pub(crate) fn allocate_history_id(&self) -> (result: Result<usize, HistoryError>)
         requires store_wf(*self),
         ensures result matches Ok(id) ==> 0 < id < usize::MAX,
@@ -1399,9 +1401,12 @@ mod tests {
             payload: 1,
         };
         assert_eq!(equivalent.payload, 2);
-        let id = book.intern(&first, 0, "principal", &numeric, Ghost::assume_new()).unwrap();
+        let id = book
+            .intern(&first, 0, "principal", &numeric, Ghost::assume_new())
+            .unwrap();
         assert_eq!(
-            book.intern(&equivalent, 0, "principal", &numeric, Ghost::assume_new()).unwrap(),
+            book.intern(&equivalent, 0, "principal", &numeric, Ghost::assume_new())
+                .unwrap(),
             id
         );
         // No shared-counter ID exceeds this book's newest one, so only reuse can succeed.
@@ -1412,15 +1417,23 @@ mod tests {
         ));
         assert_eq!(book.last, u64::MAX);
         assert_eq!(
-            book.intern(&equivalent, 0, "principal", &numeric, Ghost::assume_new()).unwrap(),
+            book.intern(&equivalent, 0, "principal", &numeric, Ghost::assume_new())
+                .unwrap(),
             id
         );
         assert_eq!(book.values.lookup(&other), None);
         let mut book = Codebook::new();
-        let first_action = book.intern(&first, 1, "action", &numeric, Ghost::assume_new()).unwrap();
-        assert!(book.intern(&other, 1, "action", &numeric, Ghost::assume_new()).unwrap() > first_action);
+        let first_action = book
+            .intern(&first, 1, "action", &numeric, Ghost::assume_new())
+            .unwrap();
+        assert!(
+            book.intern(&other, 1, "action", &numeric, Ghost::assume_new())
+                .unwrap()
+                > first_action
+        );
         assert_eq!(
-            book.intern(&equivalent, 1, "action", &numeric, Ghost::assume_new()).unwrap(),
+            book.intern(&equivalent, 1, "action", &numeric, Ghost::assume_new())
+                .unwrap(),
             first_action
         );
     }
@@ -1669,14 +1682,20 @@ mod tests {
             payload: 2,
         };
         let numeric = HistoryStore::global();
-        let id = book.intern(&first, 2, "resource", &numeric, Ghost::assume_new()).unwrap();
+        let id = book
+            .intern(&first, 2, "resource", &numeric, Ghost::assume_new())
+            .unwrap();
         let _failure = junco_core::observation::fail_reservations_after(0);
         assert!(matches!(
             book.intern(&other, 2, "resource", &numeric, Ghost::assume_new()),
             Err(HistoryError::AllocationFailed)
         ));
         assert_eq!(book.last, id);
-        assert_eq!(book.intern(&first, 2, "resource", &numeric, Ghost::assume_new()).unwrap(), id);
+        assert_eq!(
+            book.intern(&first, 2, "resource", &numeric, Ghost::assume_new())
+                .unwrap(),
+            id
+        );
         assert_eq!(book.values.lookup(&other), None);
     }
 

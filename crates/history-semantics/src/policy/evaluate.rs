@@ -3,29 +3,29 @@
 
 use alloc::{sync::Arc, vec::Vec};
 
+#[cfg(verus_keep_ghost)]
+use self::verify::*;
 use super::decision::PolicyDecision;
+#[cfg(verus_keep_ghost)]
+use super::rule::verify::{diagnostic_output, policy_rule_diagnostic, policy_rule_source};
 use super::rule::{NativeDiagnostic, PolicyRule};
 use crate::CompiledRule;
+#[cfg(verus_keep_ghost)]
+use crate::compiled_rule::verify as compiled;
+#[cfg(verus_keep_ghost)]
+use history_store::typed::verify as books;
 use history_store::{History, Store};
 use history_syntax::{Event, Rule, RuleMode};
 use junco_core::limits::{Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
+#[cfg(verus_keep_ghost)]
+use junco_core::verify::history_specs::{no_internal_compile_error, no_internal_error};
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::iter::IteratorSpec;
 #[cfg(verus_keep_ghost)]
 use vstd::view::DeepView;
-#[cfg(verus_keep_ghost)]
-use history_store::typed::verify as books;
-#[cfg(verus_keep_ghost)]
-use crate::compiled_rule::verify as compiled;
-#[cfg(verus_keep_ghost)]
-use super::rule::verify::{policy_rule_source, policy_rule_diagnostic, diagnostic_output};
-#[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{no_internal_compile_error, no_internal_error};
-#[cfg(verus_keep_ghost)]
-use self::verify::*;
 
 #[cfg(verus_keep_ghost)]
 verus! {
@@ -65,27 +65,31 @@ impl<E: Event> DiagnosticTrace<E> {
 
 #[verus_verify]
 #[verus_verify(external_body)]
-#[verus_spec(result => requires mut_ref_current(trace@).wf(), diagnostic_id@ == diagnostic.id(),
+#[verus_spec(result => requires mut_ref_current(_trace@).wf(), _diagnostic_id@ == diagnostic.id(),
     call_requires(context, ()),
-    ensures result is Deny, mut_ref_future(trace@).wf(),
-        mut_ref_future(trace@).context_calls == mut_ref_current(trace@).context_calls + 1,
-        mut_ref_future(trace@).diagnostic_calls == mut_ref_current(trace@).diagnostic_calls + 1,
+    ensures result is Deny, mut_ref_future(_trace@).wf(),
+        mut_ref_future(_trace@).context_calls == mut_ref_current(_trace@).context_calls + 1,
+        mut_ref_future(_trace@).diagnostic_calls == mut_ref_current(_trace@).diagnostic_calls + 1,
         result matches PolicyDecision::Deny { failed_precondition, allowed_fixes } ==>
-            mut_ref_future(trace@).calls == mut_ref_current(trace@).calls.push(DiagnosticCall {
-                index: index@, source: source@, diagnostic_id: diagnostic_id@,
+            mut_ref_future(_trace@).calls == mut_ref_current(_trace@).calls.push(DiagnosticCall {
+                index: _index@, source: _source@, diagnostic_id: _diagnostic_id@,
                 failed_precondition: failed_precondition@, allowed_fixes: allowed_fixes.deep_view(),
             }) && exists|value: C| call_ensures(context, (), value)
-                && diagnostic_output(diagnostic_id@, value, failed_precondition@, allowed_fixes.deep_view()))]
+                && diagnostic_output(_diagnostic_id@, value, failed_precondition@, allowed_fixes.deep_view()))]
 fn render_denial<E: Event, C, F: FnOnce() -> C>(
-    diagnostic: &super::rule::NativeDiagnostic<C>, context: F,
-    index: vstd::prelude::Ghost<vstd::prelude::nat>,
-    source: vstd::prelude::Ghost<history_syntax::Rule<E>>,
-    diagnostic_id: vstd::prelude::Ghost<vstd::prelude::int>,
-    trace: vstd::prelude::Tracked<&mut DiagnosticTrace<E>>,
+    diagnostic: &super::rule::NativeDiagnostic<C>,
+    context: F,
+    _index: vstd::prelude::Ghost<vstd::prelude::nat>,
+    _source: vstd::prelude::Ghost<history_syntax::Rule<E>>,
+    _diagnostic_id: vstd::prelude::Ghost<vstd::prelude::int>,
+    _trace: vstd::prelude::Tracked<&mut DiagnosticTrace<E>>,
 ) -> PolicyDecision {
     let context = context();
     let (failed_precondition, allowed_fixes) = (diagnostic.inner)(&context);
-    PolicyDecision::Deny { failed_precondition, allowed_fixes }
+    PolicyDecision::Deny {
+        failed_precondition,
+        allowed_fixes,
+    }
 }
 
 #[cfg(verus_keep_ghost)]
@@ -157,9 +161,13 @@ pub struct CompiledPolicy<E: Event, C> {
 fn unpack_policy_rule<E: Event, C>(item: PolicyRule<E, C>) -> (Rule<E>, NativeDiagnostic<C>) {
     let PolicyRule { rule, diagnostic } = item;
     #[cfg(verus_keep_ghost)]
-    { (rule, diagnostic) }
+    {
+        (rule, diagnostic)
+    }
     #[cfg(not(verus_keep_ghost))]
-    { (rule, NativeDiagnostic { inner: diagnostic }) }
+    {
+        (rule, NativeDiagnostic { inner: diagnostic })
+    }
 }
 
 #[cfg(verus_keep_ghost)]
@@ -328,7 +336,8 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                 call_ensures(I::into_iter, (rules,), converted)
                     && (converted.obeys_prophetic_iter_laws() ==> converted.will_return_none()))]
     pub fn from_rules<I: IntoIterator<Item = PolicyRule<E, C>>>(
-        store: Arc<Store<E>>, rules: I,
+        store: Arc<Store<E>>,
+        rules: I,
     ) -> Result<Self, CompileError> {
         proof_decl! { let ghost input = rules; }
         let convert = I::into_iter;
@@ -367,7 +376,6 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         Self::from_iterator(store, rules.into_iter())
     }
 
-
     // Arbitrary iterators may diverge; actual yields are paired even without prophetic laws.
     #[verus_verify]
     #[cfg_attr(verus_keep_ghost, verifier::exec_allows_no_decreases_clause)]
@@ -380,7 +388,8 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                 && policy_diagnostic_ids(policy) == iterator.remaining().map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
                 && iterator.will_return_none()))]
     fn from_iterator<I: Iterator<Item = PolicyRule<E, C>>>(
-        store: Arc<Store<E>>, iterator: I,
+        store: Arc<Store<E>>,
+        iterator: I,
     ) -> Result<Self, CompileError> {
         proof_decl! { let ghost original_iterator = iterator; }
         proof_decl! { let ghost mut yielded: Seq<PolicyRule<E, C>> = Seq::empty(); }
@@ -408,7 +417,8 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                         }
                     }
                     return Ok(Self {
-                        store, rules: compiled,
+                        store,
+                        rules: compiled,
                         #[cfg(verus_keep_ghost)]
                         callback_trace: verus_exec_expr! { Tracked(DiagnosticTrace::empty()) },
                     });
@@ -423,25 +433,35 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                 #[cfg_attr(verus_keep_ghost, verus_spec(invariant books::store_wf(*store)))]
                 loop {
                     match remaining.next() {
-                        Some(pending) => { let (source, _diagnostic) = unpack_policy_rule(pending); source.dispose(); }
+                        Some(pending) => {
+                            let (source, _diagnostic) = unpack_policy_rule(pending);
+                            source.dispose();
+                        }
                         None => return Err(CompileError::Runtime(HistoryError::AllocationFailed)),
                     }
                 }
             }
             let runtime = match CompiledRule::new(history_store::typed::share_store(&store), rule) {
                 Ok(runtime) => runtime,
-                Err(error) => {
+                Err(error) =>
+                {
                     #[cfg_attr(verus_keep_ghost, verus_spec(invariant books::store_wf(*store),
                         books::native_obligations::<E>() ==> no_internal_compile_error::<CompiledRule<E>>(Err(error))))]
                     loop {
                         match remaining.next() {
-                            Some(pending) => { let (source, _diagnostic) = unpack_policy_rule(pending); source.dispose(); }
+                            Some(pending) => {
+                                let (source, _diagnostic) = unpack_policy_rule(pending);
+                                source.dispose();
+                            }
                             None => return Err(error),
                         }
                     }
                 }
             };
-            compiled.push(CompiledPolicyRule { runtime, diagnostic });
+            compiled.push(CompiledPolicyRule {
+                runtime,
+                diagnostic,
+            });
             proof! {
                 yielded = yielded.push(current_item);
                 assert forall|i: int| 0 <= i < compiled@.len() implies
@@ -519,7 +539,8 @@ impl<E: Event, C> CompiledPolicy<E, C> {
             Some(index) => {
                 let rule = &self.rules[index];
                 let decision = render_denial::<E, C, _>(
-                    &rule.diagnostic, context,
+                    &rule.diagnostic,
+                    context,
                     verus_exec_expr! { Ghost(index as nat) },
                     verus_exec_expr! { Ghost(crate::compiled_rule::verify::source_rule(rule.runtime)) },
                     verus_exec_expr! { Ghost(rule.diagnostic.id()) },
@@ -566,8 +587,11 @@ impl<E: Event, C> CompiledPolicy<E, C> {
             result matches Ok(Some(index)) ==> index < final(self).rules@.len(),
             crate::compiled_rule::verify::ordered_result(verify::policy_sources(*old(self)), *history, *probe, result))]
     fn first_violation_with<L: Limits>(
-        &mut self, history: &History<E>, probe: &E,
-        limits: &mut L, world: &mut ObservationWorld,
+        &mut self,
+        history: &History<E>,
+        probe: &E,
+        limits: &mut L,
+        world: &mut ObservationWorld,
     ) -> Result<Option<usize>, HistoryError> {
         proof_decl! { let ghost entry = *self; }
         if !CompiledRule::same_owner(&self.store, history.store()) {
@@ -587,7 +611,9 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         while index < self.rules.len() {
             proof_decl! { let ghost before = *self; }
             let rule = &mut self.rules[index];
-            let answer = rule.runtime.accepts_history_with_limits(history, probe, limits, world);
+            let answer = rule
+                .runtime
+                .accepts_history_with_limits(history, probe, limits, world);
             let mode = rule.runtime.mode();
             proof! {
                 if history_store::typed::verify::native_obligations::<E>() {
@@ -608,10 +634,13 @@ impl<E: Event, C> CompiledPolicy<E, C> {
             let violated = match answer? {
                 None => false,
                 Some(inside) => match mode {
-                    RuleMode::Forbid => inside, RuleMode::Require => !inside,
+                    RuleMode::Forbid => inside,
+                    RuleMode::Require => !inside,
                 },
             };
-            if violated { return Ok(Some(index)); }
+            if violated {
+                return Ok(Some(index));
+            }
             index += 1;
         }
         Ok(None)

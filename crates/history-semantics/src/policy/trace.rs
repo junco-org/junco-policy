@@ -3,23 +3,25 @@
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::fmt;
 
+#[cfg(verus_keep_ghost)]
+use self::verify::*;
 use super::decision::PolicyDecision;
 use super::evaluate::CompiledPolicy;
+#[cfg(verus_keep_ghost)]
+use super::rule::verify::{
+    diagnostic_identity, diagnostic_output, policy_rule_diagnostic, policy_rule_source,
+};
 use super::rule::{Diagnostic, PolicyRule, pack_policy_rule};
 use history_store::{History, Store};
 use history_syntax::{Event, Rule};
+#[cfg(verus_keep_ghost)]
+use junco_core::verify::history_specs::{no_internal_compile_error, no_internal_error};
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::iter::IteratorSpec;
 #[cfg(verus_keep_ghost)]
 use vstd::view::DeepView;
-#[cfg(verus_keep_ghost)]
-use self::verify::*;
-#[cfg(verus_keep_ghost)]
-use super::rule::verify::{diagnostic_identity, diagnostic_output, policy_rule_source, policy_rule_diagnostic};
-#[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{no_internal_compile_error, no_internal_error};
 
 /// Renders a violated rule's `(failed_precondition, allowed_fixes)` from the candidate event.
 #[cfg(not(verus_keep_ghost))]
@@ -205,9 +207,15 @@ fn store_trace_diagnostic<E: Event, D: Fn(&E) -> (String, Vec<String>) + Send + 
     diagnostic: D,
 ) -> TraceDiagnostic<E> {
     #[cfg(not(verus_keep_ghost))]
-    { Arc::new(diagnostic) }
+    {
+        Arc::new(diagnostic)
+    }
     #[cfg(verus_keep_ghost)]
-    { NativeTraceDiagnostic { inner: Arc::new(diagnostic) } }
+    {
+        NativeTraceDiagnostic {
+            inner: Arc::new(diagnostic),
+        }
+    }
 }
 
 // Native field movement retains the actual Arc, not just a source-language approximation.
@@ -238,9 +246,15 @@ fn unpack_trace_rule<E: Event>(item: TraceRule<E>) -> (Rule<E>, TraceDiagnostic<
             exists|argument: &E| *argument == value && trace_arc_call(diagnostic, argument, output))]
 fn forward_trace_diagnostic<E: Event + 'static>(diagnostic: TraceDiagnostic<E>) -> Diagnostic<E> {
     #[cfg(not(verus_keep_ghost))]
-    { Box::new(move |event: &E| diagnostic(event)) }
+    {
+        Box::new(move |event: &E| diagnostic(event))
+    }
     #[cfg(verus_keep_ghost)]
-    { super::rule::NativeDiagnostic { inner: Box::new(move |event: &E| (diagnostic.inner)(event)) } }
+    {
+        super::rule::NativeDiagnostic {
+            inner: Box::new(move |event: &E| (diagnostic.inner)(event)),
+        }
+    }
 }
 
 /// Converts one trace entry without changing its source or diagnostic selection.
@@ -250,7 +264,9 @@ fn forward_trace_diagnostic<E: Event + 'static>(diagnostic: TraceDiagnostic<E>) 
     forall|value: E, output: (String, Vec<String>)|
         diagnostic_output(policy_rule_diagnostic(result), value, output.0@, output.1.deep_view()) ==>
             exists|argument: &E| *argument == value && trace_arc_call(trace_rule_diagnostic(item), argument, output))]
-pub(crate) fn trace_rule_into_policy_rule<E: Event + 'static>(item: TraceRule<E>) -> PolicyRule<E, E> {
+pub(crate) fn trace_rule_into_policy_rule<E: Event + 'static>(
+    item: TraceRule<E>,
+) -> PolicyRule<E, E> {
     let (rule, diagnostic) = unpack_trace_rule(item);
     let diagnostic = forward_trace_diagnostic(diagnostic);
     pack_policy_rule(rule, diagnostic)
@@ -294,7 +310,9 @@ impl<E: Event> Clone for TraceRule<E> {
             #[cfg(not(verus_keep_ghost))]
             diagnostic: Arc::clone(&self.diagnostic),
             #[cfg(verus_keep_ghost)]
-            diagnostic: NativeTraceDiagnostic { inner: Arc::clone(&self.diagnostic.inner) },
+            diagnostic: NativeTraceDiagnostic {
+                inner: Arc::clone(&self.diagnostic.inner),
+            },
         }
     }
 }
@@ -328,7 +346,8 @@ impl<E: Event + 'static> TracePolicy<E> {
                 trace_sources(policy) == items.map(|i: int, item: TraceRule<E>| trace_rule_source(item))
                     && trace_diagnostic_ids(policy) == items.map(|i: int, item: TraceRule<E>| trace_rule_diagnostic_id(item)))]
     pub fn new<I: IntoIterator<Item = TraceRule<E>>>(
-        store: Arc<Store<E>>, rules: I,
+        store: Arc<Store<E>>,
+        rules: I,
     ) -> Result<Self, CompileError> {
         proof_decl! { let ghost input = rules; }
         let convert = I::into_iter;
@@ -381,10 +400,13 @@ impl<E: Event + 'static> TracePolicy<E> {
         ensures trace_decision_result(*old(self), *final(self), *history, *candidate, result),
             no_internal_error(result))]
     pub fn decide(
-        &mut self, history: &History<E>, candidate: &E,
+        &mut self,
+        history: &History<E>,
+        candidate: &E,
     ) -> Result<PolicyDecision, HistoryError> {
         proof_decl! { let ghost before = *self; }
-        let context = verus_exec_expr! { || -> (value: E) ensures value == *candidate { *candidate } };
+        let context =
+            verus_exec_expr! { || -> (value: E) ensures value == *candidate { *candidate } };
         proof_decl! { let ghost actual_context = context; }
         proof! { assert(call_requires(context, ())); }
         let result = self.compiled.decide(history, candidate, context);

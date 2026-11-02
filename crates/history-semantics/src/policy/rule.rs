@@ -3,15 +3,15 @@
 
 use alloc::{boxed::Box, string::String, vec::Vec};
 
+#[cfg(verus_keep_ghost)]
+use self::verify::{diagnostic_identity, policy_rule_diagnostic, policy_rule_source};
 use super::atoms::{PRINCIPAL_VAR, RESOURCE_VAR};
+#[cfg(verus_keep_ghost)]
+use history_syntax::verify::dsl::{HeadView, PatternView};
 use history_syntax::{ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
-use history_syntax::verify::dsl::{HeadView, PatternView};
-#[cfg(verus_keep_ghost)]
 use vstd::view::DeepView;
-#[cfg(verus_keep_ghost)]
-use self::verify::{diagnostic_identity, policy_rule_source, policy_rule_diagnostic};
 
 /// Renders a violated rule's `(failed_precondition, allowed_fixes)` from the policy's context.
 #[cfg(not(verus_keep_ghost))]
@@ -28,12 +28,14 @@ pub struct PolicyRule<E: Event, C> {
     pub diagnostic: Diagnostic<C>,
 }
 
+type DiagnosticRenderer<C> = dyn Fn(&C) -> (String, Vec<String>);
+
 // Only callback storage is opaque; the raw payload avoids a recursive ghost alias.
 #[doc(hidden)]
 #[verus_verify(external_body)]
 #[cfg_attr(verus_keep_ghost, verifier::reject_recursive_types(C))]
 pub struct NativeDiagnostic<C> {
-    pub(crate) inner: Box<dyn Fn(&C) -> (String, Vec<String>)>,
+    pub(crate) inner: Box<DiagnosticRenderer<C>>,
 }
 
 #[cfg(verus_keep_ghost)]
@@ -74,9 +76,15 @@ pub fn diagnostic_from_fn<C, F: Fn(&C) -> (String, Vec<String>) + 'static>(
     diagnostic: F,
 ) -> Diagnostic<C> {
     #[cfg(verus_keep_ghost)]
-    { NativeDiagnostic { inner: Box::new(diagnostic) } }
+    {
+        NativeDiagnostic {
+            inner: Box::new(diagnostic),
+        }
+    }
     #[cfg(not(verus_keep_ghost))]
-    { Box::new(diagnostic) }
+    {
+        Box::new(diagnostic)
+    }
 }
 
 // The sole trusted constructor operation is native source/callback field storage.
@@ -85,7 +93,8 @@ pub fn diagnostic_from_fn<C, F: Fn(&C) -> (String, Vec<String>) + 'static>(
 #[verus_spec(result => ensures policy_rule_source(result) == rule,
     policy_rule_diagnostic(result) == diagnostic_identity(diagnostic))]
 pub(crate) fn pack_policy_rule<E: Event, C>(
-    rule: Rule<E>, diagnostic: Diagnostic<C>,
+    rule: Rule<E>,
+    diagnostic: Diagnostic<C>,
 ) -> PolicyRule<E, C> {
     PolicyRule { rule, diagnostic }
 }

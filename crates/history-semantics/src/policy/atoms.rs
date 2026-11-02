@@ -4,16 +4,18 @@
 //! them and a tail atom refers back to them.
 
 use alloc::string::String;
-use history_syntax::{AtomPattern, Comparison, ComponentPattern, Event, TestExpr};
-use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use history_syntax::verify::dsl::{AtomView, PatternView, TestView};
+use history_syntax::{AtomPattern, Comparison, ComponentPattern, Event, TestExpr};
+use vstd::prelude::*;
+
+type HeadVariable = &'static str;
 
 verus! {
 /// Head variable bound to the acting principal.
-pub(super) const PRINCIPAL_VAR: &'static str = "p";
+pub(super) const PRINCIPAL_VAR: HeadVariable = "p";
 /// Head variable bound to the candidate's resource.
-pub(super) const RESOURCE_VAR: &'static str = "r";
+pub(super) const RESOURCE_VAR: HeadVariable = "r";
 }
 
 /// An event whose principal compares against the head-bound principal `p`.

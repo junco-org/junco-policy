@@ -7,9 +7,9 @@ use crate::limits::Limits;
 use crate::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
 use crate::verify::encoding::*;
-use alloc::vec::Vec;
 #[cfg(verus_keep_ghost)]
 use crate::verify::history_specs::no_internal_error;
+use alloc::vec::Vec;
 use history_syntax::Event;
 use history_syntax::syntax::Component;
 use vstd::prelude::*;

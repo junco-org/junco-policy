@@ -9,9 +9,9 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::history_assumptions::*;
 #[cfg(verus_keep_ghost)]
-use verify::*;
-#[cfg(verus_keep_ghost)]
 use crate::verify::history_specs::no_internal_error;
+#[cfg(verus_keep_ghost)]
+use verify::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
 

@@ -36,8 +36,8 @@
 
 use crate::kernel::verify::Graph;
 use crate::observation::{ObservationWorld, SmallVecSpecFns};
-use alloc::vec::Vec;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::{alloc::Allocator, ops::Deref};
 use smallvec::SmallVec;
 use vstd::prelude::*;

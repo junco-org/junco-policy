@@ -72,11 +72,15 @@ fn custom_encoder_may_report_structural_errors() {
         }
     }
     assert_eq!(
-        lower_flat(&source(), &mut CustomEncoder, &mut Unmetered, &mut ObservationWorld),
+        lower_flat(
+            &source(),
+            &mut CustomEncoder,
+            &mut Unmetered,
+            &mut ObservationWorld
+        ),
         Err(HistoryError::invariant("custom encoder failure")),
     );
 }
-
 
 fn source() -> FlatPair<Value> {
     FlatPair {

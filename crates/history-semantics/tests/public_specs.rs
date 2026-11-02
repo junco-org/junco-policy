@@ -4,23 +4,23 @@ extern crate alloc;
 
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use history_semantics::compiled_rule::{CompiledRule, verify as compiled};
-use history_semantics::policy::{CompiledPolicy, PolicyDecision, TracePolicy, TraceRule};
 use history_semantics::policy::evaluate::verify as policy;
 use history_semantics::policy::rule::verify::diagnostic_output;
 use history_semantics::policy::trace::verify as trace;
+use history_semantics::policy::{CompiledPolicy, PolicyDecision, TracePolicy, TraceRule};
 use history_semantics::runtime::{RuleRuntime, verify as runtime};
 use history_semantics::validator::{Decision, Validator, verify as validator};
 use history_store::history::{History, verify as history};
 use history_store::store::{HistoryStore, verify as records};
 use history_store::typed::{Store, share_store, verify as books};
-use history_syntax::{Event, Head, RegexExpr, Rule, RuleMode};
 use history_syntax::verify::dsl::{HeadView, RegexView, TestView};
+use history_syntax::{Event, Head, RegexExpr, Rule, RuleMode};
 use junco_core::event::Request;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex};
-use junco_core::{CompileError, HistoryError};
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
 use junco_core::verify::{dsl, history_specs};
+use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 use vstd::view::DeepView;
 

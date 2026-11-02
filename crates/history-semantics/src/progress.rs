@@ -351,13 +351,11 @@ impl CompiledPair {
             assert(index == transition@);
             assert(index < usize::MAX);
         }
-        let needed = index
-            .checked_add(1)
-            .ok_or_else(verus_exec_expr! {
-                || -> (error: HistoryError)
-                    ensures error is Invariant,
-                { HistoryError::invariant("atom table length overflow") }
-            })?;
+        let needed = index.checked_add(1).ok_or_else(verus_exec_expr! {
+            || -> (error: HistoryError)
+                ensures error is Invariant,
+            { HistoryError::invariant("atom table length overflow") }
+        })?;
         let growth = needed.saturating_sub(self.caches.atoms.len());
         let bytes = Self::atom_payload_bytes(growth, atoms.ids().len())?;
         let projected = self.store.projected(bytes)?;
@@ -412,13 +410,11 @@ impl CompiledPair {
             assert(before_slot.caches.atoms@[index as int] is None);
         }
         let atom_slots = self.caches.atoms.as_mut_slice();
-        let slot = atom_slots
-            .get_mut(index)
-            .ok_or_else(verus_exec_expr! {
-                || -> (error: HistoryError)
-                    ensures error is Invariant,
-                { HistoryError::invariant("invalid atom table slot") }
-            })?;
+        let slot = atom_slots.get_mut(index).ok_or_else(verus_exec_expr! {
+            || -> (error: HistoryError)
+                ensures error is Invariant,
+            { HistoryError::invariant("invalid atom table slot") }
+        })?;
         *slot = Some(atoms);
         proof! {
             assert forall|key: ClassKey| successor_entries((*self).caches.successors).contains_key(key) implies
@@ -499,13 +495,11 @@ impl CompiledPair {
             assert(index == residual@);
             assert(index < usize::MAX);
         }
-        let needed = index
-            .checked_add(1)
-            .ok_or_else(verus_exec_expr! {
-                || -> (error: HistoryError)
-                    ensures error is Invariant,
-                { HistoryError::invariant("guard table length overflow") }
-            })?;
+        let needed = index.checked_add(1).ok_or_else(verus_exec_expr! {
+            || -> (error: HistoryError)
+                ensures error is Invariant,
+            { HistoryError::invariant("guard table length overflow") }
+        })?;
         let growth = needed.saturating_sub(self.caches.guards.len());
         let projected = self
             .store
@@ -534,13 +528,11 @@ impl CompiledPair {
         }
         proof_decl! { let ghost before_slot = *self; }
         let guard_slots = self.caches.guards.as_mut_slice();
-        let slot = guard_slots
-            .get_mut(index)
-            .ok_or_else(verus_exec_expr! {
-                || -> (error: HistoryError)
-                    ensures error is Invariant,
-                { HistoryError::invariant("invalid guard table slot") }
-            })?;
+        let slot = guard_slots.get_mut(index).ok_or_else(verus_exec_expr! {
+            || -> (error: HistoryError)
+                ensures error is Invariant,
+            { HistoryError::invariant("invalid guard table slot") }
+        })?;
         *slot = Some(Guard { transition, mask });
         proof! {
             assert forall|r: int| 0 <= r < self.caches.guards@.len() && self.caches.guards@[r] is Some
@@ -891,14 +883,11 @@ impl CompiledPair {
                 assert(index < usize::MAX);
             }
             let id = loop_try!(
-                atoms
-                    .ids()
-                    .get(index)
-                    .ok_or_else(verus_exec_expr! {
-                        || -> (error: HistoryError)
-                            ensures error is Invariant,
-                        { HistoryError::invariant("invalid primitive atom index") }
-                    }),
+                atoms.ids().get(index).ok_or_else(verus_exec_expr! {
+                    || -> (error: HistoryError)
+                        ensures error is Invariant,
+                    { HistoryError::invariant("invalid primitive atom index") }
+                }),
                 failure
             );
             proof! {
@@ -926,24 +915,20 @@ impl CompiledPair {
             let classified = Self::classify(primitive, event, bindings, limits, world);
             if loop_try!(classified, failure) {
                 let word_index = loop_try!(
-                    index
-                        .checked_div(64)
-                        .ok_or_else(verus_exec_expr! {
-                            || -> (error: HistoryError)
-                                ensures error is Invariant,
-                            { HistoryError::invariant("invalid truth word divisor") }
-                        }),
+                    index.checked_div(64).ok_or_else(verus_exec_expr! {
+                        || -> (error: HistoryError)
+                            ensures error is Invariant,
+                        { HistoryError::invariant("invalid truth word divisor") }
+                    }),
                     failure
                 );
                 let bit = loop_try!(
                     u32::try_from(loop_try!(
-                        index
-                            .checked_rem(64)
-                            .ok_or_else(verus_exec_expr! {
-                                || -> (error: HistoryError)
-                                    ensures error is Invariant,
-                                { HistoryError::invariant("invalid truth bit divisor") }
-                            }),
+                        index.checked_rem(64).ok_or_else(verus_exec_expr! {
+                            || -> (error: HistoryError)
+                                ensures error is Invariant,
+                            { HistoryError::invariant("invalid truth bit divisor") }
+                        }),
                         failure
                     ),)
                     .map_err(|_| HistoryError::invariant("invalid truth bit")),
@@ -961,13 +946,11 @@ impl CompiledPair {
                     failure
                 );
                 *truth_word |= loop_try!(
-                    1_u64
-                        .checked_shl(bit)
-                        .ok_or_else(verus_exec_expr! {
-                            || -> (error: HistoryError)
-                                ensures error is Invariant,
-                            { HistoryError::invariant("invalid truth bit") }
-                        }),
+                    1_u64.checked_shl(bit).ok_or_else(verus_exec_expr! {
+                        || -> (error: HistoryError)
+                            ensures error is Invariant,
+                        { HistoryError::invariant("invalid truth bit") }
+                    }),
                     failure
                 );
                 proof! {
@@ -1048,12 +1031,11 @@ impl CompiledPair {
                         == norm::transition_lang(self.store.graph(), theta, key.transition, current, word) by {}
         }
         if self.caches.successors.is_none() {
-            let cache = GraphCaches::successor_cache()
-                .ok_or_else(verus_exec_expr! {
-                    || -> (error: HistoryError)
-                        ensures error is Invariant,
-                    { HistoryError::invariant("invalid successor cache capacity") }
-                })?;
+            let cache = GraphCaches::successor_cache().ok_or_else(verus_exec_expr! {
+                || -> (error: HistoryError)
+                    ensures error is Invariant,
+                { HistoryError::invariant("invalid successor cache capacity") }
+            })?;
             self.caches.successors = Some(cache);
         }
         proof_decl! { let ghost entries = successor_entries((*self).caches.successors); }
@@ -1465,13 +1447,11 @@ impl CompiledPair {
                             assert(model::test_node_child(base.tests[id@ as int], index as nat) == Some(child@));
                             assert(child@ < base.tests.len());
                         }
-                        let next = index
-                            .checked_add(1)
-                            .ok_or_else(verus_exec_expr! {
-                                || -> (error: HistoryError)
-                                    ensures error is Invariant,
-                                { HistoryError::invariant("test child index overflow") }
-                            })?;
+                        let next = index.checked_add(1).ok_or_else(verus_exec_expr! {
+                            || -> (error: HistoryError)
+                                ensures error is Invariant,
+                            { HistoryError::invariant("test child index overflow") }
+                        })?;
                         work.push(Walk::TestChildren(id, next));
                         work.push(Walk::Test(child));
                         proof! { lemma_test_children_walk(base, id, index, child, next); }

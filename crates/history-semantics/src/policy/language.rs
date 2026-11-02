@@ -1,12 +1,12 @@
 //! The tail shape a state-machine policy classifies a resource's history with.
 
-use history_syntax::{Event, RegexExpr, TestExpr};
-use alloc::vec;
 #[cfg(verus_keep_ghost)]
 use alloc::boxed::Box;
-use vstd::prelude::*;
+use alloc::vec;
 #[cfg(verus_keep_ghost)]
 use history_syntax::verify::dsl::RegexView;
+use history_syntax::{Event, RegexExpr, TestExpr};
+use vstd::prelude::*;
 
 /// A setter event followed only by stable events, with any preceding history.
 ///
@@ -18,7 +18,7 @@ use history_syntax::verify::dsl::RegexView;
 ]))]
 pub fn last_state_change<E: Event>(setter: TestExpr<E>, stable: TestExpr<E>) -> RegexExpr<E> {
     proof_decl! { let ghost expected = seq![RegexView::All, RegexView::Test(setter@),
-        RegexView::Star(Box::new(RegexView::Test(stable@)))]; }
+    RegexView::Star(Box::new(RegexView::Test(stable@)))]; }
     let result = RegexExpr::Concat(vec![
         RegexExpr::all(),
         RegexExpr::test(setter),

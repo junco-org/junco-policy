@@ -15,7 +15,7 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::flatten::*;
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_specs::{no_internal_error, no_internal_compile_error};
+use crate::verify::history_specs::{no_internal_compile_error, no_internal_error};
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::{PartialEqSpec, PartialEqSpecImpl};
 

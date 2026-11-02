@@ -114,7 +114,10 @@ impl<E: Event> ValidatorBuilder<E> {
     pub fn finish(self) -> Result<Validator<E>, HistoryError> {
         let history = History::new(self.store)?;
         proof! { history_store::history::verify::lemma_empty_history(history, self.store); }
-        Ok(Validator { rules: self.rules, history })
+        Ok(Validator {
+            rules: self.rules,
+            history,
+        })
     }
 }
 
@@ -158,8 +161,12 @@ impl<E: Event> Validator<E> {
         if let Some(index) = self.first_violation_with(&request.event, limits, world)? {
             let mode = self.rules[index].mode();
             let message = match mode {
-                RuleMode::Require => "committed history does not satisfy required past-regex rule".to_owned(),
-                RuleMode::Forbid => "committed history satisfies forbidden past-regex rule".to_owned(),
+                RuleMode::Require => {
+                    "committed history does not satisfy required past-regex rule".to_owned()
+                }
+                RuleMode::Forbid => {
+                    "committed history satisfies forbidden past-regex rule".to_owned()
+                }
             };
             proof! {
                 crate::compiled_rule::verify::lemma_compiled_sources_frame(entry.rules@, self.rules@);
@@ -168,7 +175,11 @@ impl<E: Event> Validator<E> {
                     crate::compiled_rule::verify::lemma_compiled_source_mode(self.rules@[index as int], mode);
                 }
             }
-            let denial = Denial { mode, event: request.event, message };
+            let denial = Denial {
+                mode,
+                event: request.event,
+                message,
+            };
             proof! { assert(verify::denial_at(entry, request, denial, index as int)); }
             return Ok(Decision::Denied(denial));
         }
@@ -215,7 +226,10 @@ impl<E: Event> Validator<E> {
             result matches Ok(Some(index)) ==> index < final(self).rules@.len(),
             crate::compiled_rule::verify::ordered_result(verify::validator_sources(*old(self)), old(self).history, *candidate, result))]
     fn first_violation_with<L: Limits>(
-        &mut self, candidate: &E, limits: &mut L, world: &mut ObservationWorld,
+        &mut self,
+        candidate: &E,
+        limits: &mut L,
+        world: &mut ObservationWorld,
     ) -> Result<Option<usize>, HistoryError> {
         proof_decl! { let ghost entry = *self; }
         proof! { history_store::history::verify::lemma_history_frame_facts(entry.history, entry.history); }
@@ -246,9 +260,14 @@ impl<E: Event> Validator<E> {
             }
             let violated = match answer? {
                 None => false,
-                Some(inside) => match mode { RuleMode::Require => !inside, RuleMode::Forbid => inside },
+                Some(inside) => match mode {
+                    RuleMode::Require => !inside,
+                    RuleMode::Forbid => inside,
+                },
             };
-            if violated { return Ok(Some(index)); }
+            if violated {
+                return Ok(Some(index));
+            }
             index += 1;
         }
         Ok(None)
@@ -281,7 +300,6 @@ impl<E: Event> Validator<E> {
         }
         result
     }
-
 }
 
 impl<E: Event> Validator<E> {
