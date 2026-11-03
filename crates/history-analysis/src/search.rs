@@ -56,15 +56,13 @@ pub struct SearchStats {
     pub inserted: usize,
     /// States expanded.
     pub expanded: usize,
-    /// States discarded because their residual is `∅`, or dead: some part it requires has all of
-    /// its pieces among those it avoids.
+    /// States discarded because their residual is `∅` or dead: some part it requires has each of
+    /// its pieces below one it avoids.
     pub dead: usize,
     /// States discarded because an equal state was inserted before.
     pub repeated: usize,
     /// States discarded because an inserted state subsumes them.
     pub subsumed: usize,
-    /// Letters expanded, summed over expanded states.
-    pub steps: usize,
 }
 
 /// Result of one search.
@@ -172,7 +170,6 @@ impl Search<'_> {
         for (refined, letters) in branches {
             let refined = self.constraints.intern(refined);
             for letter in letters {
-                self.stats.steps += 1;
                 self.stats.generated += 1;
                 let successor = self
                     .language

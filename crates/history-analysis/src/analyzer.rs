@@ -287,16 +287,6 @@ impl<E: Event> PolicyAnalyzer<E> {
         }
     }
 
-    /// Search options used by subsequent queries.
-    pub fn options(&self) -> SearchOptions {
-        self.options
-    }
-
-    /// Replaces the search options used by subsequent queries.
-    pub fn set_options(&mut self, options: SearchOptions) {
-        self.options = options;
-    }
-
     /// Validates `rule` and adds it to the analysis.
     pub fn add_rule(&mut self, rule: &Rule<E>) -> Result<RuleId, CompileError> {
         let flat = flatten_rule(rule, &mut Unmetered, &mut ObservationWorld)?;
