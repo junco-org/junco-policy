@@ -42,12 +42,12 @@ jobs:
 
       - name: Check formatting
         run: |
-          cargo fmt --check -p junco-policy -p junco-core -p history-syntax -p history-store -p history-semantics
+          cargo fmt --check -p junco-policy -p junco-core -p history-syntax -p history-store -p history-semantics -p history-analysis
           cargo fmt --check --manifest-path fuzz/Cargo.toml
 
       - name: Lint
         run: |
-          cargo clippy --locked --no-deps -p junco-policy -p junco-core -p history-syntax -p history-store -p history-semantics --all-targets -- -D warnings
+          cargo clippy --locked --no-deps -p junco-policy -p junco-core -p history-syntax -p history-store -p history-semantics -p history-analysis --all-targets -- -D warnings
           cargo clippy --locked --no-deps --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
 
       - name: Unit tests

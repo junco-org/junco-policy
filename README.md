@@ -295,6 +295,47 @@ With Cargo's default target directories, Criterion reports are under
 the root benchmarks. The fuzz benchmark's HTML entry point is
 `fuzz/target/criterion/report/index.html`.
 
+## Static analysis
+
+`history_analysis::PolicyAnalyzer` answers questions about a rule table without a history:
+`covered(rule, by)` asks whether every candidate and history that `rule` denies is denied by
+a rule of `by`; `redundant`, `at_least_as_strict`, `never_fires`, and `always_fires` are
+built on it, and `tail_included(head, left, right)` decides one tail inclusion. A verdict is
+`Holds`, a shortest `Counterexample` (a candidate and the history before it), or `Exhausted`
+once a search exceeds `SearchOptions::max_items` (unbounded by default) or its graph budget,
+`SearchOptions::graph_bytes`. Queries return `HistoryError` for any other runtime failure.
+
+Rules are validated and lowered by `junco_core::flatten_rule` and `lower_flat`, as for the
+runtime. Each question reduces to inclusions between tails, decided by a breadth-first search
+over the derivatives of `left ∩ ¬right`. The derivatives are the runtime's:
+`history_semantics::SymbolicLanguage` compiles the difference with the runtime's normalizing
+constructors and exposes its verified symbolic derivatives and successor interpretation, keyed
+by the truth values of the atoms a derivative tests. A search state branches over classes of
+events rather than events: per component, a value that its atoms mention or any other value.
+The candidate is case-split only where an atom compares one of its components with a constant.
+Components are infinite unless `Domains` declares their values, as an action enum should. A
+generic `Event` cannot be built from components, so a counterexample names each component by a
+constant or by a numbered fresh value.
+
+A residual of `left ∩ ¬right` intersects the parts it requires with the complements of the
+pieces it avoids, as a pair of a state of `left` and a macrostate of `right` does, and the search
+prunes with antichains on that shape, up to simulation. It does not insert a state whose residual
+is dead, with some required part having each of its pieces below an avoided one, or that an
+inserted state subsumes: its constraint entails that state's, it requires all of that state's
+parts, and it avoids a piece above each of that state's pieces. "Below" is a syntactic simulation,
+a sound under-approximation of inclusion decided by memoised recursion on pairs of nodes: it
+compares unions, intersections, concatenations factor by factor, stars and complements
+structurally, and tests by their conjuncts and disjuncts. Parts are compared by identity, so
+inserted states are indexed by their parts. Inserted states are never removed, so
+counterexamples stay shortest.
+
+Each search compiles one graph with its own budget, through `CanonicalStore::with_budget`: 16 MiB
+unless `SearchOptions::graph_bytes` says otherwise, where the runtime keeps `MAX_GRAPH_BYTES`
+(100 KiB) per rule. The classes of events and the search are unverified. Their tests replay
+every counterexample through `TracePolicy`, and a differential test compares the verdicts on
+random tail pairs, including counterexample lengths, with brute force over every history up to
+a length bound.
+
 ## Fuzzing and the independent oracle
 
 libFuzzer generates lock traces and checks for panics and no-surprise violations.
@@ -350,6 +391,7 @@ Import generic APIs from the package that owns them:
 | `junco-core` | Shared IR, encoding, errors and contracts |
 | `history-store` | Histories, interning, graph storage and cache containers |
 | `history-semantics` | Compilation, evaluation, `TracePolicy` and `Validator` |
+| `history-analysis` | Static analysis of rule tables by inclusion between tails: `PolicyAnalyzer` |
 | `junco-policy` | Ownership-lock consumer: `Action`, `LockEvent`, `LockPolicy`, `lock_decision` |
 
 An `Event` is a compact `Copy` value that projects to principal, action and resource.
@@ -384,6 +426,9 @@ Semantics `cache` enables optional precompilation. Neither feature implies `runt
 Core `serde` enables portable source serialization. The root lock consumer selects
 core/Syntax `std`, Store `runtime,std` and Semantics `runtime,std,cache`.
 Semantics `test-util` is a dev-only integration probe feature.
+Analysis has no features; it is no_std + alloc and outside the Verus job. It uses Semantics
+`runtime` through `SymbolicLanguage`, a native facade like `TracePolicy` that owns a compiled
+pair and calls only verified graph operations.
 
 ## Reproduce the verification
 

@@ -159,7 +159,9 @@ impl CompiledPair {
         }
         Ok(found)
     }
-    /// Build a fresh graph from immutable numeric source, including after exhaustion.
+    /// Build a fresh graph that may be charged `budget` bytes from immutable numeric source,
+    /// including after exhaustion. The runtime passes [`junco_core::limits::MAX_GRAPH_BYTES`].
+    /// Only the runtime budget guarantees construction without internal layout errors.
     #[allow(
         clippy::shadow_unrelated,
         reason = "Separate lowering loops retain their proof-local index bindings"
@@ -168,7 +170,8 @@ impl CompiledPair {
     #[verus_spec(result => ensures
         result != Err(HistoryError::WrongHistoryOwner),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
-        flat::structural_wf(*template) ==> language::no_internal_error(result),
+        flat::structural_wf(*template) && budget == junco_core::limits::MAX_GRAPH_BYTES
+            ==> language::no_internal_error(result),
         result matches Ok(pair) ==> {
         crate::progress::verify::pair_wf(pair)
         && forall|theta: language::Subst, word: Seq<language::EventView>| language::event_wf(theta)
@@ -180,11 +183,16 @@ impl CompiledPair {
 
     pub(crate) fn compile<L: Limits>(
         template: &FlatPair<u64>,
+        budget: usize,
         limits: &mut L,
         world: &mut ObservationWorld,
     ) -> KernelResult<Self> {
         limits.checkpoint().map_err(HistoryError::from)?;
-        let mut store = CanonicalStore::new()?;
+        let mut store = if budget == junco_core::limits::MAX_GRAPH_BYTES {
+            CanonicalStore::new()?
+        } else {
+            CanonicalStore::with_budget(budget)?
+        };
         let mut tests = Vec::new();
         let mut regexes = Vec::new();
         allocation(world.try_reserve_vec_exact(&mut tests, template.tests.len()))?;
