@@ -279,10 +279,13 @@ equal events before minterm classification to avoid extra work on repeated event
 
 ```sh
 cargo bench --manifest-path fuzz/Cargo.toml --bench lock_policy
+cargo bench --manifest-path fuzz/Cargo.toml --bench other
 cargo bench --bench progress -- --noplot
 cargo bench --bench validator -- stress_growing_residual --noplot
 cargo bench --bench validator -- stress_many_rules --noplot
 ```
+
+The `other` benchmark drives Dogwood and VeriMon; build VeriMon and set `VERIMON` as described in `fuzz/benches/dogwood/README.md`.
 
 The `lock_policy` benchmark repeatedly decides over unchanged histories with a
 retained policy; it reports warm-progress latency. `progress` compares that reuse with

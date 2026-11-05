@@ -37,6 +37,7 @@ criterion = { version = "0.8", default-features = false, features = [
     "cargo_bench_support",
     "plotters",
 ] }
+dogwood-language = "1.1.0"
 
 [[bin]]
 name = "lock_policy"
@@ -48,6 +49,11 @@ bench = false
 [[bench]]
 name = "lock_policy"
 path = "benches/lock_policy.rs"
+harness = false
+
+[[bench]]
+name = "other"
+path = "benches/dogwood/main.rs"
 harness = false
 
 [[example]]

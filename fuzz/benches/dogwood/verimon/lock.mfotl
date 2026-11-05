@@ -1,0 +1,15 @@
+(EXISTS q. (
+   (((edit_req(a,r) OR release_req(a,r)) OR remove_req(a,r))
+    AND ((NOT (EXISTS p. ((edit(p,r) OR release(p,r)) OR remove(p,r)))) SINCE[0,*) edit(q,r)))
+   AND NOT (q = a)))
+OR
+(EXISTS q. (
+   (((edit_req(a,r) OR remove_req(a,r))
+     AND ((NOT (EXISTS p. (edit(p,r) OR remove(p,r)))) SINCE[0,*) edit(q,r)))
+    AND NOT (q = a))
+   AND NOT ((NOT (EXISTS p. (edit(p,r) OR remove(p,r)))) SINCE[0,*) read(a,r))))
+OR
+(EXISTS q. (
+   ((edit_req(a,r) OR remove_req(a,r))
+    AND ((NOT (EXISTS p. (read(p,r) OR remove(p,r)))) SINCE[0,*) read(q,r)))
+   AND NOT (q = a)))

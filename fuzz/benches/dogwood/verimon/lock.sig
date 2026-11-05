@@ -1,0 +1,8 @@
+read(a:string, r:string)
+edit(a:string, r:string)
+release(a:string, r:string)
+remove(a:string, r:string)
+read_req(a:string, r:string)
+edit_req(a:string, r:string)
+release_req(a:string, r:string)
+remove_req(a:string, r:string)
