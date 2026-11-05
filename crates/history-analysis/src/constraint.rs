@@ -211,17 +211,6 @@ impl Operands {
         operands
     }
 
-    /// Operands that compare each register with the listed constants.
-    pub(crate) fn pairs(pairs: impl IntoIterator<Item = (usize, ConstId)>) -> Self {
-        let mut operands = Self::default();
-        for (component, value) in pairs {
-            operands.register[component] = true;
-            operands.constants[component].push(value);
-        }
-        operands.normalize();
-        operands
-    }
-
     fn normalize(&mut self) {
         for constants in &mut self.constants {
             constants.sort_unstable();

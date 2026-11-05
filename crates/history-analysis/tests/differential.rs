@@ -109,7 +109,7 @@ fn check(setup: &Setup, left: &RegexExpr<Access>, right: &RegexExpr<Access>) -> 
             .tail_included(&setup.head, smaller, larger)
             .unwrap();
         let context = || format!("{smaller:?}\n⊑ {larger:?}\nunder {setup:?}");
-        match verdict.inclusion {
+        match verdict {
             Inclusion::Holds => {
                 for (candidate, _, shortest) in &brute {
                     assert!(

@@ -9,7 +9,7 @@ use history_syntax::{
     RuleMode, TestExpr,
 };
 use junco_core::{HistoryError, Request};
-use junco_policy::{Action, LockEvent, LockPolicy, lock_decision};
+use junco_policy::{Action, LockEvent, LockPolicy};
 use std::sync::Arc;
 
 /// Caller-assigned principal identity.
@@ -37,6 +37,17 @@ const BOB: Actor = Actor(2);
 const A: Doc = Doc(1);
 const B: Doc = Doc(2);
 const OPERATIONS: [Action; 4] = [Action::Read, Action::Edit, Action::Release, Action::Remove];
+
+/// A fresh policy with no warm cursors: the reference every retained decision must match.
+fn cold(
+    history: &History<LockEvent<Actor, Doc>>,
+    candidate: &LockEvent<Actor, Doc>,
+) -> PolicyDecision {
+    LockPolicy::new(Arc::clone(history.store()))
+        .unwrap()
+        .decide(history, candidate)
+        .unwrap()
+}
 
 fn action_is<E: Event<Action = Action>>(action: Action) -> TestExpr<E> {
     TestExpr::atom(
@@ -311,7 +322,7 @@ fn owners_and_replacements_keep_separate_progress() {
     );
     let denied = policy.decide(&second, &release).unwrap();
     assert_ne!(denied, PolicyDecision::Grant);
-    assert_eq!(denied, lock_decision(&second, &release).unwrap());
+    assert_eq!(denied, cold(&second, &release));
 
     // Truncate-and-reappend replaces a warmed branch on one owner.
     let mut owner =
@@ -328,7 +339,7 @@ fn owners_and_replacements_keep_separate_progress() {
     owner.push(LockEvent::new(BOB, Action::Edit, A)).unwrap();
     let replaced = policy.decide(&owner, &release).unwrap();
     assert_ne!(replaced, PolicyDecision::Grant);
-    assert_eq!(replaced, lock_decision(&owner, &release).unwrap());
+    assert_eq!(replaced, cold(&owner, &release));
 }
 
 #[test]
@@ -559,7 +570,7 @@ fn alternating_bindings_and_owners_change_work_never_verdicts() {
             let candidate = LockEvent::new(Actor(index % 20), Action::Release, Doc(index % 2 + 1));
             assert_eq!(
                 policy.decide(owner, &candidate).unwrap(),
-                lock_decision(owner, &candidate).unwrap()
+                cold(owner, &candidate)
             );
         }
     }

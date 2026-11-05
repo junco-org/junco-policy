@@ -172,11 +172,6 @@ impl CursorCache {
         &self.entries
     }
 
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn clear(&mut self) {
-        self.entries.clear();
-    }
-
     #[expect(
         clippy::collapsible_if,
         reason = "Pinned Verus does not support let-chain expressions"

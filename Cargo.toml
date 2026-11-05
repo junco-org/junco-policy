@@ -24,6 +24,14 @@ history-syntax = { path = "crates/history-syntax", default-features = false, fea
 [dev-dependencies]
 criterion = "0.5"
 history-semantics = { path = "crates/history-semantics", default-features = false, features = ["test-util"] }
+history-analysis = { path = "crates/history-analysis" }
+resharp = "=0.7.6"
+regex-syntax = "0.8"
+rig-core = "0.46.0"
+rig-reqwest = "0.46.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [[bench]]
 name = "validator"
@@ -31,4 +39,19 @@ harness = false
 
 [[bench]]
 name = "progress"
+harness = false
+
+[[bench]]
+name = "smt"
+path = "benches/smt/main.rs"
+harness = false
+
+[[bench]]
+name = "agentdojo"
+path = "benches/agentdojo/main.rs"
+harness = false
+
+[[bench]]
+name = "resharp"
+path = "benches/resharp/main.rs"
 harness = false

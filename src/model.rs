@@ -18,22 +18,6 @@ pub enum Action {
     Remove,
 }
 
-impl Action {
-    /// Returns `true` for [`Action::Read`], the one action that changes no ownership.
-    ///
-    /// This classifies the capability itself. It inspects no command line, appends no event and
-    /// moves no claim; whether a read is recorded in a history is the caller's decision.
-    pub fn is_read(&self) -> bool {
-        matches!(self, Self::Read)
-    }
-
-    /// Returns `true` for actions that mutate a resource's policy state — its ownership or
-    /// presence — even when no byte changes, as for [`Action::Release`].
-    pub fn is_write(&self) -> bool {
-        matches!(self, Self::Edit | Self::Release | Self::Remove)
-    }
-}
-
 impl fmt::Display for Action {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {

@@ -829,20 +829,12 @@ impl RuleRuntime {
         &self.pair.work
     }
 
-    pub fn reset_work_counters(&mut self) {
-        self.pair.reset_work_counters();
-    }
-
     pub fn reset_work_events(&mut self) {
         self.pair.reset_work_events();
     }
 
     pub fn work_events(&self) -> usize {
         self.pair.work_events()
-    }
-
-    pub fn clear_cursors(&mut self) {
-        self.cursors.clear();
     }
 
     /// Return keys and committed positions, never graph-local residual IDs.
@@ -868,10 +860,6 @@ impl RuleRuntime {
 
     pub fn set_answer_checkpoint_failure(&mut self, fail: bool) {
         self.pair.set_answer_checkpoint_failure(fail);
-    }
-
-    pub fn set_skip_guards(&mut self, skip: bool) {
-        self.pair.work.skip_guards = skip;
     }
 }
 

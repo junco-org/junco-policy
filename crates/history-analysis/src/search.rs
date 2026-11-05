@@ -22,57 +22,12 @@ use crate::constraint::{
 use crate::prune::{Antichain, Decomposition};
 use crate::simulation::Simulation;
 
-/// Search configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SearchOptions {
-    /// Stop with [`Inclusion::Exhausted`](crate::Inclusion::Exhausted) once one search has
-    /// inserted more states than this.
-    pub max_items: Option<usize>,
-    /// Bytes of runtime graph one search may be charged before it stops with
-    /// [`Inclusion::Exhausted`](crate::Inclusion::Exhausted); 16 MiB by default, against the
-    /// runtime's [`MAX_GRAPH_BYTES`](junco_core::limits::MAX_GRAPH_BYTES) per rule. Each search
-    /// reserves this much address space for each of its six arenas and commits it as the graph
-    /// grows. Must be a multiple of 16.
-    pub graph_bytes: usize,
-}
-
-impl Default for SearchOptions {
-    fn default() -> Self {
-        Self {
-            max_items: None,
-            graph_bytes: 16 * 1024 * 1024,
-        }
-    }
-}
-
-/// Work done by one analysis query, summed over its inclusion searches.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct SearchStats {
-    /// Inclusion searches run; policy questions split into one search per head case.
-    pub searches: usize,
-    /// Successor states built.
-    pub generated: usize,
-    /// States inserted into the visited set.
-    pub inserted: usize,
-    /// States expanded.
-    pub expanded: usize,
-    /// States discarded because their residual is `∅` or dead: some part it requires has each of
-    /// its pieces below one it avoids.
-    pub dead: usize,
-    /// States discarded because an equal state was inserted before.
-    pub repeated: usize,
-    /// States discarded because an inserted state subsumes them.
-    pub subsumed: usize,
-}
-
 /// Result of one search.
 pub(crate) enum SearchOutcome {
     /// No valuation satisfying the constraint admits a history in the residual.
     Holds,
     /// A counterexample exists.
     Refuted(Box<Refutation>),
-    /// The search inserted more states than the budget allows.
-    Exhausted,
 }
 
 /// A symbolic counterexample: any valuation satisfying `constraint`, with one event from each
@@ -88,15 +43,10 @@ pub(crate) fn search(
     language: &mut SymbolicLanguage,
     universes: &Universes,
     constraint: Constraint,
-    options: SearchOptions,
-    stats: &mut SearchStats,
 ) -> Result<SearchOutcome, HistoryError> {
-    stats.searches += 1;
     let mut search = Search {
         language,
         universes,
-        options,
-        stats,
         constraints: ConstraintTable::default(),
         items: Vec::new(),
         seen: HashSet::new(),
@@ -120,8 +70,6 @@ struct Item {
 struct Search<'search> {
     language: &'search mut SymbolicLanguage,
     universes: &'search Universes,
-    options: SearchOptions,
-    stats: &'search mut SearchStats,
     constraints: ConstraintTable,
     /// Inserted states, in insertion order, which is also the order of expansion.
     items: Vec<Item>,
@@ -139,13 +87,6 @@ impl Search<'_> {
             if self.language.nullable(self.items[next].residual)? {
                 return Ok(self.counterexample(next));
             }
-            if self
-                .options
-                .max_items
-                .is_some_and(|budget| self.items.len() > budget)
-            {
-                return Ok(SearchOutcome::Exhausted);
-            }
             self.expand(next)?;
             next += 1;
         }
@@ -155,7 +96,6 @@ impl Search<'_> {
     /// Inserts the successor of the item by each step of its constraint and the atoms its
     /// derivative tests.
     fn expand(&mut self, index: usize) -> Result<(), HistoryError> {
-        self.stats.expanded += 1;
         let Item {
             constraint,
             residual,
@@ -170,7 +110,6 @@ impl Search<'_> {
         for (refined, letters) in branches {
             let refined = self.constraints.intern(refined);
             for letter in letters {
-                self.stats.generated += 1;
                 let successor = self
                     .language
                     .successor(transition, &truth(&atoms, &letter))?;
@@ -189,16 +128,13 @@ impl Search<'_> {
         parent: Option<(usize, Letter)>,
     ) -> Result<(), HistoryError> {
         if self.language.is_empty(residual) {
-            self.stats.dead += 1;
             return Ok(());
         }
         if !self.seen.insert((constraint, residual)) {
-            self.stats.repeated += 1;
             return Ok(());
         }
         let state = Decomposition::of(self.language, residual)?;
         if state.dead(self.language, &mut self.simulation)? {
-            self.stats.dead += 1;
             return Ok(());
         }
         if self.antichain.subsumes(
@@ -208,7 +144,6 @@ impl Search<'_> {
             constraint,
             &state,
         )? {
-            self.stats.subsumed += 1;
             return Ok(());
         }
         self.antichain.insert(constraint, state);
@@ -217,7 +152,6 @@ impl Search<'_> {
             residual,
             parent,
         });
-        self.stats.inserted += 1;
         Ok(())
     }
 

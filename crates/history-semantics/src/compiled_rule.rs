@@ -635,20 +635,12 @@ impl<E: Event> CompiledRule<E> {
         self.runtime.work_counters()
     }
 
-    pub fn reset_work_counters(&mut self) {
-        self.runtime.reset_work_counters();
-    }
-
     pub fn work_events(&self) -> usize {
         self.runtime.work_events()
     }
 
     pub fn reset_work_events(&mut self) {
         self.runtime.reset_work_events();
-    }
-
-    pub fn clear_cursors(&mut self) {
-        self.runtime.clear_cursors();
     }
 
     pub fn cursor_positions(

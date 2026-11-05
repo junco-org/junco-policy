@@ -541,7 +541,7 @@ fn validator_with_edit_history(
         let decision = validator
             .check(request(ALICE, Action::Edit, SRC_A))
             .unwrap();
-        debug_assert!(decision.is_grant());
+        assert!(decision.is_grant());
     }
     validator
 }
@@ -563,7 +563,7 @@ fn benchmark_history_scan(criterion: &mut Criterion) {
                         let start = Instant::now();
                         let decision = validator.check(black_box(candidate)).unwrap();
                         elapsed += start.elapsed();
-                        debug_assert!(decision.is_grant());
+                        assert!(decision.is_grant());
                         validator.rollback(checkpoint).unwrap();
                     }
                     elapsed
@@ -582,7 +582,7 @@ fn benchmark_denial(criterion: &mut Criterion) {
         .expect("benchmark rule is valid");
     let mut validator = builder.finish().unwrap();
     let first = validator.check(request(ALICE, Action::Remove, A)).unwrap();
-    debug_assert!(first.is_grant());
+    assert!(first.is_grant());
 
     criterion.bench_function("deny_duplicate_remove", |bencher| {
         bencher.iter_custom(|iterations| {
@@ -592,7 +592,7 @@ fn benchmark_denial(criterion: &mut Criterion) {
                 let start = Instant::now();
                 let decision = validator.check(black_box(candidate)).unwrap();
                 elapsed += start.elapsed();
-                debug_assert!(matches!(decision, Decision::Denied(_)));
+                assert!(matches!(decision, Decision::Denied(_)));
             }
             elapsed
         });
@@ -615,7 +615,7 @@ fn benchmark_rollback(criterion: &mut Criterion) {
                         for _ in 0..removed_events {
                             let decision =
                                 validator.check(request(ALICE, Action::Read, A)).unwrap();
-                            debug_assert!(decision.is_grant());
+                            assert!(decision.is_grant());
                         }
                         (validator, checkpoint)
                     },

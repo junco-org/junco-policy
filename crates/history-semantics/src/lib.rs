@@ -14,7 +14,7 @@ pub(crate) mod compile;
 pub mod compiled_rule;
 #[cfg(feature = "runtime")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime")))]
-pub mod error;
+mod error;
 #[cfg(feature = "runtime")]
 pub(crate) mod normalize;
 #[cfg(feature = "runtime")]
@@ -29,7 +29,7 @@ pub mod runtime;
 pub(crate) mod symbolic;
 #[cfg(feature = "runtime")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime")))]
-pub mod symbolic_language;
+mod symbolic_language;
 #[cfg(feature = "runtime")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime")))]
 pub mod validator;
@@ -44,13 +44,13 @@ pub use compiled_rule::CompiledRule;
 #[cfg(feature = "runtime")]
 pub use error::PolicyError;
 #[cfg(feature = "runtime")]
-pub use policy::{PolicyDecision, TraceDiagnostic, TracePolicy, TraceRule};
+pub use policy::{PolicyDecision, TracePolicy, TraceRule};
 #[cfg(feature = "runtime")]
-pub use runtime::{BatchCursor, RuleRuntime};
+pub use runtime::RuleRuntime;
 #[cfg(feature = "runtime")]
 pub use symbolic_language::SymbolicLanguage;
 #[cfg(feature = "runtime")]
-pub use validator::{Decision, Denial, Validator, ValidatorBuilder};
+pub use validator::{Decision, Denial, Validator};
 
 #[cfg(all(test, feature = "runtime"))]
 mod graph_tests;

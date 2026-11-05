@@ -38,6 +38,7 @@ criterion = { version = "0.8", default-features = false, features = [
     "plotters",
 ] }
 dogwood-language = "1.1.0"
+history-semantics = { path = "../crates/history-semantics", default-features = false, features = ["test-util"] }
 
 [[bin]]
 name = "lock_policy"
@@ -56,6 +57,7 @@ name = "other"
 path = "benches/dogwood/main.rs"
 harness = false
 
-[[example]]
-name = "lock_policy_strictness"
-path = "examples/lock_policy_strictness.rs"
+[[bench]]
+name = "lock"
+path = "benches/lock-policy/main.rs"
+harness = false

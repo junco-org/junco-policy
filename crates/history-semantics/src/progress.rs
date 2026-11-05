@@ -756,7 +756,7 @@ impl CompiledPair {
                             primitive,
                             positive: true,
                         }) => Ok(primitive),
-                        Ok(_) => Err(HistoryError::invariant("invalid primitive atom set")),
+                        Ok(_) => Err(HistoryError::invalid_atom_set()),
                         Err(error) => Err(error),
                     }
                 };
@@ -910,7 +910,7 @@ impl CompiledPair {
                         primitive,
                         positive: true,
                     }) => Ok(primitive),
-                    Ok(_) => Err(HistoryError::invariant("invalid primitive atom set")),
+                    Ok(_) => Err(HistoryError::invalid_atom_set()),
                     Err(error) => Err(error),
                 }
             };
@@ -2575,6 +2575,7 @@ pub(crate) mod verify {
 
 #[cfg(any(test, feature = "test-util"))]
 impl CompiledPair {
+    #[cfg(test)]
     pub(crate) fn reset_work_counters(&mut self) {
         self.work = WorkCounters::default();
     }

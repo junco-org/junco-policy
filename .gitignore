@@ -8,3 +8,4 @@
 /fuzz/artifacts/
 /fuzz/coverage/
 /traces/
+/benches/agentdojo/runs/

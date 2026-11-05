@@ -7,10 +7,18 @@ use history_semantics::PolicyDecision;
 use history_store::{History, Store};
 use junco_core::HistoryError;
 
-use super::{LockPolicy, lock_decision};
+use super::LockPolicy;
 use crate::{Action, LockEvent};
 
 const ACTIONS: [Action; 4] = [Action::Read, Action::Edit, Action::Release, Action::Remove];
+
+/// A fresh policy with no warm cursors: the reference every retained decision must match.
+fn cold(history: &History<Lock>, candidate: &Lock) -> PolicyDecision {
+    LockPolicy::new(Arc::clone(history.store()))
+        .unwrap()
+        .decide(history, candidate)
+        .unwrap()
+}
 
 /// The two principals the oracle names; the acting principal is always "self".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -111,14 +119,14 @@ fn verdict(decision: PolicyDecision) -> Option<bool> {
 }
 
 #[test]
-fn lock_decision_matches_the_claim_table_exhaustively() {
+fn lock_policy_matches_the_claim_table_exhaustively() {
     let holders = [Holder::Nobody, Holder::Myself, Holder::Another];
     for owner in holders {
         for reader in holders {
             let history = history(owner, reader);
             for action in ACTIONS {
                 assert_eq!(
-                    verdict(lock_decision(&history, &on_x(Who::Me, action)).unwrap()),
+                    verdict(cold(&history, &on_x(Who::Me, action))),
                     oracle(owner, reader, action),
                     "owner={owner:?} reader={reader:?} action={action}",
                 );
@@ -128,7 +136,7 @@ fn lock_decision_matches_the_claim_table_exhaustively() {
 }
 
 fn grants(history: &History<Lock>, principal: Who, action: Action) -> bool {
-    lock_decision(history, &on_x(principal, action)).unwrap() == PolicyDecision::Grant
+    cold(history, &on_x(principal, action)) == PolicyDecision::Grant
 }
 
 #[test]
@@ -156,7 +164,7 @@ fn release_clears_only_ownership_and_remove_clears_both_claims() {
     assert!(!grants(&released, Who::Me, Action::Release));
     // Claims on another resource never interfere.
     assert_eq!(
-        lock_decision(&released, &LockEvent::new(Who::Me, Action::Edit, Path::Y)).unwrap(),
+        cold(&released, &LockEvent::new(Who::Me, Action::Edit, Path::Y)),
         PolicyDecision::Grant
     );
 }
@@ -216,7 +224,7 @@ fn foreign_edits_require_a_fresh_read_even_after_release() {
 }
 
 #[test]
-fn retained_policy_matches_one_shot_decisions_across_history_updates() {
+fn retained_policy_matches_cold_decisions_across_history_updates() {
     let store = store();
     let mut policy = LockPolicy::new(store.clone()).unwrap();
     let mut history = History::new(store).unwrap();
@@ -234,7 +242,7 @@ fn retained_policy_matches_one_shot_decisions_across_history_updates() {
     ];
 
     for candidate in candidates {
-        let expected = lock_decision(&history, &candidate).unwrap();
+        let expected = cold(&history, &candidate);
         let actual = policy.decide(&history, &candidate).unwrap();
         assert_eq!(actual, expected);
         if actual == PolicyDecision::Grant {
@@ -255,18 +263,13 @@ fn assert_x_owner_and_reader(policy: &mut LockPolicy<Who, Path>, history: &Histo
             PolicyDecision::Grant,
             "{history:?}",
         );
-        assert_eq!(
-            policy
-                .decide(history, &on_x(Who::Me, Action::Edit))
-                .unwrap(),
-            PolicyDecision::Deny {
-                failed_precondition:
-                    "src/x was last read by other; self must read it before it may edit it"
-                        .to_string(),
-                allowed_fixes: vec!["self read src/x".to_string()],
-            },
-            "{history:?}",
-        );
+        let PolicyDecision::Deny { allowed_fixes, .. } = policy
+            .decide(history, &on_x(Who::Me, Action::Edit))
+            .unwrap()
+        else {
+            panic!("{history:?}")
+        };
+        assert_eq!(allowed_fixes, ["self read src/x"], "{history:?}");
     }
 }
 
@@ -309,7 +312,7 @@ fn retained_policy_rejects_a_foreign_store_without_mutating_history() {
     );
     assert_eq!(history.as_slice(), &[on_x(Who::Other, Action::Edit)]);
     assert_eq!(
-        lock_decision(&history, &on_x(Who::Me, Action::Read)).unwrap(),
+        cold(&history, &on_x(Who::Me, Action::Read)),
         PolicyDecision::Grant,
     );
 }

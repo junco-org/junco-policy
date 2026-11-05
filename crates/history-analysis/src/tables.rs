@@ -1,7 +1,6 @@
 //! Numeric tables of one search, assembled from the encoded tails of analysed rules.
 
 use alloc::vec::Vec;
-use history_syntax::RuleMode;
 use junco_core::HistoryError;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTest};
 
@@ -36,20 +35,6 @@ impl Tables {
             });
         }
         offset(source.root, regexes)
-    }
-
-    /// Appends the histories a rule with this tail and mode denies: the tail for `Forbid`, its
-    /// complement for `Require`.
-    pub(crate) fn denial(
-        &mut self,
-        tail: &FlatPair<u64>,
-        mode: RuleMode,
-    ) -> Result<u32, HistoryError> {
-        let root = self.append(tail)?;
-        match mode {
-            RuleMode::Forbid => Ok(root),
-            RuleMode::Require => self.push(FlatRegex::Complement(root)),
-        }
     }
 
     /// Appends one regex node over earlier nodes.

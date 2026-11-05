@@ -16,10 +16,10 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
 
+use history_semantics::PolicyDecision;
 use history_semantics::policy::{
     CompiledPolicy, PolicyRule, action_is, forbid, last_state_change, principal_is, resource_is,
 };
-use history_semantics::{PolicyDecision, PolicyError};
 use history_store::{History, Store};
 use history_syntax::{Comparison, Event, RegexExpr, TestExpr};
 use junco_core::{CompileError, HistoryError};
@@ -210,21 +210,6 @@ where
             lock_context(history.as_slice(), candidate)
         })
     }
-}
-
-/// Decides one candidate with a one-shot lock policy.
-///
-/// Prefer retaining [`LockPolicy`] for repeated decisions; this compiles the policy per call.
-pub fn lock_decision<P, R>(
-    history: &History<LockEvent<P, R>>,
-    candidate: &LockEvent<P, R>,
-) -> Result<PolicyDecision, PolicyError>
-where
-    P: Copy + Debug + Eq + Hash + Display,
-    R: Copy + Debug + Eq + Hash + Display,
-{
-    let mut policy = LockPolicy::new(history.store().clone())?;
-    Ok(policy.decide(history, candidate)?)
 }
 
 #[cfg(test)]
