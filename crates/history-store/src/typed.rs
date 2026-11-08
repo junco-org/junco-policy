@@ -1080,6 +1080,24 @@ pub mod verify {
             && map::key_obligations::<E::Action>() && map::key_obligations::<E::Resource>()
     }
 
+    /// `eq_spec` is an equivalence on `T`: the reflexivity, symmetry and transitivity clauses of
+    /// the key obligations, exported for typed guarantees outside this crate.
+    pub open spec fn eq_equivalence<T: PartialEq>() -> bool {
+        &&& forall|a: T| #[trigger] a.eq_spec(&a)
+        &&& forall|a: T, b: T| #[trigger] a.eq_spec(&b) == b.eq_spec(&a)
+        &&& forall|a: T, b: T, c: T| #[trigger] a.eq_spec(&b) && #[trigger] b.eq_spec(&c) ==> a.eq_spec(&c)
+    }
+
+    /// The native obligations make component equality an equivalence.
+    pub proof fn lemma_native_obligations_eq_equivalence<E: Event>()
+        requires native_obligations::<E>(),
+        ensures
+            eq_equivalence::<E::Principal>(),
+            eq_equivalence::<E::Action>(),
+            eq_equivalence::<E::Resource>(),
+    {
+    }
+
     pub open spec fn empty_maps<E: Event>() -> ComponentMaps<E> {
         seq![Seq::<(ComponentValue<E>, u64)>::empty(),
             Seq::<(ComponentValue<E>, u64)>::empty(), Seq::<(ComponentValue<E>, u64)>::empty()]
