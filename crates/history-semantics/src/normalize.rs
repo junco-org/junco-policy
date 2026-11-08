@@ -2358,7 +2358,7 @@ impl RegexNormalize for RegexId {
 
     #[verus_verify]
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
-    #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(80))]
     fn set<G: KernelStore>(
         store: &mut G,
         children: &[Self],
