@@ -33,24 +33,26 @@ With the fix that orbit saturates after two states. The other non-proof changes
 
 ## Status
 
-**This branch is not yet green.** State at handoff (2026-11-08, after porting onto `main`):
+State at handoff (2026-11-08, after porting onto `main`, `-- --num-threads 2`):
 
 | Check | Result |
 |---|---|
-| `history-semantics --no-default-features --features runtime` | 0 errors (verified count not recorded) |
-| `history-semantics --features runtime,std,cache` | **fails** in `normalize::RegexId::set` (Z3 resource limit exceeded at `rlimit(30)` after 76 s; 6 other functions of the focused run verified. A proof-time problem, not a refuted obligation: try a higher `rlimit`, or split the proof) |
-| `history-store` (both configurations) | not run after the port (`typed.rs` gained `eq_equivalence`; it verified on the old base) |
-| `cargo test -p history-analysis` | not run after the port (passed on the old base) |
+| `history-semantics --features runtime,std,cache` | 1436 verified, 0 errors |
+| `history-semantics --no-default-features --features runtime` | 1431 verified, 0 errors |
+| `history-store --features runtime,std` | 284 verified, 0 errors |
+| `history-store --no-default-features --features runtime` | 0 errors (cargo reused a cached result) |
+| `cargo test -p history-analysis` | 13 passed |
 | `junco-core`, `history-syntax` | not re-verified: byte-identical to `main` |
 | `cargo test -p history-semantics`, fmt, clippy | not run |
 
-On the old base (branch `wip/verus-refinement-snapshot`, pushed alongside) everything verified: 1315 / 1319 functions, 0
-errors, history-store 186. During the port `RegexId::set` (whose body differs on `main`) needed
-`#[verifier::spinoff_prover]` and `#[verifier::rlimit(30)]` to verify in the first configuration;
-`derivative_step`, `interpret` and `verify::refinement::inclusion` needed proof repairs for
-`main`'s versions of that code. Start by fixing `RegexId::set` under the `cache` configuration,
-then run the full CI list (below). The eight CI verify commands are independent and can run in
+Run the full CI list (below) first. The eight CI verify commands are independent and can run in
 parallel on a machine with enough memory.
+
+On the old base (branch `wip/verus-refinement-snapshot`, pushed alongside) everything verified
+as well: 1315 / 1319 functions, history-store 186. During the port, `RegexId::set` (whose body
+differs on `main`) needed `#[verifier::spinoff_prover]` and `#[verifier::rlimit(80)]` (84 s in
+the `cache` configuration); `derivative_step`, `interpret` and `verify::refinement::inclusion`
+needed proof repairs for `main`'s versions of that code. No statement changed.
 
 Statements of the spec (`stmt_*`, 23 in total):
 
