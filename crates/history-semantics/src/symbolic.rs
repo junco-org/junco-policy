@@ -15,6 +15,12 @@ use crate::progress::verify as reach;
 #[cfg(verus_keep_ghost)]
 use crate::verify::history_algebra as algebra;
 #[cfg(verus_keep_ghost)]
+use crate::verify::finite_deriv as fder;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_interp as fint;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_trans as ftr;
+#[cfg(verus_keep_ghost)]
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use junco_core::error::HistoryError;
@@ -215,6 +221,7 @@ impl DerivativeFactors {
             derivative_factors_wf(old(store).graph(), self.root, self.count as nat, self.concat), index < self.count,
             derivative_results(old(store).graph(), self.root, self.concat, index as nat, old(results).view()),
             prefix == derivative_prefix(old(store).graph(), self.root, index as nat),
+            fder::results_bound(old(store).graph(), self.root@, old(results).view()),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
             final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
@@ -228,7 +235,8 @@ impl DerivativeFactors {
             derivative_dependencies_complete(old(store).graph(), self.root, cache@)
                 == derivative_dependencies_complete(final(store).graph(), self.root, cache@),
             match result { Ok(next) => next == derivative_prefix(final(store).graph(), self.root, index as nat + 1)
-                && derivative_results(final(store).graph(), self.root, self.concat, index as nat + 1, final(results).view()), Err(_) => true },
+                && derivative_results(final(store).graph(), self.root, self.concat, index as nat + 1, final(results).view())
+                && fder::results_bound(final(store).graph(), self.root@, final(results).view()), Err(_) => true },
     )]
     fn child_step<G: KernelStore>(
         self,
@@ -255,18 +263,30 @@ impl DerivativeFactors {
                     None => return Err(HistoryError::symbolic_invariant()),
                 };
                 let suffix = self.suffix(store, start)?;
+                proof_decl! { let ghost mid = store.graph(); }
                 results.push(TransitionId::append(d, store, &suffix)?);
                 proof! {
                     derivative_append_factor(store.graph(), self.root, index as int, d, suffix.view(), results.view().last());
                     derivative_results_push(store.graph(), self.root, true, index as nat, prior_results, results.view().last());
+                    fder::lemma_factor_concat2(mid, store.graph(), self.root@, index as int, d@, suffix.view(), results.view().last()@);
+                    fder::lemma_results_stable(before, store.graph(), self.root@, prior_results);
+                    fder::lemma_results_push(store.graph(), self.root@, prior_results, results.view().last());
                 }
             } else {
                 results.push(d);
-                proof! { derivative_results_push(store.graph(), self.root, false, index as nat, prior_results, d); }
+                proof! {
+                    derivative_results_push(store.graph(), self.root, false, index as nat, prior_results, d);
+                    fder::lemma_factor_set(store.graph(), self.root@, index as int, d@);
+                    fder::lemma_results_stable(before, store.graph(), self.root@, prior_results);
+                    fder::lemma_results_push(store.graph(), self.root@, prior_results, d);
+                }
             }
         }
         proof! {
-            if self.concat && !prefix { derivative_results_skip(store.graph(), self.root, index as nat, results.view()); }
+            if self.concat && !prefix {
+                derivative_results_skip(store.graph(), self.root, index as nat, results.view());
+                fder::lemma_results_stable(before, store.graph(), self.root@, results.view());
+            }
         }
         let n = RegexId::nullable(child, store)?;
         Ok(prefix && n)
@@ -292,7 +312,8 @@ impl DerivativeFactors {
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), cache@),
-            match result { Ok(out) => derivative_correct(final(store).graph(), self.root@, out), Err(_) => true },
+            match result { Ok(out) => derivative_correct(final(store).graph(), self.root@, out)
+                && fder::dbound(final(store).graph(), self.root@, out@), Err(_) => true },
     )]
     fn derive<G: KernelStore>(
         self,
@@ -301,7 +322,7 @@ impl DerivativeFactors {
         intersect: bool,
     ) -> KernelResult<TransitionId> {
         proof_decl! { let ghost entry = store.graph(); }
-        proof! { derivative_frame(store.graph()); }
+        proof! { derivative_frame(store.graph()); fder::lemma_results_empty(store.graph(), self.root@); }
         proof! { derivative_dependency_frame(entry, self.root); }
         let mut results = WorkVec::new();
         let mut state = Ok(true);
@@ -319,12 +340,14 @@ impl DerivativeFactors {
                 store.graph().regexes[self.root@ as int] == entry.regexes[self.root@ as int],
                 derivative_dependencies_complete(entry, self.root, cache@) == derivative_dependencies_complete(store.graph(), self.root, cache@),
                 match state { Ok(prefix) => prefix == derivative_prefix(store.graph(), self.root, index as nat)
-                    && derivative_results(store.graph(), self.root, self.concat, index as nat, results.view()), Err(_) => true },
+                    && derivative_results(store.graph(), self.root, self.concat, index as nat, results.view())
+                    && fder::results_bound(store.graph(), self.root@, results.view()), Err(_) => true },
             decreases self.count - index);
         state?;
         proof! {
             derivative_frame(store.graph());
             derivative_result_future(store.graph(), self.root, self.concat, intersect, results.view());
+            fder::lemma_derive_future(store.graph(), self.root@, results.view(), intersect);
         }
         if intersect {
             TransitionId::intersect(store, &results)
@@ -356,7 +379,8 @@ impl DerivativeFactors {
             model::graph_wf(final(store).graph()), final(store).valid_store(), final(cache)@ == old(cache)@,
             derivative_cache_wf(final(store).graph(), final(cache)@), derivative_tasks_wf(final(store).graph(), final(tasks).view()),
             match result { Ok(Some(out)) => derivative_correct(final(store).graph(), self.root@, out)
-                && out@ < final(store).graph().transitions.len(), _ => true },
+                && out@ < final(store).graph().transitions.len()
+                && fder::dbound(final(store).graph(), self.root@, out@), _ => true },
             result matches Ok(Some(_)) ==> final(tasks).view() == old(tasks).view(),
             old(tasks).view().is_prefix_of(final(tasks).view()),
             forall|bound: nat| self.root@ <= bound && derivative_tasks_bounded(old(tasks).view(), bound)
@@ -501,7 +525,8 @@ pub(crate) trait RegexDerivative: Sized {
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), final(cache)@),
-            match result { Ok(out) => derivative_correct(final(store).graph(), this@, out), Err(_) => true };
+            match result { Ok(out) => derivative_correct(final(store).graph(), this@, out)
+                && fder::dbound(final(store).graph(), this@, out@), Err(_) => true };
 }
 }
 
@@ -548,7 +573,7 @@ fn grow_derivative_cache<G: KernelStore>(
         derivative_cache_prefix_facts(before, cache@);
         reveal(derivative_cache_wf);
         assert forall|i: int| 0 <= i < cache@.len() implies match #[trigger] cache@[i] {
-            Some(out) => derivative_correct(store.graph(), i as nat, out), None => true,
+            Some(out) => derivative_correct(store.graph(), i as nat, out) && fder::dbound(store.graph(), i as nat, out@), None => true,
         } by {
             if i < before.len() { assert(cache@[i] == before[i]); }
             else { assert(cache@[i] is None); }
@@ -559,6 +584,7 @@ fn grow_derivative_cache<G: KernelStore>(
 
 impl RegexDerivative for RegexId {
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(40))]
     fn derivative_step<G: KernelStore>(
         this: RegexId,
         store: &mut G,
@@ -599,6 +625,9 @@ impl RegexDerivative for RegexId {
         };
         if pending {
             let c = store.constants();
+            proof! {
+                fder::lemma_native_future(store.graph(), this, cache@);
+            }
             let out = match this.head(store)? {
                 RegexHead::Empty | RegexHead::Epsilon => {
                     proof! { derivative_native_correct(store.graph(), this, cache@, c.transition_empty); }
@@ -676,7 +705,28 @@ impl RegexDerivative for RegexId {
                 .branch(store, cache, false, finish, tasks)?,
             };
             if let Some(out) = out {
-                proof! { assert(derivative_correct(store.graph(), this@, out)); }
+                proof! {
+                    assert(derivative_correct(store.graph(), this@, out));
+                    derivative_graph_frame(growth_graph, store.graph(), this);
+                    match growth_graph.regexes[this@ as int].kind {
+                        model::RegexKindNode::Star(inner) => {
+                            assert(inner < cache@.len() && cache@[inner as int] is Some);
+                            assert(vstd::array::spec_array_as_slice(&[this])@ =~= seq![this]);
+                            assert(fder::native_bound(growth_graph, store.graph(), this, cache@, out@));
+                        },
+                        model::RegexKindNode::Not(inner) => {
+                            assert(inner < cache@.len() && cache@[inner as int] is Some);
+                            assert(fder::native_bound(growth_graph, store.graph(), this, cache@, out@));
+                        },
+                        model::RegexKindNode::Test(_) => {
+                            assert(fder::native_bound(growth_graph, store.graph(), this, cache@, out@));
+                        },
+                        _ => {
+                            assert(fder::native_bound(growth_graph, store.graph(), this, cache@, out@));
+                        },
+                    }
+                    assert(fder::dbound(store.graph(), this@, out@));
+                }
                 let slots = cache.as_mut_slice();
                 match slots.get_mut(index) {
                     Some(slot) => *slot = Some(out),
@@ -686,7 +736,7 @@ impl RegexDerivative for RegexId {
                     assert(derivative_cache_wf(store.graph(), cache@)) by {
                         reveal(derivative_cache_wf);
                         assert forall|i: int| 0 <= i < cache@.len() implies match #[trigger] cache@[i] {
-                            Some(t) => derivative_correct(store.graph(), i as nat, t), None => true,
+                            Some(t) => derivative_correct(store.graph(), i as nat, t) && fder::dbound(store.graph(), i as nat, t@), None => true,
                         } by { if i == index { assert(cache@[i] == Some(out)); } }
                     }
                 }
@@ -1382,6 +1432,8 @@ fn interpret_not<G: KernelStore>(
             ==> interp_results_equiv(model::gsem(theta),
                 interp_run(old(store).graph(), old(tasks).view().push((root, finish)), lifted_values(old(store).graph(), old(values).view()), theta, event),
                 interp_run(final(store).graph(), final(tasks).view(), lifted_values(final(store).graph(), final(values).view()), theta, event)),
+        result is Ok ==> (fint::ipre(old(store).graph(), old(tasks).view().push((root, finish)), old(values).view())
+            ==> fint::istep(final(store).graph(), old(tasks).view().push((root, finish)), final(tasks).view(), old(values).view(), final(values).view())),
 {
     hide(interp_run); hide(interp_stack_result); hide(interp_tasks_covered);
     hide(reach::atoms_wf); hide(test_atoms_covered);
@@ -1415,6 +1467,10 @@ fn interpret_not<G: KernelStore>(
                 assert(lifted_values(store.graph(), values.view()) =~= lifted_values(store.graph(), prior).drop_last().push(model::lift_regex(store.graph(), values.view().last()@)));
                 interp_value_reduction(store.graph(), root, finish, pending, lifted_values(store.graph(), prior), lifted_values(store.graph(), values.view()), theta, event);
             }
+            assert(before.transitions[root@ as int] == store.graph().transitions[root@ as int]);
+            if fint::ipre(before, pending.push((root, finish)), prior) {
+                fint::lemma_istep_not(before, store.graph(), root, pending, prior, values.view().last());
+            }
         }
     } else {
         tasks.push((root, true));
@@ -1427,6 +1483,10 @@ fn interpret_not<G: KernelStore>(
                 interp_expand_unary(store.graph(), root, inner, pending, lifted_values(store.graph(), prior), theta, event);
             }
             interp_lemma_work_unary(store.graph(), root, pending, inner);
+            assert(before.transitions[root@ as int] == store.graph().transitions[root@ as int]);
+            if fint::ipre(before, pending.push((root, finish)), prior) {
+                fint::lemma_istep_unary(before, store.graph(), root, finish, pending, prior, inner);
+            }
         }
     }
     proof {
@@ -1495,6 +1555,8 @@ pub(crate) trait TransitionInterpret: Sized {
                 || (interp_tasks_wf(old(store).graph(), final(tasks).view())
                     && interp_work(old(store).graph(), final(tasks).view())
                         < interp_work(old(store).graph(), old(tasks).view().push((id, finish)))),
+            result.is_ok() ==> (fint::ipre(old(store).graph(), old(tasks).view().push((id, finish)), old(values).view())
+                ==> fint::istep(final(store).graph(), old(tasks).view().push((id, finish)), final(tasks).view(), old(values).view(), final(values).view())),
     {
         proof_decl! { let ghost before = store.graph(); }
         if finish {
@@ -1551,6 +1613,10 @@ pub(crate) trait TransitionInterpret: Sized {
                     assert(lifted_values(store.graph(), old(values).view().skip(old(values).view().len() - count))
                         =~= lifted_values(store.graph(), old(values).view()).skip(old(values).view().len() - count));
                     interp_run_congruent(store.graph(), tasks.view(), reduced, lifted_values(store.graph(), values.view()), theta, event);
+                }
+                assert(values.view() =~= old(values).view().take(start as int).push(out));
+                if fint::ipre(before, old(tasks).view().push((id, finish)), old(values).view()) {
+                    fint::lemma_istep_set(before, store.graph(), id, intersect, old(tasks).view(), old(values).view(), start as int, out);
                 }
             }
         } else {
@@ -1610,6 +1676,9 @@ pub(crate) trait TransitionInterpret: Sized {
                     interp_expand_set(store.graph(), id, old(tasks).view(), lifted_values(store.graph(), old(values).view()), theta, event);
                 }
                 interp_lemma_work_branch(store.graph(), id, old(tasks).view());
+                if fint::ipre(before, old(tasks).view().push((id, finish)), old(values).view()) {
+                    fint::lemma_istep_expand(before, store.graph(), id, finish, old(tasks).view(), old(values).view());
+                }
             }
         }
         proof! {
@@ -1666,7 +1735,9 @@ pub(crate) trait TransitionInterpret: Sized {
             interp_tasks_wf(final(store).graph(), final(tasks).view()), norm::regex_ids_valid(final(store).graph(), final(values).view()),
             result.is_ok() ==> interp_machine_relation(old(store).graph(), final(store).graph(), old(tasks).view().push((this, finish)), final(tasks).view(), old(values).view(), final(values).view(), atoms@, words@),
             result.is_ok() ==> interp_work(final(store).graph(), final(tasks).view())
-                < interp_work(old(store).graph(), old(tasks).view().push((this, finish)));
+                < interp_work(old(store).graph(), old(tasks).view().push((this, finish))),
+            result.is_ok() ==> (fint::ipre(old(store).graph(), old(tasks).view().push((this, finish)), old(values).view())
+                ==> fint::istep(final(store).graph(), old(tasks).view().push((this, finish)), final(tasks).view(), old(values).view(), final(values).view()));
 
     fn interpret<G: KernelStore>(
         this: TransitionId,
@@ -1689,14 +1760,16 @@ pub(crate) trait TransitionInterpret: Sized {
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>|
                     language::event_wf(theta) && truth_words_realize(old(store).graph(), atoms@, truth_words@, theta, event) ==>
                         model::regex_lang(final(store).graph(), theta, id@, word)
-                            == norm::transition_lang(final(store).graph(), theta, this, event, word);
+                            == norm::transition_lang(final(store).graph(), theta, this, event, word),
+            result matches Ok(id) ==> (ftr::nf_sum(old(store).graph(), this@)
+                ==> ftr::tval(final(store).graph(), this@, model::lift_regex(final(store).graph(), id@)));
 }
 }
 
 #[verus_verify]
 impl TransitionInterpret for TransitionId {
     verus! {
-
+    #[verifier::spinoff_prover]
     fn interpret_step<G: KernelStore>(
         this: TransitionId,
         store: &mut G,
@@ -1733,6 +1806,10 @@ impl TransitionInterpret for TransitionId {
                         language::lemma_interp_const(model::gsem(theta), event, model::lift_regex(store.graph(), r@));
                         interp_value_reduction(store.graph(), this, finish, pending, lifted_values(store.graph(), prior), lifted_values(store.graph(), values.view()), theta, event);
                     }
+                    assert(before.transitions[this@ as int] == store.graph().transitions[this@ as int]);
+                    if fint::ipre(before, pending.push((this, finish)), prior) {
+                        fint::lemma_istep_const(before, store.graph(), this, finish, pending, prior, r);
+                    }
                 }
             }
             TransitionHead::If(test, a, b) => {
@@ -1766,6 +1843,10 @@ impl TransitionInterpret for TransitionId {
                         interp_choose(store.graph(), this, finish, test, a, b, chosen, pending, lifted_values(store.graph(), prior), theta, event);
                     }
                     interp_lemma_work_if(store.graph(), this, finish, pending, chosen);
+                    assert(before.transitions[this@ as int] == store.graph().transitions[this@ as int]);
+                    if fint::ipre(before, pending.push((this, finish)), prior) {
+                        fint::lemma_istep_if(before, store.graph(), this, finish, pending, prior, test@, a, b, chosen);
+                    }
                 }
             }
             TransitionHead::Union(n) => {
@@ -1787,6 +1868,9 @@ impl TransitionInterpret for TransitionId {
                     values.push(RegexId::concat(store, &xs)?);
                     proof! {
                         interp_append_finish(before, store.graph(), this, pending, prior, head, xs.view(), values.view());
+                        if fint::ipre(before, pending.push((this, finish)), prior) {
+                            fint::lemma_istep_append(before, store.graph(), this, pending, prior, xs.view(), values.view().last());
+                        }
                     }
                 } else {
                     tasks.push((this, true));
@@ -1807,6 +1891,10 @@ impl TransitionInterpret for TransitionId {
                             interp_expand_unary(store.graph(), this, inner, pending, lifted_values(store.graph(), prior), theta, event);
                         }
                         interp_lemma_work_unary(store.graph(), this, pending, inner);
+                        assert(before.transitions[this@ as int] == store.graph().transitions[this@ as int]);
+                        if fint::ipre(before, pending.push((this, finish)), prior) {
+                            fint::lemma_istep_unary(before, store.graph(), this, finish, pending, prior, inner);
+                        }
                     }
                 }
             }
@@ -1865,6 +1953,11 @@ impl TransitionInterpret for TransitionId {
                 interp_run_unfold(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event);
                 interp_run_unfold(store.graph(), Seq::empty(), seq![interpreted(entry, this, theta, event)], theta, event);
             }
+            if ftr::nf_sum(entry, this@) {
+                assert(values.view() =~= Seq::<RegexId>::empty());
+                assert(tasks.view() =~= seq![(this, false)]);
+                fint::lemma_iinit(store.graph(), this);
+            }
         }
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant model::graph_extends(entry, store.graph()), model::graph_wf(store.graph()), store.valid_store(),
@@ -1885,6 +1978,7 @@ impl TransitionInterpret for TransitionId {
                         interp_results_equiv(model::gsem(theta),
                             interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event),
                             Some(seq![interpreted(entry, this, theta, event)])),
+                state.is_ok() && ftr::nf_sum(entry, this@) ==> fint::iinv(store.graph(), this@, tasks.view(), values.view()),
             decreases if state is Ok { interp_work(store.graph(), tasks.view()) + 1 } else { 0 },
         ))]
         while !tasks.is_empty() && state.is_ok() {
@@ -1918,11 +2012,19 @@ impl TransitionInterpret for TransitionId {
                         interp_run(before, pending, lifted_values(before, prior), theta, event),
                         Some(seq![interpreted(entry, this, theta, event)]));
                 }
+                if state.is_ok() && ftr::nf_sum(entry, this@) {
+                    fint::lemma_iloop(before, store.graph(), this@, pending, prior, tasks.view(), values.view());
+                }
             }
         }
         state?;
         proof! {
             interp_root_stable(entry, store.graph(), this);
+            if ftr::nf_sum(entry, this@) {
+                assert(tasks.view() =~= Seq::<(TransitionId, bool)>::empty());
+                fint::lemma_ifinal(store.graph(), this@, values.view());
+                assert(values.view().last() == values.view()[0]);
+            }
         }
         match values.pop() {
             Some(v) => Ok(v),
@@ -2215,9 +2317,11 @@ pub(crate) mod verify {
         algebra::theorem_symbolic_derivative_correct(model::gsem(theta), event, model::lift_regex(g, root), word);
     }
 
+    /// Every cached derivative is correct and has the class bound of its state
+    /// (`verify::finite_deriv::dbound`).
     pub open spec fn derivative_cache_wf(g: model::Graph, cache: Seq<Option<TransitionId>>) -> bool {
         forall|i: int| 0 <= i < cache.len() ==> match #[trigger] cache[i] {
-            Some(out) => derivative_correct(g, i as nat, out), None => true,
+            Some(out) => derivative_correct(g, i as nat, out) && fder::dbound(g, i as nat, out@), None => true,
         }
     }
 
@@ -2251,6 +2355,11 @@ pub(crate) mod verify {
         requires model::graph_extends(before, after), root@ < before.regexes.len(),
         ensures root@ < after.regexes.len(), after.regexes[root@ as int] == before.regexes[root@ as int],
             after.constants == before.constants,
+    {}
+
+    pub proof fn derivative_correct_bounds(g: model::Graph, root: nat, out: TransitionId)
+        requires derivative_correct(g, root, out),
+        ensures root < g.regexes.len(), out@ < g.transitions.len(),
     {}
 
     pub open spec fn derivative_tasks_wf(g: model::Graph, tasks: Seq<(RegexId, bool)>) -> bool {
@@ -2713,8 +2822,13 @@ pub(crate) mod verify {
         }
         assert forall|cache: Seq<Option<TransitionId>>| derivative_cache_wf(a, cache) implies derivative_cache_wf(b, cache) by {
             assert forall|i: int| 0 <= i < cache.len() implies match #[trigger] cache[i] {
-                Some(out) => derivative_correct(b, i as nat, out), None => true,
-            } by {}
+                Some(out) => derivative_correct(b, i as nat, out) && fder::dbound(b, i as nat, out@), None => true,
+            } by {
+                if let Some(out) = cache[i] {
+                    derivative_correct_bounds(a, i as nat, out);
+                    fder::lemma_dbound_stable(a, b, i as nat, out@);
+                }
+            }
         }
         assert forall|root: RegexId, index: nat| root@ < a.regexes.len() && index <= derivative_children_ids(a, root).len()
             implies derivative_prefix(a, root, index) == derivative_prefix(b, root, index) by {

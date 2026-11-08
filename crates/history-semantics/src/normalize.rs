@@ -19,6 +19,22 @@ use junco_core::verify::history_specs::{EventView, Subst};
 use junco_core::{loop_try, scan};
 #[cfg(verus_keep_ghost)]
 use verify::*;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_collect as fcol;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_steps as fsteps;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_branch as fbr;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_trans as ftr;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_link as flink;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_machine as fmach;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_impl as fimpl;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_compile as fcmp;
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 verus! {
@@ -770,6 +786,7 @@ pub(crate) trait TestNormalize: Sized {
             old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(id) => id@ < final(store).graph().tests.len()
+                && test_connective_result(old(store).graph(), final(store).graph(), children@, and, id@)
                 && (forall|theta: Subst, event: EventView| language::event_wf(theta)
                     ==> test_truth(final(store).graph(), theta, id@, event)
                         == test_combo(final(store).graph(), theta, children@, event, and)), Err(_) => true },
@@ -1218,6 +1235,27 @@ impl TestNormalize for TestId {
                                                     }
                                                 }
                                             }
+                                            assert forall|i: int| 0 <= i < flat.view().len()
+                                                implies test_member(store.graph(), children@, and, #[trigger] flat.view()[i]@) by {
+                                                if i < prior.len() {
+                                                    assert(flat.view()[i] == prior[i]);
+                                                } else {
+                                                    let j = i - prior.len();
+                                                    assert(children@[index as int] == id);
+                                                    match store.graph().tests[id@ as int] {
+                                                        model::TestNode::And(cs) => {
+                                                            if mode.and { assert(flat.view()[i]@ == cs[j]); assert(cs.contains(cs[j])); }
+                                                            else { assert(flat.view()[i] == id); }
+                                                        },
+                                                        model::TestNode::Or(cs) => {
+                                                            if !mode.and { assert(flat.view()[i]@ == cs[j]); assert(cs.contains(cs[j])); }
+                                                            else { assert(flat.view()[i] == id); }
+                                                        },
+                                                        _ => { assert(flat.view()[i] == id); },
+                                                    }
+                                                    assert(test_piece_contains(store.graph(), children@[index as int]@, and, flat.view()[i]@));
+                                                }
+                                            }
                                         }
                                         Ok(false)
                                     }
@@ -1248,6 +1286,8 @@ impl TestNormalize for TestId {
                 match collecting {
                     Ok(true) => test_absorbs(store.graph(), children@, and),
                     Ok(false) => test_ids_valid(store.graph(), flat.view())
+                        && (forall|k: int| 0 <= k < flat.view().len()
+                            ==> test_member(store.graph(), children@, and, #[trigger] flat.view()[k]@))
                         && (forall|theta: Subst, event: EventView|
                             test_combo(store.graph(), theta, flat.view(), event, and)
                                 == test_combo(store.graph(), theta, children@.take(index as int), event, and)),
@@ -1255,6 +1295,8 @@ impl TestNormalize for TestId {
                 },
             ensures matches!(collecting, Ok(false)) ==> index == children.len(),
                 match collecting { Ok(false) => test_ids_valid(store.graph(), flat.view())
+                && (forall|k: int| 0 <= k < flat.view().len()
+                    ==> test_member(store.graph(), children@, and, #[trigger] flat.view()[k]@))
                 && (forall|theta: Subst, event: EventView|
                     test_combo(store.graph(), theta, flat.view(), event, and) == test_combo(store.graph(), theta, children@, event, and)), _ => true },
             decreases children.len() - index,
@@ -1296,6 +1338,11 @@ impl TestNormalize for TestId {
                 test_combo(store.graph(), theta, flat.view(), event, and)
                     == test_combo(store.graph(), theta, children@, event, and) by {
                 test_lemma_combo_membership(store.graph(), theta, event, flat.view(), collected, and);
+            }
+            assert forall|i: int| 0 <= i < flat.view().len()
+                implies test_member(old(store).graph(), children@, and, #[trigger] flat.view()[i]@) by {
+                assert(collected.contains(flat.view()[i]));
+                let j = choose|j: int| 0 <= j < collected.len() && collected[j] == flat.view()[i];
             }
         }
         let mut collapse = Ok(false);
@@ -1342,6 +1389,8 @@ impl TestNormalize for TestId {
                 mode.and == and,
                 test_ids_valid(store.graph(), flat.view()), test_ids_valid(store.graph(), children@), index <= flat.len(),
                 model::strictly_increasing(model::test_ids(flat.view())),
+                forall|k: int| 0 <= k < flat.view().len()
+                    ==> test_member(old(store).graph(), children@, and, #[trigger] flat.view()[k]@),
                 collapse is Ok ==> (forall|theta: Subst, event: EventView|
                     test_combo(store.graph(), theta, flat.view(), event, and)
                         == test_combo(old(store).graph(), theta, children@, event, and)),
@@ -1398,6 +1447,8 @@ impl TestNormalize for TestId {
                 mode.and == and, test_ids_valid(store.graph(), children@),
                 test_ids_valid(store.graph(), flat.view()), index <= flat.len(),
                 model::strictly_increasing(model::test_ids(flat.view())),
+                forall|k: int| 0 <= k < flat.view().len()
+                    ==> test_member(old(store).graph(), children@, and, #[trigger] flat.view()[k]@),
                 flat.view().take(flat.view().len() as int) == flat.view(),
                 retaining is Ok ==> kept.view() == flat.view().take(index as int).filter(
                     |id: TestId| !test_redundant_in(store.graph(), id, flat.view(), and)),
@@ -1415,6 +1466,12 @@ impl TestNormalize for TestId {
             test_lemma_filter_ordered(flat.view(), |id: TestId| !test_redundant_in(store.graph(), id, flat.view(), and), |id: TestId| id@);
             assert(kept.view() == test_retained(store.graph(), flat.view(), and));
             assert forall|i: int| 0 <= i < kept.view().len() implies kept.view()[i]@ < store.graph().tests.len() by {
+                assert(kept.view().contains(kept.view()[i]));
+                assert(flat.view().contains(kept.view()[i]));
+                let j = choose|j: int| 0 <= j < flat.view().len() && flat.view()[j] == kept.view()[i];
+            }
+            assert forall|i: int| 0 <= i < kept.view().len()
+                implies test_member(old(store).graph(), children@, and, #[trigger] kept.view()[i]@) by {
                 assert(kept.view().contains(kept.view()[i]));
                 assert(flat.view().contains(kept.view()[i]));
                 let j = choose|j: int| 0 <= j < flat.view().len() && flat.view()[j] == kept.view()[i];
@@ -1487,6 +1544,10 @@ impl TestNormalize for TestId {
                                     == test_combo(before, theta, children@, event, and));
                                 assert(test_combo(before, theta, kept.view(), event, and)
                                     == test_combo(store.graph(), theta, kept.view(), event, and));
+                            }
+                            assert forall|k: int| 0 <= k < model::test_ids(kept.view()).len()
+                                implies test_member(old(store).graph(), children@, and, #[trigger] model::test_ids(kept.view())[k]) by {
+                                assert(model::test_ids(kept.view())[k] == kept.view()[k]@);
                             }
                         }
                         Ok(id)
@@ -1941,6 +2002,8 @@ pub(crate) trait RegexNormalize: Sized {
             final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().regexes.len()
+                    && (fimpl::regex_nf(model::lift_regex(old(store).graph(), this@))
+                        ==> fimpl::regex_nf(model::lift_regex(final(store).graph(), id@)))
                     && forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
                         ==> model::regex_lang(final(store).graph(), theta, id@, word)
                             == language::lang(model::gsem(theta), language::Regex::Star(Box::new(
@@ -1964,6 +2027,7 @@ pub(crate) trait RegexNormalize: Sized {
             final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().regexes.len()
+                    && regex_not_result(final(store).graph(), this@, id@)
                     && forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
                         ==> model::regex_lang(final(store).graph(), theta, id@, word)
                             == !model::regex_lang(final(store).graph(), theta, this@, word),
@@ -1987,6 +2051,8 @@ pub(crate) trait RegexNormalize: Sized {
             model::graph_wf(final(store).graph()),
             match result {
                 Ok(id) => id@ < final(store).graph().regexes.len()
+                    && (if test@ == final(store).graph().constants.test_false { id@ == final(store).graph().constants.empty }
+                        else { final(store).graph().regexes[id@ as int].kind == model::RegexKindNode::Test(test@) })
                     && forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
                         ==> model::regex_lang(final(store).graph(), theta, id@, word)
                             == (word.len() == 1 && model::test_holds(theta,
@@ -2010,6 +2076,7 @@ pub(crate) trait RegexNormalize: Sized {
             final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().regexes.len()
+                    && regex_concat_result(old(store).graph(), final(store).graph(), children@, id@)
                     && forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
                         ==> model::regex_lang(final(store).graph(), theta, id@, word)
                             == concat_combo(final(store).graph(), theta, children@, word),
@@ -2053,7 +2120,10 @@ pub(crate) trait RegexNormalize: Sized {
             old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(result),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result {
-                Ok(id) => id@ < final(store).graph().regexes.len() && forall|theta: Subst, word: Seq<EventView>|
+                Ok(id) => id@ < final(store).graph().regexes.len()
+                    && (regex_set_flat_inputs(old(store).graph(), children@, intersect)
+                        ==> regex_set_shape(old(store).graph(), final(store).graph(), children@, intersect, id@))
+                    && forall|theta: Subst, word: Seq<EventView>|
                     language::event_wf(theta) ==> model::regex_lang(final(store).graph(), theta, id@, word)
                         == regex_combo(final(store).graph(), theta, children@, word, intersect),
                 Err(_) => true,
@@ -2082,6 +2152,7 @@ impl RegexNormalize for RegexId {
             regex_unfold(store.graph(), this@);
             regex_constants(store.graph());
             regex_star_laws(store.graph(), this@);
+            fcmp::lemma_star_future(store.graph(), this@);
         }
         store.checkpoint()?;
         let c = store.constants();
@@ -2179,7 +2250,9 @@ impl RegexNormalize for RegexId {
                 model::graph_wf(store.graph()), regex_ids_valid(store.graph(), children@),
                 regex_ids_valid(store.graph(), flat.view()),
                 match collecting {
-                    Ok(false) => model::regex_ids(flat.view()) == regex_concat_flat(store.graph(), children@.subrange(0, index as int)),
+                    Ok(false) => model::regex_ids(flat.view()) == regex_concat_flat(store.graph(), children@.subrange(0, index as int))
+                        && forall|i: int| 0 <= i < index
+                            ==> store.graph().regexes[children@[i]@ as int].kind != model::RegexKindNode::Empty,
                     Ok(true) => exists|i: int| 0 <= i < index
                         && store.graph().regexes[children@[i]@ as int].kind == model::RegexKindNode::Empty,
                     Err(_) => true,
@@ -2226,6 +2299,8 @@ impl RegexNormalize for RegexId {
                 model::graph_wf(store.graph()), regex_ids_valid(store.graph(), children@),
                 regex_ids_valid(store.graph(), flat.view()),
                 model::regex_ids(flat.view()) == regex_concat_flat(store.graph(), children@),
+                forall|i: int| 0 <= i < children.len()
+                    ==> store.graph().regexes[children@[i]@ as int].kind != model::RegexKindNode::Empty,
                 match n { Ok(value) => value == regex_nullable_combo(store.graph(), flat.view().subrange(0, index as int), true), Err(_) => true },
             decreases flat.len() - index,
         );
@@ -2282,7 +2357,8 @@ impl RegexNormalize for RegexId {
     }
 
     #[verus_verify]
-
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
     fn set<G: KernelStore>(
         store: &mut G,
         children: &[Self],
@@ -2346,6 +2422,25 @@ impl RegexNormalize for RegexId {
                                                 regex_combo_push(store.graph(), prior_flat, id, theta, word, mode.intersect);
                                                 regex_combo_prefix(store.graph(), children@, index as int, theta, word, mode.intersect);
                                             }
+                                            let piece = regex_set_piece(store.graph(), id@, mode@);
+                                            assert(model::regex_ids(flat.view()) == model::regex_ids(prior_flat) + piece);
+                                            assert(model::regex_ids(flat.view()).len() == flat.view().len());
+                                            assert(model::regex_ids(prior_flat).len() == prior_flat.len());
+                                            assert forall|k: int| 0 <= k < flat.view().len()
+                                                implies regex_member(store.graph(), children@, intersect, #[trigger] flat.view()[k]@) by {
+                                                assert(model::regex_ids(flat.view())[k] == flat.view()[k]@);
+                                                if k < prior_flat.len() {
+                                                    assert(model::regex_ids(prior_flat)[k] == prior_flat[k]@);
+                                                    assert(model::regex_ids(flat.view())[k] == model::regex_ids(prior_flat)[k]);
+                                                } else {
+                                                    assert(children@[index as int] == id);
+                                                    let j = k - prior_flat.len();
+                                                    assert(model::regex_ids(flat.view())[k] == (model::regex_ids(prior_flat) + piece)[k]);
+                                                    assert(model::regex_ids(flat.view())[k] == piece[j]);
+                                                    assert(piece.contains(piece[j]));
+                                                    assert(regex_piece_contains(store.graph(), children@[index as int]@, intersect, flat.view()[k]@));
+                                                }
+                                            }
                                         }
                                         Ok(false)
                                     }
@@ -2371,7 +2466,9 @@ impl RegexNormalize for RegexId {
                 regex_mode_wf(store.graph(), mode@), regex_ids_valid(store.graph(), children@), regex_ids_valid(store.graph(), flat.view()), index <= children.len(),
                 mode.intersect == intersect, mode.absorber == absorber,
                 match collecting {
-                    Ok(false) => regex_equivalent(store.graph(), flat.view(), children@.subrange(0, index as int), intersect),
+                    Ok(false) => regex_equivalent(store.graph(), flat.view(), children@.subrange(0, index as int), intersect)
+                        && forall|k: int| 0 <= k < flat.view().len()
+                            ==> regex_member(store.graph(), children@, intersect, #[trigger] flat.view()[k]@),
                     Ok(true) => exists|i: int| 0 <= i < index && children@[i] == absorber,
                     Err(_) => true,
                 },
@@ -2408,6 +2505,21 @@ impl RegexNormalize for RegexId {
                                             regex_split_preserves(store.graph(), id, prior_tests, prior_others, tests.view(), others.view(), intersect);
                                             regex_combo_prefix(store.graph(), flat.view(), index as int, theta, word, intersect);
                                         }
+                                        assert(regex_member(store.graph(), children@, intersect, flat.view()[index as int]@));
+                                        assert forall|k: int| 0 <= k < others.view().len()
+                                            implies regex_member(store.graph(), children@, intersect, #[trigger] others.view()[k]@) by {
+                                            if k < prior_others.len() { assert(others.view()[k] == prior_others[k]); }
+                                            else { assert(others.view()[k] == flat.view()[index as int]); }
+                                        }
+                                        assert forall|k: int| 0 <= k < tests.view().len()
+                                            implies regex_member_test(store.graph(), children@, intersect, #[trigger] tests.view()[k]@) by {
+                                            if k < prior_tests.len() {
+                                                assert(tests.view()[k] == prior_tests[k]);
+                                            } else {
+                                                assert(store.graph().regexes[flat.view()[index as int]@ as int].kind
+                                                    == model::RegexKindNode::Test(tests.view()[k]@));
+                                            }
+                                        }
                                     }
                                     Ok(())
                                 }
@@ -2432,6 +2544,12 @@ impl RegexNormalize for RegexId {
                 regex_ids_valid(store.graph(), flat.view()), regex_ids_valid(store.graph(), children@),
                 regex_equivalent(store.graph(), flat.view(), children@, intersect),
                 test_ids_valid(store.graph(), tests.view()), regex_ids_valid(store.graph(), others.view()), index <= flat.len(),
+                forall|k: int| 0 <= k < flat.view().len()
+                    ==> regex_member(store.graph(), children@, intersect, #[trigger] flat.view()[k]@),
+                forall|k: int| 0 <= k < others.view().len()
+                    ==> regex_member(store.graph(), children@, intersect, #[trigger] others.view()[k]@),
+                forall|k: int| 0 <= k < tests.view().len()
+                    ==> regex_member_test(store.graph(), children@, intersect, #[trigger] tests.view()[k]@),
                 match splitting { Ok(()) => regex_split_prefix(store.graph(), flat.view(), tests.view(), others.view(), index as nat), Err(_) => true },
             decreases flat.len() - index,
         );
@@ -2447,6 +2565,7 @@ impl RegexNormalize for RegexId {
                 regex_group_equivalence_extends(grouped_graph, next, children@, tests.view(), grouped_others, intersect);
             }
         }
+        proof_decl! { let ghost mut chosen: nat = 0; let ghost mut chosen_graph = grouped_graph; }
         if !tests.is_empty() {
             let r = {
                 match TestId::connective(store, &tests, intersect) {
@@ -2460,6 +2579,7 @@ impl RegexNormalize for RegexId {
                                 regex_test_connective_extends(test_graph, next, tests.view(), test, intersect);
                             }
                         }
+                        proof! { chosen = test@; chosen_graph = test_graph; }
                         RegexId::from_test(store, test)
                     }
                     Err(error) => Err(error),
@@ -2507,6 +2627,15 @@ impl RegexNormalize for RegexId {
                             == regex_combo(store.graph(), theta, children@, word, intersect));
                     }
                 }
+                if r != c.empty {
+                    test_connective_result_extends(grouped_graph, chosen_graph, store.graph(), tests.view(), intersect, chosen);
+                    assert(store.graph().regexes[r@ as int].kind == model::RegexKindNode::Test(chosen));
+                    assert(regex_combined_test(old(store).graph(), store.graph(), children@, intersect, r@));
+                }
+                assert forall|k: int| 0 <= k < others.view().len()
+                    implies regex_set_operand_ok(old(store).graph(), store.graph(), children@, intersect, #[trigger] others.view()[k]@) by {
+                    if k < grouped_others.len() { assert(others.view()[k] == grouped_others[k]); }
+                }
             }
         }
         proof! {
@@ -2515,6 +2644,13 @@ impl RegexNormalize for RegexId {
                     == regex_combo(store.graph(), theta, children@, word, intersect) by {
                 assert(regex_group_combo(store.graph(), theta, tests.view(), grouped_others, word, intersect)
                     == regex_combo(store.graph(), theta, children@, word, intersect));
+            }
+        }
+        proof_decl! { let ghost gt = store.graph(); }
+        proof! {
+            assert forall|k: int| 0 <= k < others.view().len()
+                implies regex_set_operand_ok(old(store).graph(), gt, children@, intersect, #[trigger] others.view()[k]@) by {
+                if tests.view().len() == 0 { assert(regex_member(old(store).graph(), children@, intersect, others.view()[k]@)); }
             }
         }
         proof_decl! { let ghost unsorted = others.view(); }
@@ -2534,6 +2670,12 @@ impl RegexNormalize for RegexId {
             regex_member_ids_valid(store.graph(), sorted, others.view());
             regex_combo_members(store.graph(), sorted, others.view(), intersect);
             regex_dedup_strict(sorted, others.view());
+            assert forall|k: int| 0 <= k < others.view().len()
+                implies regex_set_operand_ok(old(store).graph(), gt, children@, intersect, #[trigger] others.view()[k]@) by {
+                assert(sorted.contains(others.view()[k]));
+                assert(unsorted.contains(others.view()[k]));
+                let j = choose|j: int| 0 <= j < unsorted.len() && unsorted[j] == others.view()[k];
+            }
         }
         let mut stats = Ok(RegexStats {
             all_nullable: true,
@@ -2553,6 +2695,9 @@ impl RegexNormalize for RegexId {
                 old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(stats),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(stats matches Err(HistoryError::InvalidPolicy { .. })),
                 store.graph().constants == c@, regex_ids_valid(store.graph(), others.view()), regex_ids_valid(store.graph(), children@),
+                store.graph() == gt,
+                forall|k: int| 0 <= k < others.view().len()
+                    ==> regex_set_operand_ok(old(store).graph(), gt, children@, intersect, #[trigger] others.view()[k]@),
                 regex_equivalent(store.graph(), others.view(), children@, intersect), model::strictly_increasing(model::regex_ids(others.view())), index <= others.len(),
                 match stats { Ok(value) => regex_stats_prefix(store.graph(), others.view(), index as nat, c.epsilon, value@, true), Err(_) => true },
             decreases others.len() - index,
@@ -2585,6 +2730,9 @@ impl RegexNormalize for RegexId {
                 old(store).errors_are_non_invariant() && old(store).valid_store() ==> (match failure { Some(error) => language::no_internal_error::<()>(Err(error)), None => true }),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
                 regex_ids_valid(store.graph(), others.view()), index <= others.len(),
+                store.graph() == gt, store.graph().constants == c@,
+                forall|k: int| 0 <= k < others.view().len()
+                    ==> regex_set_operand_ok(old(store).graph(), gt, children@, intersect, #[trigger] others.view()[k]@),
                 mode.intersect == intersect, regex_ids_valid(store.graph(), children@),
                 forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
                     ==> regex_combo(store.graph(), theta, others.view(), word, intersect)
@@ -2644,6 +2792,14 @@ impl RegexNormalize for RegexId {
                                                             }
                                                         }
                                                         others.remove(index);
+                                                        proof! {
+                                                            assert forall|k: int| 0 <= k < others.view().len()
+                                                                implies regex_set_operand_ok(old(store).graph(), gt, children@, intersect,
+                                                                    #[trigger] others.view()[k]@) by {
+                                                                if k < index { assert(others.view()[k] == prior_ids[k]); }
+                                                                else { assert(others.view()[k] == prior_ids[k + 1]); }
+                                                            }
+                                                        }
                                                         Ok(true)
                                                     } else {
                                                         Ok(false)
@@ -2704,6 +2860,9 @@ impl RegexNormalize for RegexId {
                 old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(n),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(n matches Err(HistoryError::InvalidPolicy { .. })),
                 regex_ids_valid(store.graph(), others.view()), regex_ids_valid(store.graph(), children@),
+                store.graph() == gt, store.graph().constants == c@,
+                forall|k: int| 0 <= k < others.view().len()
+                    ==> regex_set_operand_ok(old(store).graph(), gt, children@, intersect, #[trigger] others.view()[k]@),
                 regex_equivalent(store.graph(), others.view(), children@, intersect), model::strictly_increasing(model::regex_ids(others.view())), index <= others.len(),
                 match n { Ok(value) => value == regex_nullable_combo(store.graph(), others.view().subrange(0, index as int), intersect), Err(_) => true },
             decreases others.len() - index,
@@ -2717,6 +2876,18 @@ impl RegexNormalize for RegexId {
             assert forall|next: model::Graph| model::graph_extends(store.graph(), next)
                 implies regex_equivalent(next, others.view(), children@, intersect) by {
                 regex_equivalence_extends(store.graph(), next, others.view(), children@, intersect);
+            }
+            if others.view().len() == 1 && regex_set_flat_inputs(old(store).graph(), children@, intersect) {
+                let o0 = others.view()[0]@;
+                assert(regex_set_operand_ok(old(store).graph(), gt, children@, intersect, o0));
+                if regex_member(old(store).graph(), children@, intersect, o0) {
+                    regex_member_valid(old(store).graph(), children@, intersect, o0);
+                    assert(!regex_is_set(old(store).graph(), o0, intersect));
+                    assert(old(store).graph().regexes == store.graph().regexes.subrange(0, old(store).graph().regexes.len() as int));
+                    assert(store.graph().regexes[o0 as int] == old(store).graph().regexes[o0 as int]);
+                }
+                assert forall|o: nat| #[trigger] regex_piece_contains(store.graph(), o0, intersect, o)
+                    implies regex_set_operand_ok(old(store).graph(), store.graph(), children@, intersect, o) by {}
             }
         }
         if others.is_empty() {
@@ -2743,6 +2914,17 @@ impl RegexNormalize for RegexId {
                         == regex_combo_nats(store.graph(), theta, model::regex_ids(others.view()), word, intersect));
                     assert(regex_combo(store.graph(), theta, others.view(), word, intersect)
                         == regex_combo(store.graph(), theta, children@, word, intersect));
+                }
+                assert forall|o: nat| #[trigger] regex_piece_contains(store.graph(), id@, intersect, o)
+                    implies regex_set_operand_ok(old(store).graph(), store.graph(), children@, intersect, o) by {
+                    let ids = model::regex_ids(others.view());
+                    assert(ids.contains(o));
+                    let k = choose|k: int| 0 <= k < ids.len() && ids[k] == o;
+                    assert(ids[k] == others.view()[k]@);
+                    assert(regex_set_operand_ok(old(store).graph(), gt, children@, intersect, others.view()[k]@));
+                    if !regex_member(old(store).graph(), children@, intersect, o) {
+                        regex_combined_test_extends(old(store).graph(), gt, store.graph(), children@, intersect, o);
+                    }
                 }
             }
             Ok(id)
@@ -2787,7 +2969,10 @@ impl TransitionMode {
                     && (!collapsed ==> collect_total(final(store).graph(), final(pending).view(), final(flat).view(),
                             final(constants).view(), self.intersect)
                         <= collect_total(old(store).graph(), old(pending).view(), old(flat).view(),
-                            old(constants).view(), self.intersect)),
+                            old(constants).view(), self.intersect))
+                    && ((old(flat).view().len() == 0 && old(constants).view().len() == 0)
+                        ==> fcol::collect_members(final(store).graph(), model::transition_ids(old(pending).view()),
+                            self.intersect, final(pending).view(), final(flat).view(), final(constants).view())),
                 Err(_) => true,
             },
     )]
@@ -2802,9 +2987,17 @@ impl TransitionMode {
             let ghost p0 = pending.view();
             let ghost f0 = flat.view();
             let ghost rs0 = constants.view();
+            let ghost orig = model::transition_ids(pending.view());
+            let ghost fresh = flat.view().len() == 0 && constants.view().len() == 0;
         }
         proof! {
             if p0.len() > 0 { transition_lemma_pending_work_pop(store.graph(), p0, self.intersect); }
+            if fresh {
+                fcol::lemma_members_start(store.graph(), p0, self.intersect);
+                assert(f0 =~= Seq::<TransitionId>::empty());
+                assert(rs0 =~= Seq::<RegexId>::empty());
+            }
+            assert(model::bounded(orig, store.graph().transitions.len()));
         }
         let mut state = Ok(false);
         #[cfg_attr(verus_keep_ghost, verus_spec(
@@ -2823,6 +3016,8 @@ impl TransitionMode {
                 flat.view().len() >= f0.len(),
                 forall|i: int| f0.len() <= i < flat.view().len()
                     ==> transition_set_leaf(store.graph().transitions[flat.view()[i]@ as int], self.intersect),
+                model::bounded(orig, store.graph().transitions.len()),
+                fresh && state.is_ok() ==> fcol::collect_members(store.graph(), orig, self.intersect, pending.view(), flat.view(), constants.view()),
                 match state {
                     Ok(collapsed) => forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
                         ==> transition_collect_combo(store.graph(), theta, p0, f0, rs0, event, word, self.intersect)
@@ -2856,6 +3051,7 @@ impl TransitionMode {
                                 transition_lemma_identities(store.graph(), self@);
                                 model::lemma_graph_transition_wf(store.graph(), id@);
                                 assert(p0 =~= prefix.push(id));
+                                if fresh { fcol::lemma_members_pop(store.graph(), orig, self.intersect, prefix, id, f0, rs0); }
                             }
                             if id == self.absorber {
                                 proof! { transition_lemma_collect_absorber(store.graph(), self@, p0, f0, rs0); }
@@ -2879,6 +3075,12 @@ impl TransitionMode {
                                                             reveal(transition_children);
                                                             transition_lemma_collect_expand(store.graph(), self@, p0, f0, rs0, children);
                                                             collect_lemma_expand(store.graph(), prefix, id, children, f0, rs0, self.intersect);
+                                                            if fresh {
+                                                                assert(store.graph().transitions[id@ as int]
+                                                                    == model::TransitionNode::Union(transition_children(store.graph(), id@)));
+                                                                fcol::lemma_members_expand(store.graph(), orig, self.intersect, prefix, id,
+                                                                    children, f0, rs0, transition_children(store.graph(), id@));
+                                                            }
                                                         }
 
                                                         Ok(())
@@ -2901,6 +3103,12 @@ impl TransitionMode {
                                                             reveal(transition_children);
                                                             transition_lemma_collect_expand(store.graph(), self@, p0, f0, rs0, children);
                                                             collect_lemma_expand(store.graph(), prefix, id, children, f0, rs0, self.intersect);
+                                                            if fresh {
+                                                                assert(store.graph().transitions[id@ as int]
+                                                                    == model::TransitionNode::Intersect(transition_children(store.graph(), id@)));
+                                                                fcol::lemma_members_expand(store.graph(), orig, self.intersect, prefix, id,
+                                                                    children, f0, rs0, transition_children(store.graph(), id@));
+                                                            }
                                                         }
 
                                                         Ok(())
@@ -2913,6 +3121,10 @@ impl TransitionMode {
                                                 proof! {
                                                     transition_lemma_collect_constant(store.graph(), self@, p0, f0, rs0, r);
                                                     collect_lemma_constant(store.graph(), prefix, id, f0, rs0, r, self.intersect);
+                                                    if fresh {
+                                                        assert(store.graph().transitions[id@ as int] == model::TransitionNode::Const(r@));
+                                                        fcol::lemma_members_const(store.graph(), orig, self.intersect, prefix, id, f0, rs0, r);
+                                                    }
                                                 }
 
                                                 Ok(())
@@ -2922,6 +3134,10 @@ impl TransitionMode {
                                                 proof! {
                                                     transition_lemma_collect_leaf(store.graph(), self@, p0, f0, rs0);
                                                     collect_lemma_leaf(store.graph(), prefix, id, f0, rs0, self.intersect);
+                                                    if fresh {
+                                                        assert(fcol::flat_ok(store.graph(), self.intersect, id@));
+                                                        fcol::lemma_members_leaf(store.graph(), orig, self.intersect, prefix, id, f0, rs0);
+                                                    }
                                                 }
 
                                                 Ok(())
@@ -2969,7 +3185,7 @@ pub(crate) trait TransitionNormalize: Sized {
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().transitions.len()
-                    && final(store).graph().transitions[id@ as int] is Const
+                    && final(store).graph().transitions[id@ as int] == model::TransitionNode::Const(regex@)
                     && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
                         ==> transition_lang(final(store).graph(), theta, id, event, word)
                             == model::regex_lang(final(store).graph(), theta, regex@, word),
@@ -2996,6 +3212,8 @@ pub(crate) trait TransitionNormalize: Sized {
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
+                && ((ftr::nf_sum(old(store).graph(), then_id@) && ftr::nf_sum(old(store).graph(), else_id@))
+                    ==> fsteps::ite_bound(final(store).graph(), id@, then_id@, else_id@))
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
                     ==> transition_lang(final(store).graph(), theta, id, event, word)
                         == transition_if_combo(final(store).graph(), theta, test, then_id, else_id, event, word), Err(_) => true },
@@ -3016,7 +3234,9 @@ pub(crate) trait TransitionNormalize: Sized {
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
-                && transition_result(final(store).graph(), ActionShape::Fold(model::transition_ids(children@), 0), id), Err(_) => true },
+                && transition_result(final(store).graph(), ActionShape::Fold(model::transition_ids(children@), 0), id)
+                && (fcol::all_nf(old(store).graph(), model::transition_ids(children@))
+                    ==> fsteps::run_bound(final(store).graph(), ActionShape::Fold(model::transition_ids(children@), 0), id@)), Err(_) => true },
     ;
 
     fn not<G: KernelStore>(this: TransitionId, store: &mut G) -> (result: KernelResult<TransitionId>)
@@ -3031,7 +3251,9 @@ pub(crate) trait TransitionNormalize: Sized {
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
-                && transition_result(final(store).graph(), ActionShape::Not(this@), id), Err(_) => true },
+                && transition_result(final(store).graph(), ActionShape::Not(this@), id)
+                && (ftr::nf_sum(old(store).graph(), this@) ==> fsteps::run_bound(final(store).graph(), ActionShape::Not(this@), id@)),
+                Err(_) => true },
     ;
 
     fn append<G: KernelStore>(
@@ -3051,9 +3273,12 @@ pub(crate) trait TransitionNormalize: Sized {
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
+                && ((ftr::nf_sum(old(store).graph(), this@) && flink::ids_nf(old(store).graph(), suffix@))
+                    ==> fsteps::app_bound(final(store).graph(), id@, this@, flink::lifts(final(store).graph(), suffix@)))
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
                     ==> transition_lang(final(store).graph(), theta, id, event, word)
-                        == transition_append_combo(final(store).graph(), theta, this, suffix@, event, word), Err(_) => true },
+                        == transition_append_combo(final(store).graph(), theta, this, suffix@, event, word),
+                Err(_) => true },
     ;
 
     fn intern<G: KernelStore>(
@@ -3102,6 +3327,8 @@ pub(crate) trait TransitionNormalize: Sized {
                 Ok(id) => id@ < final(store).graph().transitions.len()
                     && tdepth(final(store).graph(), id@)
                         <= if_bound(tdepth(old(store).graph(), a@), tdepth(old(store).graph(), b@))
+                    && (id@ == a@ || id@ == b@
+                        || final(store).graph().transitions[id@ as int] == model::TransitionNode::If(test@, a@, b@))
                     && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
                         ==> transition_lang(final(store).graph(), theta, id, event, word)
                             == transition_if_combo(final(store).graph(), theta, test, a, b, event, word),
@@ -3131,6 +3358,8 @@ pub(crate) trait TransitionNormalize: Sized {
                         model::TransitionNode::Union(cs) => !intersect ==> cs.len() > 1,
                         _ => true,
                     })
+                    && (fcol::all_nf(old(store).graph(), model::transition_ids(children@))
+                        ==> fcol::collect_out(final(store).graph(), model::transition_ids(children@), intersect, id@))
                     && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
                         ==> transition_lang(final(store).graph(), theta, id, event, word)
                             == transition_combo(final(store).graph(), theta, children@, event, word, intersect),
@@ -3228,6 +3457,9 @@ impl TransitionNormalize for TransitionId {
             assert(model::constants_wf(store.graph())) by { model::lemma_graph_wf_elim(store.graph()); }
             machine_driver_extension_future(entry, store.graph());
             machine_driver_if_future(store.graph(), test, then_id, else_id, id);
+            if ftr::nf_sum(entry, then_id@) && ftr::nf_sum(entry, else_id@) {
+                fbr::lemma_ite_start(entry, store.graph(), test@, then_id@, else_id@, id@, path@);
+            }
         }
         Action::Clean(id, path).run(store)
     }
@@ -3262,6 +3494,9 @@ impl TransitionNormalize for TransitionId {
         proof! {
             machine_driver_extension_future(entry, store.graph());
             machine_driver_append_future(store.graph(), this, suffix@, r);
+            if ftr::nf_sum(entry, this@) && flink::ids_nf(entry, suffix@) {
+                fbr::lemma_app_future(entry, store.graph(), this@, suffix@, r@);
+            }
         }
         Action::Append(this, r).run(store)
     }
@@ -3317,7 +3552,8 @@ impl TransitionNormalize for TransitionId {
         hide(model::lift_regex);
         hide(Seq::no_duplicates);
         hide(model::unique_nodes);
-        proof_decl! { let ghost original = children@; let ghost entry = store.graph(); }
+        proof_decl! { let ghost original = children@; let ghost entry = store.graph();
+            let ghost cs = model::transition_ids(children@); let ghost nf = fcol::all_nf(entry, cs); }
         proof! {
             tdepth_lemma_constants(entry);
             collect_lemma_bound(entry, original, intersect);
@@ -3356,6 +3592,7 @@ impl TransitionNormalize for TransitionId {
                 transition_lemma_initial_collection(store.graph(), mode@, original,
                     pending.view(), flat.view(), constants.view(), true);
                 model::lemma_graph_wf_elim(store.graph());
+                if nf { fcol::lemma_const_out(store.graph(), cs, intersect, absorber@); }
             }
             return Ok(absorber);
         }
@@ -3365,6 +3602,11 @@ impl TransitionNormalize for TransitionId {
             transition_lemma_initial_collection(store.graph(), mode@, original,
                 pending.view(), flat.view(), constants.view(), false);
             collect_lemma_flat(store.graph(), original, pending.view(), flat.view(), constants.view(), intersect);
+            assert(model::bounded(cs, entry.transitions.len()));
+            if nf {
+                assert(pending.view() =~= Seq::<TransitionId>::empty());
+                fcol::lemma_members_elems(entry, cs, intersect, flat.view(), constants.view());
+            }
         }
         if !constants.is_empty() {
             proof_decl! { let ghost before_group = store.graph(); let ghost prior_flat = flat.view(); }
@@ -3388,12 +3630,27 @@ impl TransitionNormalize for TransitionId {
                 transition_lemma_group_result(store.graph(), original, prior_flat, constants.view(), mode@, t);
                 tdepth_lemma_constants(store.graph());
                 collect_lemma_const_result(before_group, store.graph(), original, prior_flat, t, t != identity, intersect);
+                if nf {
+                    fcol::lemma_elems_stable(entry, store.graph(), cs, intersect, prior_flat);
+                    if t == absorber { fcol::lemma_const_out(store.graph(), cs, intersect, absorber@); }
+                    if t != identity {
+                        assert(intersect);
+                        fcol::lemma_leaf_elem(entry, after_regex, store.graph(), cs, constants.view(), r@, t@);
+                    }
+                }
             }
             if t == absorber {
                 return Ok(absorber);
             }
             if t != identity {
                 flat.push(t);
+                proof! {
+                    if nf {
+                        assert forall|k: int| 0 <= k < flat.view().len() implies #[trigger] fcol::elem_flat(store.graph(), cs, intersect, flat.view()[k]@) by {
+                            if k < prior_flat.len() { assert(flat.view()[k] == prior_flat[k]); }
+                        }
+                    }
+                }
             }
             proof! {
                 assert forall|i: int| 0 <= i < flat.view().len() implies
@@ -3440,6 +3697,23 @@ impl TransitionNormalize for TransitionId {
                 transition_set_leaf(store.graph().transitions[flat.view()[i]@ as int], intersect) by {
                 assert(unsorted.contains(flat.view()[i]));
                 let j = choose|j: int| 0 <= j < unsorted.len() && unsorted[j] == flat.view()[i];
+            }
+            if nf {
+                assert forall|k: int| 0 <= k < flat.view().len() implies #[trigger] fcol::elem_flat(store.graph(), cs, intersect, flat.view()[k]@) by {
+                    assert(unsorted.contains(flat.view()[k]));
+                    let j = choose|j: int| 0 <= j < unsorted.len() && unsorted[j] == flat.view()[k];
+                    assert(fcol::elem_flat(store.graph(), cs, intersect, unsorted[j]@));
+                }
+                fcol::lemma_const_out(store.graph(), cs, intersect, identity@);
+                if flat.view().len() == 1 {
+                    assert(fcol::elem_flat(store.graph(), cs, intersect, flat.view()[0]@));
+                    fcol::lemma_elem_out(store.graph(), cs, intersect, flat.view()[0]@);
+                }
+                assert forall|k: int| 0 <= k < model::transition_ids(flat.view()).len() implies
+                    #[trigger] fcol::elem_flat(store.graph(), cs, intersect, model::transition_ids(flat.view())[k]) by {
+                    assert(model::transition_ids(flat.view())[k] == flat.view()[k]@);
+                }
+                fcol::lemma_node_future(store.graph(), cs, intersect, model::transition_ids(flat.view()));
             }
         }
         proof! { model::lemma_graph_wf_elim(store.graph()); }
@@ -3739,6 +4013,9 @@ impl Action {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Pair(a@, b@),
                     transition_action_views(old(tasks).view()), old(values).view(),
                     transition_action_views(final(tasks).view()), final(values).view())
+                    && (fsteps::xpre(old(store).graph(), ActionShape::Pair(a@, b@), transition_action_views(old(tasks).view()), old(values).view())
+                        ==> fsteps::xeffect(final(store).graph(), ActionShape::Pair(a@, b@), transition_action_views(old(tasks).view()),
+                            old(values).view(), transition_action_views(final(tasks).view()), final(values).view()))
                     && machine_progress(old(store).graph(), transition_action_views(old(tasks).view()),
                         ActionShape::Pair(a@, b@), old(values).view(),
                         final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
@@ -3792,6 +4069,9 @@ impl Action {
                     proof! {
                         transition_lemma_push_result(store.graph(), ActionShape::Pair(a@, b@), p0, v0, c.transition_empty);
                         machine_value_result(entry, store.graph(), p0, ActionShape::Pair(a@, b@), v0, c.transition_empty);
+                        if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                            fbr::lemma_pair_keep(entry, store.graph(), p0, v0, a, b, c.transition_empty);
+                        }
                     }
                 } else {
                     tasks.push(Action::CleanIf(guard, c.test_true));
@@ -3804,6 +4084,10 @@ impl Action {
                             .push(ActionShape::SwapThen).push(ActionShape::Pair(xt@, yt@)));
                         machine_pair_empty(entry, store.graph(), p0, a, b, x, xt, xe, y, yt, ye, guard, c.test_true,
                             c.transition_empty, v0);
+                        if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                            assert(values.view() == v0.push(c.transition_empty));
+                            fbr::lemma_pair_empty_branches(entry, store.graph(), p0, v0, a, b, x, xt, y, yt, guard, c.transition_empty);
+                        }
                     }
                 }
             } else if x == y {
@@ -3815,6 +4099,9 @@ impl Action {
                     assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::CleanIf(x@, c.test_true@))
                         .push(ActionShape::Pair(xe@, ye@)).push(ActionShape::Pair(xt@, yt@)));
                     machine_pair_both(entry, store.graph(), p0, a, b, x, xt, xe, y, yt, ye, c.test_true, v0);
+                    if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                        fbr::lemma_pair_both(entry, store.graph(), p0, v0, a, b, x, xt, xe, y, yt, ye);
+                    }
                 }
             } else if xe == c.transition_empty || (ye != c.transition_empty && x < y) {
                 tasks.push(Action::CleanIf(x, c.test_true));
@@ -3825,6 +4112,9 @@ impl Action {
                     assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::CleanIf(x@, c.test_true@))
                         .push(ActionShape::Pair(xe@, b@)).push(ActionShape::Pair(xt@, b@)));
                     machine_pair_split(entry, store.graph(), p0, a, b, x, xt, xe, c.test_true, true, v0);
+                    if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                        fbr::lemma_pair_split(entry, store.graph(), p0, v0, a, b, x, xt, xe, true);
+                    }
                 }
             } else {
                 tasks.push(Action::CleanIf(y, c.test_true));
@@ -3835,6 +4125,9 @@ impl Action {
                     assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::CleanIf(y@, c.test_true@))
                         .push(ActionShape::Pair(a@, ye@)).push(ActionShape::Pair(a@, yt@)));
                     machine_pair_split(entry, store.graph(), p0, a, b, y, yt, ye, c.test_true, false, v0);
+                    if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                        fbr::lemma_pair_split(entry, store.graph(), p0, v0, a, b, y, yt, ye, false);
+                    }
                 }
             }
             Ok(())
@@ -3863,6 +4156,11 @@ impl Action {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Fold(model::transition_ids(xs.view()), index as nat),
                     transition_action_views(old(tasks).view()), old(values).view(),
                     transition_action_views(final(tasks).view()), final(values).view())
+                    && (fsteps::xpre(old(store).graph(), ActionShape::Fold(model::transition_ids(xs.view()), index as nat),
+                            transition_action_views(old(tasks).view()), old(values).view())
+                        ==> fsteps::xeffect(final(store).graph(), ActionShape::Fold(model::transition_ids(xs.view()), index as nat),
+                            transition_action_views(old(tasks).view()), old(values).view(),
+                            transition_action_views(final(tasks).view()), final(values).view()))
                     && machine_progress(old(store).graph(), transition_action_views(old(tasks).view()),
                         ActionShape::Fold(model::transition_ids(xs.view()), index as nat), old(values).view(),
                         final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
@@ -3908,6 +4206,10 @@ impl Action {
                         tasks.push(Action::Fold(children, 1));
                         proof! {
                             assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::Fold(model::transition_ids(cs), 1)));
+                            if fsteps::xpre(entry, ActionShape::Fold(model::transition_ids(original), 0), p0, v0) {
+                                assert(first == cs[0]);
+                                fbr::lemma_fold_start(entry, store.graph(), p0, v0, model::transition_ids(original), flat, cs);
+                            }
                         }
                     }
                     _ => {
@@ -3916,6 +4218,9 @@ impl Action {
                             machine_pair_set_result(store.graph(), original, ActionShape::Fold(model::transition_ids(original), 0), flat);
                             transition_lemma_push_result(store.graph(), ActionShape::Fold(model::transition_ids(original), 0), p0, v0, flat);
                             machine_fold_flat(entry, store.graph(), p0, model::transition_ids(original), v0, flat);
+                            if fsteps::xpre(entry, ActionShape::Fold(model::transition_ids(original), 0), p0, v0) {
+                                fbr::lemma_fold_flat(entry, store.graph(), p0, v0, model::transition_ids(original), flat);
+                            }
                         }
                     }
                 }
@@ -3939,12 +4244,18 @@ impl Action {
                     assert(model::transition_ids(original)[index as int] == b@);
                     assert(values.view() == v0.drop_last());
                     machine_fold_next(store.graph(), p0, model::transition_ids(original), index as nat, v0);
+                    if fsteps::xpre(entry, ActionShape::Fold(model::transition_ids(original), index as nat), p0, v0) {
+                        fbr::lemma_fold_next(entry, store.graph(), p0, v0, model::transition_ids(original), index as nat, a, b);
+                    }
                 }
             }
             proof! {
                 if index != 0 && index >= original.len() {
                     machine_pair_fold_noop(store.graph(), original, index as nat, p0, v0);
                     machine_fold_noop(store.graph(), p0, model::transition_ids(original), index as nat, v0);
+                    if fsteps::xpre(entry, ActionShape::Fold(model::transition_ids(original), index as nat), p0, v0) {
+                        fbr::lemma_fold_noop(entry, store.graph(), p0, v0, model::transition_ids(original), index as nat);
+                    }
                 }
             }
         }
@@ -3973,6 +4284,9 @@ impl Action {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Clean(id@, path@),
                     transition_action_views(old(tasks).view()), old(values).view(),
                     transition_action_views(final(tasks).view()), final(values).view())
+                    && (fsteps::xpre(old(store).graph(), ActionShape::Clean(id@, path@), transition_action_views(old(tasks).view()), old(values).view())
+                        ==> fsteps::xeffect(final(store).graph(), ActionShape::Clean(id@, path@), transition_action_views(old(tasks).view()),
+                            old(values).view(), transition_action_views(final(tasks).view()), final(values).view()))
                     && machine_progress(old(store).graph(), transition_action_views(old(tasks).view()),
                         ActionShape::Clean(id@, path@), old(values).view(),
                         final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
@@ -3999,6 +4313,7 @@ impl Action {
                     transition_lemma_clean_identity(store.graph(), id, path);
                     transition_lemma_push_result(store.graph(), ActionShape::Clean(id@, path@), p0, v0, id);
                     machine_value_result(entry, store.graph(), p0, ActionShape::Clean(id@, path@), v0, id);
+                    if fsteps::xpre(entry, ActionShape::Clean(id@, path@), p0, v0) { fbr::lemma_clean_self(entry, store.graph(), p0, v0, id, path); }
                 }
             }
             TransitionHead::If(test, a, b) => {
@@ -4036,15 +4351,28 @@ impl Action {
                 proof! {
                     assert(transition_action_views(tasks.view()) == transition_clean_if_tasks(store.graph(), test, a, b, yes, no, p0));
                     machine_clean_if(entry, store.graph(), p0, id, path, test, a, b, yes, no, v0);
+                    if fsteps::xpre(entry, ActionShape::Clean(id@, path@), p0, v0) {
+                        fbr::lemma_clean_if(entry, store.graph(), p0, v0, id, path, test, a, b, yes, no);
+                    }
                 }
             }
             TransitionHead::Union(n) => {
                 Self::clean_children(store, id, n, false, path, tasks)?;
-                proof! { machine_clean_children(store.graph(), p0, id, path, false, v0); }
+                proof! {
+                    machine_clean_children(store.graph(), p0, id, path, false, v0);
+                    if fsteps::xpre(entry, ActionShape::Clean(id@, path@), p0, v0) {
+                        fbr::lemma_clean_children(entry, store.graph(), p0, v0, id, path, false);
+                    }
+                }
             }
             TransitionHead::Intersect(n) => {
                 Self::clean_children(store, id, n, true, path, tasks)?;
-                proof! { machine_clean_children(store.graph(), p0, id, path, true, v0); }
+                proof! {
+                    machine_clean_children(store.graph(), p0, id, path, true, v0);
+                    if fsteps::xpre(entry, ActionShape::Clean(id@, path@), p0, v0) {
+                        fbr::lemma_clean_children(entry, store.graph(), p0, v0, id, path, true);
+                    }
+                }
             }
             TransitionHead::Not(inner) => {
                 tasks.push(Action::NotResult);
@@ -4053,11 +4381,17 @@ impl Action {
                     transition_lemma_clean_not_effect(store.graph(), id, path, inner, p0);
                     assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::NotResult).push(ActionShape::Clean(inner@, path@)));
                     machine_clean_not(entry, store.graph(), p0, id, path, inner, v0);
+                    if fsteps::xpre(entry, ActionShape::Clean(id@, path@), p0, v0) {
+                        fbr::lemma_clean_not(entry, store.graph(), p0, v0, id, path, inner);
+                    }
                 }
             }
             TransitionHead::Append(inner, n) => {
                 let xs = Self::suffix_values(store, id, n)?;
-                proof! { transition_lemma_suffix(store.graph(), id@); }
+                proof! {
+                    transition_lemma_suffix(store.graph(), id@);
+                    assert(entry.transitions[id@ as int] == model::TransitionNode::Append(inner@, model::regex_ids(xs.view())));
+                }
                 let r = RegexId::concat(store, &xs)?;
                 tasks.push(Action::AppendResult(r));
                 tasks.push(Action::Clean(inner, path));
@@ -4066,6 +4400,9 @@ impl Action {
                     transition_lemma_clean_append_effect(store.graph(), id, path, inner, xs.view(), r, p0);
                     assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::AppendResult(r@)).push(ActionShape::Clean(inner@, path@)));
                     machine_clean_append(entry, store.graph(), p0, id, path, inner, r, v0);
+                    if fsteps::xpre(entry, ActionShape::Clean(id@, path@), p0, v0) {
+                        fbr::lemma_clean_append(entry, store.graph(), p0, v0, id, path, inner, xs.view(), r);
+                    }
                 }
             }
         }
@@ -4095,6 +4432,9 @@ impl Action {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Not(id@),
                     transition_action_views(old(tasks).view()), old(values).view(),
                     transition_action_views(final(tasks).view()), final(values).view())
+                    && (fsteps::xpre(old(store).graph(), ActionShape::Not(id@), transition_action_views(old(tasks).view()), old(values).view())
+                        ==> fsteps::xeffect(final(store).graph(), ActionShape::Not(id@), transition_action_views(old(tasks).view()),
+                            old(values).view(), transition_action_views(final(tasks).view()), final(values).view()))
                     && machine_progress(old(store).graph(), transition_action_views(old(tasks).view()),
                         ActionShape::Not(id@), old(values).view(),
                         final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
@@ -4128,6 +4468,9 @@ impl Action {
                     transition_lemma_extends_transitive(entry, before_const, store.graph());
                     assert(values.view() == prior.push(values.view().last()));
                     machine_value_result(entry, store.graph(), base, ActionShape::Not(id@), prior, values.view().last());
+                    if fsteps::xpre(entry, ActionShape::Not(id@), base, prior) {
+                        fbr::lemma_not_const(entry, before_const, store.graph(), base, prior, id, head, r, values.view().last());
+                    }
                 }
             }
             TransitionHead::Not(inner) => {
@@ -4136,6 +4479,9 @@ impl Action {
                     machine_unary_double_not_result(store.graph(), id, inner);
                     transition_lemma_push_result(store.graph(), ActionShape::Not(id@), base, prior, inner);
                     machine_not_double(entry, store.graph(), base, id, inner, prior);
+                    if fsteps::xpre(entry, ActionShape::Not(id@), base, prior) {
+                        fbr::lemma_not_double(entry, store.graph(), base, prior, id, inner);
+                    }
                 }
             }
             TransitionHead::Append(_, _) => {
@@ -4145,6 +4491,9 @@ impl Action {
                     transition_lemma_push_result(store.graph(), ActionShape::Not(id@), base, prior, values.view().last());
                     assert(values.view() == prior.push(values.view().last()));
                     machine_wrap_interned(entry, store.graph(), base, ActionShape::Not(id@), prior, values.view().last());
+                    if fsteps::xpre(entry, ActionShape::Not(id@), base, prior) {
+                        fbr::lemma_not_wrap(entry, store.graph(), base, prior, id, values.view().last());
+                    }
                 }
             }
             TransitionHead::If(test, a, b) => {
@@ -4168,6 +4517,9 @@ impl Action {
                         transition_lemma_extends_transitive(entry, before_if, store.graph());
                         tdepth_lemma_constants(before_if);
                         machine_not_flip(entry, store.graph(), base, id, test, a, b, out, c.test_true, prior);
+                        if fsteps::xpre(entry, ActionShape::Not(id@), base, prior) {
+                            fbr::lemma_not_flip(entry, store.graph(), base, prior, id, test, a, b, guard, out);
+                        }
                     }
                 } else {
                     tasks.push(Action::CleanIf(test, c.test_true));
@@ -4177,6 +4529,9 @@ impl Action {
                         machine_unary_if_effect(store.graph(), id, test, a, b, None, base, prior);
                         assert(transition_action_views(tasks.view()) =~= machine_unary_if_tasks(store.graph(), test, a, b, None, base));
                         machine_unary_if(entry, store.graph(), base, id, test, a, b, None, prior);
+                        if fsteps::xpre(entry, ActionShape::Not(id@), base, prior) {
+                            fbr::lemma_unary_if(entry, store.graph(), base, prior, id, test, a, b, None);
+                        }
                     }
                 }
             }
@@ -4192,6 +4547,9 @@ impl Action {
                     machine_unary_children_effect(store.graph(), id, None, true, base, prior);
                     assert(transition_action_views(tasks.view()) =~= machine_unary_child_tasks(store.graph(), id, None, true, base));
                     machine_unary_children(store.graph(), base, id, None, true, prior);
+                    if fsteps::xpre(entry, ActionShape::Not(id@), base, prior) {
+                        fbr::lemma_unary_children(entry, store.graph(), base, prior, id, None, true);
+                    }
                 }
             }
             TransitionHead::Intersect(n) => {
@@ -4206,6 +4564,9 @@ impl Action {
                     machine_unary_children_effect(store.graph(), id, None, false, base, prior);
                     assert(transition_action_views(tasks.view()) =~= machine_unary_child_tasks(store.graph(), id, None, false, base));
                     machine_unary_children(store.graph(), base, id, None, false, prior);
+                    if fsteps::xpre(entry, ActionShape::Not(id@), base, prior) {
+                        fbr::lemma_unary_children(entry, store.graph(), base, prior, id, None, false);
+                    }
                 }
             }
         }
@@ -4240,6 +4601,9 @@ impl Action {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Append(id@, r@),
                     transition_action_views(old(tasks).view()), old(values).view(),
                     transition_action_views(final(tasks).view()), final(values).view())
+                    && (fsteps::xpre(old(store).graph(), ActionShape::Append(id@, r@), transition_action_views(old(tasks).view()), old(values).view())
+                        ==> fsteps::xeffect(final(store).graph(), ActionShape::Append(id@, r@), transition_action_views(old(tasks).view()),
+                            old(values).view(), transition_action_views(final(tasks).view()), final(values).view()))
                     && machine_progress(old(store).graph(), transition_action_views(old(tasks).view()),
                         ActionShape::Append(id@, r@), old(values).view(),
                         final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
@@ -4271,6 +4635,9 @@ impl Action {
                     machine_unary_append_identity_result(store.graph(), id, r, id);
                     transition_lemma_push_result(store.graph(), ActionShape::Append(id@, r@), base, prior, id);
                     machine_value_result(entry, store.graph(), base, ActionShape::Append(id@, r@), prior, id);
+                    if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
+                        fbr::lemma_append_eps(entry, store.graph(), base, prior, id, r);
+                    }
                 }
             } else if r == c.empty {
                 values.push(c.transition_empty);
@@ -4278,6 +4645,9 @@ impl Action {
                     machine_unary_append_identity_result(store.graph(), id, r, c.transition_empty);
                     transition_lemma_push_result(store.graph(), ActionShape::Append(id@, r@), base, prior, c.transition_empty);
                     machine_value_result(entry, store.graph(), base, ActionShape::Append(id@, r@), prior, c.transition_empty);
+                    if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
+                        fbr::lemma_append_empty(entry, store.graph(), base, prior, id, r, c.transition_empty);
+                    }
                 }
             } else {
                 match id.head(store)? {
@@ -4291,6 +4661,9 @@ impl Action {
                             transition_lemma_extends_transitive(entry, before_const, store.graph());
                             assert(values.view() == prior.push(values.view().last()));
                             machine_value_result(entry, store.graph(), base, ActionShape::Append(id@, r@), prior, values.view().last());
+                            if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
+                                fbr::lemma_append_const(entry, before_const, store.graph(), base, prior, id, r, head, out, values.view().last());
+                            }
                         }
                     }
                     TransitionHead::If(test, a, b) => {
@@ -4301,6 +4674,9 @@ impl Action {
                             machine_unary_if_effect(store.graph(), id, test, a, b, Some(r), base, prior);
                             assert(transition_action_views(tasks.view()) =~= machine_unary_if_tasks(store.graph(), test, a, b, Some(r), base));
                             machine_unary_if(entry, store.graph(), base, id, test, a, b, Some(r), prior);
+                            if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
+                                fbr::lemma_unary_if(entry, store.graph(), base, prior, id, test, a, b, Some(r));
+                            }
                         }
                     }
                     TransitionHead::Union(n) => {
@@ -4315,12 +4691,18 @@ impl Action {
                             machine_unary_children_effect(store.graph(), id, Some(r), false, base, prior);
                             assert(transition_action_views(tasks.view()) =~= machine_unary_child_tasks(store.graph(), id, Some(r), false, base));
                             machine_unary_children(store.graph(), base, id, Some(r), false, prior);
+                            if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
+                                fbr::lemma_unary_children(entry, store.graph(), base, prior, id, Some(r), false);
+                            }
                         }
                     }
                     TransitionHead::Append(inner, n) => {
                         let mut xs = Self::suffix_values(store, id, n)?;
                         proof_decl! { let ghost children = xs.view(); }
-                        proof! { transition_lemma_suffix(store.graph(), id@); }
+                        proof! {
+                            transition_lemma_suffix(store.graph(), id@);
+                            assert(entry.transitions[id@ as int] == model::TransitionNode::Append(inner@, model::regex_ids(children)));
+                        }
                         xs.push(r);
                         let combined = RegexId::concat(store, &xs)?;
                         tasks.push(Action::Append(inner, combined));
@@ -4328,6 +4710,9 @@ impl Action {
                             machine_unary_append_nested_effect(store.graph(), id, inner, r, combined, children, base, prior);
                             assert(transition_action_views(tasks.view()) =~= base.push(ActionShape::Append(inner@, combined@)));
                             machine_append_nested(entry, store.graph(), base, id, r, inner, combined, prior);
+                            if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
+                                fbr::lemma_append_nested(entry, store.graph(), base, prior, id, r, inner, children, combined);
+                            }
                         }
                     }
                     TransitionHead::Intersect(_) | TransitionHead::Not(_) => {
@@ -4357,6 +4742,9 @@ impl Action {
                             transition_lemma_extends_transitive(entry, before_intern, store.graph());
                             assert(values.view() == prior.push(values.view().last()));
                             machine_wrap_interned(entry, store.graph(), base, ActionShape::Append(id@, r@), prior, values.view().last());
+                            if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
+                                fbr::lemma_append_raw(entry, store.graph(), base, prior, id, r, xs.view(), values.view().last());
+                            }
                         }
                     }
                 }
@@ -4370,6 +4758,8 @@ impl Action {
         reason = "Preserve the existing Verus-verified match arms."
     )]
     #[verus_verify]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
     #[verus_spec(result =>
         requires model::graph_wf(old(store).graph()), old(store).valid_store(),
             transition_configuration_valid(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view()),
@@ -4391,6 +4781,9 @@ impl Action {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Pair(a@, b@),
                     transition_action_views(old(tasks).view()), old(values).view(),
                     transition_action_views(final(tasks).view()), final(values).view())
+                    && (fsteps::xpre(old(store).graph(), ActionShape::Pair(a@, b@), transition_action_views(old(tasks).view()), old(values).view())
+                        ==> fsteps::xeffect(final(store).graph(), ActionShape::Pair(a@, b@), transition_action_views(old(tasks).view()),
+                            old(values).view(), transition_action_views(final(tasks).view()), final(values).view()))
                     && machine_progress(old(store).graph(), transition_action_views(old(tasks).view()),
                         ActionShape::Pair(a@, b@), old(values).view(),
                         final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
@@ -4426,6 +4819,7 @@ impl Action {
                     machine_pair_identity_result(store.graph(), a, b, a, c.transition_all, c.transition_empty);
                     transition_lemma_push_result(store.graph(), ActionShape::Pair(a@, b@), p0, v0, a);
                     machine_value_result(entry, store.graph(), p0, ActionShape::Pair(a@, b@), v0, a);
+                    if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) { fbr::lemma_pair_keep(entry, store.graph(), p0, v0, a, b, a); }
                 }
             } else if a == c.transition_all {
                 values.push(b);
@@ -4433,6 +4827,7 @@ impl Action {
                     machine_pair_identity_result(store.graph(), a, b, b, c.transition_all, c.transition_empty);
                     transition_lemma_push_result(store.graph(), ActionShape::Pair(a@, b@), p0, v0, b);
                     machine_value_result(entry, store.graph(), p0, ActionShape::Pair(a@, b@), v0, b);
+                    if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) { fbr::lemma_pair_keep(entry, store.graph(), p0, v0, a, b, b); }
                 }
             } else if a == c.transition_empty || b == c.transition_empty {
                 values.push(c.transition_empty);
@@ -4440,6 +4835,9 @@ impl Action {
                     machine_pair_identity_result(store.graph(), a, b, c.transition_empty, c.transition_all, c.transition_empty);
                     transition_lemma_push_result(store.graph(), ActionShape::Pair(a@, b@), p0, v0, c.transition_empty);
                     machine_value_result(entry, store.graph(), p0, ActionShape::Pair(a@, b@), v0, c.transition_empty);
+                    if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                        fbr::lemma_pair_keep(entry, store.graph(), p0, v0, a, b, c.transition_empty);
+                    }
                 }
             } else {
                 let left = a.head(store)?;
@@ -4455,6 +4853,9 @@ impl Action {
                             transition_lemma_push_result(store.graph(), ActionShape::Pair(a@, b@), p0, v0, out);
                             transition_lemma_extends_transitive(entry, after_regex, store.graph());
                             machine_value_result(entry, store.graph(), p0, ActionShape::Pair(a@, b@), v0, out);
+                            if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                                fbr::lemma_pair_const(entry, after_regex, store.graph(), p0, v0, a, b, x, y, r, out);
+                            }
                         }
                     }
                     (TransitionHead::If(_, _, _), TransitionHead::If(_, _, _)) => {
@@ -4477,6 +4878,9 @@ impl Action {
                                 transition_children(store.graph(), a@).len())) + transition_child_actions(store.graph(), a@,
                                 ChildShape::PairLeft(b@)));
                             machine_pair_union(store.graph(), p0, a, b, true, v0);
+                            if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                                fbr::lemma_pair_union(entry, store.graph(), p0, v0, a, b, true);
+                            }
                         }
                     }
                     (_, TransitionHead::Union(n)) => {
@@ -4496,6 +4900,9 @@ impl Action {
                                 transition_children(store.graph(), b@).len())) + transition_child_actions(store.graph(), b@,
                                 ChildShape::PairRight(a@)));
                             machine_pair_union(store.graph(), p0, a, b, false, v0);
+                            if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                                fbr::lemma_pair_union(entry, store.graph(), p0, v0, a, b, false);
+                            }
                         }
                     }
                     (TransitionHead::If(test, t, e), _) => {
@@ -4508,6 +4915,9 @@ impl Action {
                             assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::CleanIf(test@, c.test_true@))
                                 .push(ActionShape::Pair(e@, b@)).push(ActionShape::Pair(t@, b@)));
                             machine_pair_split(entry, store.graph(), p0, a, b, test, t, e, c.test_true, true, v0);
+                            if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                                fbr::lemma_pair_split(entry, store.graph(), p0, v0, a, b, test, t, e, true);
+                            }
                         }
                     }
                     (_, TransitionHead::If(test, t, e)) => {
@@ -4520,6 +4930,9 @@ impl Action {
                             assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::CleanIf(test@, c.test_true@))
                                 .push(ActionShape::Pair(a@, e@)).push(ActionShape::Pair(a@, t@)));
                             machine_pair_split(entry, store.graph(), p0, a, b, test, t, e, c.test_true, false, v0);
+                            if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                                fbr::lemma_pair_split(entry, store.graph(), p0, v0, a, b, test, t, e, false);
+                            }
                         }
                     }
                     _ => {
@@ -4530,6 +4943,9 @@ impl Action {
                             transition_lemma_push_result(store.graph(), ActionShape::Pair(a@, b@), p0, v0, out);
                             collect_lemma_pair_bound(entry, a, b);
                             machine_value_result(entry, store.graph(), p0, ActionShape::Pair(a@, b@), v0, out);
+                            if fsteps::xpre(entry, ActionShape::Pair(a@, b@), p0, v0) {
+                                fbr::lemma_pair_collect(entry, store.graph(), p0, v0, a, b, out);
+                            }
                         }
                     }
                 }
@@ -4540,6 +4956,7 @@ impl Action {
 
     verus! {
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
     #[verus_spec(result =>
         requires model::graph_wf(old(store).graph()), old(store).valid_store(),
             transition_action_valid(old(store).graph(), self@),
@@ -4560,6 +4977,9 @@ impl Action {
                 Ok(()) => transition_effect(final(store).graph(), self@,
                     transition_action_views(old(tasks).view()), old(values).view(),
                     transition_action_views(final(tasks).view()), final(values).view())
+                    && (fsteps::xpre(old(store).graph(), self@, transition_action_views(old(tasks).view()), old(values).view())
+                        ==> fsteps::xeffect(final(store).graph(), self@, transition_action_views(old(tasks).view()), old(values).view(),
+                            transition_action_views(final(tasks).view()), final(values).view()))
                     && machine_progress(old(store).graph(), transition_action_views(old(tasks).view()), self@, old(values).view(),
                         final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
                 Err(_) => true,
@@ -4593,6 +5013,9 @@ impl Action {
                     machine_driver_union_effect(store.graph(), n as nat, p0, v0, values.view().last());
                     assert(values.view() == v0.take(v0.len() as int - n as int).push(values.view().last()));
                     machine_driver_union(entry, store.graph(), p0, n as nat, v0, values.view().last());
+                    if fsteps::xpre(entry, ActionShape::Union(n as nat), p0, v0) {
+                        fbr::lemma_step_union(entry, store.graph(), p0, v0, n as nat, values.view().last());
+                    }
                 }
             }
             Action::Intersect(n) => {
@@ -4603,6 +5026,9 @@ impl Action {
                     assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::Fold(
                         model::transition_ids(v0.subrange(v0.len() as int - n as int, v0.len() as int)), 0)));
                     machine_driver_intersect(store.graph(), p0, n as nat, v0);
+                    if fsteps::xpre(entry, ActionShape::Intersect(n as nat), p0, v0) {
+                        fbr::lemma_step_intersect(entry, store.graph(), p0, v0, n as nat);
+                    }
                 }
             }
             Action::Fold(xs, index) => {
@@ -4631,6 +5057,9 @@ impl Action {
                     machine_driver_if_effect(store.graph(), test, None, p0, v0, values.view().last());
                     assert(values.view() == v0.take(v0.len() as int - 2).push(values.view().last()));
                     machine_driver_if(entry, store.graph(), p0, ActionShape::If(test@), v0, values.view().last());
+                    if fsteps::xpre(entry, ActionShape::If(test@), p0, v0) {
+                        fbr::lemma_step_if(entry, store.graph(), p0, v0, test@, values.view().last());
+                    }
                 }
             }
             Action::CleanIf(test, path) => {
@@ -4652,6 +5081,9 @@ impl Action {
                     machine_driver_if_effect(store.graph(), test, Some(path), p0, v0, out);
                     assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::Clean(out@, path@)));
                     machine_driver_clean_if(entry, store.graph(), p0, test, path, v0, out);
+                    if fsteps::xpre(entry, ActionShape::CleanIf(test@, path@), p0, v0) {
+                        fbr::lemma_step_clean_if(entry, store.graph(), p0, v0, test@, path@, out);
+                    }
                 }
             }
             Action::Clean(id, path) => Action::clean_step(store, id, path, &c, tasks, values)?,
@@ -4669,6 +5101,9 @@ impl Action {
                     machine_driver_result_effect(store.graph(), ActionShape::NotResult, p0, v0);
                     assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::Not(id@)));
                     machine_driver_result(store.graph(), p0, None, v0);
+                    if fsteps::xpre(entry, ActionShape::NotResult, p0, v0) {
+                        fbr::lemma_step_result(entry, store.graph(), p0, v0, None);
+                    }
                 }
             }
             Action::AppendResult(r) => {
@@ -4682,6 +5117,9 @@ impl Action {
                     machine_driver_result_effect(store.graph(), ActionShape::AppendResult(r@), p0, v0);
                     assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::Append(id@, r@)));
                     machine_driver_result(store.graph(), p0, Some(r@), v0);
+                    if fsteps::xpre(entry, ActionShape::AppendResult(r@), p0, v0) {
+                        fbr::lemma_step_result(entry, store.graph(), p0, v0, Some(r@));
+                    }
                 }
             }
             Action::SwapThen => {
@@ -4700,6 +5138,9 @@ impl Action {
                     machine_driver_swap_effect(store.graph(), p0, v0);
                     assert(values.view() =~= v0.take(v0.len() as int - 2).push(v0[v0.len() - 1]).push(v0[v0.len() - 2]));
                     machine_driver_swap(store.graph(), p0, v0);
+                    if fsteps::xpre(entry, ActionShape::SwapThen, p0, v0) {
+                        fbr::lemma_step_swap(entry, store.graph(), p0, v0);
+                    }
                 }
             }
         }
@@ -4729,7 +5170,10 @@ impl Action {
                     transition_program(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view()),
                     transition_program(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()))
                     && machine_cost(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view())
-                        < machine_cost(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view()),
+                        < machine_cost(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view())
+                    && (fsteps::xcfg(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view())
+                        ==> fsteps::xstep(final(store).graph(), transition_action_views(old(tasks).view()), old(values).view(),
+                            transition_action_views(final(tasks).view()), final(values).view())),
                 Err(_) => true,
             },
     )]
@@ -4756,6 +5200,9 @@ impl Action {
         proof! {
             transition_lemma_program_stable(entry, store.graph(), p0, v0);
             transition_lemma_effect_frame(store.graph(), shape, pending, v0, transition_action_views(tasks.view()), values.view());
+            if fsteps::xcfg(entry, p0, v0) {
+                fbr::lemma_next(entry, store.graph(), pending, shape, v0, transition_action_views(tasks.view()), values.view());
+            }
         }
         Ok(())
     }
@@ -4780,7 +5227,8 @@ impl Action {
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
-                && transition_result(final(store).graph(), self@, id), Err(_) => true },
+                && transition_result(final(store).graph(), self@, id)
+                && (fsteps::xnf_task(old(store).graph(), self@) ==> fsteps::run_bound(final(store).graph(), self@, id@)), Err(_) => true },
     )]
     fn run<G: KernelStore>(self, store: &mut G) -> KernelResult<TransitionId> {
         proof_decl! { let ghost entry = store.graph(); let ghost shape = self@;
@@ -4797,6 +5245,8 @@ impl Action {
             guarded_lemma_run_singleton(transition_context_sem(), transition_freeze_action(entry, shape), Seq::<TransitionMeaning>::empty());
             assert(guarded_apply(transition_context_sem(), transition_freeze_action(entry, shape), Seq::<TransitionMeaning>::empty()) is Some);
             assert(original is Some);
+            assert(values.view() =~= Seq::<TransitionId>::empty());
+            if fsteps::xnf_task(entry, shape) { fbr::lemma_run_start(entry, shape); }
         }
         let mut state = Ok(());
         #[cfg_attr(verus_keep_ghost, verus_spec(
@@ -4809,24 +5259,31 @@ impl Action {
                 old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
                 old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
-                model::graph_wf(store.graph()), store.valid_store(), model::graph_extends(entry, store.graph()),
+                model::graph_wf(store.graph()), store.valid_store(), model::graph_extends(entry, store.graph()), model::graph_wf(entry),
+                transition_action_valid(entry, shape),
                 transition_configuration_valid(store.graph(), transition_action_views(tasks.view()), values.view()),
                 state.is_ok() ==> transition_program(store.graph(), transition_action_views(tasks.view()), values.view()) is Some,
                 state.is_ok() ==> transition_program_refines(original,
                     transition_program(store.graph(), transition_action_views(tasks.view()), values.view())),
+                fsteps::xnf_task(entry, shape) && state.is_ok() ==> fsteps::xrun(store.graph(), shape, transition_action_views(tasks.view()), values.view()),
             decreases if state.is_ok() {
                 machine_cost(store.graph(), transition_action_views(tasks.view()), values.view()) + 1
             } else { 0 },
         ))]
         while !tasks.is_empty() && state.is_ok() {
             proof_decl! { let ghost before = store.graph();
-            let ghost before_program = transition_program(before, transition_action_views(tasks.view()), values.view()); }
+            let ghost before_program = transition_program(before, transition_action_views(tasks.view()), values.view());
+            let ghost before_tasks = transition_action_views(tasks.view()); let ghost before_values = values.view(); }
             state = Action::next(store, &mut tasks, &mut values);
             proof! {
                 transition_lemma_extends_transitive(entry, before, store.graph());
                 if state.is_ok() {
                     guarded_lemma_program_transitive(transition_context_sem(), transition_context_valid(), original,
                         before_program, transition_program(store.graph(), transition_action_views(tasks.view()), values.view()));
+                }
+                if fsteps::xnf_task(entry, shape) && state.is_ok() {
+                    fbr::lemma_run_step(entry, before, store.graph(), shape, before_tasks, before_values,
+                        transition_action_views(tasks.view()), values.view());
                 }
             }
         }
@@ -4836,6 +5293,8 @@ impl Action {
             assert(transition_freeze_tasks(store.graph(), transition_action_views(tasks.view())) =~= Seq::<TransitionAction>::empty());
             transition_lemma_program_stable(entry, store.graph(), seq![shape], Seq::empty());
             machine_driver_complete(store.graph(), shape, values.view());
+            assert(transition_action_views(tasks.view()) =~= Seq::<ActionShape>::empty());
+            if fsteps::xnf_task(entry, shape) { fbr::lemma_run_end(store.graph(), shape, values.view()); }
         }
         match values.pop() {
             Some(v) => Ok(v),
@@ -14806,4 +15265,255 @@ pub(crate) mod verify {
     }
 
         }
+
+    verus! {
+    // ----- Structural contract of the normalizer (paper appendix, (N0)–(N5)) -----
+
+    /// Interning: in a well-formed graph, a regex kind determines its id. In particular a union,
+    /// intersection, or list state is determined by its operands, and a complement by its body.
+    pub proof fn regex_kind_unique(g: model::Graph, a: nat, b: nat)
+        requires model::graph_wf(g), a < g.regexes.len(), b < g.regexes.len(),
+            g.regexes[a as int].kind == g.regexes[b as int].kind,
+        ensures a == b,
+    {
+        regex_unfold(g, a);
+        regex_unfold(g, b);
+        model::lemma_graph_wf_elim(g);
+        assert(g.regexes[a as int] == g.regexes[b as int]);
+    }
+
+    /// (N3), exactly: the result `r` of `N(¬x)`.
+    pub open spec fn regex_not_result(g: model::Graph, x: nat, r: nat) -> bool {
+        match g.regexes[x as int].kind {
+            model::RegexKindNode::Empty => r == g.constants.all,
+            model::RegexKindNode::All => r == g.constants.empty,
+            model::RegexKindNode::Not(inner) => r == inner,
+            _ => r < g.regexes.len() && g.regexes[r as int].kind == model::RegexKindNode::Not(x),
+        }
+    }
+
+    /// (N4), exactly: the result `r` of `N(x₁⋯xₖ)` absorbs `∅`, flattens concatenations, drops
+    /// `ε`, and returns `ε`, the single remaining factor, or the list of the factors. Factors are
+    /// read in `before`, the interned list in `after`.
+    pub open spec fn regex_concat_result(before: model::Graph, after: model::Graph, children: Seq<RegexId>, r: nat) -> bool {
+        let f = regex_concat_flat(before, children);
+        if exists|i: int| 0 <= i < children.len() && before.regexes[children[i]@ as int].kind == model::RegexKindNode::Empty {
+            r == before.constants.empty
+        } else if f.len() == 0 {
+            r == before.constants.epsilon
+        } else if f.len() == 1 {
+            r == f[0]
+        } else {
+            r < after.regexes.len() && after.regexes[r as int].kind == model::RegexKindNode::Concat(f)
+        }
+    }
+
+    /// `t` is in the piece contributed by the test `c` to a flattened `∧` (`and`) or `∨`.
+    pub open spec fn test_piece_contains(g: model::Graph, c: nat, and: bool, t: nat) -> bool {
+        match g.tests[c as int] {
+            model::TestNode::And(cs) => if and { cs.contains(t) } else { t == c },
+            model::TestNode::Or(cs) => if !and { cs.contains(t) } else { t == c },
+            _ => t == c,
+        }
+    }
+
+    /// `t` is an operand of the flattened connective over `children`.
+    pub open spec fn test_member(g: model::Graph, children: Seq<TestId>, and: bool, t: nat) -> bool {
+        exists|i: int| 0 <= i < children.len() && #[trigger] test_piece_contains(g, children[i]@, and, t)
+    }
+
+    /// Shape of the test connective (the basis of (N5)): the result `r` is `⊤`, `⊥`, an operand of
+    /// the flattened input, or an interned `∧`/`∨` node over such operands. Operands are read in
+    /// `before`, the result node in `after`.
+    pub open spec fn test_connective_result(before: model::Graph, after: model::Graph, children: Seq<TestId>, and: bool, r: nat) -> bool {
+        ||| r == before.constants.test_true
+        ||| r == before.constants.test_false
+        ||| test_member(before, children, and, r)
+        ||| r < after.tests.len() && match after.tests[r as int] {
+            model::TestNode::And(ks) => and && forall|k: int| 0 <= k < ks.len() ==> test_member(before, children, and, #[trigger] ks[k]),
+            model::TestNode::Or(ks) => !and && forall|k: int| 0 <= k < ks.len() ==> test_member(before, children, and, #[trigger] ks[k]),
+            _ => false,
+        }
+    }
+
+    pub proof fn test_connective_result_extends(before: model::Graph, a: model::Graph, b: model::Graph,
+        children: Seq<TestId>, and: bool, r: nat)
+        requires test_connective_result(before, a, children, and, r), model::graph_extends(a, b),
+        ensures test_connective_result(before, b, children, and, r),
+    {
+        if r < a.tests.len() {
+            assert(a.tests == b.tests.subrange(0, a.tests.len() as int));
+            assert(b.tests[r as int] == a.tests[r as int]);
+        }
+    }
+
+    /// `o` is in the piece contributed by the regex `c` to a flattened `+` (`&` for `intersect`):
+    /// the operands of a union (intersection), otherwise `c` itself.
+    pub open spec fn regex_piece_contains(g: model::Graph, c: nat, intersect: bool, o: nat) -> bool {
+        match g.regexes[c as int].kind {
+            model::RegexKindNode::Union(cs) => if !intersect { cs.contains(o) } else { o == c },
+            model::RegexKindNode::Intersect(cs) => if intersect { cs.contains(o) } else { o == c },
+            _ => o == c,
+        }
+    }
+
+    /// `o ∈ ops₊(X)` (`ops_&(X)` for `intersect`).
+    pub open spec fn regex_member(g: model::Graph, children: Seq<RegexId>, intersect: bool, o: nat) -> bool {
+        exists|i: int| 0 <= i < children.len() && #[trigger] regex_piece_contains(g, children[i]@, intersect, o)
+    }
+
+    pub open spec fn regex_is_set(g: model::Graph, o: nat, intersect: bool) -> bool {
+        match g.regexes[o as int].kind {
+            model::RegexKindNode::Union(_) => !intersect,
+            model::RegexKindNode::Intersect(_) => intersect,
+            _ => false,
+        }
+    }
+
+    pub proof fn regex_member_valid(g: model::Graph, children: Seq<RegexId>, intersect: bool, o: nat)
+        requires model::graph_wf(g), regex_ids_valid(g, children), regex_member(g, children, intersect, o),
+        ensures o < g.regexes.len(),
+    {
+        let i = choose|i: int| 0 <= i < children.len() && #[trigger] regex_piece_contains(g, children[i]@, intersect, o);
+        let c = children[i]@;
+        model::lemma_graph_regex_wf(g, c);
+        match g.regexes[c as int].kind {
+            model::RegexKindNode::Union(cs) | model::RegexKindNode::Intersect(cs) => {
+                if cs.contains(o) { let j = choose|j: int| 0 <= j < cs.len() && cs[j] == o; }
+            },
+            _ => {},
+        }
+    }
+
+    /// The inputs are normalized for this connective: `ops₊(X)` contains no unions (resp.
+    /// `ops_&(X)` no intersections), as holds when `X` consists of states.
+    pub open spec fn regex_set_flat_inputs(g: model::Graph, children: Seq<RegexId>, intersect: bool) -> bool {
+        forall|o: nat| regex_member(g, children, intersect, o) ==> !regex_is_set(g, o, intersect)
+    }
+
+    /// `t` is the test of some member of `ops₊(X)` (`ops_&(X)`).
+    pub open spec fn regex_member_test(g: model::Graph, children: Seq<RegexId>, intersect: bool, t: nat) -> bool {
+        exists|o: nat| #[trigger] regex_member(g, children, intersect, o)
+            && o < g.regexes.len() && g.regexes[o as int].kind == model::RegexKindNode::Test(t)
+    }
+
+    /// `o` is a test combined by the test connective from tests of `ops₊(X)` (`ops_&(X)`).
+    pub open spec fn regex_combined_test(before: model::Graph, after: model::Graph, children: Seq<RegexId>, intersect: bool, o: nat) -> bool {
+        o < after.regexes.len() && exists|t: nat, ts: Seq<TestId>|
+            after.regexes[o as int].kind == model::RegexKindNode::Test(t)
+            && (forall|k: int| 0 <= k < ts.len() ==> regex_member_test(before, children, intersect, #[trigger] ts[k]@))
+            && #[trigger] test_connective_result(before, after, ts, intersect, t)
+    }
+
+    /// A legal operand of `N(ΣX)` (`N(&X)`): a member of `ops₊(X)` or a combined test.
+    pub open spec fn regex_set_operand_ok(before: model::Graph, after: model::Graph, children: Seq<RegexId>, intersect: bool, o: nat) -> bool {
+        regex_member(before, children, intersect, o) || regex_combined_test(before, after, children, intersect, o)
+    }
+
+    /// (N1)/(N2): the result `r` of `N(ΣX)` (`N(&X)`) is a constant, or its operands are members of
+    /// `ops₊(X)` (`ops_&(X)`) or tests combined from the tests among them. Inputs are read in
+    /// `before`, the result in `after`.
+    pub open spec fn regex_set_shape(before: model::Graph, after: model::Graph, children: Seq<RegexId>, intersect: bool, r: nat) -> bool {
+        ||| r == before.constants.empty
+        ||| r == before.constants.all
+        ||| r == before.constants.epsilon
+        ||| r < after.regexes.len() && forall|o: nat| #[trigger] regex_piece_contains(after, r, intersect, o)
+            ==> regex_member(before, children, intersect, o) || regex_combined_test(before, after, children, intersect, o)
+    }
+
+    pub proof fn regex_combined_test_extends(before: model::Graph, a: model::Graph, b: model::Graph,
+        children: Seq<RegexId>, intersect: bool, o: nat)
+        requires regex_combined_test(before, a, children, intersect, o), model::graph_extends(a, b),
+        ensures regex_combined_test(before, b, children, intersect, o),
+    {
+        let (t, ts) = choose|t: nat, ts: Seq<TestId>|
+            a.regexes[o as int].kind == model::RegexKindNode::Test(t)
+            && (forall|k: int| 0 <= k < ts.len() ==> regex_member_test(before, children, intersect, #[trigger] ts[k]@))
+            && #[trigger] test_connective_result(before, a, ts, intersect, t);
+        assert(a.regexes == b.regexes.subrange(0, a.regexes.len() as int));
+        assert(b.regexes[o as int] == a.regexes[o as int]);
+        test_connective_result_extends(before, a, b, ts, intersect, t);
+    }
+
+    /// (N0) for complements: `N(¬p) = ¬p` whenever `¬p` is a state.
+    pub proof fn regex_not_fixpoint(g: model::Graph, x: nat, p: nat, r: nat)
+        requires model::graph_wf(g), x < g.regexes.len(), p < g.regexes.len(),
+            g.regexes[x as int].kind == model::RegexKindNode::Not(p),
+            !(g.regexes[p as int].kind is Empty || g.regexes[p as int].kind is All || g.regexes[p as int].kind is Not),
+            regex_not_result(g, p, r),
+        ensures r == x,
+    {
+        regex_kind_unique(g, r, x);
+    }
+
+    /// (N3) involution: `N(¬N(¬x)) = x` for every node `x` that is not the complement of `∅`,
+    /// `Univ`, or a complement; in particular for every state.
+    pub proof fn regex_not_involution(g: model::Graph, x: nat, r: nat, r2: nat)
+        requires model::graph_wf(g), x < g.regexes.len(),
+            forall|p: nat| #[trigger] g.regexes[x as int].kind == model::RegexKindNode::Not(p)
+                ==> !(g.regexes[p as int].kind is Empty || g.regexes[p as int].kind is All || g.regexes[p as int].kind is Not),
+            regex_not_result(g, x, r), regex_not_result(g, r, r2),
+        ensures r2 == x,
+    {
+        regex_constants(g);
+        regex_unfold(g, g.constants.empty);
+        regex_unfold(g, g.constants.all);
+        regex_unfold(g, x);
+        match g.regexes[x as int].kind {
+            model::RegexKindNode::Empty => {
+                assert(g.regexes[g.constants.all as int].kind is All);
+                assert(g.regexes[g.constants.empty as int].kind is Empty);
+                regex_kind_unique(g, x, g.constants.empty);
+            },
+            model::RegexKindNode::All => {
+                assert(g.regexes[g.constants.empty as int].kind is Empty);
+                assert(g.regexes[g.constants.all as int].kind is All);
+                regex_kind_unique(g, x, g.constants.all);
+            },
+            model::RegexKindNode::Not(p) => {
+                assert(r == p);
+                assert(p < g.regexes.len());
+                regex_not_fixpoint(g, x, p, r2);
+            },
+            _ => {
+                assert(g.regexes[r as int].kind == model::RegexKindNode::Not(x));
+            },
+        }
+    }
+
+    /// Factors that are neither `∅`, `ε`, nor concatenations flatten to themselves.
+    pub proof fn regex_concat_flat_atoms(g: model::Graph, children: Seq<RegexId>)
+        requires forall|i: int| 0 <= i < children.len() ==> !(#[trigger] g.regexes[children[i]@ as int].kind is Empty
+            || g.regexes[children[i]@ as int].kind is Epsilon || g.regexes[children[i]@ as int].kind is Concat),
+        ensures regex_concat_flat(g, children) == model::regex_ids(children),
+        decreases children.len(),
+    {
+        if children.len() > 0 {
+            let init = children.drop_last();
+            assert forall|i: int| 0 <= i < init.len() implies !(#[trigger] g.regexes[init[i]@ as int].kind is Empty
+                || g.regexes[init[i]@ as int].kind is Epsilon || g.regexes[init[i]@ as int].kind is Concat) by {
+                assert(init[i] == children[i]);
+            }
+            regex_concat_flat_atoms(g, init);
+            assert(g.regexes[children.last()@ as int].kind == g.regexes[children[children.len() - 1]@ as int].kind);
+            assert(model::regex_ids(children) =~= model::regex_ids(init) + seq![children.last()@]);
+        }
+    }
+
+    /// (N0) for lists: applied to the elements of a list state, `N` returns that state.
+    pub proof fn regex_concat_fixpoint(before: model::Graph, after: model::Graph, q: nat, children: Seq<RegexId>, r: nat)
+        requires model::graph_wf(after), model::graph_extends(before, after), q < before.regexes.len(),
+            before.regexes[q as int].kind == model::RegexKindNode::Concat(model::regex_ids(children)), children.len() >= 2,
+            forall|i: int| 0 <= i < children.len() ==> !(#[trigger] before.regexes[children[i]@ as int].kind is Empty
+                || before.regexes[children[i]@ as int].kind is Epsilon || before.regexes[children[i]@ as int].kind is Concat),
+            regex_concat_result(before, after, children, r),
+        ensures r == q,
+    {
+        regex_concat_flat_atoms(before, children);
+        assert(!exists|i: int| 0 <= i < children.len() && before.regexes[children[i]@ as int].kind == model::RegexKindNode::Empty);
+        assert(before.regexes == after.regexes.subrange(0, before.regexes.len() as int));
+        assert(after.regexes[q as int] == before.regexes[q as int]);
+        regex_kind_unique(after, r, q);
+    }
+    }
 }
