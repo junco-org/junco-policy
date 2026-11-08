@@ -414,9 +414,9 @@ inserted state subsumes: its constraint entails that state's, it requires all of
 parts, and it avoids a piece above each of that state's pieces. "Below" is a syntactic simulation,
 a sound under-approximation of inclusion decided by memoised recursion on pairs of nodes: it
 compares unions, intersections, concatenations factor by factor, stars and complements
-structurally, and tests by their conjuncts and disjuncts. Parts are compared by identity, so
-inserted states are indexed by their parts. Inserted states are never removed, so
-counterexamples stay shortest.
+structurally, and tests by recursion through their conjunctions and disjunctions. Parts are
+compared by identity, so inserted states are indexed by their parts. Inserted states are never
+removed, so counterexamples stay shortest.
 
 Each search compiles one graph with its own 16 MiB budget, through `CanonicalStore::with_budget`,
 where the runtime keeps `MAX_GRAPH_BYTES` (100 KiB) per rule. The classes of events and the search
