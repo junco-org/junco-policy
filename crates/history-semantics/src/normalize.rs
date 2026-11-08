@@ -2908,7 +2908,7 @@ impl TransitionMode {
                                                     Err(error) => Err(error),
                                                 }
                                             }
-                                            TransitionHead::Const(r) => {
+                                            TransitionHead::Const(r) if self.intersect => {
                                                 constants.push(r);
                                                 proof! {
                                                     transition_lemma_collect_constant(store.graph(), self@, p0, f0, rs0, r);
