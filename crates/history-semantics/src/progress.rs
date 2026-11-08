@@ -5,6 +5,8 @@
 use super::normalize::verify as norm;
 #[cfg(verus_keep_ghost)]
 use super::symbolic;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_interp as fint;
 use crate::WorkVec;
 use crate::normalize::RegexNormalize;
 use crate::symbolic::{AtomTruth, RegexDerivative, TransitionInterpret};
@@ -859,7 +861,8 @@ impl CompiledPair {
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             final(self).caches.atoms@ == old(self).caches.atoms@,
             result matches Ok(id) ==> successor_entries((*final(self)).caches.successors).contains_key(class_key(key))
-                && successor_entries((*final(self)).caches.successors)[class_key(key)] == id,
+                && successor_entries((*final(self)).caches.successors)[class_key(key)] == id
+                && fint::entry_val(final(self).store.graph(), key.transition@, id@),
     )]
     /// Cached or freshly interpreted successor of `key`; every entry it publishes is covered by
     /// `successor_entries_wf`, so callers read the language equivalence from `pair_wf`.
@@ -901,6 +904,7 @@ impl CompiledPair {
                 language::event_wf(theta) && symbolic::verify::truth_words_realize(self.store.graph(), atoms@, key.words.view(), theta, current)
                     implies model::regex_lang(self.store.graph(), theta, successor@, word)
                         == norm::transition_lang(self.store.graph(), theta, key.transition, current, word) by {}
+            fint::lemma_entry_val_intro(entry.store.graph(), self.store.graph(), key.transition@, successor@);
         }
         if self.caches.successors.is_none() {
             let cache = GraphCaches::successor_cache()
@@ -919,6 +923,7 @@ impl CompiledPair {
                 let i = other.transition@ as int;
                 other.transition@ < self.store.graph().transitions.len() && 0 <= i < self.caches.atoms@.len() && self.caches.atoms@[i] is Some
                     && successor_entries((*self).caches.successors)[other]@ < self.store.graph().regexes.len()
+                    && fint::entry_val(self.store.graph(), other.transition@, successor_entries((*self).caches.successors)[other]@)
                     && forall|theta: Subst, current: EventView, word: Seq<EventView>|
                         language::event_wf(theta) && symbolic::verify::truth_words_realize(self.store.graph(), self.caches.atoms@[i].unwrap()@, other.words, theta, current)
                             ==> model::regex_lang(self.store.graph(), theta, successor_entries((*self).caches.successors)[other]@, word)
@@ -1794,6 +1799,7 @@ pub(crate) mod verify {
             let index = key.transition@ as int;
             key.transition@ < g.transitions.len() && 0 <= index < atoms.len() && atoms[index] is Some
             && entries[key]@ < g.regexes.len()
+            && fint::entry_val(g, key.transition@, entries[key]@)
             && forall|theta: Subst, event: EventView, word: Seq<EventView>|
                 language::event_wf(theta) && symbolic::verify::truth_words_realize(g, atoms[index].unwrap()@, key.words, theta, event)
                     ==> model::regex_lang(g, theta, entries[key]@, word)
@@ -1977,6 +1983,7 @@ pub(crate) mod verify {
             let index = key.transition@ as int;
             key.transition@ < b.transitions.len() && 0 <= index < atoms.len() && atoms[index] is Some
             && entries[key]@ < b.regexes.len()
+            && fint::entry_val(b, key.transition@, entries[key]@)
             && forall|theta: Subst, event: EventView, word: Seq<EventView>|
                 language::event_wf(theta) && symbolic::verify::truth_words_realize(b, atoms[index].unwrap()@, key.words, theta, event)
                     ==> model::regex_lang(b, theta, entries[key]@, word)
@@ -1985,6 +1992,7 @@ pub(crate) mod verify {
             let index = key.transition@ as int;
             symbolic::verify::truth_words_realize_extends(a, b, atoms[index].unwrap()@, key.words);
             model::lemma_lift_regex_stable(a, b, entries[key]@);
+            fint::lemma_entry_val_stable(a, b, key.transition@, entries[key]@);
             model::lemma_lift_transition_stable(a, b, key.transition@);
             assert forall|theta: Subst, event: EventView, word: Seq<EventView>|
                 language::event_wf(theta) && symbolic::verify::truth_words_realize(b, atoms[index].unwrap()@, key.words, theta, event)

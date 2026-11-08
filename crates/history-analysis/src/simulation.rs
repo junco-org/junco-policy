@@ -10,8 +10,9 @@
 //! - `¬x ≤ ¬y` if `y ≤ x`;
 //! - `x_1⋯x_n ≤ y_1⋯y_n` if `x_i ≤ y_i` for each `i`, and `x ≤ Σ*·y` and `x ≤ y·Σ*` if `x ≤ y`;
 //! - `x* ≤ y*` and `x ≤ y*` if `x ≤ y`;
-//! - between one-event tests, `φ ≤ ψ` if `ψ` is `⊤`, `φ` is `⊥`, every conjunct of `ψ` is one of
-//!   `φ`, or every disjunct of `φ` is one of `ψ`.
+//! - between one-event tests, `φ ≤ ψ` if `φ = ψ`, `ψ` is `⊤`, `φ` is `⊥`, a disjunction `φ` has
+//!   each disjunct below `ψ`, `φ` lies below each conjunct of a conjunction `ψ`, a conjunction `φ`
+//!   has some conjunct below `ψ`, or `φ` lies below some disjunct of a disjunction `ψ`.
 //!
 //! Each rule is the monotonicity or antitonicity of an operator, or an inclusion that holds under
 //! every valuation of the candidate, so `x ≤ y` implies that the language of `x` is included in
@@ -22,12 +23,13 @@ use hashbrown::HashMap;
 use history_semantics::SymbolicLanguage;
 use junco_core::HistoryError;
 use junco_core::kernel::{RegexId, RegexKindView, TestId, TestView};
-use smallvec::{SmallVec, smallvec};
+use smallvec::SmallVec;
 
 /// The simulation between the residuals of one language, memoised per pair.
 #[derive(Default)]
 pub(crate) struct Simulation {
     known: HashMap<(RegexId, RegexId), bool>,
+    known_tests: HashMap<(TestId, TestId), bool>,
 }
 
 /// A residual's node, with its children copied out of the graph.
@@ -43,7 +45,7 @@ enum Node {
     Not(RegexId),
 }
 
-/// A test's node, with the children of a conjunction or disjunction in increasing order.
+/// A test's node, with the children of a conjunction or disjunction copied out of the graph.
 enum TestNode {
     True,
     False,
@@ -125,7 +127,7 @@ impl Simulation {
         }
         Ok(match (left, right) {
             (Node::Not(inner), Node::Not(outer)) => self.le(language, *outer, *inner)?,
-            (Node::Test(phi), Node::Test(psi)) => test_le(language, *phi, *psi)?,
+            (Node::Test(phi), Node::Test(psi)) => self.test_le(language, *phi, *psi)?,
             (Node::Star(inner), Node::Star(outer)) => {
                 self.le(language, *inner, *outer)? || self.le(language, x, *outer)?
             }
@@ -271,30 +273,89 @@ fn test_node(language: &mut SymbolicLanguage, id: TestId) -> Result<TestNode, Hi
     })
 }
 
-/// Whether every event that satisfies `phi` satisfies `psi`, by the rule for tests.
-fn test_le(
-    language: &mut SymbolicLanguage,
-    phi: TestId,
-    psi: TestId,
-) -> Result<bool, HistoryError> {
-    if phi == psi {
-        return Ok(true);
+impl Simulation {
+    /// Whether every event that satisfies `phi` satisfies `psi`, by the rules for tests.
+    fn test_le(
+        &mut self,
+        language: &mut SymbolicLanguage,
+        phi: TestId,
+        psi: TestId,
+    ) -> Result<bool, HistoryError> {
+        if phi == psi {
+            return Ok(true);
+        }
+        if let Some(known) = self.known_tests.get(&(phi, psi)) {
+            return Ok(*known);
+        }
+        let (left, right) = (test_node(language, phi)?, test_node(language, psi)?);
+        let result = self.derive_test(language, phi, &left, &right, psi)?;
+        self.known_tests.insert((phi, psi), result);
+        Ok(result)
     }
-    let (left, right) = (test_node(language, phi)?, test_node(language, psi)?);
-    if matches!(right, TestNode::True) || matches!(left, TestNode::False) {
-        return Ok(true);
+
+    fn derive_test(
+        &mut self,
+        language: &mut SymbolicLanguage,
+        phi: TestId,
+        left: &TestNode,
+        right: &TestNode,
+        psi: TestId,
+    ) -> Result<bool, HistoryError> {
+        if matches!(right, TestNode::True) || matches!(left, TestNode::False) {
+            return Ok(true);
+        }
+        if let TestNode::Or(disjuncts) = left
+            && self.each_test_below(language, disjuncts, psi)?
+        {
+            return Ok(true);
+        }
+        if let TestNode::And(conjuncts) = right
+            && self.below_each_test(language, phi, conjuncts)?
+        {
+            return Ok(true);
+        }
+        if let TestNode::And(conjuncts) = left {
+            for &conjunct in conjuncts {
+                if self.test_le(language, conjunct, psi)? {
+                    return Ok(true);
+                }
+            }
+        }
+        if let TestNode::Or(disjuncts) = right {
+            for &disjunct in disjuncts {
+                if self.test_le(language, phi, disjunct)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
-    let conjuncts = |id: TestId, node: &TestNode| match node {
-        TestNode::And(conjuncts) => conjuncts.clone(),
-        _ => smallvec![id],
-    };
-    let disjuncts = |id: TestId, node: &TestNode| match node {
-        TestNode::Or(disjuncts) => disjuncts.clone(),
-        _ => smallvec![id],
-    };
-    let included = |small: &[TestId], large: &[TestId]| {
-        small.iter().all(|test| large.binary_search(test).is_ok())
-    };
-    Ok(included(&conjuncts(psi, &right), &conjuncts(phi, &left))
-        || included(&disjuncts(phi, &left), &disjuncts(psi, &right)))
+
+    fn each_test_below(
+        &mut self,
+        language: &mut SymbolicLanguage,
+        phis: &[TestId],
+        psi: TestId,
+    ) -> Result<bool, HistoryError> {
+        for &phi in phis {
+            if !self.test_le(language, phi, psi)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn below_each_test(
+        &mut self,
+        language: &mut SymbolicLanguage,
+        phi: TestId,
+        psis: &[TestId],
+    ) -> Result<bool, HistoryError> {
+        for &psi in psis {
+            if !self.test_le(language, phi, psi)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
 }

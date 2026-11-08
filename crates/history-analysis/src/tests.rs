@@ -478,6 +478,36 @@ fn simulation_settles_a_narrower_rule_at_the_root() {
 }
 
 #[test]
+fn simulation_compares_nested_tests() {
+    // After a read, the narrow tail keeps every later event off reads and stages of `r`, the
+    // broad one off reads of `r`. The narrow keep test's disjunct `A ≠ read ∧ A ≠ stage` lies below
+    // the broad one's disjunct `A ≠ read` by a conjunct, so the initial residual is dead.
+    let since = |keep: TestExpr<Access>| {
+        RegexExpr::concat([
+            RegexExpr::all(),
+            RegexExpr::test(action_is(Comparison::Eq, Action::Read)),
+            RegexExpr::star(RegexExpr::test(keep)),
+        ])
+    };
+    let narrow = since(TestExpr::or([
+        resource_is(Comparison::Neq, None),
+        TestExpr::and([
+            action_is(Comparison::Neq, Action::Read),
+            action_is(Comparison::Neq, Action::Stage),
+        ]),
+    ]));
+    let broad = since(TestExpr::or([
+        resource_is(Comparison::Neq, None),
+        action_is(Comparison::Neq, Action::Read),
+    ]));
+    let mut analyzer = PolicyAnalyzer::new(finite_actions());
+    let verdict = analyzer.tail_included(&head(), &narrow, &broad).unwrap();
+    assert!(verdict.holds());
+    assert_eq!(verdict.stats.expanded, 0);
+    assert!(!included(&broad, &narrow));
+}
+
+#[test]
 fn vacuity_distinguishes_rules_that_never_or_always_fire() {
     let mut analyzer = PolicyAnalyzer::new(finite_actions());
     let read = ever(action_is(Comparison::Eq, Action::Read));

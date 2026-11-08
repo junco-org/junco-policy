@@ -158,6 +158,7 @@ impl CompiledPair {
     #[verus_verify]
     #[verus_spec(result => ensures result matches Ok(pair) ==> {
         crate::progress::verify::pair_wf(pair)
+        && crate::verify::finite_impl::regex_nf(model::lift_regex(pair.store.graph(), pair.root@))
         && forall|theta: language::Subst, word: Seq<language::EventView>| language::event_wf(theta)
             ==> model::regex_lang(pair.store.graph(), theta, pair.root@, word)
                 == source_regex(*template, template.root as nat, theta, word)
@@ -184,6 +185,7 @@ impl CompiledPair {
                 world,
             };
             proof_decl! { let ghost restoration = kernel.restoration(); }
+            proof! { crate::verify::finite_compile::lemma_compiled_empty(kernel.graph()); assert(tests@ =~= Seq::<TestId>::empty()); }
             let mut index = 0;
             #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant index <= template.tests@.len(), tests@.len() == index,
@@ -191,6 +193,7 @@ impl CompiledPair {
                 kernel.restoration() == restoration,
                 test_maps(kernel.graph(), *template, tests@),
                 regex_maps(kernel.graph(), *template, regexes@), regexes@.len() == 0,
+                crate::verify::finite_compile::compiled_nf(kernel.graph(), tests@, regexes@),
             decreases template.tests@.len() - index,
         ))]
             while index < template.tests.len() {
@@ -265,6 +268,20 @@ impl CompiledPair {
                             }
                         }
                     }
+                    match test {
+                        FlatTest::Bool(_) | FlatTest::Atom { .. } => {
+                            crate::verify::finite_compile::lemma_test_simple_nf(kernel.graph(), id@);
+                        }
+                        FlatTest::And(children) => {
+                            crate::verify::finite_compile::lemma_connective_nf(before, kernel.graph(), tests@, regexes@,
+                                children@, selected_ids, true, id@);
+                        }
+                        FlatTest::Or(children) => {
+                            crate::verify::finite_compile::lemma_connective_nf(before, kernel.graph(), tests@, regexes@,
+                                children@, selected_ids, false, id@);
+                        }
+                    }
+                    crate::verify::finite_compile::lemma_push_test(before, kernel.graph(), tests@, regexes@, id);
                     test_push(kernel.graph(), *template, tests@, id);
                 }
                 tests.push(id);
@@ -277,6 +294,7 @@ impl CompiledPair {
                 kernel.restoration() == restoration,
                 test_maps(kernel.graph(), *template, tests@), tests@.len() == template.tests@.len(),
                 regex_maps(kernel.graph(), *template, regexes@),
+                crate::verify::finite_compile::compiled_nf(kernel.graph(), tests@, regexes@),
             decreases template.regexes@.len() - index,
         ))]
             while index < template.regexes.len() {
@@ -388,6 +406,30 @@ impl CompiledPair {
                             }
                         }
                     }
+                    match regex {
+                        FlatRegex::Empty | FlatRegex::All | FlatRegex::Epsilon => {
+                            crate::verify::finite_compile::lemma_regex_const_nf(kernel.graph(), id@);
+                        }
+                        FlatRegex::Test(test) => {
+                            crate::verify::finite_compile::lemma_from_test_nf(before, kernel.graph(), tests@, regexes@, *test as int, id@);
+                        }
+                        FlatRegex::Concat(children) => {
+                            crate::verify::finite_compile::lemma_concat_nf(before, kernel.graph(), tests@, regexes@, children@, selected_ids, id@);
+                        }
+                        FlatRegex::Union(children) => {
+                            crate::verify::finite_compile::lemma_set_nf(before, kernel.graph(), tests@, regexes@, children@, selected_ids, false, id@);
+                        }
+                        FlatRegex::Intersect(children) => {
+                            crate::verify::finite_compile::lemma_set_nf(before, kernel.graph(), tests@, regexes@, children@, selected_ids, true, id@);
+                        }
+                        FlatRegex::Star(child) => {
+                            crate::verify::finite_compile::lemma_compiled_regex(before, tests@, regexes@, *child as int);
+                        }
+                        FlatRegex::Complement(child) => {
+                            crate::verify::finite_compile::lemma_not_nf(before, kernel.graph(), tests@, regexes@, *child as int, id@);
+                        }
+                    }
+                    crate::verify::finite_compile::lemma_push_regex(before, kernel.graph(), tests@, regexes@, id);
                     regex_push(kernel.graph(), *template, regexes@, id);
                 }
                 regexes.push(id);
@@ -397,18 +439,21 @@ impl CompiledPair {
                 assert(kernel.valid_store());
                 assert(model::graph_wf(kernel.graph()));
                 assert(regex_maps(kernel.graph(), *template, regexes@));
+                assert(crate::verify::finite_compile::compiled_nf(kernel.graph(), tests@, regexes@));
             }
         }
         proof! {
             assert(store.valid_store());
             assert(model::graph_wf(store.graph()));
             assert(regex_maps(store.graph(), *template, regexes@));
+            assert(crate::verify::finite_compile::compiled_nf(store.graph(), tests@, regexes@));
         }
         let root = Self::lookup(&regexes, template.root)?;
         limits.checkpoint().map_err(HistoryError::from)?;
         proof! {
             assert(model::graph_wf(store.graph()));
             assert(regex_correct(store.graph(), *template, template.root as nat, root));
+            crate::verify::finite_compile::lemma_compiled_regex(store.graph(), tests@, regexes@, template.root as int);
         }
         Ok(CompiledPair::new(store, root))
     }

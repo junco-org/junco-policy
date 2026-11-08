@@ -132,7 +132,8 @@ impl<E: Event> Verdict<E> {
     }
 }
 
-/// Constants of the analysed rules and domains, interned with ids per value.
+/// Constants of the analysed rules and domains, interned with ids per value. Ids start at 1, as
+/// the `FlatEncoder` contract requires nonzero codes; the constant with id `i` is `values[i - 1]`.
 struct Constants<E: Event> {
     ids: HashMap<ComponentValue<E>, ConstId>,
     values: Vec<ComponentValue<E>>,
@@ -143,7 +144,7 @@ impl<E: Event> Constants<E> {
         if let Some(id) = self.ids.get(&value) {
             return *id;
         }
-        let id = ConstId::try_from(self.values.len()).expect("constant ids fit in u32");
+        let id = ConstId::try_from(self.values.len() + 1).expect("constant ids fit in u32");
         self.values.push(value);
         self.ids.insert(value, id);
         id
@@ -586,7 +587,7 @@ impl<E: Event> PolicyAnalyzer<E> {
 
     fn value<T>(&self, slot: Slot, project: impl FnOnce(ComponentValue<E>) -> T) -> Value<T> {
         match slot {
-            Slot::Constant(id) => Value::Constant(project(self.constants.values[id as usize])),
+            Slot::Constant(id) => Value::Constant(project(self.constants.values[id as usize - 1])),
             Slot::Fresh(number) => Value::Fresh(number),
         }
     }
