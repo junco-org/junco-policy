@@ -302,4 +302,801 @@ pub open spec fn stmt_search_terminates() -> bool {
             ==> exists|bound: nat| #[trigger] traces_bounded(g0, q0, cases_of, bound)
 }
 
+// ----- proofs -----
+
+pub open spec fn induced_assignment(theta: Subst, e: EventView,
+    atoms: Set<model::Primitive>) -> Assignment {
+    Map::new(atoms, |p: model::Primitive| model::primitive_holds(theta, p, e))
+}
+
+pub proof fn lemma_induced_realizes(theta: Subst, e: EventView, atoms: Set<model::Primitive>)
+    ensures induced_assignment(theta, e, atoms).dom() == atoms,
+        realizes(theta, e, induced_assignment(theta, e, atoms)),
+{}
+
+pub proof fn lemma_realizes_unique(theta: Subst, e: EventView,
+    atoms: Set<model::Primitive>, a: Assignment, b: Assignment)
+    requires a.dom() == atoms, b.dom() == atoms, realizes(theta, e, a), realizes(theta, e, b),
+    ensures a == b,
+{
+    assert(a =~= b);
+}
+
+pub proof fn lemma_paper_steps_finite(d: NDomains, item: Item, atoms: Set<model::Primitive>,
+    cases_split: Set<Constraint>, next: spec_fn(Assignment) -> Regex<model::Test>)
+    ensures paper_steps(d, item, atoms, cases_split, next).finite(),
+{
+    crate::verify::finite_states::lemma_powerset_finite(atoms);
+    let pw = ISet::new(|s: Set<model::Primitive>| s.subset_of(atoms));
+    let assignment = |s: Set<model::Primitive>| Map::new(atoms,
+        |p: model::Primitive| s.contains(p));
+    pw.lemma_map_finite(assignment);
+    let assignments = pw.map(assignment);
+    let maker = |g: Constraint| assignments.map(|a: Assignment|
+        Case { constraint: g, alpha: a, next: next(a) });
+    assert forall|g: Constraint| cases_split.contains(g) implies #[trigger] maker(g).finite() by {
+        assignments.lemma_map_finite(|a: Assignment|
+            Case { constraint: g, alpha: a, next: next(a) });
+    }
+    crate::verify::finite_states::lemma_big_union_finite(cases_split, maker);
+    let bound = ISet::new(|c: Case| exists|g: Constraint|
+        cases_split.contains(g) && #[trigger] maker(g).contains(c));
+    assert forall|c: Case| paper_steps(d, item, atoms, cases_split, next).contains(c)
+        implies bound.contains(c) by {
+        let yes = atoms.filter(|p: model::Primitive| c.alpha[p]);
+        assert(yes.subset_of(atoms));
+        assert(assignment(yes) =~= c.alpha);
+        assert(pw.contains(yes));
+        assert(assignments.contains(c.alpha));
+        assert(maker(c.constraint).contains(c));
+    }
+    vstd::iset_lib::lemma_iset_subset_finite(bound,
+        paper_steps(d, item, atoms, cases_split, next));
+}
+
+pub proof fn lemma_node_reachable(d: NDomains, g0: Constraint, q0: Regex<model::Test>,
+    cases_of: spec_fn(Item) -> Set<Case>, t: Trace, j: int)
+    requires trace_wf(d, g0, q0, cases_of, t), 0 <= j < t.nodes.len(),
+    ensures reachable_item(cases_of, Item { constraint: g0, state: q0 },
+        t.nodes[j].depth, t.nodes[j].item),
+    decreases j,
+{
+    if j > 0 {
+        assert(parent_ok(cases_of, t, j));
+        let (p, alpha) = t.nodes[j].parent.unwrap();
+        let c = choose|c: Case| #[trigger] cases_of(t.nodes[p as int].item).contains(c)
+            && c.alpha == alpha && t.nodes[j].item == case_item(c);
+        lemma_node_reachable(d, g0, q0, cases_of, t, p as int);
+        assert(reachable_item(cases_of, Item { constraint: g0, state: q0 },
+            (t.nodes[j].depth - 1) as nat, t.nodes[p as int].item));
+    }
+}
+
+pub proof fn lemma_chain_len(d: NDomains, g0: Constraint, q0: Regex<model::Test>,
+    cases_of: spec_fn(Item) -> Set<Case>, t: Trace, j: int, fuel: nat)
+    requires trace_wf(d, g0, q0, cases_of, t), 0 <= j < t.nodes.len(),
+        fuel >= t.nodes[j].depth,
+    ensures chain(t.nodes, j, fuel).len() == t.nodes[j].depth,
+        chain(t.nodes, j, fuel) == chain(t.nodes, j, t.nodes[j].depth),
+    decreases j,
+{
+    if j > 0 {
+        assert(parent_ok(cases_of, t, j));
+        let (p, alpha) = t.nodes[j].parent.unwrap();
+        lemma_chain_len(d, g0, q0, cases_of, t, p as int, (fuel - 1) as nat);
+        lemma_chain_len(d, g0, q0, cases_of, t, p as int,
+            (t.nodes[j].depth - 1) as nat);
+    }
+}
+
+pub proof fn lemma_trace_nodes_bounded(g0: Constraint, q0: Regex<model::Test>,
+    cases_of: spec_fn(Item) -> Set<Case>, f: Set<Item>, d: NDomains, t: Trace)
+    requires items_within(cases_of, Item { constraint: g0, state: q0 }, f),
+        trace_wf(d, g0, q0, cases_of, t),
+    ensures t.nodes.len() <= f.len(),
+{
+    let items = t.nodes.map(|i: int, n: Node| n.item);
+    assert(items.no_duplicates()) by {
+        assert forall|i: int, j: int| 0 <= i < items.len() && 0 <= j < items.len()
+            && i != j implies items[i] != items[j] by {
+            if i < j {
+                assert(t.nodes[i].depth <= t.nodes[j].depth);
+                assert(t.nodes[i].item != t.nodes[j].item);
+            } else {
+                assert(t.nodes[j].depth <= t.nodes[i].depth);
+                assert(t.nodes[j].item != t.nodes[i].item);
+            }
+        }
+    }
+    assert forall|j: int| 0 <= j < items.len() implies f.contains(#[trigger] items[j]) by {
+        lemma_node_reachable(d, g0, q0, cases_of, t, j);
+    }
+    crate::verify::finite_impl::lemma_nodup_len(items, f);
+}
+
+pub proof fn theorem_search_terminates()
+    ensures stmt_search_terminates(),
+{
+    assert forall|g0: Constraint, q0: Regex<model::Test>,
+        cases_of: spec_fn(Item) -> Set<Case>|
+        #[trigger] finitely_many_items(cases_of, Item { constraint: g0, state: q0 })
+        implies exists|bound: nat| #[trigger] traces_bounded(g0, q0, cases_of, bound) by {
+        let f = choose|f: Set<Item>| #[trigger] items_within(cases_of,
+            Item { constraint: g0, state: q0 }, f);
+        assert(traces_bounded(g0, q0, cases_of, f.len())) by {
+            assert forall|d: NDomains, t: Trace| #[trigger] trace_wf(d, g0, q0, cases_of, t)
+                implies t.nodes.len() <= f.len() by {
+                lemma_trace_nodes_bounded(g0, q0, cases_of, f, d, t);
+            }
+        }
+    }
+}
+
+pub open spec fn atom_pair_image(p: model::Primitive) -> (Component, nat) {
+    match p {
+        model::Primitive::Eq(c, model::GTerm::Constant(v)) => (c, v),
+        model::Primitive::Eq(c, model::GTerm::Variable(_)) => (c, 0),
+    }
+}
+
+pub proof fn lemma_atom_pairs_members(atoms: Set<model::Primitive>)
+    ensures forall|p: (Component, nat)| #[trigger] atom_pairs(atoms).contains(p)
+        <==> (atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Variable(p.0)))
+            && atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Constant(p.1)))),
+{
+    let image = |p: model::Primitive| atom_pair_image(p);
+    let bound = atoms.to_iset().map(image);
+    atoms.to_iset().lemma_map_finite(image);
+    let f = |p: (Component, nat)|
+        atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Variable(p.0)))
+        && atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Constant(p.1)));
+    assert forall|p: (Component, nat)| f(p) implies bound.contains(p) by {
+        let a = model::Primitive::Eq(p.0, model::GTerm::Constant(p.1));
+        assert(atom_pair_image(a) == p);
+    }
+    lemma_set_new_bounded(f, bound);
+}
+
+pub proof fn lemma_domain_pairs_members(d: NDomains, atoms: Set<model::Primitive>)
+    ensures forall|p: (Component, nat)| #[trigger] domain_pairs(d, atoms).contains(p)
+        <==> (atom_pairs(atoms).contains(p)
+            || (atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Variable(p.0)))
+                && match n_domain(d, p.0) {
+                    Some(values) => values.contains(p.1), None => false,
+                })),
+{
+    let principal = d.principal.unwrap_or(Set::empty());
+    let action = d.action.unwrap_or(Set::empty());
+    let resource = d.resource.unwrap_or(Set::empty());
+    let pm = |v: nat| (Component::Principal, v);
+    let am = |v: nat| (Component::Action, v);
+    let rm = |v: nat| (Component::Resource, v);
+    principal.to_iset().lemma_map_finite(pm);
+    action.to_iset().lemma_map_finite(am);
+    resource.to_iset().lemma_map_finite(rm);
+    let bound = atom_pairs(atoms).to_iset().union(principal.to_iset().map(pm))
+        .union(action.to_iset().map(am)).union(resource.to_iset().map(rm));
+    let f = |p: (Component, nat)| atom_pairs(atoms).contains(p)
+        || (atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Variable(p.0)))
+            && match n_domain(d, p.0) { Some(values) => values.contains(p.1), None => false });
+    assert forall|p: (Component, nat)| f(p) implies bound.contains(p) by {
+        if !atom_pairs(atoms).contains(p) {
+            match p.0 {
+                Component::Principal => { assert(principal.to_iset().map(pm).contains(p)); },
+                Component::Action => { assert(action.to_iset().map(am).contains(p)); },
+                Component::Resource => { assert(resource.to_iset().map(rm).contains(p)); },
+            }
+        }
+    }
+    lemma_set_new_bounded(f, bound);
+}
+
+pub proof fn lemma_decided_agreement(d: NDomains, g: Constraint, k: Component, v: nat,
+    theta0: Subst, theta: Subst)
+    requires decides(d, g, k, v), n_theta_ok(d, theta0), n_theta_ok(d, theta),
+        sat_by(theta0, g), sat_by(theta, g),
+    ensures (language::field_value(theta0, k) == v) == (language::field_value(theta, k) == v),
+{
+    let eq = eq_literal(k, v);
+    let ne = ne_literal(k, v);
+    if entails(d, g, set![eq]) {
+        assert(sat_by(theta0, set![eq]));
+        assert(sat_by(theta, set![eq]));
+        assert(set![eq].contains(eq));
+    } else {
+        assert(sat_by(theta0, set![ne]));
+        assert(sat_by(theta, set![ne]));
+        assert(set![ne].contains(ne));
+    }
+}
+
+pub proof fn lemma_finite_nat_bound(s: Set<nat>) -> (bound: nat)
+    ensures forall|v: nat| #[trigger] s.contains(v) ==> v < bound,
+    decreases s.len(),
+{
+    if s.len() == 0 {
+        s.lemma_len0_is_empty();
+        assert forall|v: nat| #[trigger] s.contains(v) implies v < 0nat by {}
+        0
+    } else {
+        let x = s.choose();
+        let b = lemma_finite_nat_bound(s.remove(x));
+        assert forall|v: nat| #[trigger] s.contains(v) implies v < b + x + 1 by {
+            if v != x { assert(s.remove(x).contains(v)); }
+        }
+        b + x + 1
+    }
+}
+
+pub proof fn lemma_transport_field(d: NDomains, atoms: Set<model::Primitive>, pi: Pairs,
+    g: Constraint, alpha: Assignment, theta0: Subst, e0: EventView, theta: Subst,
+    k: Component) -> (v: nat)
+    requires atoms_local(atoms), alpha.dom() == atoms,
+        pi == atom_pairs(atoms) && n_unrestricted(d) || pi == domain_pairs(d, atoms),
+        forall|p: (Component, nat)| pi.contains(p) ==> #[trigger] decides(d, g, p.0, p.1),
+        n_theta_ok(d, theta0), n_event_in(d, e0), sat_by(theta0, g), realizes(theta0, e0, alpha),
+        n_theta_ok(d, theta), sat_by(theta, g),
+    ensures
+        n_domain(d, k) matches Some(values) ==> values.contains(v),
+        forall|p: model::Primitive| #[trigger] atoms.contains(p)
+            && (p matches model::Primitive::Eq(c, _) && c == k)
+            ==> alpha[p] == model::primitive_holds(theta, p,
+                EventView { principal: if k == Component::Principal { v } else { e0.principal },
+                    action: if k == Component::Action { v } else { e0.action },
+                    resource: if k == Component::Resource { v } else { e0.resource } }),
+{
+    lemma_atom_pairs_members(atoms);
+    lemma_domain_pairs_members(d, atoms);
+    let reg = model::Primitive::Eq(k, model::GTerm::Variable(k));
+    let x0 = language::field_value(theta0, k);
+    let x = language::field_value(theta, k);
+    let old = language::field_value(e0, k);
+    let v;
+    if n_domain(d, k) is Some {
+        if atoms.contains(reg) {
+            let values = n_domain(d, k).unwrap();
+            assert(values.contains(x0));
+            assert(pi.contains((k, x0)));
+            lemma_decided_agreement(d, g, k, x0, theta0, theta);
+            assert(x == x0);
+        }
+        v = old;
+    } else if atoms.contains(reg) && alpha[reg] {
+        v = x;
+    } else if exists|c: nat| atoms.contains(model::Primitive::Eq(k, model::GTerm::Constant(c)))
+        && alpha[model::Primitive::Eq(k, model::GTerm::Constant(c))] {
+        let c = choose|c: nat| atoms.contains(model::Primitive::Eq(k, model::GTerm::Constant(c)))
+            && alpha[model::Primitive::Eq(k, model::GTerm::Constant(c))];
+        assert(old == c);
+        if atoms.contains(reg) {
+            assert(pi.contains((k, c)));
+            lemma_decided_agreement(d, g, k, c, theta0, theta);
+            assert(x != c);
+        }
+        v = c;
+    } else {
+        let codes = atoms.map(|p: model::Primitive| atom_pair_image(p).1).insert(x);
+        let bound = lemma_finite_nat_bound(codes);
+        assert(codes.contains(x));
+        assert(x < bound);
+        v = bound;
+        assert(v != x);
+        assert forall|c: nat| atoms.contains(model::Primitive::Eq(k, model::GTerm::Constant(c)))
+            implies v != c by {
+            assert(codes.contains(c));
+        }
+    }
+    let event = EventView {
+        principal: if k == Component::Principal { v } else { e0.principal },
+        action: if k == Component::Action { v } else { e0.action },
+        resource: if k == Component::Resource { v } else { e0.resource },
+    };
+    assert(language::field_value(event, k) == v);
+    assert forall|p: model::Primitive| #[trigger] atoms.contains(p)
+        && (p matches model::Primitive::Eq(c, _) && c == k)
+        implies alpha[p] == model::primitive_holds(theta, p, event) by {
+        match p {
+            model::Primitive::Eq(c, model::GTerm::Variable(c2)) => {
+                assert(c == k && c2 == k);
+                assert(p == reg);
+            },
+            model::Primitive::Eq(c, model::GTerm::Constant(code)) => {
+                assert(alpha[p] == (old == code));
+                if n_domain(d, k) is None && atoms.contains(reg) && alpha[reg] {
+                    assert(old == x0);
+                    assert(pi.contains((k, code)));
+                    lemma_decided_agreement(d, g, k, code, theta0, theta);
+                }
+            },
+        }
+    }
+    v
+}
+
+pub proof fn lemma_transport_realizer(d: NDomains, item: Item, atoms: Set<model::Primitive>,
+    pi: Pairs, cases_split: Set<Constraint>, c: Case, theta: Subst)
+    requires atoms_local(atoms), split_ok(d, item.constraint, pi, cases_split),
+        pi == atom_pairs(atoms) && n_unrestricted(d) || pi == domain_pairs(d, atoms),
+        cases_split.contains(c.constraint), c.alpha.dom() == atoms,
+        exists|t0: Subst, e0: EventView| n_theta_ok(d, t0) && n_event_in(d, e0)
+            && sat_by(t0, c.constraint) && realizes(t0, e0, c.alpha),
+        n_theta_ok(d, theta), sat_by(theta, c.constraint),
+    ensures exists|e: EventView| n_event_in(d, e) && #[trigger] realizes(theta, e, c.alpha),
+{
+    let (t0, e0) = choose|t0: Subst, e0: EventView| n_theta_ok(d, t0) && n_event_in(d, e0)
+        && sat_by(t0, c.constraint) && realizes(t0, e0, c.alpha);
+    let principal = lemma_transport_field(d, atoms, pi, c.constraint, c.alpha,
+        t0, e0, theta, Component::Principal);
+    let action = lemma_transport_field(d, atoms, pi, c.constraint, c.alpha,
+        t0, e0, theta, Component::Action);
+    let resource = lemma_transport_field(d, atoms, pi, c.constraint, c.alpha,
+        t0, e0, theta, Component::Resource);
+    let e = EventView { principal, action, resource };
+    assert(n_event_in(d, e)) by {
+        assert forall|k: Component| #[trigger] n_domain(d, k) is Some
+            implies n_domain(d, k)->Some_0.contains(language::field_value(e, k)) by {
+            match k {
+                Component::Principal => {}, Component::Action => {}, Component::Resource => {},
+            }
+        }
+    }
+    assert(realizes(theta, e, c.alpha)) by {
+        assert forall|p: model::Primitive| #[trigger] c.alpha.dom().contains(p)
+            implies c.alpha[p] == model::primitive_holds(theta, p, e) by {
+            match p { model::Primitive::Eq(k, _) => { match k {
+                Component::Principal => {}, Component::Action => {}, Component::Resource => {},
+            } } }
+        }
+    }
+}
+
+pub proof fn lemma_successor_cases_common(d: NDomains, item: Item,
+    atoms: Set<model::Primitive>, pi: Pairs, cases_split: Set<Constraint>,
+    next: spec_fn(Assignment) -> Regex<model::Test>)
+    requires atoms_local(atoms), split_ok(d, item.constraint, pi, cases_split),
+        pi == atom_pairs(atoms) && n_unrestricted(d) || pi == domain_pairs(d, atoms),
+        forall|alpha: Assignment| alpha.dom() == atoms
+            ==> #[trigger] successor_ok(item.state, alpha, next(alpha)),
+    ensures paper_steps(d, item, atoms, cases_split, next).finite(),
+        steps_ok(d, item, Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next))
+            .unwrap_or(Set::empty())),
+{
+    hide(language::lang);
+    hide(successor_ok);
+    hide(realizes);
+    hide(n_theta_ok);
+    hide(n_event_in);
+    hide(atoms_local);
+    hide(atom_pairs);
+    hide(domain_pairs);
+    hide(n_unrestricted);
+    hide(satisfiable);
+    hide(entails);
+    broadcast use vstd::set::lemma_set_new_from_iset;
+    lemma_paper_steps_finite(d, item, atoms, cases_split, next);
+    let cases = Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next))
+        .unwrap_or(Set::empty());
+    assert(cases.to_iset() == paper_steps(d, item, atoms, cases_split, next));
+    assert forall|c: Case| #[trigger] cases.contains(c) implies {
+        &&& satisfiable(d, c.constraint) && entails(d, c.constraint, item.constraint)
+        &&& successor_ok(item.state, c.alpha, c.next)
+        &&& forall|theta: Subst| n_theta_ok(d, theta) && #[trigger] sat_by(theta, c.constraint)
+            ==> exists|e: EventView| n_event_in(d, e) && #[trigger] realizes(theta, e, c.alpha)
+    } by {
+        assert(paper_steps(d, item, atoms, cases_split, next).contains(c));
+        assert forall|theta: Subst| n_theta_ok(d, theta) && #[trigger] sat_by(theta, c.constraint)
+            implies exists|e: EventView| n_event_in(d, e) && #[trigger] realizes(theta, e, c.alpha) by {
+            lemma_transport_realizer(d, item, atoms, pi, cases_split, c, theta);
+        }
+    }
+    assert forall|theta: Subst, e: EventView| n_theta_ok(d, theta)
+        && #[trigger] n_event_in(d, e) && #[trigger] sat_by(theta, item.constraint)
+        implies exists|c: Case| #[trigger] cases.contains(c)
+            && sat_by(theta, c.constraint) && realizes(theta, e, c.alpha) by {
+        let g = choose|g: Constraint| #[trigger] cases_split.contains(g) && sat_by(theta, g);
+        let alpha = induced_assignment(theta, e, atoms);
+        lemma_induced_realizes(theta, e, atoms);
+        let c = Case { constraint: g, alpha, next: next(alpha) };
+        assert(paper_steps(d, item, atoms, cases_split, next).contains(c));
+        assert(cases.contains(c));
+    }
+    assert forall|theta: Subst, e: EventView, c1: Case, c2: Case| n_theta_ok(d, theta)
+        && cases.contains(c1) && cases.contains(c2) && #[trigger] sat_by(theta, c1.constraint)
+        && #[trigger] sat_by(theta, c2.constraint) && #[trigger] realizes(theta, e, c1.alpha)
+        && realizes(theta, e, c2.alpha) implies c1 == c2 by {
+        assert(paper_steps(d, item, atoms, cases_split, next).contains(c1));
+        assert(paper_steps(d, item, atoms, cases_split, next).contains(c2));
+        assert(c1.constraint == c2.constraint);
+        lemma_realizes_unique(theta, e, atoms, c1.alpha, c2.alpha);
+    }
+}
+
+pub proof fn theorem_successor_cases()
+    ensures stmt_successor_cases(),
+{
+    hide(language::lang);
+    hide(successor_ok);
+    hide(atoms_complete);
+    hide(steps_ok);
+    hide(paper_steps);
+    assert forall|d: NDomains, item: Item, atoms: Set<model::Primitive>,
+        cases_split: Set<Constraint>, next: spec_fn(Assignment) -> Regex<model::Test>|
+        n_unrestricted(d) && satisfiable(d, item.constraint) && atoms_local(atoms)
+        && atoms_complete(item.state, atoms)
+        && split_ok(d, item.constraint, atom_pairs(atoms), cases_split)
+        && (forall|alpha: Assignment| alpha.dom() == atoms
+            ==> #[trigger] successor_ok(item.state, alpha, next(alpha)))
+        implies #[trigger] paper_steps(d, item, atoms, cases_split, next).finite()
+            && steps_ok(d, item, Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next))
+                .unwrap_or(Set::empty())) by {
+        lemma_successor_cases_common(d, item, atoms, atom_pairs(atoms), cases_split, next);
+    }
+}
+
+pub proof fn theorem_successor_cases_finite_domains()
+    ensures stmt_successor_cases_finite_domains(),
+{
+    hide(language::lang);
+    hide(successor_ok);
+    hide(atoms_complete);
+    hide(steps_ok);
+    hide(paper_steps);
+    assert forall|d: NDomains, item: Item, atoms: Set<model::Primitive>,
+        cases_split: Set<Constraint>, next: spec_fn(Assignment) -> Regex<model::Test>|
+        satisfiable(d, item.constraint) && atoms_local(atoms) && atoms_complete(item.state, atoms)
+        && split_ok(d, item.constraint, domain_pairs(d, atoms), cases_split)
+        && (forall|alpha: Assignment| alpha.dom() == atoms
+            ==> #[trigger] successor_ok(item.state, alpha, next(alpha)))
+        implies #[trigger] paper_steps(d, item, atoms, cases_split, next).finite()
+            && steps_ok(d, item, Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next))
+                .unwrap_or(Set::empty())) by {
+        lemma_successor_cases_common(d, item, atoms, domain_pairs(d, atoms), cases_split, next);
+    }
+}
+
+/// Only expanded nodes need complete cases; an implementation may retain their ghost evidence.
+pub open spec fn trace_steps_ok(d: NDomains, cases_of: spec_fn(Item) -> Set<Case>,
+    t: Trace) -> bool {
+    forall|p: int| 0 <= p < t.expanded ==> #[trigger] steps_ok(d, t.nodes[p].item,
+        cases_of(t.nodes[p].item))
+}
+
+pub proof fn lemma_follows_push(d: NDomains, letters: Seq<Assignment>, theta: Subst,
+    u: Seq<EventView>, alpha: Assignment, e: EventView)
+    requires follows(d, letters, theta, u), n_event_in(d, e), realizes(theta, e, alpha),
+    ensures follows(d, letters.push(alpha), theta, u.push(e)),
+{
+    assert(n_history_in(d, u.push(e))) by {
+        assert forall|i: int| 0 <= i < u.push(e).len()
+            implies #[trigger] n_event_in(d, u.push(e)[i]) by {
+            if i < u.len() { assert(u.push(e)[i] == u[i]); }
+        }
+    }
+    assert forall|i: int| 0 <= i < u.push(e).len()
+        implies #[trigger] realizes(theta, u.push(e)[i], letters.push(alpha)[i]) by {
+        if i < u.len() { assert(u.push(e)[i] == u[i]); }
+    }
+}
+
+pub proof fn lemma_follows_unpush(d: NDomains, letters: Seq<Assignment>, theta: Subst,
+    u: Seq<EventView>, alpha: Assignment)
+    requires follows(d, letters.push(alpha), theta, u),
+    ensures follows(d, letters, theta, u.drop_last()), n_event_in(d, u.last()),
+        realizes(theta, u.last(), alpha), u.drop_last().push(u.last()) == u,
+{
+    assert(u.len() > 0);
+    assert(u.drop_last().push(u.last()) =~= u);
+    assert(n_history_in(d, u.drop_last())) by {
+        assert forall|i: int| 0 <= i < u.drop_last().len()
+            implies #[trigger] n_event_in(d, u.drop_last()[i]) by {
+            assert(u.drop_last()[i] == u[i]);
+        }
+    }
+    assert forall|i: int| 0 <= i < u.drop_last().len()
+        implies #[trigger] realizes(theta, u.drop_last()[i], letters[i]) by {
+        assert(u.drop_last()[i] == u[i]);
+        assert(letters.push(alpha)[i] == letters[i]);
+    }
+    assert(realizes(theta, u[u.len() - 1], letters.push(alpha)[letters.len() as int]));
+}
+
+pub proof fn lemma_node_realizable(d: NDomains, g0: Constraint, q0: Regex<model::Test>,
+    cases_of: spec_fn(Item) -> Set<Case>, t: Trace, j: int)
+    requires satisfiable(d, g0), trace_steps_ok(d, cases_of, t),
+        trace_wf(d, g0, q0, cases_of, t), 0 <= j < t.nodes.len(),
+    ensures entails(d, t.nodes[j].item.constraint, g0),
+        satisfiable(d, t.nodes[j].item.constraint),
+        forall|theta: Subst| n_theta_ok(d, theta) && sat_by(theta, t.nodes[j].item.constraint)
+            ==> exists|u: Seq<EventView>| #[trigger] follows(d,
+                chain(t.nodes, j, t.nodes[j].depth), theta, u),
+    decreases j,
+{
+    hide(language::lang);
+    hide(realizes);
+    hide(successor_ok);
+    hide(follows);
+    hide(n_history_in);
+    hide(n_event_in);
+    hide(n_theta_ok);
+    hide(satisfiable);
+    hide(entails);
+    hide(sat_by);
+    lemma_chain_len(d, g0, q0, cases_of, t, j, t.nodes[j].depth);
+    if j == 0 {
+        assert(chain(t.nodes, j, t.nodes[j].depth) == Seq::<Assignment>::empty());
+        assert(entails(d, g0, g0)) by { reveal(entails); }
+        assert forall|theta: Subst| n_theta_ok(d, theta) && sat_by(theta, g0)
+            implies exists|u: Seq<EventView>| #[trigger] follows(d,
+                chain(t.nodes, j, t.nodes[j].depth), theta, u) by {
+            assert(follows(d, Seq::empty(), theta, Seq::empty())) by {
+                reveal(follows);
+                reveal(n_history_in);
+            }
+        }
+    } else {
+        assert(parent_ok(cases_of, t, j));
+        let (p, alpha) = t.nodes[j].parent.unwrap();
+        let c = choose|c: Case| #[trigger] cases_of(t.nodes[p as int].item).contains(c)
+            && c.alpha == alpha && t.nodes[j].item == case_item(c);
+        assert(steps_ok(d, t.nodes[p as int].item, cases_of(t.nodes[p as int].item)));
+        lemma_node_realizable(d, g0, q0, cases_of, t, p as int);
+        lemma_entails_trans(d, c.constraint, t.nodes[p as int].item.constraint, g0);
+        lemma_chain_len(d, g0, q0, cases_of, t, p as int,
+            (t.nodes[j].depth - 1) as nat);
+        let prefix = chain(t.nodes, p as int, t.nodes[p as int].depth);
+        assert(chain(t.nodes, j, t.nodes[j].depth) == prefix.push(alpha));
+        assert forall|theta: Subst| n_theta_ok(d, theta) && sat_by(theta, c.constraint)
+            implies exists|u: Seq<EventView>| #[trigger] follows(d,
+                chain(t.nodes, j, t.nodes[j].depth), theta, u) by {
+            assert(sat_by(theta, t.nodes[p as int].item.constraint)) by { reveal(entails); }
+            let u = choose|u: Seq<EventView>| #[trigger] follows(d, prefix, theta, u);
+            let e = choose|e: EventView| n_event_in(d, e) && #[trigger] realizes(theta, e, c.alpha);
+            lemma_follows_push(d, prefix, theta, u, alpha, e);
+        }
+    }
+}
+
+// Keep the suffix explicit to avoid recursively generating larger SMT language terms.
+pub proof fn lemma_node_language(d: NDomains, g0: Constraint, q0: Regex<model::Test>,
+    cases_of: spec_fn(Item) -> Set<Case>, t: Trace, j: int, theta: Subst,
+    u: Seq<EventView>, w: Seq<EventView>)
+    requires trace_steps_ok(d, cases_of, t), trace_wf(d, g0, q0, cases_of, t),
+        0 <= j < t.nodes.len(), n_theta_ok(d, theta), sat_by(theta, t.nodes[j].item.constraint),
+        follows(d, chain(t.nodes, j, t.nodes[j].depth), theta, u),
+    ensures n_lang(theta, t.nodes[j].item.state, w) == n_lang(theta, q0, u + w),
+    decreases j,
+{
+    hide(language::lang);
+    hide(realizes);
+    hide(successor_ok);
+    hide(follows);
+    hide(n_history_in);
+    hide(n_event_in);
+    hide(n_theta_ok);
+    hide(satisfiable);
+    hide(entails);
+    hide(sat_by);
+    lemma_chain_len(d, g0, q0, cases_of, t, j, t.nodes[j].depth);
+    if j == 0 {
+        assert(u =~= Seq::<EventView>::empty()) by { reveal(follows); }
+        assert(u + w =~= w);
+    } else {
+        assert(parent_ok(cases_of, t, j));
+        let (p, alpha) = t.nodes[j].parent.unwrap();
+        let c = choose|c: Case| #[trigger] cases_of(t.nodes[p as int].item).contains(c)
+            && c.alpha == alpha && t.nodes[j].item == case_item(c);
+        assert(steps_ok(d, t.nodes[p as int].item, cases_of(t.nodes[p as int].item)));
+        lemma_chain_len(d, g0, q0, cases_of, t, p as int,
+            (t.nodes[j].depth - 1) as nat);
+        let prefix = chain(t.nodes, p as int, t.nodes[p as int].depth);
+        assert(chain(t.nodes, j, t.nodes[j].depth) == prefix.push(alpha));
+        lemma_follows_unpush(d, prefix, theta, u, alpha);
+        assert(sat_by(theta, t.nodes[p as int].item.constraint)) by { reveal(entails); }
+        let e = u.last();
+        let before = u.drop_last();
+        assert(successor_ok(t.nodes[p as int].item.state, c.alpha, c.next));
+        assert(n_lang(theta, c.next, w)
+            == n_lang(theta, t.nodes[p as int].item.state, seq![e] + w)) by {
+            reveal(successor_ok);
+            reveal(n_theta_ok);
+        }
+        lemma_node_language(d, g0, q0, cases_of, t, p as int, theta, before, seq![e] + w);
+        assert(before + (seq![e] + w) =~= u + w);
+    }
+}
+
+pub proof fn lemma_node_semantics(d: NDomains, g0: Constraint, q0: Regex<model::Test>,
+    cases_of: spec_fn(Item) -> Set<Case>, t: Trace, j: int)
+    requires satisfiable(d, g0), trace_steps_ok(d, cases_of, t),
+        trace_wf(d, g0, q0, cases_of, t), 0 <= j < t.nodes.len(),
+    ensures entails(d, t.nodes[j].item.constraint, g0),
+        satisfiable(d, t.nodes[j].item.constraint),
+        forall|theta: Subst| n_theta_ok(d, theta) && sat_by(theta, t.nodes[j].item.constraint)
+            ==> exists|u: Seq<EventView>| #[trigger] follows(d,
+                chain(t.nodes, j, t.nodes[j].depth), theta, u),
+        forall|theta: Subst, u: Seq<EventView>, w: Seq<EventView>|
+            n_theta_ok(d, theta) && sat_by(theta, t.nodes[j].item.constraint)
+            && #[trigger] follows(d, chain(t.nodes, j, t.nodes[j].depth), theta, u)
+            ==> #[trigger] n_lang(theta, t.nodes[j].item.state, w) == n_lang(theta, q0, u + w),
+{
+    hide(language::lang);
+    hide(follows);
+    hide(n_theta_ok);
+    hide(sat_by);
+    hide(entails);
+    hide(satisfiable);
+    hide(successor_ok);
+    lemma_node_realizable(d, g0, q0, cases_of, t, j);
+    assert forall|theta: Subst, u: Seq<EventView>, w: Seq<EventView>|
+        n_theta_ok(d, theta) && sat_by(theta, t.nodes[j].item.constraint)
+        && #[trigger] follows(d, chain(t.nodes, j, t.nodes[j].depth), theta, u)
+        implies #[trigger] n_lang(theta, t.nodes[j].item.state, w) == n_lang(theta, q0, u + w) by {
+        lemma_node_language(d, g0, q0, cases_of, t, j, theta, u, w);
+    }
+}
+
+pub proof fn lemma_no_witness_below(d: NDomains, g0: Constraint, q0: Regex<model::Test>,
+    cases_of: spec_fn(Item) -> Set<Case>, t: Trace, j: int, theta: Subst, w: Seq<EventView>)
+    requires trace_steps_ok(d, cases_of, t), trace_wf(d, g0, q0, cases_of, t),
+        0 <= j < t.nodes.len(), witness(d, t.nodes[j].item, theta, w),
+        forall|k: int| #![trigger t.nodes[k]] 0 <= k < t.nodes.len()
+            && t.nodes[k].depth <= t.nodes[j].depth + w.len() ==> k < t.expanded,
+    ensures false,
+    decreases w.len(),
+{
+    hide(language::lang);
+    hide(successor_ok);
+    hide(realizes);
+    hide(n_theta_ok);
+    hide(n_event_in);
+    hide(n_history_in);
+    hide(sat_by);
+    hide(entails);
+    hide(satisfiable);
+    assert(t.nodes[j].depth <= t.nodes[j].depth + w.len());
+    assert(j < t.expanded);
+    assert(!nullable_state(t.nodes[j].item.state));
+    if w.len() == 0 {
+        assert(w =~= Seq::<EventView>::empty());
+        language::lemma_nullable_iff_nil(model::gsem(theta), t.nodes[j].item.state);
+    } else {
+        assert(steps_ok(d, t.nodes[j].item, cases_of(t.nodes[j].item)));
+        let e = w[0];
+        let tail = w.drop_first();
+        assert(w =~= seq![e] + tail);
+        assert(n_event_in(d, e)) by { reveal(n_history_in); }
+        let c = choose|c: Case| #[trigger] cases_of(t.nodes[j].item).contains(c)
+            && sat_by(theta, c.constraint) && realizes(theta, e, c.alpha);
+        assert(n_lang(theta, c.next, tail)) by {
+            reveal(successor_ok);
+            reveal(n_theta_ok);
+            assert(successor_ok(t.nodes[j].item.state, c.alpha, c.next));
+        }
+        assert(n_history_in(d, tail)) by {
+            reveal(n_history_in);
+            assert forall|i: int| 0 <= i < tail.len()
+                implies #[trigger] n_event_in(d, tail[i]) by { assert(tail[i] == w[i + 1]); }
+        }
+        assert(witness(d, case_item(c), theta, tail));
+        if exists|k: int| 0 < k < t.nodes.len()
+            && t.nodes[k].parent == Some((j as nat, c.alpha)) && t.nodes[k].item == case_item(c) {
+            let k = choose|k: int| 0 < k < t.nodes.len()
+                && t.nodes[k].parent == Some((j as nat, c.alpha))
+                && t.nodes[k].item == case_item(c);
+            assert(parent_ok(cases_of, t, k));
+            assert(t.nodes[k].depth == t.nodes[j].depth + 1);
+            lemma_no_witness_below(d, g0, q0, cases_of, t, k, theta, tail);
+        } else {
+            assert(may_discard(d, t.nodes, case_item(c), t.nodes[j].depth + 1));
+            if c.next == Regex::<model::Test>::Empty {
+                reveal(language::lang);
+            } else if no_witness(d, case_item(c)) {
+                assert(!witness(d, case_item(c), theta, tail));
+            } else {
+                let k = choose|k: int| 0 <= k < t.nodes.len()
+                    && t.nodes[k].depth <= t.nodes[j].depth + 1
+                    && #[trigger] witnesses_within(d, case_item(c), t.nodes[k].item);
+                assert(witness(d, t.nodes[k].item, theta, tail));
+                assert forall|h: int| #![trigger t.nodes[h]] 0 <= h < t.nodes.len()
+                    && t.nodes[h].depth <= t.nodes[k].depth + tail.len()
+                    implies h < t.expanded by {
+                    assert(t.nodes[h].depth <= t.nodes[j].depth + w.len());
+                }
+                lemma_no_witness_below(d, g0, q0, cases_of, t, k, theta, tail);
+            }
+        }
+    }
+}
+
+pub proof fn lemma_search_correct(d: NDomains, g0: Constraint, r: Regex<model::Test>,
+    s: Regex<model::Test>, q0: Regex<model::Test>, cases_of: spec_fn(Item) -> Set<Case>,
+    t: Trace, outcome: Outcome)
+    requires satisfiable(d, g0), initial_ok(q0, r, s), trace_steps_ok(d, cases_of, t),
+        trace_wf(d, g0, q0, cases_of, t), trace_outcome(t, outcome),
+    ensures outcome_ok(d, g0, r, s, outcome),
+{
+    hide(language::lang);
+    match outcome {
+        Outcome::Exhausted => {},
+        Outcome::Holds => {
+            assert forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta)
+                && n_history_in(d, w) && sat_by(theta, g0) && #[trigger] n_lang(theta, r, w)
+                implies n_lang(theta, s, w) by {
+                if !n_lang(theta, s, w) {
+                    let root = Item { constraint: g0, state: q0 };
+                    assert(witness(d, root, theta, w));
+                    if t.nodes.len() > 0 {
+                        lemma_no_witness_below(d, g0, q0, cases_of, t, 0, theta, w);
+                    } else {
+                        assert(may_discard(d, t.nodes, root, 0));
+                        if q0 == Regex::<model::Test>::Empty { reveal(language::lang); }
+                        else { assert(no_witness(d, root)); }
+                    }
+                }
+            }
+        },
+        Outcome::Refuted(g, letters) => {
+            let j = t.expanded as int;
+            lemma_node_realizable(d, g0, q0, cases_of, t, j);
+            lemma_chain_len(d, g0, q0, cases_of, t, j, t.nodes[j].depth);
+            assert(letters.len() == t.nodes[j].depth);
+            assert forall|theta: Subst, u: Seq<EventView>| n_theta_ok(d, theta)
+                && sat_by(theta, g) && #[trigger] follows(d, letters, theta, u)
+                implies inclusion_cex(d, g0, r, s, theta, u) by {
+                language::lemma_nullable_iff_nil(model::gsem(theta), t.nodes[j].item.state);
+                assert(n_lang(theta, t.nodes[j].item.state, Seq::empty()));
+                lemma_node_language(d, g0, q0, cases_of, t, j, theta, u, Seq::empty());
+                assert(u + Seq::<EventView>::empty() =~= u);
+                assert(n_lang(theta, q0, u));
+                assert(sat_by(theta, g0));
+            }
+            assert(no_cex_shorter(d, g0, r, s, letters.len())) by {
+                assert forall|theta: Subst, w: Seq<EventView>| w.len() < letters.len()
+                    implies !#[trigger] inclusion_cex(d, g0, r, s, theta, w) by {
+                    if inclusion_cex(d, g0, r, s, theta, w) {
+                        assert(witness(d, t.nodes[0].item, theta, w));
+                        assert forall|k: int| #![trigger t.nodes[k]] 0 <= k < t.nodes.len()
+                            && t.nodes[k].depth <= t.nodes[0].depth + w.len()
+                            implies k < t.expanded by {
+                            if k >= j {
+                                if k > j { assert(t.nodes[j].depth <= t.nodes[k].depth); }
+                                assert(false);
+                            }
+                        }
+                        lemma_no_witness_below(d, g0, q0, cases_of, t, 0, theta, w);
+                    }
+                }
+            }
+        },
+    }
+}
+
+pub proof fn theorem_search_correct()
+    ensures stmt_search_correct(),
+{
+    assert forall|d: NDomains, g0: Constraint, r: Regex<model::Test>, s: Regex<model::Test>,
+        q0: Regex<model::Test>, cases_of: spec_fn(Item) -> Set<Case>, t: Trace, outcome: Outcome|
+        n_unrestricted(d) && satisfiable(d, g0) && #[trigger] initial_ok(q0, r, s)
+        && (forall|i: Item| #[trigger] steps_ok(d, i, cases_of(i)))
+        && #[trigger] trace_wf(d, g0, q0, cases_of, t) && #[trigger] trace_outcome(t, outcome)
+        implies outcome_ok(d, g0, r, s, outcome) by {
+        assert(trace_steps_ok(d, cases_of, t));
+        lemma_search_correct(d, g0, r, s, q0, cases_of, t, outcome);
+    }
+}
+
+pub proof fn theorem_search_correct_finite_domains()
+    ensures stmt_search_correct_finite_domains(),
+{
+    assert forall|d: NDomains, g0: Constraint, r: Regex<model::Test>, s: Regex<model::Test>,
+        q0: Regex<model::Test>, cases_of: spec_fn(Item) -> Set<Case>, t: Trace, outcome: Outcome|
+        satisfiable(d, g0) && #[trigger] initial_ok(q0, r, s)
+        && (forall|i: Item| #[trigger] steps_ok(d, i, cases_of(i)))
+        && #[trigger] trace_wf(d, g0, q0, cases_of, t) && #[trigger] trace_outcome(t, outcome)
+        implies outcome_ok(d, g0, r, s, outcome) by {
+        assert(trace_steps_ok(d, cases_of, t));
+        lemma_search_correct(d, g0, r, s, q0, cases_of, t, outcome);
+    }
+}
+
 } // verus!

@@ -1,12 +1,13 @@
 # Specification of policy-refinement analysis (draft for freeze)
 
-Owner: main agent (the coordinator, VerusCoordinator, was killed with the session; its draft is
-complete apart from the updates marked below). Status: **specs only — no proofs, no exec changes,
-nothing assumed.**
+Status: **all 23 frozen statement proofs complete; SymbolicLanguage contracts verified;
+analyzer port and executable implementation link in progress.** The only new trusted leaves
+are the approved native hashbrown wrappers described in §11.
 Spec module: `crates/history-semantics/src/verify/refinement/` (registered in `verify/mod.rs`;
 compiled only under `verus_keep_ghost` + `runtime`, like the rest of `verify`). Every theorem is a
-`stmt_*` spec function returning the proposition; the proof phase will add
-`proof fn … ensures stmt_*()`. Nothing in this module is an `admit`, `assume`, or `external_body`.
+`stmt_*` spec function returning the proposition, with a public
+`proof fn theorem_* … ensures stmt_*()` verified against it. No `admit`, `assume`, or
+`external_body` occurs in the refinement module.
 
 Repository: `/home/zak/junco-policy-inclusion` (uncommitted). Paper: `/home/zak/paper/pldi2027`.
 File references below: `bg` = `bg.tex`, `inc` = `inclusion.tex`, `rx` = `regex.tex`, `app` = `appendix.tex`.
@@ -27,6 +28,9 @@ semantics of `refinement/semantics.rs`:
 | `never_fires(R)` | `never_denies(D, R)` (app:454) | R denies it; globally shortest | no claim |
 | `always_fires(R)` | `always_denies(D, R)` | R matches the candidate and grants; globally shortest | no claim |
 | `tail_included(h, l, r)` | `tails_included(D, h, l, r)` | matches `h`, history in `l` not `r`; globally shortest | no claim |
+
+Only `tail_included` exists on this branch; all other query rows and `add_rule` are spec-only
+until those queries return to `main`.
 
 `Err(_)` carries no claim. Planned exec postconditions (once `history-analysis` is put under
 Verus; see Q1):
@@ -287,7 +291,7 @@ pub open spec fn covered_with_ok(d, p, rule, cases, query) -> bool    // analyze
 Already verified and reused: `derivative_correct`, `successor_entries_wf` (successor language),
 `atoms_wf` (atom completeness), `CompiledPair::compile` (root language), `guard_wf`.
 
-## 8. How the layers compose (proof plan, not started)
+## 8. How the layers compose (executable implementation link pending)
 
 1. Query → numeric: `stmt_front_end_denies` + `stmt_numeric_genericity` turn a typed query into
    numeric `n_covers` / `included_under` queries, for every component type.
@@ -377,6 +381,54 @@ Already verified and reused: `derivative_correct`, `successor_entries_wf` (succe
     fewer states; both history-semantics Verus configs (947/951) and workspace tests pass. With it,
     §6's status changes from OPEN to: (S0)-(S6) to be mechanized for the implementation and
     `search::finitely_many_items` discharged via `theorem_finite_reachable`.
+17. **Verified facade (behavior-preserving restructuring).** `SymbolicLanguage::derive` reads
+    positive atoms with an index loop, and `successor` builds its SmallVec key with `new` plus
+    `extend_from_slice`; callback APIs and results are unchanged. All eight facade methods now
+    have verified contracts, including atom completeness for every `nat` valuation.
+18. **Constant-id capacity (author decision during proof completion).** Keep runtime behavior
+    and public Rust signatures unchanged. Constructor/query verification has explicit capacity
+    preconditions excluding `u32` constant-id overflow; the existing overflow panic is not claimed
+    unreachable without those preconditions.
+19. **Universe storage.** Private `Rc<[ConstId]>` becomes `Rc<Vec<ConstId>>`; ids and declaration
+    order are unchanged.
+20. **Register choices.** Equals alternatives keep their compact id list plus one optional
+    remainder; final constraints are built only during the product, eliminating intermediate
+    enum buffers.
+21. **Letter choices.** Compact named ids and prefix/remainder flags replace intermediate option
+    buffers without changing class order.
+22. **Enumeration.** Explicit products and owning step iteration replace closure/array chains,
+    preserving lexicographic order without added constraint clones.
+23. **Literal copies and equality.** Verified `copy` uses SmallVec `new` plus `extend_from_slice`;
+    manual equality compares ordered literal ids, retaining canonical set-view injectivity.
+24. **Table construction.** Explicit copy/shift loops preserve source ordering, earlier-root
+    languages, and existing overflow/error paths; successful difference is exactly left minus right.
+25. **Remaining native capacities (author decision).** Preserve runtime behavior and Rust
+    signatures. Derive product, constraint-id, and fresh-counter size bounds where possible;
+    otherwise expose explicit sufficient query/state preconditions for those bounds.
+26. **Encoding attempts.** A ghost call count on `FlatEncoder` records each opted-in encode
+    attempt. Generic lowering bounds it by head/test traversal size, including error returns;
+    typed encoders' runtime and book logic are unchanged.
+27. **Counterexample assembly.** Indexed candidate/history construction preserves component and
+    history order and fresh-number allocation. History rows are projected directly into one
+    preallocated result vector; numerical slot rows and search alphabets are ghost evidence only.
+    The native analyzer's 13 tests pass; reconstruction and executable verdict contracts verify
+    in focused and complete CI checks; both analyzer configurations verify with 0 errors.
+28. **Sufficient query resources.** `query_capacity` includes native search-product, constraint-id,
+    queue, and fresh-counter bounds in addition to constant-id capacity. Its vocabulary-cardinality
+    bound is conservative: it uses the existing book plus both flattening traversal costs, not a
+    bound on mathematical history values. Inputs outside it retain their original runtime behavior.
+29. **Query input cloning (implementation counterexample).** `tail_included` constructs rules
+    with derived `Head`/`RegexExpr` clones. A well-typed `Copy` principal whose custom `Clone`
+    returns `Principal(n + 1)` has coherent equality, hashing and event projections, yet a head
+    requiring principal 0 yields a counterexample with principal 1 (`cargo run -p history-analysis
+    --features runtime --example clone_probe`, temporary probe removed after execution).
+    This clone violates the normal Clone convention, but the current native obligations do not
+    exclude it. The author selected borrowed-source flattening: `flatten_rule_parts` reuses the
+    existing iterative implementation; `flatten_rule` preserves its API and contract. The query
+    now passes original head/tail references and does not invoke their Clone hooks. The corrected
+    probe returns principal 0, and all 13 analyzer tests pass. No clone trust boundary is added.
+
+
 
 ## 10. Decisions (FROZEN by the author)
 
@@ -387,6 +439,12 @@ declared finite domains too (`*_finite_domains` statements are proof targets); Q
 minimality as implemented; Q6 keep the `Exhausted` short-circuit and `Err` on table overflow;
 Q7 accept vacuous meaning on small types; Q8 Figure 2 updated to the implemented rules (done);
 Q9 `Constants` codes start at 1 (done: `analyzer.rs:135-150, 590`; analyzer tests, fmt, clippy pass).
+
+Q10 keep constant-id overflow behavior and public signatures; add verified capacity preconditions
+to constructor/query contracts (chosen by the author during proof completion).
+
+Q11 keep the remaining native overflow behavior/signatures as well; use verified size
+preconditions for product, constraint-id, and fresh-counter limits if not otherwise derivable.
 
 ### Original questions
 
@@ -427,11 +485,21 @@ Q9 `Constants` codes start at 1 (done: `analyzer.rs:135-150, 590`; analyzer test
 
 ## 11. Trust base of this phase
 
-No new `assume`, `admit`, `external_body`, or `assume_specification`. The spec module only adds
-`spec fn` definitions and statements. Existing trust base (unchanged): `junco-core/src/verify/history_assumptions.rs`
+No new `assume`, `admit`, or `assume_specification`. The refinement module's mathematical
+definitions remain frozen. Existing trust base (unchanged): `junco-core/src/verify/history_assumptions.rs`
 (`assume_specification`s for SmallVec, slices, `Vec::dedup`, …, and the `KernelStore` external
 trait specification), `compiled_rule.rs:290` `same_owner`, `observation.rs` and `history-store`
 external bodies, and `books::native_obligations` as a hypothesis of typed guarantees.
-For the analyzer, the planned proof adds one native obligation of the same kind as
-`books::native_obligations`: the analyzer's `Constants` satisfies the `FlatEncoder` contract
-(`obeys_encoding_spec`, `maps_wf` over `component_equality`); it currently does not (Q9).
+The analyzer's scoped `BorrowedEncoder` satisfies the `FlatEncoder` contract over its real
+constant book. `analyzer_obligations` includes event projection laws and the native Eq/hash
+obligations for both constant interning and the internal search/pruning/simulation keys.
+
+The analyzer's new native leaves are `NativeMap<K, V>`, `NativeSet<K>`, and `NativeGroups<K, V>`
+in `crates/history-analysis/src/native.rs` (author-approved hashbrown wrappers). Their external
+bodies cover only construction, Eq-class lookup, fresh insertion, set insertion, and grouped
+append/read. Logical keys are stored Eq representatives, not Rust identity; duplicate Eq keys
+retain the existing representative. Contracts are conditional on `key_obligations`, following
+`history-store`'s native map pattern. No analyzer, constraint, pruning, simulation, or search
+algorithm is a trusted leaf.
+The SmallVec antichain key also requires Eq-equivalent keys to have the same ordered regex-id
+view. These are explicit native-key hypotheses, not assumptions about an analyzer verdict.

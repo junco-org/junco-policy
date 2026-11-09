@@ -8,7 +8,7 @@ use crate::scope::VariableScope;
 use alloc::vec::Vec;
 use history_syntax::Event;
 use history_syntax::syntax::{
-    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
 use vstd::prelude::*;
 
@@ -374,12 +374,8 @@ fn schedule_tests<'a, E: Event, L: Limits>(
     Ok(())
 }
 
-/// Lowers borrowed syntax in source order without constructing an executable graph.
-/// Resource failures propagate; well-scoped inputs cannot produce scope diagnostics.
-/// The continuation invariant excludes internal stack and operand-guard failures.
+/// Lowers a rule through the borrowed-source flattener.
 #[verus_verify]
-#[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
-#[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
 #[verus_spec(result => ensures
     no_internal_compile_error(result),
     !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
@@ -389,15 +385,46 @@ fn schedule_tests<'a, E: Event, L: Limits>(
             && !(result matches Err(CompileError::UnboundVariable { .. })),
     result matches Ok(flat) ==> flattened::<E>(*rule, flat)
         && crate::verify::encoding::constants_in_domain(flat.source, component_domain::<E>()),
+    result matches Ok(flat) ==> flat.source.tests@.len() + flat.source.regexes@.len()
+        <= regex_cost::<E>(rule.tail@),
 )]
 pub fn flatten_rule<E: Event, L: Limits>(
     rule: &Rule<E>,
     limits: &mut L,
     world: &mut ObservationWorld,
 ) -> Result<FlatRule<ComponentValue<E>>, CompileError> {
+    flatten_rule_parts(rule.mode, &rule.head, &rule.tail, limits, world)
+}
+
+/// Lowers borrowed syntax in source order without constructing an executable graph.
+/// Resource failures propagate; well-scoped inputs cannot produce scope diagnostics.
+/// The continuation invariant excludes internal stack and operand-guard failures.
+#[verus_verify]
+#[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+#[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
+#[verus_spec(result => ensures
+    no_internal_compile_error(result),
+    !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
+    crate::verify::dsl::head_scoped(source_head@)
+        && crate::verify::dsl::regex_scoped(source_tail@, source_head@)
+        ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
+            && !(result matches Err(CompileError::UnboundVariable { .. })),
+    result matches Ok(flat) ==> flattened::<E>(Rule { mode, head: *source_head, tail: *source_tail }, flat)
+        && crate::verify::encoding::constants_in_domain(flat.source, component_domain::<E>()),
+    result matches Ok(flat) ==> flat.source.tests@.len() + flat.source.regexes@.len()
+        <= regex_cost::<E>(source_tail@),
+)]
+pub fn flatten_rule_parts<E: Event, L: Limits>(
+    mode: RuleMode,
+    source_head: &Head<E>,
+    source_tail: &RegexExpr<E>,
+    limits: &mut L,
+    world: &mut ObservationWorld,
+) -> Result<FlatRule<ComponentValue<E>>, CompileError> {
+    proof_decl! { let ghost rule = Rule { mode, head: *source_head, tail: *source_tail }; }
     limits.checkpoint().map_err(HistoryError::from)?;
     let mut scope = VariableScope::new();
-    let head = flatten_head(&rule.head, &mut scope)?;
+    let head = flatten_head(source_head, &mut scope)?;
     let mut builder = FlatBuilder::new(head);
     let mut work = Vec::new();
     let mut tests: Vec<u32> = Vec::new();
@@ -406,8 +433,10 @@ pub fn flatten_rule<E: Event, L: Limits>(
         let ghost mut test_sources = Seq::empty();
         let ghost mut regex_sources = Seq::empty();
     }
-    push(&mut work, Work::Regex(&rule.tail), limits, world)?;
+    push(&mut work, Work::Regex(source_tail), limits, world)?;
     proof! {
+        reveal_with_fuel(work_cost, 2);
+        assert(work_cost::<E>(work@) == regex_cost::<E>(rule.tail@));
         assert(run_work::<E>(work@, test_sources, regex_sources) == Some((Seq::empty(), seq![rule.tail@]))) by {
             reveal_with_fuel(run_work, 2);
         }
@@ -417,6 +446,7 @@ pub fn flatten_rule<E: Event, L: Limits>(
     }
     #[cfg_attr(verus_keep_ghost, verus_spec(
         invariant builder.wf(),
+            rule.head@ == source_head@, rule.tail@ == source_tail@,
             head_represents::<E>(builder.head_view(), rule.head@),
             crate::verify::dsl::head_scoped(rule.head@),
             scope_matches::<E>(scope, rule.head@),
@@ -429,6 +459,8 @@ pub fn flatten_rule<E: Event, L: Limits>(
             result_stacks::<E>(builder.tests_view(), builder.regexes_view(), tests@, regexes@,
                 test_sources, regex_sources, rule.head@),
             run_work::<E>(work@, test_sources, regex_sources) == Some((Seq::empty(), seq![rule.tail@])),
+            builder.tests_view().len() + builder.regexes_view().len() + work_cost::<E>(work@)
+                <= regex_cost::<E>(rule.tail@),
         decreases work_cost::<E>(work@),
     ))]
     while !work.is_empty() {
@@ -809,6 +841,10 @@ pub fn flatten_rule<E: Event, L: Limits>(
             reveal(result_stacks);
             reveal_with_fuel(work_cost, 2);
             assert(work_cost::<E>(work@) < work_cost::<E>(old_work));
+            assert(builder.tests_view().len() + builder.regexes_view().len()
+                <= old_tests.len() + old_regexes.len() + 1);
+            assert(builder.tests_view().len() + builder.regexes_view().len()
+                + work_cost::<E>(work@) <= regex_cost::<E>(rule.tail@));
             assert forall|i: int| 0 <= i < builder.tests_view().len() implies
                 crate::verify::encoding::test_in_domain(builder.tests_view()[i], component_domain::<E>()) by {
                 if i < old_tests.len() { assert(builder.tests_view()[i] == old_tests[i]); }
@@ -844,7 +880,7 @@ pub fn flatten_rule<E: Event, L: Limits>(
         assert(crate::verify::encoding::constants_in_domain(source, component_domain::<E>()));
     }
     Ok(FlatRule {
-        mode: rule.mode,
+        mode,
         source,
     })
 }

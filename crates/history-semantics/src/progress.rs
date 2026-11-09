@@ -326,6 +326,11 @@ impl CompiledPair {
             language::no_internal_error(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result is Ok ==> has_atoms(*final(self), transition),
+            final(self).caches.derivatives@ == old(self).caches.derivatives@,
+            successor_entries(final(self).caches.successors) == successor_entries(old(self).caches.successors),
+            forall|i: int| 0 <= i < old(self).caches.atoms@.len() && old(self).caches.atoms@[i] is Some
+                ==> i < final(self).caches.atoms@.len()
+                    && final(self).caches.atoms@[i] == old(self).caches.atoms@[i],
     )]
     pub(crate) fn ensure_atoms<L: Limits>(
         &mut self,
@@ -374,10 +379,14 @@ impl CompiledPair {
             invariant pair_wf(*self), pair_frame(entry, *self),
                 self.store.graph() == old(self).store.graph() || model::graph_extends(old(self).store.graph(), self.store.graph()),
                 prior_atoms.is_prefix_of(self.caches.atoms@),
+                self.caches.derivatives@ == entry.caches.derivatives@,
+                forall|i: int| 0 <= i < entry.caches.atoms@.len() && entry.caches.atoms@[i] is Some
+                    ==> i < self.caches.atoms@.len() && self.caches.atoms@[i] == entry.caches.atoms@[i],
                 forall|i: int| prior_atoms.len() <= i < self.caches.atoms@.len() ==> self.caches.atoms@[i] is None,
                 index == transition@, transition@ < self.store.graph().transitions.len(),
                 needed == index + 1,
                 atoms_wf(self.store.graph(), transition@, atoms@),
+                atoms_contained(self.store.graph(), transition@, atoms@),
                 successor_entries((*self).caches.successors) == successor_entries(entry.caches.successors),
                 self.caches.atoms@.len() <= needed || self.caches.atoms@ == prior_atoms,
             decreases needed - self.caches.atoms@.len(),
@@ -991,6 +1000,7 @@ impl CompiledPair {
             symbolic::verify::assignment_valid(old(self).caches.atoms@[key.transition@ as int].unwrap()@.len(), key.words.view())
                 ==> language::no_internal_error(result),
             final(self).caches.atoms@ == old(self).caches.atoms@,
+            final(self).caches.derivatives@ == old(self).caches.derivatives@,
             result matches Ok(id) ==> successor_entries((*final(self)).caches.successors).contains_key(class_key(key))
                 && successor_entries((*final(self)).caches.successors)[class_key(key)] == id
                 && fint::entry_val(final(self).store.graph(), key.transition@, id@),
@@ -1247,6 +1257,7 @@ impl CompiledPair {
             old(store).errors_are_non_invariant() ==> language::no_internal_error(result),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             result matches Ok(atoms) ==> atoms_wf(final(store).graph(), root@, atoms@),
+            result matches Ok(atoms) ==> atoms_contained(final(store).graph(), root@, atoms@),
     )]
     pub(crate) fn collect_atoms<G: KernelStore>(
         store: &mut G,
@@ -1275,11 +1286,16 @@ impl CompiledPair {
             store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             forall|j: int| 0 <= j < primitives@.len() ==> primitives@[j]@ < store.graph().tests.len()
                 && #[trigger] store.graph().tests[primitives@[j]@ as int] matches model::TestNode::Atom(_, true),
+            forall|j: int| #![trigger primitives@[j]] 0 <= j < primitives@.len() ==> match store.graph().tests[primitives@[j]@ as int] {
+                model::TestNode::Atom(p, _) => transition_reaches_primitive(base, root@, p),
+                _ => false,
+            },
             model::graph_extends(base, store.graph()),
             base == old(store).graph(),
             work.view() == pending_work,
             model::graph_wf(base),
             forall|j: int| 0 <= j < work.view().len() ==> walk_wf(base, work.view()[j]),
+            forall|j: int| 0 <= j < work.view().len() ==> walk_supported(base, root@, work.view()[j]),
             collector(base, root@, visited(transitions@, tests@), frontier(base, work.view()), found(store.graph(), primitives@)),
         ensures work.view().len() == 0,
             store.valid_store(), model::graph_wf(store.graph()), model::graph_extends(base, store.graph()),
@@ -1289,6 +1305,10 @@ impl CompiledPair {
             store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             forall|j: int| 0 <= j < primitives@.len() ==> primitives@[j]@ < store.graph().tests.len()
                 && #[trigger] store.graph().tests[primitives@[j]@ as int] matches model::TestNode::Atom(_, true),
+            forall|j: int| #![trigger primitives@[j]] 0 <= j < primitives@.len() ==> match store.graph().tests[primitives@[j]@ as int] {
+                model::TestNode::Atom(p, _) => transition_reaches_primitive(base, root@, p),
+                _ => false,
+            },
             collector(base, root@, visited(transitions@, tests@), frontier(base, work.view()), found(store.graph(), primitives@)),
         decreases transition_atoms_work(base, work.view()),
     ))]
@@ -1309,6 +1329,10 @@ impl CompiledPair {
                 assert(work.view().push(task) =~= pending_work);
                 assert(collector(base, root@, before_done, before_pending, before_atoms));
                 assert(walk_wf(base, task));
+                assert(walk_supported(base, root@, task));
+                lemma_walk_supported_children(base, root@, task);
+                assert forall|j: int| 0 <= j < rest.len() implies
+                    walk_supported(base, root@, rest[j]) by { assert(rest[j] == before_work[j]); }
                 lemma_graph_ids_obey_cmp();
                 lemma_walk_work_push(base);
             }
@@ -1342,14 +1366,26 @@ impl CompiledPair {
                             work.push(Walk::Test(test));
                             work.push(Walk::Transition(then_transition));
                             work.push(Walk::Transition(else_transition));
+                            proof! {
+                                assert(transition_tests(base, id@)[0] == test@);
+                                assert(transition_edges(base, id@)[0] == then_transition@);
+                                assert(transition_edges(base, id@)[1] == else_transition@);
+                                assert(walk_supported(base, root@, Walk::Test(test)));
+                                assert(walk_supported(base, root@, Walk::Transition(then_transition)));
+                                assert(walk_supported(base, root@, Walk::Transition(else_transition)));
+                            }
                         }
                         TransitionView::Union(_) | TransitionView::Intersect(_) => {
-                            work.push(Walk::TransitionChildren(id, 0))
+                            work.push(Walk::TransitionChildren(id, 0));
+                            proof! { assert(walk_supported(base, root@, work.view().last())); }
                         }
                         TransitionView::Not(child)
                         | TransitionView::Append {
                             transition: child, ..
-                        } => work.push(Walk::Transition(child)),
+                        } => {
+                            work.push(Walk::Transition(child));
+                            proof! { assert(walk_supported(base, root@, work.view().last())); }
+                        },
                     }
                 }
                 Walk::TransitionChildren(id, index) => {
@@ -1381,6 +1417,11 @@ impl CompiledPair {
                         work.push(Walk::TransitionChildren(id, next));
                         work.push(Walk::Transition(child));
                         proof! { lemma_transition_children_walk(base, id, index, child, next); }
+                        proof! {
+                            assert(transition_edges(base, id@)[index as int] == child@);
+                            assert(walk_supported(base, root@, Walk::Transition(child)));
+                            assert(walk_supported(base, root@, Walk::TransitionChildren(id, next)));
+                        }
                     }
                 }
                 Walk::Test(id) => {
@@ -1421,6 +1462,18 @@ impl CompiledPair {
                                 assert(primitives@[before_ids.len() as int] == positive);
                                 assert(store.graph().tests[positive@ as int] == model::TestNode::Atom(primitive@, true));
                                 assert(has_positive(store.graph(), primitives@, primitive@));
+                                assert(base.tests[id@ as int] == model::TestNode::Atom(primitive@, match base.tests[id@ as int] {
+                                    model::TestNode::Atom(_, polarity) => polarity, _ => true,
+                                }));
+                                assert(test_reaches_primitive(base, id@, primitive@));
+                                assert(transition_reaches_primitive(base, root@, primitive@));
+                                assert forall|j: int| #![trigger primitives@[j]] 0 <= j < primitives@.len() implies match store.graph().tests[primitives@[j]@ as int] {
+                                    model::TestNode::Atom(p, _) => transition_reaches_primitive(base, root@, p),
+                                    _ => false,
+                                } by {
+                                    if j < before_ids.len() { assert(primitives@[j] == before_ids[j]); }
+                                    else { assert(j == before_ids.len()); }
+                                }
                                 assert forall|j: int| 0 <= j < primitives@.len() implies
                                     primitives@[j]@ < store.graph().tests.len()
                                     && #[trigger] store.graph().tests[primitives@[j]@ as int] matches model::TestNode::Atom(_, true) by {
@@ -1431,7 +1484,10 @@ impl CompiledPair {
                                 }
                             }
                         }
-                        TestView::And(_) | TestView::Or(_) => work.push(Walk::TestChildren(id, 0)),
+                        TestView::And(_) | TestView::Or(_) => {
+                            work.push(Walk::TestChildren(id, 0));
+                            proof! { assert(walk_supported(base, root@, work.view().last())); }
+                        },
                     }
                 }
                 Walk::TestChildren(id, index) => {
@@ -1463,10 +1519,19 @@ impl CompiledPair {
                         work.push(Walk::TestChildren(id, next));
                         work.push(Walk::Test(child));
                         proof! { lemma_test_children_walk(base, id, index, child, next); }
+                        proof! {
+                            assert(test_edges(base, id@)[index as int] == child@);
+                            assert(walk_supported(base, root@, Walk::Test(child)));
+                            assert(walk_supported(base, root@, Walk::TestChildren(id, next)));
+                        }
                     }
                 }
             }
             proof! {
+                assert forall|j: int| 0 <= j < work.view().len() implies
+                    walk_supported(base, root@, work.view()[j]) by {
+                    if j < rest.len() { assert(work.view()[j] == rest[j]); }
+                }
                 lemma_work_tail_wf(base, rest, work.view());
                 lemma_frontier_tail(base, work.view());
                 lemma_frontier_discharge(base, rest, task, work.view(), visited(transitions@, tests@));
@@ -1487,6 +1552,12 @@ impl CompiledPair {
         }
         store.checkpoint()?;
         proof_decl! { let ghost collected = primitives@; }
+        proof! {
+            assert forall|j: int| #![trigger collected[j]] 0 <= j < collected.len() implies match store.graph().tests[collected[j]@ as int] {
+                model::TestNode::Atom(p, _) => transition_reaches_primitive(base, root@, p),
+                _ => false,
+            } by {}
+        }
         let primitive_slice = primitives.as_mut_slice();
         primitive_slice.sort_unstable();
         proof_decl! { let ghost sorted = primitives@; }
@@ -1500,6 +1571,17 @@ impl CompiledPair {
                 && #[trigger] store.graph().tests[sorted[j]@ as int] matches model::TestNode::Atom(_, true) by {
                 assert(collected.contains(sorted[j]));
                 let i = choose|i: int| 0 <= i < collected.len() && collected[i] == sorted[j];
+            }
+            assert forall|j: int| #![trigger sorted[j]] 0 <= j < sorted.len() implies match store.graph().tests[sorted[j]@ as int] {
+                model::TestNode::Atom(p, _) => transition_reaches_primitive(base, root@, p),
+                _ => false,
+            } by {
+                assert(collected.contains(sorted[j]));
+                let i = choose|i: int| 0 <= i < collected.len() && collected[i] == sorted[j];
+                assert(collected[i] == sorted[j]);
+                assert(match store.graph().tests[collected[i]@ as int] {
+                    model::TestNode::Atom(p, _) => transition_reaches_primitive(base, root@, p), _ => false,
+                });
             }
         }
         primitives.dedup();
@@ -1524,6 +1606,19 @@ impl CompiledPair {
                 implies has_positive(store.graph(), primitives@, p) by {
                 assert(found(store.graph(), sorted).contains(p));
                 assert(found(store.graph(), primitives@).contains(p));
+            }
+            assert forall|p: model::Primitive| has_positive(store.graph(), primitives@, p) implies
+                transition_reaches_primitive(store.graph(), root@, p) by {
+                let j = choose|j: int| 0 <= j < primitives@.len() && primitives@[j]@ < store.graph().tests.len()
+                    && store.graph().tests[primitives@[j]@ as int] == model::TestNode::Atom(p, true);
+                assert(sorted.contains(primitives@[j]));
+                let i = choose|i: int| 0 <= i < sorted.len() && sorted[i] == primitives@[j];
+                assert(sorted[i] == primitives@[j]);
+                assert(match store.graph().tests[sorted[i]@ as int] {
+                    model::TestNode::Atom(q, _) => transition_reaches_primitive(base, root@, q), _ => false,
+                });
+                assert(transition_reaches_primitive(base, root@, p));
+                lemma_transition_reaches_stable(base, store.graph(), root@, p);
             }
         }
         store.checkpoint()?;
@@ -1583,6 +1678,85 @@ pub(crate) mod verify {
         pub open spec fn atoms_wf(g: model::Graph, root: nat, ids: Seq<TestId>) -> bool {
             model::atom_ids_wf(g, ids) && forall|p: model::Primitive|
                 transition_reaches_primitive(g, root, p) ==> has_positive(g, ids, p)
+        }
+
+        pub open spec fn atoms_contained(g: model::Graph, root: nat, ids: Seq<TestId>) -> bool {
+            forall|p: model::Primitive| has_positive(g, ids, p)
+                ==> transition_reaches_primitive(g, root, p)
+        }
+
+        pub(super) open spec fn walk_supported(g: model::Graph, root: nat, task: Walk) -> bool {
+            match task {
+                Walk::Transition(id) => forall|p: model::Primitive|
+                    transition_reaches_primitive(g, id@, p) ==> transition_reaches_primitive(g, root, p),
+                Walk::Test(id) => forall|p: model::Primitive|
+                    test_reaches_primitive(g, id@, p) ==> transition_reaches_primitive(g, root, p),
+                Walk::TransitionChildren(id, _) => forall|p: model::Primitive|
+                    transition_reaches_primitive(g, id@, p) ==> transition_reaches_primitive(g, root, p),
+                Walk::TestChildren(id, _) => forall|p: model::Primitive|
+                    test_reaches_primitive(g, id@, p) ==> transition_reaches_primitive(g, root, p),
+            }
+        }
+
+        pub(super) proof fn lemma_walk_supported_children(g: model::Graph, root: nat, task: Walk)
+            requires model::graph_wf(g), walk_wf(g, task), walk_supported(g, root, task),
+            ensures match task {
+                Walk::Transition(id) | Walk::TransitionChildren(id, _) =>
+                    (forall|j: int| #![trigger transition_edges(g, id@)[j]] 0 <= j < transition_edges(g, id@).len()
+                        ==> forall|p: model::Primitive|
+                            transition_reaches_primitive(g, transition_edges(g, id@)[j], p)
+                                ==> transition_reaches_primitive(g, root, p))
+                    && (forall|j: int| #![trigger transition_tests(g, id@)[j]] 0 <= j < transition_tests(g, id@).len()
+                        ==> forall|p: model::Primitive|
+                            test_reaches_primitive(g, transition_tests(g, id@)[j], p)
+                                ==> transition_reaches_primitive(g, root, p)),
+                Walk::Test(id) | Walk::TestChildren(id, _) =>
+                    forall|j: int| #![trigger test_edges(g, id@)[j]] 0 <= j < test_edges(g, id@).len()
+                        ==> forall|p: model::Primitive|
+                            test_reaches_primitive(g, test_edges(g, id@)[j], p)
+                                ==> transition_reaches_primitive(g, root, p),
+            },
+        {
+            match task {
+                Walk::Transition(id) | Walk::TransitionChildren(id, _) => {
+                    model::lemma_graph_transition_wf(g, id@);
+                    assert forall|j: int| #![trigger transition_edges(g, id@)[j]] 0 <= j < transition_edges(g, id@).len() implies
+                        forall|p: model::Primitive|
+                            transition_reaches_primitive(g, transition_edges(g, id@)[j], p)
+                                ==> transition_reaches_primitive(g, root, p) by {
+                        assert(transition_edges(g, id@)[j] < id@);
+                        assert forall|p: model::Primitive|
+                            transition_reaches_primitive(g, transition_edges(g, id@)[j], p) implies
+                                transition_reaches_primitive(g, root, p) by {
+                            assert(transition_reaches_primitive(g, id@, p));
+                        }
+                    }
+                    assert forall|j: int| #![trigger transition_tests(g, id@)[j]] 0 <= j < transition_tests(g, id@).len() implies
+                        forall|p: model::Primitive|
+                            test_reaches_primitive(g, transition_tests(g, id@)[j], p)
+                                ==> transition_reaches_primitive(g, root, p) by {
+                        assert forall|p: model::Primitive|
+                            test_reaches_primitive(g, transition_tests(g, id@)[j], p) implies
+                                transition_reaches_primitive(g, root, p) by {
+                            assert(transition_reaches_primitive(g, id@, p));
+                        }
+                    }
+                },
+                Walk::Test(id) | Walk::TestChildren(id, _) => {
+                    model::lemma_graph_test_wf(g, id@);
+                    assert forall|j: int| #![trigger test_edges(g, id@)[j]] 0 <= j < test_edges(g, id@).len() implies
+                        forall|p: model::Primitive|
+                            test_reaches_primitive(g, test_edges(g, id@)[j], p)
+                                ==> transition_reaches_primitive(g, root, p) by {
+                        assert(test_edges(g, id@)[j] < id@);
+                        assert forall|p: model::Primitive|
+                            test_reaches_primitive(g, test_edges(g, id@)[j], p) implies
+                                transition_reaches_primitive(g, root, p) by {
+                            assert(test_reaches_primitive(g, id@, p));
+                        }
+                    }
+                },
+            }
         }
 
         proof fn lemma_atom_id_index(ids: Seq<TestId>, index: int)
@@ -2043,6 +2217,21 @@ pub(crate) mod verify {
             }
         }
 
+        pub proof fn lemma_atoms_contained_extends(a: model::Graph, b: model::Graph, root: nat, ids: Seq<TestId>)
+            requires model::graph_wf(a), model::graph_extends(a, b), root < a.transitions.len(),
+                model::atom_ids_wf(a, ids), atoms_contained(a, root, ids),
+            ensures atoms_contained(b, root, ids),
+        {
+            assert forall|p: model::Primitive| has_positive(b, ids, p) implies
+                transition_reaches_primitive(b, root, p) by {
+                let j = choose|j: int| 0 <= j < ids.len() && ids[j]@ < b.tests.len()
+                    && b.tests[ids[j]@ as int] == model::TestNode::Atom(p, true);
+                assert(a.tests[ids[j]@ as int] == b.tests[ids[j]@ as int]);
+                assert(has_positive(a, ids, p));
+                lemma_transition_reaches_stable(a, b, root, p);
+            }
+        }
+
         pub proof fn lemma_atoms_wf_extends(a: model::Graph, b: model::Graph, root: nat, ids: Seq<TestId>)
             requires model::graph_wf(a), model::graph_extends(a, b), root < a.transitions.len(), atoms_wf(a, root, ids),
             ensures atoms_wf(b, root, ids),
@@ -2064,6 +2253,7 @@ pub(crate) mod verify {
     pub open(crate) spec fn atom_cache_wf(g: model::Graph, atoms: Seq<Option<AtomSet>>) -> bool {
         forall|i: int| 0 <= i < atoms.len() && atoms[i] is Some ==> i < g.transitions.len()
             && atoms_wf(g, i as nat, atoms[i].unwrap()@)
+            && atoms_contained(g, i as nat, atoms[i].unwrap()@)
     }
 
     pub open(crate) spec fn successor_entries_wf(
@@ -2286,7 +2476,7 @@ pub(crate) mod verify {
         }
     }
 
-    pub(super) proof fn lemma_pair_symbolic_frame(before: CompiledPair, after: CompiledPair)
+    pub(crate) proof fn lemma_pair_symbolic_frame(before: CompiledPair, after: CompiledPair)
         requires pair_wf(before), after.store.valid_store(), model::graph_wf(after.store.graph()),
             pair_frame(before, after),
             after.caches.atoms@ == before.caches.atoms@, after.caches.guards@ == before.caches.guards@, successor_entries(after.caches.successors) == successor_entries(before.caches.successors),
@@ -2295,8 +2485,10 @@ pub(crate) mod verify {
     {
         symbolic::verify::derivative_extends(before.store.graph(), after.store.graph());
         assert forall|i: int| 0 <= i < after.caches.atoms@.len() && after.caches.atoms@[i] is Some implies i < after.store.graph().transitions.len()
-            && atoms_wf(after.store.graph(), i as nat, after.caches.atoms@[i].unwrap()@) by {
+            && atoms_wf(after.store.graph(), i as nat, after.caches.atoms@[i].unwrap()@)
+            && atoms_contained(after.store.graph(), i as nat, after.caches.atoms@[i].unwrap()@) by {
             lemma_atoms_wf_extends(before.store.graph(), after.store.graph(), i as nat, before.caches.atoms@[i].unwrap()@);
+            lemma_atoms_contained_extends(before.store.graph(), after.store.graph(), i as nat, before.caches.atoms@[i].unwrap()@);
         }
         lemma_successor_entries_frame(before.store.graph(), after.store.graph(), before.caches.atoms@, successor_entries(before.caches.successors));
         lemma_guard_cache_frame(before.store.graph(), after.store.graph(), before.caches.atoms@, before.caches.guards@);

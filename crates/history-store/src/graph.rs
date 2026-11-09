@@ -1418,6 +1418,37 @@ impl CanonicalStore {
             verify::lemma_regexes_weight_count(self.graph().regexes);
             verify::lemma_transitions_weight_count(self.graph().transitions);
         }
+
+        /// Every native constant payload is a `u64`, including after graph extension.
+        pub proof fn lemma_constant_bounds(&self)
+            ensures forall|i: int| #![trigger self.graph().tests[i]]
+                0 <= i < self.graph().tests.len() ==> match self.graph().tests[i] {
+                model::TestNode::Atom(model::Primitive::Eq(_, model::GTerm::Constant(v)), _) => v <= u64::MAX,
+                _ => true,
+            },
+        {
+            match self.storage.tables {
+                Some(t) => {
+                    assert forall|i: int| #![trigger self.graph().tests[i]]
+                        0 <= i < self.graph().tests.len() implies
+                        match self.graph().tests[i] {
+                            model::TestNode::Atom(model::Primitive::Eq(_, model::GTerm::Constant(v)), _) => v <= u64::MAX,
+                            _ => true,
+                        } by {
+                        match t.tests@[i] {
+                            TestNode::Atom { primitive, .. } => {
+                                match primitive {
+                                    Primitive::Eq { term: Term::Constant(value), .. } => {},
+                                    _ => {},
+                                }
+                            },
+                            _ => {},
+                        }
+                    }
+                },
+                None => {},
+            }
+        }
     }
 
     /// Creates the canonical graph with the runtime's budget, [`MAX_GRAPH_BYTES`], and its

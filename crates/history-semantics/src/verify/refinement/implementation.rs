@@ -128,4 +128,21 @@ pub open spec fn covered_with_ok(d: NDomains, p: Seq<NRule>, rule: NRule, cases:
             ==> (#[trigger] n_lang(theta, query(g1).1, w) == n_lang(theta, firing_denials(d, p, g1), w))
 }
 
+/// The analyzer's retained case function has a finite trace bound once each real successor
+/// abstracts into the implementation model and refinements use the finite atom vocabulary.
+pub proof fn theorem_impl_search_bounded(d: NDomains,
+    cases_of: spec_fn(Item) -> Set<Case>,
+    atoms_of: spec_fn(Regex<model::Test>) -> Set<model::Primitive>,
+    g0: Constraint, q0: Regex<model::Test>)
+    requires crate::verify::finite_impl::regex_nf(q0),
+        cases_follow(crate::verify::finite_impl::m_impl(), cases_of),
+        cases_from_atoms(d, cases_of, atoms_of),
+    ensures finitely_many_items(cases_of, Item { constraint: g0, state: q0 }),
+        exists|bound: nat| #[trigger] traces_bounded(g0, q0, cases_of, bound),
+{
+    theorem_impl_finitely_many_items(d, cases_of, atoms_of,
+        Item { constraint: g0, state: q0 });
+    theorem_search_terminates();
+}
+
 } // verus!

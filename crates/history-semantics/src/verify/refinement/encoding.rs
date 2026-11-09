@@ -21,6 +21,8 @@ use junco_core::verify::flatten as fl;
 use junco_core::verify::history_specs as language;
 use junco_core::verify::history_specs::{EventView, Regex, Subst};
 use crate::compile::verify as numeric;
+use junco_core::flat::{FlatRegex, FlatTerm, FlatTest};
+use junco_core::flat::verify as portable;
 use vstd::prelude::*;
 
 verus! {
@@ -190,7 +192,7 @@ pub open spec fn regex_mentions(r: Regex<model::Test>, c: Component, v: nat) -> 
     match r {
         Regex::Test(t) => test_mentions(t, c, v),
         Regex::Union(cs) | Regex::Concat(cs) | Regex::Intersect(cs) =>
-            exists|i: int| 0 <= i < cs.len() && #[trigger] regex_mentions(cs[i], c, v),
+            exists|i: int| #![trigger regex_mention_child(r, i)] 0 <= i < cs.len() && regex_mentions(cs[i], c, v),
         Regex::Star(b) | Regex::Not(b) => regex_mentions(*b, c, v),
         _ => false,
     }
@@ -201,7 +203,7 @@ pub open spec fn test_mentions(t: model::Test, c: Component, v: nat) -> bool
 {
     match t {
         model::Test::Atom(model::Primitive::Eq(field, model::GTerm::Constant(k)), _) => field == c && k == v,
-        model::Test::And(cs) | model::Test::Or(cs) => exists|i: int| 0 <= i < cs.len() && #[trigger] test_mentions(cs[i], c, v),
+        model::Test::And(cs) | model::Test::Or(cs) => exists|i: int| #![trigger test_mention_child(t, i)] 0 <= i < cs.len() && test_mentions(cs[i], c, v),
         _ => false,
     }
 }
@@ -216,6 +218,470 @@ pub open spec fn stmt_numeric_genericity() -> bool {
 pub open spec fn n_pair_values(theta: Subst, w: Seq<EventView>) -> ISet<nat> {
     ISet::new(|x: nat| x == theta.principal || x == theta.action || x == theta.resource
         || exists|i: int| 0 <= i < w.len() && ((#[trigger] w[i]).principal == x || w[i].action == x || w[i].resource == x))
+}
+
+// ===== proofs =====
+
+// Parent-keyed triggers avoid conditional children and recursive-call fuel in SMT patterns.
+#[verifier::opaque]
+pub open spec fn test_mention_child(t: model::Test, i: int) -> Option<model::Test> {
+    match t {
+        model::Test::And(cs) | model::Test::Or(cs) => Some(cs[i]),
+        _ => None,
+    }
+}
+
+#[verifier::opaque]
+pub open spec fn regex_mention_child(r: Regex<model::Test>, i: int) -> Option<Regex<model::Test>> {
+    match r {
+        Regex::Union(cs) | Regex::Concat(cs) | Regex::Intersect(cs) => Some(cs[i]),
+        _ => None,
+    }
+}
+
+/// `source_test` reads the valuation only at bound components.
+pub proof fn lemma_source_test_local(template: FlatPair<u64>, index: nat, a: Subst, b: Subst, e: EventView)
+    requires portable::structural_wf(template), agrees_on_binds(template, a, b),
+    ensures numeric::source_test(template, index, a, e) == numeric::source_test(template, index, b, e),
+    decreases index,
+{
+    reveal_with_fuel(numeric::source_test, 1);
+    if index < template.tests@.len() {
+        assert(portable::test_wf(template.head@, template.tests@[index as int], index));
+        match template.tests@[index as int] {
+            FlatTest::Atom { field, term, positive } => {
+                if let FlatTerm::Variable(v) = term {
+                    assert(template.head@[portable::field_index(v)] is Bind);
+                    assert(language::head_field(numeric::head_view(template), v) is Bind) by {
+                        match v { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
+                    }
+                    assert(language::field_value(a, v) == language::field_value(b, v));
+                }
+            },
+            FlatTest::And(children) | FlatTest::Or(children) => {
+                assert forall|i: int| 0 <= i < children@.len() implies
+                    numeric::source_test(template, children@[i] as nat, a, e)
+                        == numeric::source_test(template, children@[i] as nat, b, e) by {
+                    assert(children@[i] < index);
+                    lemma_source_test_local(template, children@[i] as nat, a, b, e);
+                }
+            },
+            _ => {},
+        }
+    }
+}
+
+/// `source_regex` reads the valuation only at bound components.
+pub proof fn lemma_source_regex_local(template: FlatPair<u64>, index: nat, a: Subst, b: Subst, w: Seq<EventView>)
+    requires portable::structural_wf(template), agrees_on_binds(template, a, b),
+    ensures numeric::source_regex(template, index, a, w) == numeric::source_regex(template, index, b, w),
+    decreases index, 1nat,
+{
+    reveal_with_fuel(numeric::source_regex, 1);
+    if index < template.regexes@.len() {
+        assert(portable::regex_wf(template.regexes@[index as int], index, template.tests@.len()));
+        match template.regexes@[index as int] {
+            FlatRegex::Test(test) => {
+                if w.len() == 1 {
+                    lemma_source_test_local(template, test as nat, a, b, w[0]);
+                }
+            },
+            FlatRegex::Union(children) | FlatRegex::Intersect(children) => {
+                assert forall|i: int| 0 <= i < children@.len() implies
+                    numeric::source_regex(template, children@[i] as nat, a, w)
+                        == numeric::source_regex(template, children@[i] as nat, b, w) by {
+                    assert(children@[i] < index);
+                    lemma_source_regex_local(template, children@[i] as nat, a, b, w);
+                }
+            },
+            FlatRegex::Concat(children) => {
+                assert forall|i: int, p: Seq<EventView>| 0 <= i < children@.len() implies
+                    numeric::source_regex(template, children@[i] as nat, a, p)
+                        == numeric::source_regex(template, children@[i] as nat, b, p) by {
+                    assert(children@[i] < index);
+                    lemma_source_regex_local(template, children@[i] as nat, a, b, p);
+                }
+                if numeric::source_regex(template, index, a, w) {
+                    let parts = choose|parts: Seq<Seq<EventView>>|
+                        parts.len() == children@.len() && parts.flatten() == w
+                        && forall|i: int| 0 <= i < children@.len() ==> children@[i] < index
+                            && numeric::source_regex(template, children@[i] as nat, a, parts[i]);
+                    assert forall|i: int| 0 <= i < children@.len() implies children@[i] < index
+                        && numeric::source_regex(template, children@[i] as nat, b, parts[i]) by {}
+                    assert(numeric::source_regex(template, index, b, w));
+                }
+                if numeric::source_regex(template, index, b, w) {
+                    let parts = choose|parts: Seq<Seq<EventView>>|
+                        parts.len() == children@.len() && parts.flatten() == w
+                        && forall|i: int| 0 <= i < children@.len() ==> children@[i] < index
+                            && numeric::source_regex(template, children@[i] as nat, b, parts[i]);
+                    assert forall|i: int| 0 <= i < children@.len() implies children@[i] < index
+                        && numeric::source_regex(template, children@[i] as nat, a, parts[i]) by {}
+                    assert(numeric::source_regex(template, index, a, w));
+                }
+            },
+            FlatRegex::Star(child) => {
+                assert forall|p: Seq<EventView>|
+                    numeric::source_regex(template, child as nat, a, p)
+                        == #[trigger] numeric::source_regex(template, child as nat, b, p) by {
+                    lemma_source_regex_local(template, child as nat, a, b, p);
+                }
+                if numeric::source_regex(template, index, a, w) {
+                    let parts = choose|parts: Seq<Seq<EventView>>| parts.flatten() == w
+                        && forall|i: int| 0 <= i < parts.len()
+                            ==> numeric::source_regex(template, child as nat, a, parts[i]);
+                    assert forall|i: int| 0 <= i < parts.len() implies
+                        numeric::source_regex(template, child as nat, b, parts[i]) by {}
+                    assert(numeric::source_regex(template, index, b, w));
+                }
+                if numeric::source_regex(template, index, b, w) {
+                    let parts = choose|parts: Seq<Seq<EventView>>| parts.flatten() == w
+                        && forall|i: int| 0 <= i < parts.len()
+                            ==> numeric::source_regex(template, child as nat, b, parts[i]);
+                    assert forall|i: int| 0 <= i < parts.len() implies
+                        numeric::source_regex(template, child as nat, a, parts[i]) by {}
+                    assert(numeric::source_regex(template, index, a, w));
+                }
+            },
+            FlatRegex::Complement(child) => {
+                lemma_source_regex_local(template, child as nat, a, b, w);
+            },
+            _ => {},
+        }
+    }
+}
+
+pub proof fn theorem_source_regex_local()
+    ensures stmt_source_regex_local(),
+{
+    assert forall|template: FlatPair<u64>, a: Subst, b: Subst, w: Seq<EventView>|
+        portable::structural_wf(template) && agrees_on_binds(template, a, b)
+            implies (#[trigger] numeric::source_regex(template, template.root as nat, a, w)
+                == #[trigger] numeric::source_regex(template, template.root as nat, b, w)) by {
+        lemma_source_regex_local(template, template.root as nat, a, b, w);
+    }
+}
+
+/// One instance of `stmt_front_end_denies`.
+pub proof fn lemma_front_end_denies<E: Event>(
+    rule: Rule<E>, flat: FlatRule<ComponentValue<E>>, template: FlatPair<u64>,
+    maps: enc::Codebook<ComponentValue<E>>, later: enc::Codebook<ComponentValue<E>>,
+    domain: enc::Domain<ComponentValue<E>>, n: NRule,
+    candidate: TEvent<E::Principal, E::Action, E::Resource>,
+    history: Seq<TEvent<E::Principal, E::Action, E::Resource>>,
+    request: Seq<u64>, word: Seq<Seq<u64>>, theta: Subst, w: Seq<EventView>,
+)
+    requires
+        front_end_ok(rule, flat, template, maps, domain), represents(n, rule.mode, template),
+        enc::extends(maps, later, fl::component_equality::<E>()),
+        enc::maps_wf(later, fl::component_equality::<E>(), domain),
+        enc::event_encoded(later, fl::component_equality::<E>(), domain, fl::event_values::<E>(candidate), request),
+        enc::word_encoded(later, fl::component_equality::<E>(), domain, fl::word_values::<E>(history), word),
+        enc::event_representation(request, theta), enc::word_representation(word, w),
+    ensures rule_denies(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w),
+{
+    enc::lemma_dsl_later_maps_preservation::<E>(rule, flat, template, maps, later, domain,
+        candidate, history, request, word);
+    enc::lemma_topology_wf(flat.source, template);
+    let flat_head = portable::head_matches(template.head@, request, enc::numeric_equality());
+    if flat_head {
+        assert forall|c: Component| #[trigger] n_head_field(n.head, c) is Some
+            implies language::field_value(theta, c) == n_head_field(n.head, c)->Some_0 by {
+            assert(n_head_field(n.head, c) == head_code(template.head@[portable::field_index(c)])) by {
+                match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
+            }
+            assert(language::field_value(theta, c) == request[portable::field_index(c)] as nat) by {
+                match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
+            }
+            if let FlatHead::Constant(expected) = template.head@[portable::field_index(c)] {
+                assert((enc::numeric_equality())(c, request[portable::field_index(c)], expected));
+            }
+        }
+    }
+    if n_head_matches(n.head, theta) {
+        assert forall|c: Component| match #[trigger] template.head@[portable::field_index(c)] {
+            FlatHead::Constant(expected) => (enc::numeric_equality())(c, request[portable::field_index(c)], expected),
+            _ => true,
+        } by {
+            assert(n_head_field(n.head, c) == head_code(template.head@[portable::field_index(c)])) by {
+                match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
+            }
+            assert(language::field_value(theta, c) == request[portable::field_index(c)] as nat) by {
+                match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
+            }
+        }
+        assert(flat_head);
+        let head = numeric::head_view(template);
+        let bound = language::head_bindings(head, theta);
+        assert(n_head_field(n.head, Component::Principal) == head_code(template.head@[0]));
+        assert(n_head_field(n.head, Component::Action) == head_code(template.head@[1]));
+        assert(n_head_field(n.head, Component::Resource) == head_code(template.head@[2]));
+        assert(language::head_match(head, theta, bound));
+        numeric::lemma_flat_regex(template, template.root as nat, request, theta, word, w, bound);
+        assert forall|c: Component| #[trigger] language::head_field(head, c) is Bind
+            implies language::field_value(bound, c) == language::field_value(theta, c) by {
+            match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
+        }
+        lemma_source_regex_local(template, template.root as nat, bound, theta, w);
+        assert(language::event_wf(theta));
+        assert(n_lang(theta, n.tail, w) == numeric::source_regex(template, template.root as nat, theta, w));
+    }
+}
+
+pub proof fn theorem_front_end_denies<E: Event>()
+    ensures stmt_front_end_denies::<E>(),
+{
+    assert forall|rule: Rule<E>, flat: FlatRule<ComponentValue<E>>, template: FlatPair<u64>,
+        maps: enc::Codebook<ComponentValue<E>>, later: enc::Codebook<ComponentValue<E>>,
+        domain: enc::Domain<ComponentValue<E>>, n: NRule,
+        candidate: TEvent<E::Principal, E::Action, E::Resource>,
+        history: Seq<TEvent<E::Principal, E::Action, E::Resource>>,
+        request: Seq<u64>, word: Seq<Seq<u64>>, theta: Subst, w: Seq<EventView>|
+        #![trigger front_end_ok(rule, flat, template, maps, domain), represents(n, rule.mode, template),
+            enc::extends(maps, later, fl::component_equality::<E>()),
+            enc::event_encoded(later, fl::component_equality::<E>(), domain, fl::event_values::<E>(candidate), request),
+            enc::word_encoded(later, fl::component_equality::<E>(), domain, fl::word_values::<E>(history), word),
+            enc::event_representation(request, theta), enc::word_representation(word, w)]
+        front_end_ok(rule, flat, template, maps, domain) && represents(n, rule.mode, template)
+            && enc::extends(maps, later, fl::component_equality::<E>())
+            && enc::maps_wf(later, fl::component_equality::<E>(), domain)
+            && enc::event_encoded(later, fl::component_equality::<E>(), domain, fl::event_values::<E>(candidate), request)
+            && enc::word_encoded(later, fl::component_equality::<E>(), domain, fl::word_values::<E>(history), word)
+            && enc::event_representation(request, theta) && enc::word_representation(word, w)
+        implies (rule_denies(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w)) by {
+        lemma_front_end_denies::<E>(rule, flat, template, maps, later, domain, n, candidate, history,
+            request, word, theta, w);
+    }
+}
+
+// ----- numeric genericity -----
+
+pub open spec fn n_in_values(values: ISet<nat>, e: EventView) -> bool {
+    values.contains(e.principal) && values.contains(e.action) && values.contains(e.resource)
+}
+
+/// `b` is the renaming of an event `a` whose values lie in `values`.
+pub open spec fn n_renamed(f: spec_fn(nat) -> nat, values: ISet<nat>) -> spec_fn(EventView, EventView) -> bool {
+    |a: EventView, b: EventView| n_in_values(values, a) && b == n_rename_event(f, a)
+}
+
+pub open spec fn n_renamed_rev(f: spec_fn(nat) -> nat, values: ISet<nat>) -> spec_fn(EventView, EventView) -> bool {
+    |b: EventView, a: EventView| n_in_values(values, a) && b == n_rename_event(f, a)
+}
+
+pub proof fn lemma_rename_field(f: spec_fn(nat) -> nat, e: EventView, c: Component)
+    ensures language::field_value(n_rename_event(f, e), c) == f(language::field_value(e, c)),
+{
+    match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
+}
+
+pub proof fn lemma_in_values_field(values: ISet<nat>, e: EventView, c: Component)
+    requires n_in_values(values, e),
+    ensures values.contains(language::field_value(e, c)),
+{
+    match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
+}
+
+pub proof fn lemma_test_rename(t: model::Test, theta: Subst, f: spec_fn(nat) -> nat, fixed: ISet<nat>,
+    values: ISet<nat>, e: EventView)
+    requires n_renaming_ok(f, fixed, values), n_in_values(values, theta), n_in_values(values, e),
+        forall|c: Component, v: nat| #[trigger] test_mentions(t, c, v) ==> fixed.contains(v),
+    ensures model::test_holds(theta, t, e)
+        == model::test_holds(n_rename_event(f, theta), t, n_rename_event(f, e)),
+    decreases t,
+{
+    reveal_with_fuel(test_mentions, 1);
+    reveal_with_fuel(model::test_holds, 1);
+    match t {
+        model::Test::Atom(model::Primitive::Eq(field, term), positive) => {
+            lemma_rename_field(f, e, field);
+            lemma_in_values_field(values, e, field);
+            let x = language::field_value(e, field);
+            match term {
+                model::GTerm::Constant(k) => {
+                    assert(test_mentions(t, field, k));
+                    assert(fixed.contains(k));
+                    assert(values.contains(x));
+                    assert(f(x) == k <==> x == k);
+                },
+                model::GTerm::Variable(v) => {
+                    lemma_rename_field(f, theta, v);
+                    lemma_in_values_field(values, theta, v);
+                    let y = language::field_value(theta, v);
+                    assert(values.contains(x) && values.contains(y));
+                    assert(f(x) == f(y) <==> x == y);
+                },
+            }
+        },
+        model::Test::And(cs) | model::Test::Or(cs) => {
+            assert forall|i: int| 0 <= i < cs.len() implies
+                model::test_holds(theta, cs[i], e)
+                    == model::test_holds(n_rename_event(f, theta), cs[i], n_rename_event(f, e)) by {
+                assert forall|c: Component, v: nat| #[trigger] test_mentions(cs[i], c, v) implies fixed.contains(v) by {
+                    reveal(test_mention_child);
+                    assert(test_mention_child(t, i) == Some(cs[i]));
+                    assert(test_mentions(t, c, v));
+                }
+                lemma_test_rename(cs[i], theta, f, fixed, values, e);
+            }
+        },
+        _ => {},
+    }
+}
+
+pub proof fn lemma_lang_rename(r: Regex<model::Test>, theta: Subst, f: spec_fn(nat) -> nat, fixed: ISet<nat>,
+    values: ISet<nat>, u: Seq<EventView>, v: Seq<EventView>)
+    requires n_renaming_ok(f, fixed, values), n_in_values(values, theta),
+        enc::pointwise(u, v, n_renamed(f, values)),
+        forall|c: Component, k: nat| #[trigger] regex_mentions(r, c, k) ==> fixed.contains(k),
+    ensures language::lang(model::gsem(theta), r, u)
+        == language::lang(model::gsem(n_rename_event(f, theta)), r, v),
+    decreases r,
+{
+    reveal_with_fuel(language::lang, 1);
+    reveal_with_fuel(regex_mentions, 1);
+    let ftheta = n_rename_event(f, theta);
+    let rel = n_renamed(f, values);
+    let rev = n_renamed_rev(f, values);
+    match r {
+        Regex::Test(l) => {
+            if u.len() == 1 {
+                assert(rel(u[0], v[0]));
+                assert forall|c: Component, k: nat| #[trigger] test_mentions(l, c, k) implies fixed.contains(k) by {
+                    assert(regex_mentions(r, c, k));
+                }
+                lemma_test_rename(l, theta, f, fixed, values, u[0]);
+            }
+        },
+        Regex::Union(cs) | Regex::Intersect(cs) => {
+            assert forall|i: int| 0 <= i < cs.len() implies
+                language::lang(model::gsem(theta), cs[i], u) == language::lang(model::gsem(ftheta), cs[i], v) by {
+                assert forall|c: Component, k: nat| #[trigger] regex_mentions(cs[i], c, k) implies fixed.contains(k) by {
+                    reveal(regex_mention_child);
+                    assert(regex_mention_child(r, i) == Some(cs[i]));
+                    assert(regex_mentions(r, c, k));
+                }
+                lemma_lang_rename(cs[i], theta, f, fixed, values, u, v);
+            }
+        },
+        Regex::Not(b) => {
+            assert forall|c: Component, k: nat| #[trigger] regex_mentions(*b, c, k) implies fixed.contains(k) by {
+                assert(regex_mentions(r, c, k));
+            }
+            lemma_lang_rename(*b, theta, f, fixed, values, u, v);
+        },
+        Regex::Concat(cs) => {
+            assert forall|i: int| #![trigger cs[i]] 0 <= i < cs.len() implies
+                forall|c: Component, k: nat| #[trigger] regex_mentions(cs[i], c, k) ==> fixed.contains(k) by {
+                assert forall|c: Component, k: nat| #[trigger] regex_mentions(cs[i], c, k) implies fixed.contains(k) by {
+                    reveal(regex_mention_child);
+                    assert(regex_mention_child(r, i) == Some(cs[i]));
+                    assert(regex_mentions(r, c, k));
+                }
+            }
+            if language::lang(model::gsem(theta), r, u) {
+                let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == cs.len() && u == parts.flatten()
+                    && forall|i: int| 0 <= i < cs.len() ==> language::lang(model::gsem(theta), cs[i], parts[i]);
+                assert(enc::pointwise(v, u, rev));
+                enc::lemma_partition_lift(v, u, parts, rev);
+                let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && v == lifted.flatten()
+                    && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rev);
+                assert forall|i: int| 0 <= i < cs.len() implies language::lang(model::gsem(ftheta), cs[i], lifted[i]) by {
+                    assert(enc::pointwise(lifted[i], parts[i], rev));
+                    assert(enc::pointwise(parts[i], lifted[i], rel));
+                    lemma_lang_rename(cs[i], theta, f, fixed, values, parts[i], lifted[i]);
+                }
+                assert(language::lang(model::gsem(ftheta), r, v));
+            }
+            if language::lang(model::gsem(ftheta), r, v) {
+                let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == cs.len() && v == parts.flatten()
+                    && forall|i: int| 0 <= i < cs.len() ==> language::lang(model::gsem(ftheta), cs[i], parts[i]);
+                enc::lemma_partition_lift(u, v, parts, rel);
+                let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && u == lifted.flatten()
+                    && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rel);
+                assert forall|i: int| 0 <= i < cs.len() implies language::lang(model::gsem(theta), cs[i], lifted[i]) by {
+                    lemma_lang_rename(cs[i], theta, f, fixed, values, lifted[i], parts[i]);
+                }
+                assert(language::lang(model::gsem(theta), r, u));
+            }
+        },
+        Regex::Star(b) => {
+            assert forall|c: Component, k: nat| #[trigger] regex_mentions(*b, c, k) implies fixed.contains(k) by {
+                assert(regex_mentions(r, c, k));
+            }
+            if language::lang(model::gsem(theta), r, u) {
+                let parts = choose|parts: Seq<Seq<EventView>>| u == parts.flatten()
+                    && forall|i: int| 0 <= i < parts.len() ==> language::lang(model::gsem(theta), *b, parts[i]);
+                assert(enc::pointwise(v, u, rev));
+                enc::lemma_partition_lift(v, u, parts, rev);
+                let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && v == lifted.flatten()
+                    && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rev);
+                assert forall|i: int| 0 <= i < lifted.len() implies language::lang(model::gsem(ftheta), *b, lifted[i]) by {
+                    assert(enc::pointwise(lifted[i], parts[i], rev));
+                    assert(enc::pointwise(parts[i], lifted[i], rel));
+                    lemma_lang_rename(*b, theta, f, fixed, values, parts[i], lifted[i]);
+                }
+                assert(language::lang(model::gsem(ftheta), r, v));
+            }
+            if language::lang(model::gsem(ftheta), r, v) {
+                let parts = choose|parts: Seq<Seq<EventView>>| v == parts.flatten()
+                    && forall|i: int| 0 <= i < parts.len() ==> language::lang(model::gsem(ftheta), *b, parts[i]);
+                enc::lemma_partition_lift(u, v, parts, rel);
+                let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && u == lifted.flatten()
+                    && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rel);
+                assert forall|i: int| 0 <= i < lifted.len() implies language::lang(model::gsem(theta), *b, lifted[i]) by {
+                    lemma_lang_rename(*b, theta, f, fixed, values, lifted[i], parts[i]);
+                }
+                assert(language::lang(model::gsem(theta), r, u));
+            }
+        },
+        _ => {},
+    }
+}
+
+/// One instance of `stmt_numeric_genericity`.
+pub proof fn lemma_numeric_genericity(rule: NRule, theta: Subst, w: Seq<EventView>, f: spec_fn(nat) -> nat)
+    requires n_renaming_ok(f, n_rule_codes(rule), n_pair_values(theta, w)),
+    ensures n_rule_denies(rule, theta, w) == n_rule_denies(rule, n_rename_event(f, theta), n_rename_history(f, w)),
+{
+    let fixed = n_rule_codes(rule);
+    let values = n_pair_values(theta, w);
+    let ftheta = n_rename_event(f, theta);
+    let fw = n_rename_history(f, w);
+    assert(n_in_values(values, theta));
+    assert forall|i: int| #![trigger w[i]] 0 <= i < w.len()
+        implies n_renamed(f, values)(w[i], fw[i]) by {
+        assert(values.contains(w[i].principal));
+        assert(values.contains(w[i].action));
+        assert(values.contains(w[i].resource));
+    }
+    assert(enc::pointwise(w, fw, n_renamed(f, values)));
+    assert forall|c: Component, k: nat| #[trigger] regex_mentions(rule.tail, c, k) implies fixed.contains(k) by {
+        assert(rule_mentions(rule, c, k));
+    }
+    lemma_lang_rename(rule.tail, theta, f, fixed, values, w, fw);
+    assert forall|c: Component| (#[trigger] n_head_field(rule.head, c) is Some) implies
+        (language::field_value(theta, c) == n_head_field(rule.head, c)->Some_0
+            <==> language::field_value(ftheta, c) == n_head_field(rule.head, c)->Some_0) by {
+        let k = n_head_field(rule.head, c)->Some_0;
+        assert(rule_mentions(rule, c, k));
+        assert(fixed.contains(k));
+        lemma_rename_field(f, theta, c);
+        lemma_in_values_field(values, theta, c);
+        assert(values.contains(language::field_value(theta, c)));
+    }
+    assert(n_head_matches(rule.head, theta) == n_head_matches(rule.head, ftheta));
+}
+
+pub proof fn theorem_numeric_genericity()
+    ensures stmt_numeric_genericity(),
+{
+    assert forall|rule: NRule, theta: Subst, w: Seq<EventView>, f: spec_fn(nat) -> nat|
+        n_renaming_ok(f, n_rule_codes(rule), n_pair_values(theta, w))
+            implies (n_rule_denies(rule, theta, w)
+                == #[trigger] n_rule_denies(rule, n_rename_event(f, theta), n_rename_history(f, w))) by {
+        lemma_numeric_genericity(rule, theta, w, f);
+    }
 }
 
 } // verus!

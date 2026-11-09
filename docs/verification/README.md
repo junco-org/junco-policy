@@ -1,7 +1,7 @@
-# Verus verification of the policy-refinement analysis: handoff
+# Verus verification of the policy-refinement analysis
 
-This branch (`handoff/verus-proofs`, based on `main`) carries the machine-checked part of the
-paper's policy-inclusion analysis that exists so far, plus everything needed to continue it.
+This branch (`handoff/verus-proofs`, based on `main`) carries the completed machine-checked
+policy-inclusion analysis and its executable `PolicyAnalyzer::tail_included` implementation link.
 The work was done on an older base (`feat/inclusion-simulation`) and ported onto `main`; the
 exact pre-port state is the local branch `wip/verus-refinement-snapshot` (1315 / 1319 verified,
 0 errors, on the old base).
@@ -15,7 +15,6 @@ exact pre-port state is the local branch `wip/verus-refinement-snapshot` (1315 /
 | `crates/history-semantics/src/{normalize,symbolic,compile,progress}.rs` | Proof-only annotations for the link, plus one approved executable fix (below). |
 | `docs/verification/SPEC.md` | The specification document: top-level statement (§0), each layer (§1–§7), proof plan (§8), paper ↔ code differences (§9), the author's frozen decisions (§10), trust base (§11). |
 | `docs/verification/finiteness-notes.md` | Working notes of the finiteness mechanization: design of the machine-typing invariant, lemma inventory, pitfalls. |
-| `docs/verification/drafts/` | Unverified drafts for slices 2 and 4 (see below). Not compiled. |
 
 `SPEC.md` and the notes were written on the author's machine: absolute paths (`/tmp/...`,
 `/home/...`) and agent names in them are historical. In `SPEC.md` §10, Q2 was resolved by
@@ -33,20 +32,24 @@ With the fix that orbit saturates after two states. The other non-proof changes
 
 ## Status
 
-State at handoff (2026-11-08, after porting onto `main`, `-- --num-threads 2`):
+Baseline for the approved proof-completion plan (Verus 0.2026.10.04.426d8b0, Z3 4.16.0,
+Rust 1.98.1; all nine CI commands launched with `-- --num-threads 16`):
 
 | Check | Result |
 |---|---|
-| `history-semantics --features runtime,std,cache` | 1436 verified, 0 errors |
-| `history-semantics --no-default-features --features runtime` | 1431 verified, 0 errors |
-| `history-store --features runtime,std` | 284 verified, 0 errors |
-| `history-store --no-default-features --features runtime` | 0 errors (cargo reused a cached result) |
-| `cargo test -p history-analysis` | 13 passed |
-| `junco-core`, `history-syntax` | not re-verified: byte-identical to `main` |
-| `cargo test -p history-semantics`, fmt, clippy | not run |
+| `history-syntax`, minimal and `serde,std` | passed; cached results, counts not emitted |
+| `junco-core`, minimal / `runtime,std,serde` | 163 / 241 verified, 0 errors |
+| `history-store`, `runtime` / `runtime,std` | 284 / 284 verified, 0 errors |
+| `history-semantics`, `runtime` / `runtime,std,cache` | 1431 / 1436 verified, 0 errors |
+| `history-semantics --features runtime,std,cache --test public_specs` | 19 verified, 0 errors |
+| `cargo test --locked -p history-analysis` | 13 passed |
+| `cargo test --locked -p history-semantics` | passed; 0 tests with default features |
+| `cargo test --locked -p history-semantics --features runtime,std,cache` | 42 passed |
+| Trust scan of analyzer, semantics `verify/`, and facade | no matches |
 
-Run the full CI list (below) first. The eight CI verify commands are independent and can run in
-parallel on a machine with enough memory.
+The baseline exercised the first nine CI verification commands below; C1 adds the two analyzer
+configurations. They may be launched in parallel; Cargo can serialize compilation through the
+shared target-directory lock.
 
 On the old base (branch `wip/verus-refinement-snapshot`, pushed alongside) everything verified
 as well: 1315 / 1319 functions, history-store 186. During the port, `RegexId::set` (whose body
@@ -54,47 +57,96 @@ differs on `main`) needed `#[verifier::spinoff_prover]` and `#[verifier::rlimit(
 the `cache` configuration); `derivative_step`, `interpret` and `verify::refinement::inclusion`
 needed proof repairs for `main`'s versions of that code. No statement changed.
 
-Statements of the spec (`stmt_*`, 23 in total):
+All 23 frozen `stmt_*` statements now have focused, verified `theorem_*` proofs:
 
 | Layer | Proved | Open |
 |---|---|---|
 | semantics | `refines_iff_covers`, `redundant_iff_covered`, `genericity` | — |
-| encoding | — | `source_regex_local`, `front_end_denies`, `numeric_genericity` (drafts exist) |
+| encoding | `source_regex_local`, `front_end_denies`, `numeric_genericity` | — |
 | inclusion | `paper_split_ok`, `policy_reduction`, `vacuity_reductions` | — |
-| search | — | `successor_cases`, `successor_cases_finite_domains`, `search_correct`, `search_correct_finite_domains`, `search_terminates` |
-| pruning | — | `decomposition`, `prune_sound`, `sim_rules_sound`, `test_rules_sound`, `checks_discard` (partial draft) |
+| search | `successor_cases`, `successor_cases_finite_domains`, `search_correct`, `search_correct_finite_domains`, `search_terminates` | — |
+| pruning | `decomposition`, `prune_sound`, `sim_rules_sound`, `test_rules_sound`, `checks_discard` | — |
 | finiteness | `lift_injective`, `reachable_states_finite`, `items_from_states` | — |
 | analyzer | `choice_exists` | — |
 
 Beyond the statements, the finiteness layer proves that the implemented normalizer satisfies the
 abstract contract (`theorem_impl_contract`) and that the implementation has finitely many
 reachable items (`theorem_impl_finitely_many_items`) given `cases_follow(m_impl(), cases_of)`,
-which slice 6 discharges from the analyzer's search via `lemma_impl_successor_abstracts`.
+discharged by the analyzer's retained expansion archive and `theorem_impl_search_bounded`.
 
-Not started: bringing `history-analysis` under Verus (decision Q1), the implementation link, and
-the exec postconditions of `SPEC.md` §0.
+All C1–C6 slices and all eleven unfiltered CI verification commands pass with the pinned toolchain.
+
+| Final CI configuration | Result |
+|---|---|
+| `history-syntax --no-default-features` | cached pass; counts not emitted |
+| `history-syntax --features serde,std` | cached pass; counts not emitted |
+| `junco-core --no-default-features` | 164 verified, 0 errors |
+| `junco-core --features runtime,std,serde` | 242 verified, 0 errors |
+| `history-store --no-default-features --features runtime` | 285 verified, 0 errors |
+| `history-store --features runtime,std` | 285 verified, 0 errors |
+| `history-semantics --no-default-features --features runtime` | 1572 verified, 0 errors |
+| `history-semantics --features runtime,std,cache` | 1577 verified, 0 errors |
+| `history-semantics --features runtime,std,cache --test public_specs` | 19 verified, 0 errors |
+| `history-analysis --no-default-features --features runtime` | 488 verified, 0 errors |
+| `history-analysis --no-default-features --features runtime,std` | 488 verified, 0 errors |
+
+Final native checks: analyzer 13 tests passed; enabled-runtime semantics 42 passed; default
+semantics test command and `cargo check --locked --workspace --all-targets` passed. The C2
+successor-enumeration, value-changing Clone, and validated-vector allocation-reuse probes passed
+and were removed. All 23 statement/theorem ensures links are present. The 191 original refinement
+spec bodies are mathematically unchanged; three have proof-only trigger annotations adjusted.
+
+C5 combined acceptance: real `search/run/expand` plus search helpers 117 verified, 0 errors;
+the complete implementation boundedness theorem module 1 verified, 0 errors. Cases are retained
+in ghost evidence independently of successor-cache eviction.
+
+Focused completion: search 27 verified, 0 errors; facade and its ghost module 17 verified,
+0 errors, with related store/derivative/atom/successor functions checked separately. The search's
+reusable correctness helpers require complete successor cases only for expanded trace nodes;
+this permits retained ghost expansion evidence without assuming that the successor LRU never evicts.
+Pruning focused acceptance: 13 verified, 0 errors with the default pinned solver; its accepted
+draft was removed. Only the padding quantifier's SMT trigger changed; its mathematical body
+and all statements are unchanged.
+Encoding focused acceptance: 13 verified, 0 errors with the default pinned solver; both accepted
+draft files were removed. Recursive mention quantifiers now trigger on closed parent/index
+helpers instead of recursive calls; their mathematical bodies and statements are unchanged.
+C1 acceptance: analyzer `runtime` and `runtime,std` each 0 verified, 0 errors (native-leaf stage);
+bare analyzer tests 13 passed, and workspace/all-targets compatibility passed.
+No analyzer algorithm is a trusted leaf; the temporary encoder scaffold was removed by C4.
+C2 acceptance: constraint and ghost-view modules 136 verified, 0 errors; all 13 analyzer tests
+passed. The throwaway successor smoke proved the two refinements and their exact 2 + 3 letter
+class sets, with no classes at the other components, then was removed. Split/letter products
+and constraint interning expose explicit size preconditions for the search caller to discharge.
+C3 acceptance: tables and table ghost helpers 19 verified, 0 errors; all 13 analyzer tests passed.
+Exact source-copy/difference semantics and earlier-root language preservation include errors.
+C4 acceptance: frontend 39 verified, 0 errors; analyzer tests 13 passed. Related core metadata:
+compile 10, flatten 12, typed 21 verified, all 0 errors.
+C6 acceptance: analyzer (including `tail_included` and `decide`) 25 verified, 0 errors; typed
+numeric bridge 34, verdict helpers 16, reconstruction helpers 13, native reconstruction 4 and
+components 1 verified, all 0 errors. Borrowed-source flattener scope repair: 2 verified, 0 errors.
+The value-changing Clone probe now preserves the requested principal, and all 13 analyzer tests
+pass. Full integration is covered by the final matrix above.
 
 ## Trust
 
-No new `assume`, `admit`, `external_body`, `assume_specification` or `#[verifier::external]`.
-Open hypotheses:
-- `search::finitely_many_items` in `stmt_search_terminates` (statement unchanged; discharged for
-  the implementation as described above once `cases_follow` is proved);
-- typed guarantees are conditional on `books::native_obligations` (and `eq_equivalence`, implied
-  by them) and on the `FlatEncoder` obligation for the analyzer's `Constants` (decision Q4).
+The only new trusted bodies are the author-approved hashbrown wrappers in
+`history-analysis/src/native.rs`: `NativeMap`, `NativeSet`, and `NativeGroups`. No new `assume`,
+`admit`, or `assume_specification` is introduced. Native-key Eq/hash and ordered-key view
+correspondence are explicit hypotheses of `analyzer_obligations`; see `SPEC.md` §11.
+The real search consumes `theorem_impl_search_bounded`; `finitely_many_items` is no longer an
+undischarged implementation hypothesis. Typed guarantees retain projection/Eq obligations and
+the explicit sufficient constant-id/search/fresh-counter capacity preconditions. Those bounds
+are conservative verification preconditions, not runtime rejection rules.
 
-## Remaining work
+## Implementation links
 
-| # | Slice | Depends on | Notes |
-|---|---|---|---|
-| 2 | Encoding (3 statements) | — | `drafts/encoding.rs.draft` drafts all three theorems; last focused run had 3 compile errors, fixed, not re-run. See `drafts/encoding-notes.md`. Old base: re-check against `main`'s `junco-core` encoding lemmas. |
-| 3 | Search (5 statements, paper Lemma 5.3 / Theorem 5.5) | finiteness (done) for termination | Correctness can proceed independently. |
-| 4 | Pruning (5 statements) | — | `drafts/pruning.rs.draft`: helper lemmas (`lemma_union_ops_lang`, `lemma_inter_ops_lang`, `lemma_decomposition`, …), never compiled. |
-| 5 | `history-analysis` under Verus | — | Largest and least predictable. |
-| 6 | Implementation link + §0 postconditions; `cases_follow(m_impl(), cases_of)` | 2–5 | |
-| 7 | Finite-domain variants (`*_finite_domains`) | 2–4 | Partly inside slice 3. |
-
-Slices 2, 3, 4 and 5 touch disjoint files and can run in parallel.
+- `history-analysis/src/analyzer.rs`: real `tail_included` ensures typed `tail_included_ok`.
+- `history-analysis/src/verify/search_exec.rs`: actual result proof consumes the implementation bound.
+- `history-semantics/src/verify/refinement/implementation.rs`: `theorem_impl_search_bounded`.
+- `history-analysis/src/verify/reconstruction.rs` and `typed_numeric.rs`: every admissible
+  counterexample instantiation and globally shortest history, without a u64 bound on history values.
+- `junco-core/src/flatten.rs`: borrowed-source lowering avoids Clone-dependent query semantics;
+  the original `flatten_rule` entry point retains its API and verified contract.
 
 ## Toolchain and commands
 
@@ -110,6 +162,9 @@ Slices 2, 3, 4 and 5 touch disjoint files and can run in parallel.
   cargo verus verify --locked -p history-store --features runtime,std
   cargo verus verify --locked -p history-semantics --no-default-features --features runtime
   cargo verus verify --locked -p history-semantics --features runtime,std,cache
+  cargo verus verify --locked -p history-semantics --features runtime,std,cache --test public_specs
+  cargo verus verify --locked -p history-analysis --no-default-features --features runtime
+  cargo verus verify --locked -p history-analysis --no-default-features --features runtime,std
   ```
   Append `-- --num-threads N` to use more cores (default 1). On the author's 2-core machine each
   `history-semantics` configuration took about 4.5 minutes with 2 threads.
@@ -126,6 +181,7 @@ Slices 2, 3, 4 and 5 touch disjoint files and can run in parallel.
 - No executable-behavior change without the author's approval; spec, proof and ghost code only.
 - Never change a `stmt_*` statement or a definition it depends on. If one looks false, record a
   counterexample and raise it.
+- SMT trigger/unfolding annotations may be repaired without changing any mathematical body.
 - No new trust (see above).
 - New proof files go under `verify/refinement/` (or `verify/finite_*`) and are registered in the
   corresponding `mod.rs`.

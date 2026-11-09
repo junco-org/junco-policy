@@ -222,6 +222,7 @@ impl DerivativeFactors {
             derivative_results(old(store).graph(), self.root, self.concat, index as nat, old(results).view()),
             prefix == derivative_prefix(old(store).graph(), self.root, index as nat),
             fder::results_bound(old(store).graph(), self.root@, old(results).view()),
+            derivative_results_vocab(old(store).graph(), self.root@, old(results).view()),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
             final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
@@ -237,6 +238,7 @@ impl DerivativeFactors {
             match result { Ok(next) => next == derivative_prefix(final(store).graph(), self.root, index as nat + 1)
                 && derivative_results(final(store).graph(), self.root, self.concat, index as nat + 1, final(results).view())
                 && fder::results_bound(final(store).graph(), self.root@, final(results).view()), Err(_) => true },
+            result is Ok ==> derivative_results_vocab(final(store).graph(), self.root@, final(results).view()),
     )]
     fn child_step<G: KernelStore>(
         self,
@@ -257,6 +259,10 @@ impl DerivativeFactors {
                 assert(derivative_dependency(store.graph(), self.root, child@));
             }
             let d = RegexId::cached(cache, child)?;
+            proof! {
+                derivative_cached_bound(store.graph(), cache@, child, d);
+                lemma_regex_graph_child_vocab(store.graph(), self.root@, child@);
+            }
             if self.concat {
                 let start = match index.checked_add(1) {
                     Some(v) => v,
@@ -271,6 +277,13 @@ impl DerivativeFactors {
                     fder::lemma_factor_concat2(mid, store.graph(), self.root@, index as int, d@, suffix.view(), results.view().last()@);
                     fder::lemma_results_stable(before, store.graph(), self.root@, prior_results);
                     fder::lemma_results_push(store.graph(), self.root@, prior_results, results.view().last());
+                    lemma_derivative_vocab_stable(mid, store.graph(), child@, d@);
+                    lemma_regex_graph_child_vocab(store.graph(), self.root@, child@);
+                    norm::lemma_guard_definition(store.graph(), d@);
+                    norm::lemma_guard_definition(store.graph(), results.view().last()@);
+                    assert(derivative_vocab(store.graph(), self.root@, results.view().last()@));
+                    lemma_derivative_results_vocab_stable(before, store.graph(), self.root@, prior_results);
+                    assert(derivative_results_vocab(store.graph(), self.root@, results.view()));
                 }
             } else {
                 results.push(d);
@@ -279,6 +292,8 @@ impl DerivativeFactors {
                     fder::lemma_factor_set(store.graph(), self.root@, index as int, d@);
                     fder::lemma_results_stable(before, store.graph(), self.root@, prior_results);
                     fder::lemma_results_push(store.graph(), self.root@, prior_results, d);
+                    assert(derivative_vocab(store.graph(), self.root@, d@));
+                    assert(derivative_results_vocab(store.graph(), self.root@, results.view()));
                 }
             }
         }
@@ -286,12 +301,16 @@ impl DerivativeFactors {
             if self.concat && !prefix {
                 derivative_results_skip(store.graph(), self.root, index as nat, results.view());
                 fder::lemma_results_stable(before, store.graph(), self.root@, results.view());
+                lemma_derivative_results_vocab_stable(before, store.graph(), self.root@, results.view());
             }
         }
         let n = RegexId::nullable(child, store)?;
         Ok(prefix && n)
     }
+    verus! {
     #[verus_verify]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(120))]
     #[verus_spec(result =>
         requires model::graph_wf(old(store).graph()), old(store).valid_store(),
             derivative_cache_wf(old(store).graph(), cache@),
@@ -313,7 +332,8 @@ impl DerivativeFactors {
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), cache@),
             match result { Ok(out) => derivative_correct(final(store).graph(), self.root@, out)
-                && fder::dbound(final(store).graph(), self.root@, out@), Err(_) => true },
+                && fder::dbound(final(store).graph(), self.root@, out@)
+                && derivative_vocab(final(store).graph(), self.root@, out@), Err(_) => true },
     )]
     fn derive<G: KernelStore>(
         self,
@@ -321,6 +341,9 @@ impl DerivativeFactors {
         cache: &[Option<TransitionId>],
         intersect: bool,
     ) -> KernelResult<TransitionId> {
+        hide(Seq::<_>::no_duplicates);
+        hide(model::unique_nodes);
+        hide(model::tables_wf);
         proof_decl! { let ghost entry = store.graph(); }
         proof! { derivative_frame(store.graph()); fder::lemma_results_empty(store.graph(), self.root@); }
         proof! { derivative_dependency_frame(entry, self.root); }
@@ -342,6 +365,7 @@ impl DerivativeFactors {
                 match state { Ok(prefix) => prefix == derivative_prefix(store.graph(), self.root, index as nat)
                     && derivative_results(store.graph(), self.root, self.concat, index as nat, results.view())
                     && fder::results_bound(store.graph(), self.root@, results.view()), Err(_) => true },
+                state is Ok ==> derivative_results_vocab(store.graph(), self.root@, results.view()),
             decreases self.count - index);
         state?;
         proof! {
@@ -349,11 +373,30 @@ impl DerivativeFactors {
             derivative_result_future(store.graph(), self.root, self.concat, intersect, results.view());
             fder::lemma_derive_future(store.graph(), self.root@, results.view(), intersect);
         }
-        if intersect {
+        proof! {
+            assert forall|i: int| 0 <= i < results.view().len() implies norm::guard_vocab(store.graph(), results.view()[i]@).subset_of(
+                regex_primitives(model::lift_regex(store.graph(), self.root@))) by {
+                norm::lemma_guard_definition(store.graph(), results.view()[i]@);
+            }
+            norm::lemma_guard_union(store.graph(), model::transition_ids(results.view()), regex_primitives(model::lift_regex(store.graph(), self.root@)));
+        }
+        proof_decl! { let ghost before_collect = store.graph(); }
+        let out = if intersect {
             TransitionId::intersect(store, &results)
         } else {
             TransitionId::collect(store, &results, false)
+        }?;
+        proof! {
+            model::lemma_graph_wf_elim(entry);
+            model::lemma_lift_regex_stable(entry, store.graph(), self.root@);
+            model::lemma_graph_wf_elim(before_collect);
+            model::lemma_lift_regex_stable(before_collect, store.graph(), self.root@);
+            norm::lemma_guard_task_stable(before_collect, store.graph(),
+                norm::ActionShape::Fold(model::transition_ids(results.view()), 0));
+            norm::lemma_guard_subset(store.graph(), out@, regex_primitives(model::lift_regex(store.graph(), self.root@)));
         }
+        Ok(out)
+    }
     }
     // `cache@` is specified as a `Vec` view; a slice parameter would change every caller's contract.
     #[allow(clippy::ptr_arg)]
@@ -380,7 +423,8 @@ impl DerivativeFactors {
             derivative_cache_wf(final(store).graph(), final(cache)@), derivative_tasks_wf(final(store).graph(), final(tasks).view()),
             match result { Ok(Some(out)) => derivative_correct(final(store).graph(), self.root@, out)
                 && out@ < final(store).graph().transitions.len()
-                && fder::dbound(final(store).graph(), self.root@, out@), _ => true },
+                && fder::dbound(final(store).graph(), self.root@, out@)
+                && derivative_vocab(final(store).graph(), self.root@, out@), _ => true },
             result matches Ok(Some(_)) ==> final(tasks).view() == old(tasks).view(),
             old(tasks).view().is_prefix_of(final(tasks).view()),
             forall|bound: nat| self.root@ <= bound && derivative_tasks_bounded(old(tasks).view(), bound)
@@ -496,6 +540,10 @@ pub(crate) trait RegexDerivative: Sized {
             old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             old(store).errors_are_non_invariant() && this@ < usize::MAX && (!finish || derivative_dependencies_complete(old(store).graph(), this, old(cache)@)) ==> language::no_internal_error(result),
             cache_completions_preserved(old(cache)@, final(cache)@),
+            old(cache)@.len() <= final(cache)@.len(),
+            forall|i: int| #![trigger final(cache)@[i]]
+                0 <= i < old(cache)@.len() && old(cache)@[i] is Some
+                ==> i < final(cache)@.len() && final(cache)@[i] == old(cache)@[i],
             old(tasks).view().is_prefix_of(final(tasks).view()),
             forall|bound: nat| this@ <= bound && derivative_tasks_bounded(old(tasks).view(), bound)
                 ==> derivative_tasks_bounded(final(tasks).view(), bound),
@@ -525,6 +573,11 @@ pub(crate) trait RegexDerivative: Sized {
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), final(cache)@),
+            old(cache)@.len() <= final(cache)@.len(),
+            forall|i: int| #![trigger final(cache)@[i]]
+                0 <= i < old(cache)@.len() && old(cache)@[i] is Some
+                ==> i < final(cache)@.len() && final(cache)@[i] == old(cache)@[i],
+            result matches Ok(out) ==> this@ < final(cache)@.len() && final(cache)@[this@ as int] == Some(out),
             match result { Ok(out) => derivative_correct(final(store).graph(), this@, out)
                 && fder::dbound(final(store).graph(), this@, out@), Err(_) => true };
 }
@@ -573,7 +626,8 @@ fn grow_derivative_cache<G: KernelStore>(
         derivative_cache_prefix_facts(before, cache@);
         reveal(derivative_cache_wf);
         assert forall|i: int| 0 <= i < cache@.len() implies match #[trigger] cache@[i] {
-            Some(out) => derivative_correct(store.graph(), i as nat, out) && fder::dbound(store.graph(), i as nat, out@), None => true,
+            Some(out) => derivative_correct(store.graph(), i as nat, out) && fder::dbound(store.graph(), i as nat, out@)
+                && derivative_vocab(store.graph(), i as nat, out@), None => true,
         } by {
             if i < before.len() { assert(cache@[i] == before[i]); }
             else { assert(cache@[i] is None); }
@@ -584,7 +638,7 @@ fn grow_derivative_cache<G: KernelStore>(
 
 impl RegexDerivative for RegexId {
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
-    #[cfg_attr(verus_keep_ghost, verifier::rlimit(40))]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(80))]
     fn derivative_step<G: KernelStore>(
         this: RegexId,
         store: &mut G,
@@ -592,6 +646,7 @@ impl RegexDerivative for RegexId {
         finish: bool,
         tasks: &mut WorkVec<(RegexId, bool)>,
     ) -> KernelResult<()> {
+        hide(Seq::<_>::no_duplicates);
         hide(derivative_cache_wf); hide(derivative_tasks_wf);
         hide(derivative_correct);
         hide(derivative_tasks_ready); hide(derivative_scheduled);
@@ -630,16 +685,33 @@ impl RegexDerivative for RegexId {
             }
             let out = match this.head(store)? {
                 RegexHead::Empty | RegexHead::Epsilon => {
+                    proof! {
+                        norm::lemma_guard_constants(store.graph());
+                        norm::lemma_guard_definition(store.graph(), c.transition_empty@);
+                        assert(derivative_vocab(store.graph(), this@, c.transition_empty@));
+                    }
                     proof! { derivative_native_correct(store.graph(), this, cache@, c.transition_empty); }
                     Some(c.transition_empty)
                 }
                 RegexHead::All => {
+                    proof! {
+                        norm::lemma_guard_constants(store.graph());
+                        norm::lemma_guard_definition(store.graph(), c.transition_all@);
+                        assert(derivative_vocab(store.graph(), this@, c.transition_all@));
+                    }
                     proof! { derivative_native_correct(store.graph(), this, cache@, c.transition_all); }
                     Some(c.transition_all)
                 }
                 RegexHead::Test(test) => {
                     let out = TransitionId::if_then_else(store, test, c.transition_epsilon, c.transition_empty)?;
                     proof! { derivative_graph_frame(growth_graph, store.graph(), this); }
+                    proof! {
+                        norm::lemma_guard_constants(store.graph());
+                        norm::lemma_test_definition(store.graph(), test@);
+                        norm::lemma_guard_definition(store.graph(), out@);
+                        norm::regex_unfold(store.graph(), this@);
+                        assert(derivative_vocab(store.graph(), this@, out@));
+                    }
                     proof! { derivative_test_correct(store.graph(), this, test, cache@, out, c.transition_epsilon, c.transition_empty); }
                     Some(out)
                 }
@@ -651,9 +723,17 @@ impl RegexDerivative for RegexId {
                             }
                         }
                         let d = Self::cached(cache, inner)?;
+                        proof_decl! { let ghost before_append = store.graph(); }
                         proof! { derivative_cached_bound(store.graph(), cache@, inner, d); }
                         let out = TransitionId::append(d, store, &[this])?;
                         proof! { derivative_graph_frame(growth_graph, store.graph(), this); }
+                        proof! {
+                            lemma_derivative_vocab_stable(before_append, store.graph(), inner@, d@);
+                            lemma_regex_graph_child_vocab(store.graph(), this@, inner@);
+                            norm::lemma_guard_definition(store.graph(), d@);
+                            norm::lemma_guard_definition(store.graph(), out@);
+                            assert(derivative_vocab(store.graph(), this@, out@));
+                        }
                         proof! { derivative_native_correct(store.graph(), this, cache@, out); }
                         Some(out)
                     } else {
@@ -672,9 +752,17 @@ impl RegexDerivative for RegexId {
                             }
                         }
                         let d = Self::cached(cache, inner)?;
+                        proof_decl! { let ghost before_not = store.graph(); }
                         proof! { derivative_cached_bound(store.graph(), cache@, inner, d); }
                         let out = TransitionId::not(d, store)?;
                         proof! { derivative_graph_frame(growth_graph, store.graph(), this); }
+                        proof! {
+                            lemma_derivative_vocab_stable(before_not, store.graph(), inner@, d@);
+                            lemma_regex_graph_child_vocab(store.graph(), this@, inner@);
+                            norm::lemma_guard_definition(store.graph(), d@);
+                            norm::lemma_guard_definition(store.graph(), out@);
+                            assert(derivative_vocab(store.graph(), this@, out@));
+                        }
                         proof! { derivative_native_correct(store.graph(), this, cache@, out); }
                         Some(out)
                     } else {
@@ -726,6 +814,7 @@ impl RegexDerivative for RegexId {
                         },
                     }
                     assert(fder::dbound(store.graph(), this@, out@));
+                    assert(derivative_vocab(store.graph(), this@, out@));
                 }
                 let slots = cache.as_mut_slice();
                 match slots.get_mut(index) {
@@ -736,7 +825,8 @@ impl RegexDerivative for RegexId {
                     assert(derivative_cache_wf(store.graph(), cache@)) by {
                         reveal(derivative_cache_wf);
                         assert forall|i: int| 0 <= i < cache@.len() implies match #[trigger] cache@[i] {
-                            Some(t) => derivative_correct(store.graph(), i as nat, t) && fder::dbound(store.graph(), i as nat, t@), None => true,
+                            Some(t) => derivative_correct(store.graph(), i as nat, t) && fder::dbound(store.graph(), i as nat, t@)
+                                && derivative_vocab(store.graph(), i as nat, t@), None => true,
                         } by { if i == index { assert(cache@[i] == Some(out)); } }
                     }
                 }
@@ -745,6 +835,9 @@ impl RegexDerivative for RegexId {
         proof! {
             derivative_lemma_step_post(before, store.graph(), this, finish, prior_tasks, tasks.view());
             assert(cache_completions_preserved(cache_before, cache@));
+            assert forall|i: int| #![trigger cache@[i]]
+                0 <= i < cache_before.len() && cache_before[i] is Some implies
+                i < cache@.len() && cache@[i] == cache_before[i] by {}
             assert(tasks.view() == prior_tasks && cache_complete(cache@, this@) || derivative_scheduled(before, this, prior_tasks, tasks.view()));
             if derivative_scheduled(before, this, prior_tasks, tasks.view()) {
                 derivative_scheduled_facts(before, this, prior_tasks, tasks.view());
@@ -778,6 +871,9 @@ impl RegexDerivative for RegexId {
             old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(store.graph()), store.valid_store(), this@ < store.graph().regexes.len(),
             derivative_cache_wf(store.graph(), cache@), derivative_tasks_wf(store.graph(), tasks.view()),
+            old(cache)@.len() <= cache@.len(),
+            forall|i: int| 0 <= i < old(cache)@.len() && old(cache)@[i] is Some
+                ==> i < cache@.len() && cache@[i] == old(cache)@[i],
             derivative_tasks_bounded(tasks.view(), this@),
             decreases if state is Ok { derivative_work(store.graph(), tasks.view()) + 1 } else { 0 }))]
         while !tasks.is_empty() && state.is_ok() {
@@ -2034,10 +2130,872 @@ impl TransitionInterpret for TransitionId {
 }
 
 #[cfg(verus_keep_ghost)]
-pub(crate) mod verify {
+pub mod verify {
     use super::*;
     verus! {
-            broadcast use junco_core::kernel::verify::group_kernel_views;
+    broadcast use {junco_core::kernel::verify::group_kernel_views, vstd::set::group_set_lemmas};
+
+    pub open spec fn test_primitives(t: model::Test) -> Set<model::Primitive>
+        decreases t, 1nat, 0nat,
+    {
+        match t {
+            model::Test::Atom(p, _) => Set::empty().insert(p),
+            model::Test::And(cs) | model::Test::Or(cs) => test_primitive_prefix(t, cs.len()),
+            _ => Set::empty(),
+        }
+    }
+
+    pub open spec fn test_primitive_prefix(t: model::Test, n: nat) -> Set<model::Primitive>
+        decreases t, 0nat, n,
+    {
+        match t {
+            model::Test::And(cs) | model::Test::Or(cs) => if 0 < n <= cs.len() {
+                test_primitive_prefix(t, (n - 1) as nat).union(test_primitives(cs[n - 1]))
+            } else { Set::empty() },
+            _ => Set::empty(),
+        }
+    }
+
+    pub open spec fn regex_primitives(r: language::Regex<model::Test>) -> Set<model::Primitive>
+        decreases r, 1nat, 0nat,
+    {
+        match r {
+            language::Regex::Test(t) => test_primitives(t),
+            language::Regex::Union(cs) | language::Regex::Intersect(cs)
+                | language::Regex::Concat(cs) => regex_primitive_prefix(r, cs.len()),
+            language::Regex::Star(b) | language::Regex::Not(b) => regex_primitives(*b),
+            _ => Set::empty(),
+        }
+    }
+
+    pub open spec fn regex_primitive_prefix(r: language::Regex<model::Test>, n: nat) -> Set<model::Primitive>
+        decreases r, 0nat, n,
+    {
+        match r {
+            language::Regex::Union(cs) | language::Regex::Intersect(cs)
+                | language::Regex::Concat(cs) => if 0 < n <= cs.len() {
+                    regex_primitive_prefix(r, (n - 1) as nat).union(regex_primitives(cs[n - 1]))
+                } else { Set::empty() },
+            _ => Set::empty(),
+        }
+    }
+
+    pub proof fn lemma_test_primitive_prefix(t: model::Test, n: nat, p: model::Primitive)
+        requires t is And || t is Or, n <= crate::verify::finite_impl::test_kids(t).len(),
+        ensures test_primitive_prefix(t, n).contains(p)
+            == (exists|i: int| 0 <= i < n && test_primitives(crate::verify::finite_impl::test_kids(t)[i]).contains(p)),
+        decreases n,
+    {
+        let cs = crate::verify::finite_impl::test_kids(t);
+        reveal_with_fuel(test_primitive_prefix, 1);
+        if n > 0 {
+            lemma_test_primitive_prefix(t, (n - 1) as nat, p);
+            assert(test_primitive_prefix(t, (n - 1) as nat).contains(p)
+                == (exists|i: int| 0 <= i < n - 1 && test_primitives(cs[i]).contains(p)));
+            if exists|i: int| 0 <= i < n && test_primitives(cs[i]).contains(p) {
+                let i = choose|i: int| 0 <= i < n && test_primitives(cs[i]).contains(p);
+                if i < n - 1 {
+                    assert(exists|j: int| 0 <= j < n - 1 && test_primitives(cs[j]).contains(p));
+                } else { assert(i == n - 1); }
+            }
+            if test_primitive_prefix(t, (n - 1) as nat).contains(p) {
+                let j = choose|j: int| 0 <= j < n - 1 && test_primitives(cs[j]).contains(p);
+                assert(exists|i: int| 0 <= i < n && test_primitives(cs[i]).contains(p));
+            }
+            if test_primitives(cs[n - 1]).contains(p) {
+                assert(exists|i: int| 0 <= i < n && test_primitives(cs[i]).contains(p));
+            }
+        }
+    }
+
+    pub proof fn lemma_test_pair_vocab(a: model::Test, b: model::Test)
+        ensures test_primitives(model::Test::And(seq![a, b])) == test_primitives(a).union(test_primitives(b)),
+    {
+        reveal_with_fuel(test_primitive_prefix, 3);
+        reveal_with_fuel(test_primitives, 3);
+        assert(test_primitives(model::Test::And(seq![a, b])) =~= test_primitives(a).union(test_primitives(b)));
+    }
+
+    pub open spec fn regex_kids(r: language::Regex<model::Test>) -> Seq<language::Regex<model::Test>> {
+        match r {
+            language::Regex::Union(cs) | language::Regex::Intersect(cs) | language::Regex::Concat(cs) => cs,
+            _ => Seq::empty(),
+        }
+    }
+
+    pub proof fn lemma_regex_primitive_prefix(r: language::Regex<model::Test>, n: nat, p: model::Primitive)
+        requires r is Union || r is Intersect || r is Concat, n <= regex_kids(r).len(),
+        ensures regex_primitive_prefix(r, n).contains(p)
+            == (exists|i: int| 0 <= i < n && regex_primitives(regex_kids(r)[i]).contains(p)),
+        decreases n,
+    {
+        let cs = regex_kids(r);
+        reveal_with_fuel(regex_primitive_prefix, 1);
+        if n > 0 {
+            lemma_regex_primitive_prefix(r, (n - 1) as nat, p);
+            assert(regex_primitive_prefix(r, (n - 1) as nat).contains(p)
+                == (exists|i: int| 0 <= i < n - 1 && regex_primitives(cs[i]).contains(p)));
+            if exists|i: int| 0 <= i < n && regex_primitives(cs[i]).contains(p) {
+                let i = choose|i: int| 0 <= i < n && regex_primitives(cs[i]).contains(p);
+                if i < n - 1 { assert(exists|j: int| 0 <= j < n - 1 && regex_primitives(cs[j]).contains(p)); }
+                else { assert(i == n - 1); }
+            }
+            if regex_primitive_prefix(r, (n - 1) as nat).contains(p) {
+                let j = choose|j: int| 0 <= j < n - 1 && regex_primitives(cs[j]).contains(p);
+                assert(exists|i: int| 0 <= i < n && regex_primitives(cs[i]).contains(p));
+            }
+            if regex_primitives(cs[n - 1]).contains(p) {
+                assert(exists|i: int| 0 <= i < n && regex_primitives(cs[i]).contains(p));
+            }
+        }
+    }
+
+    pub proof fn lemma_test_primitives_lift(g: model::Graph, id: nat, p: model::Primitive)
+        requires model::graph_wf(g), id < g.tests.len(),
+        ensures test_primitives(model::lift_test(g, id)).contains(p)
+            == reach::test_reaches_primitive(g, id, p),
+        decreases id,
+    {
+        model::lemma_graph_test_wf(g, id);
+        reveal_with_fuel(model::lift_test, 1);
+        reveal_with_fuel(model::lift_tests, 1);
+        reveal_with_fuel(test_primitives, 1);
+        reveal_with_fuel(reach::test_reaches_primitive, 1);
+        match g.tests[id as int] {
+            model::TestNode::And(cs) | model::TestNode::Or(cs) => {
+                let t = model::lift_test(g, id);
+                lemma_test_primitive_prefix(t, cs.len(), p);
+                assert forall|i: int| 0 <= i < cs.len() implies
+                    test_primitives(model::lift_tests(g, cs, id)[i]).contains(p)
+                        == reach::test_reaches_primitive(g, cs[i], p) by {
+                    lemma_test_primitives_lift(g, cs[i], p);
+                }
+                if test_primitives(t).contains(p) {
+                    let i = choose|i: int| 0 <= i < cs.len() && test_primitives(model::lift_tests(g, cs, id)[i]).contains(p);
+                    assert(reach::test_edges(g, id)[i] == cs[i]);
+                    assert(cs[i] < id);
+                    assert(reach::test_reaches_primitive(g, id, p));
+                }
+                if reach::test_reaches_primitive(g, id, p) {
+                    let i = choose|i: int| 0 <= i < cs.len() && cs[i] < id && reach::test_reaches_primitive(g, cs[i], p);
+                    assert(test_primitives(model::lift_tests(g, cs, id)[i]).contains(p));
+                    assert(test_primitives(crate::verify::finite_impl::test_kids(t)[i]).contains(p));
+                }
+            },
+            _ => {},
+        }
+    }
+
+    pub proof fn lemma_regex_primitives_stable(a: model::Graph, b: model::Graph, q: nat)
+        requires model::graph_wf(a), model::graph_extends(a, b), q < a.regexes.len(),
+        ensures regex_primitives(model::lift_regex(a, q)) == regex_primitives(model::lift_regex(b, q)),
+    {
+        model::lemma_graph_wf_elim(a);
+        model::lemma_lift_regex_stable(a, b, q);
+    }
+
+    pub proof fn lemma_test_primitive_code(t: model::Test, c: history_syntax::Component, v: nat)
+        ensures test_primitives(t).contains(model::Primitive::Eq(c, model::GTerm::Constant(v)))
+            == crate::verify::refinement::encoding::test_mentions(t, c, v),
+        decreases t,
+    {
+        reveal_with_fuel(test_primitives, 1);
+        reveal_with_fuel(crate::verify::refinement::encoding::test_mentions, 1);
+        reveal(crate::verify::refinement::encoding::test_mention_child);
+        let p = model::Primitive::Eq(c, model::GTerm::Constant(v));
+        match t {
+            model::Test::And(cs) => {
+                lemma_test_primitive_prefix(t, cs.len(), p);
+                assert forall|i: int| #![trigger cs[i]] 0 <= i < cs.len() implies
+                    test_primitives(cs[i]).contains(p) == crate::verify::refinement::encoding::test_mentions(cs[i], c, v) by {
+                    lemma_test_primitive_code(cs[i], c, v);
+                }
+                if test_primitives(t).contains(p) {
+                    let i = choose|i: int| 0 <= i < cs.len() && test_primitives(cs[i]).contains(p);
+                    lemma_test_primitive_code(cs[i], c, v);
+                    assert(crate::verify::refinement::encoding::test_mention_child(t, i) == Some(cs[i]));
+                    assert(exists|j: int| #![trigger crate::verify::refinement::encoding::test_mention_child(t, j)]
+                        0 <= j < cs.len() && crate::verify::refinement::encoding::test_mentions(cs[j], c, v));
+                }
+                if crate::verify::refinement::encoding::test_mentions(t, c, v) {
+                    let i = choose|i: int| #![trigger crate::verify::refinement::encoding::test_mention_child(t, i)]
+                        0 <= i < cs.len() && crate::verify::refinement::encoding::test_mentions(cs[i], c, v);
+                    lemma_test_primitive_code(cs[i], c, v);
+                    assert(test_primitives(cs[i]).contains(p));
+                }
+            },
+            model::Test::Or(cs) => {
+                lemma_test_primitive_prefix(t, cs.len(), p);
+                assert forall|i: int| #![trigger cs[i]] 0 <= i < cs.len() implies
+                    test_primitives(cs[i]).contains(p) == crate::verify::refinement::encoding::test_mentions(cs[i], c, v) by {
+                    lemma_test_primitive_code(cs[i], c, v);
+                }
+                if test_primitives(t).contains(p) {
+                    let i = choose|i: int| 0 <= i < cs.len() && test_primitives(cs[i]).contains(p);
+                    lemma_test_primitive_code(cs[i], c, v);
+                    assert(crate::verify::refinement::encoding::test_mention_child(t, i) == Some(cs[i]));
+                    assert(exists|j: int| #![trigger crate::verify::refinement::encoding::test_mention_child(t, j)]
+                        0 <= j < cs.len() && crate::verify::refinement::encoding::test_mentions(cs[j], c, v));
+                }
+                if crate::verify::refinement::encoding::test_mentions(t, c, v) {
+                    let i = choose|i: int| #![trigger crate::verify::refinement::encoding::test_mention_child(t, i)]
+                        0 <= i < cs.len() && crate::verify::refinement::encoding::test_mentions(cs[i], c, v);
+                    lemma_test_primitive_code(cs[i], c, v);
+                    assert(test_primitives(cs[i]).contains(p));
+                }
+            },
+            _ => {},
+        }
+    }
+
+    pub proof fn lemma_regex_primitive_code(r: language::Regex<model::Test>, c: history_syntax::Component, v: nat)
+        ensures regex_primitives(r).contains(model::Primitive::Eq(c, model::GTerm::Constant(v)))
+            == crate::verify::refinement::encoding::regex_mentions(r, c, v),
+        decreases r,
+    {
+        reveal_with_fuel(regex_primitives, 1);
+        reveal_with_fuel(crate::verify::refinement::encoding::regex_mentions, 2);
+        reveal(crate::verify::refinement::encoding::regex_mention_child);
+        let p = model::Primitive::Eq(c, model::GTerm::Constant(v));
+        match r {
+            language::Regex::Test(t) => { lemma_test_primitive_code(t, c, v); },
+            language::Regex::Star(b) | language::Regex::Not(b) => {
+                lemma_regex_primitive_code(*b, c, v);
+            },
+            language::Regex::Union(cs) | language::Regex::Intersect(cs) | language::Regex::Concat(cs) => {
+                lemma_regex_primitive_prefix(r, cs.len(), p);
+                assert forall|i: int| 0 <= i < cs.len() implies
+                    regex_primitives(cs[i]).contains(p)
+                        == crate::verify::refinement::encoding::regex_mentions(cs[i], c, v) by {
+                    lemma_regex_primitive_code(cs[i], c, v);
+                }
+                if regex_primitives(r).contains(p) {
+                    let i = choose|i: int| 0 <= i < cs.len() && regex_primitives(cs[i]).contains(p);
+                    lemma_regex_primitive_code(cs[i], c, v);
+                    assert(crate::verify::refinement::encoding::regex_mentions(cs[i], c, v));
+                    assert(crate::verify::refinement::encoding::regex_mention_child(r, i) == Some(cs[i]));
+                    assert(exists|j: int| #![trigger crate::verify::refinement::encoding::regex_mention_child(r, j)]
+                        0 <= j < regex_kids(r).len() && crate::verify::refinement::encoding::regex_mentions(regex_kids(r)[j], c, v));
+                    assert(crate::verify::refinement::encoding::regex_mentions(r, c, v));
+                }
+                if crate::verify::refinement::encoding::regex_mentions(r, c, v) {
+                    let i = choose|i: int| 0 <= i < cs.len() && crate::verify::refinement::encoding::regex_mentions(cs[i], c, v);
+                    lemma_regex_primitive_code(cs[i], c, v);
+                    assert(regex_primitives(regex_kids(r)[i]).contains(p));
+                }
+            },
+            _ => {},
+        }
+    }
+
+    /// Primitives tested now; tests in constant residuals and append suffixes are tested later.
+    pub open spec fn transition_primitives(t: language::Transition<model::Test>) -> Set<model::Primitive>
+        decreases t, 1nat, 0nat,
+    {
+        match t {
+            language::Transition::Const(_) => Set::empty(),
+            language::Transition::If(test, a, b) => test_primitives(test)
+                .union(transition_primitives(*a)).union(transition_primitives(*b)),
+            language::Transition::Union(cs) | language::Transition::Intersect(cs) =>
+                transition_primitive_prefix(t, cs.len()),
+            language::Transition::Not(b) | language::Transition::Append(b, _) => transition_primitives(*b),
+        }
+    }
+
+    pub open spec fn transition_primitive_prefix(t: language::Transition<model::Test>, n: nat) -> Set<model::Primitive>
+        decreases t, 0nat, n,
+    {
+        match t {
+            language::Transition::Union(cs) | language::Transition::Intersect(cs) => if 0 < n <= cs.len() {
+                transition_primitive_prefix(t, (n - 1) as nat).union(transition_primitives(cs[n - 1]))
+            } else { Set::empty() },
+            _ => Set::empty(),
+        }
+    }
+
+    pub open spec fn transition_kids(t: language::Transition<model::Test>) -> Seq<language::Transition<model::Test>> {
+        match t { language::Transition::Union(cs) | language::Transition::Intersect(cs) => cs, _ => Seq::empty() }
+    }
+
+    pub proof fn lemma_transition_primitive_prefix(t: language::Transition<model::Test>, n: nat, p: model::Primitive)
+        requires t is Union || t is Intersect, n <= transition_kids(t).len(),
+        ensures transition_primitive_prefix(t, n).contains(p)
+            == (exists|i: int| 0 <= i < n && transition_primitives(transition_kids(t)[i]).contains(p)),
+        decreases n,
+    {
+        let cs = transition_kids(t);
+        reveal_with_fuel(transition_primitive_prefix, 1);
+        if n > 0 {
+            lemma_transition_primitive_prefix(t, (n - 1) as nat, p);
+            assert(transition_primitive_prefix(t, (n - 1) as nat).contains(p)
+                == (exists|i: int| 0 <= i < n - 1 && transition_primitives(cs[i]).contains(p)));
+            if exists|i: int| 0 <= i < n && transition_primitives(cs[i]).contains(p) {
+                let i = choose|i: int| 0 <= i < n && transition_primitives(cs[i]).contains(p);
+                if i < n - 1 { assert(exists|j: int| 0 <= j < n - 1 && transition_primitives(cs[j]).contains(p)); }
+                else { assert(i == n - 1); }
+            }
+            if transition_primitive_prefix(t, (n - 1) as nat).contains(p) {
+                let j = choose|j: int| 0 <= j < n - 1 && transition_primitives(cs[j]).contains(p);
+                assert(exists|i: int| 0 <= i < n && transition_primitives(cs[i]).contains(p));
+            }
+            if transition_primitives(cs[n - 1]).contains(p) {
+                assert(exists|i: int| 0 <= i < n && transition_primitives(cs[i]).contains(p));
+            }
+        }
+    }
+
+    pub proof fn lemma_transition_primitives_lift(g: model::Graph, id: nat, p: model::Primitive)
+        requires model::graph_wf(g), id < g.transitions.len(),
+        ensures transition_primitives(model::lift_transition(g, id)).contains(p)
+            == reach::transition_reaches_primitive(g, id, p),
+        decreases id,
+    {
+        model::lemma_graph_transition_wf(g, id);
+        norm::transition_unfold(g, id);
+        reveal_with_fuel(transition_primitives, 1);
+        reveal_with_fuel(reach::transition_reaches_primitive, 1);
+        assert forall|j: int| #![trigger reach::transition_edges(g, id)[j]]
+            0 <= j < reach::transition_edges(g, id).len() implies
+                transition_primitives(model::lift_transition(g, reach::transition_edges(g, id)[j])).contains(p)
+                    == reach::transition_reaches_primitive(g, reach::transition_edges(g, id)[j], p) by {
+            lemma_transition_primitives_lift(g, reach::transition_edges(g, id)[j], p);
+        }
+        match g.transitions[id as int] {
+            model::TransitionNode::If(t, a, b) => {
+                lemma_test_primitives_lift(g, t, p);
+                lemma_transition_primitives_lift(g, a, p);
+                lemma_transition_primitives_lift(g, b, p);
+                assert(reach::transition_tests(g, id) == seq![t]);
+                assert(reach::transition_edges(g, id) == seq![a, b]);
+                if reach::test_reaches_primitive(g, t, p) || reach::transition_reaches_primitive(g, a, p)
+                    || reach::transition_reaches_primitive(g, b, p) {
+                    if reach::test_reaches_primitive(g, t, p) {
+                        assert(reach::transition_tests(g, id)[0] == t);
+                    } else if reach::transition_reaches_primitive(g, a, p) {
+                        assert(reach::transition_edges(g, id)[0] == a);
+                    } else { assert(reach::transition_edges(g, id)[1] == b); }
+                    assert(reach::transition_reaches_primitive(g, id, p));
+                }
+                assert(reach::transition_reaches_primitive(g, id, p) == (reach::test_reaches_primitive(g, t, p)
+                    || reach::transition_reaches_primitive(g, a, p) || reach::transition_reaches_primitive(g, b, p)));
+            },
+            model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => {
+                let lifted = model::lift_transition(g, id);
+                lemma_transition_primitive_prefix(lifted, cs.len(), p);
+                reveal_with_fuel(model::lift_transitions, 1);
+                assert(transition_kids(lifted) == model::lift_transitions(g, cs, id));
+                assert forall|j: int| 0 <= j < cs.len() implies
+                    model::lift_transitions(g, cs, id)[j] == model::lift_transition(g, cs[j]) by {}
+                if transition_primitives(lifted).contains(p) {
+                    let i = choose|i: int| 0 <= i < cs.len() && transition_primitives(model::lift_transitions(g, cs, id)[i]).contains(p);
+                    assert(reach::transition_edges(g, id)[i] == cs[i]);
+                    assert(cs[i] < id);
+                    assert(reach::transition_reaches_primitive(g, id, p));
+                }
+                if reach::transition_reaches_primitive(g, id, p) {
+                    let i = choose|i: int| 0 <= i < cs.len() && cs[i] < id && reach::transition_reaches_primitive(g, cs[i], p);
+                    assert(transition_primitives(transition_kids(lifted)[i]).contains(p));
+                }
+            },
+            model::TransitionNode::Not(child) | model::TransitionNode::Append(child, _) => {
+                lemma_transition_primitives_lift(g, child, p);
+                assert(reach::transition_tests(g, id) == Seq::<nat>::empty());
+                assert(reach::transition_edges(g, id) == seq![child]);
+                assert(reach::transition_edges(g, id)[0] == child);
+                assert(reach::transition_reaches_primitive(g, id, p)
+                    == reach::transition_reaches_primitive(g, child, p));
+            },
+            _ => {},
+        }
+    }
+
+    pub open spec fn derivative_vocab(g: model::Graph, q: nat, t: nat) -> bool {
+        transition_primitives(model::lift_transition(g, t)).subset_of(regex_primitives(model::lift_regex(g, q)))
+    }
+
+    pub proof fn lemma_derivative_vocab_stable(a: model::Graph, b: model::Graph, q: nat, t: nat)
+        requires model::graph_wf(a), model::graph_extends(a, b), q < a.regexes.len(), t < a.transitions.len(),
+            derivative_vocab(a, q, t),
+        ensures derivative_vocab(b, q, t),
+    {
+        model::lemma_graph_wf_elim(a);
+        model::lemma_lift_stable_under_extends(a, b);
+    }
+
+    pub proof fn lemma_test_negation_primitives(g: model::Graph, relation: Set<(nat, nat)>, a: nat, b: nat, p: model::Primitive)
+        requires model::graph_wf(g), norm::test_negation_witness(g, relation), relation.contains((a, b)),
+        ensures reach::test_reaches_primitive(g, a, p) == reach::test_reaches_primitive(g, b, p),
+        decreases a,
+    {
+        norm::test_lemma_negation_witness_elim(g, relation);
+        reveal(norm::test_negation_row);
+        reveal_with_fuel(reach::test_reaches_primitive, 1);
+        match (g.tests[a as int], g.tests[b as int]) {
+            (model::TestNode::And(cs), model::TestNode::Or(ds))
+                | (model::TestNode::Or(cs), model::TestNode::And(ds)) => {
+                if reach::test_reaches_primitive(g, a, p) {
+                    let i = choose|i: int| 0 <= i < cs.len() && cs[i] < a && reach::test_reaches_primitive(g, cs[i], p);
+                    assert(cs.contains(cs[i]));
+                    let d = choose|d: nat| ds.contains(d) && relation.contains((cs[i], d));
+                    lemma_test_negation_primitives(g, relation, cs[i], d, p);
+                    let j = ds.lemma_contains_to_index(d);
+                    assert(d < b);
+                    assert(reach::test_edges(g, b) == ds);
+                    assert(ds[j] == d);
+                    assert(exists|k: int| 0 <= k < reach::test_edges(g, b).len()
+                        && reach::test_edges(g, b)[k] < b && reach::test_reaches_primitive(g, reach::test_edges(g, b)[k], p));
+                    assert(reach::test_reaches_primitive(g, b, p));
+                }
+                if reach::test_reaches_primitive(g, b, p) {
+                    let j = choose|j: int| 0 <= j < ds.len() && ds[j] < b && reach::test_reaches_primitive(g, ds[j], p);
+                    assert(ds.contains(ds[j]));
+                    let c = choose|c: nat| cs.contains(c) && relation.contains((c, ds[j]));
+                    let i = cs.lemma_contains_to_index(c);
+                    assert(c < a);
+                    lemma_test_negation_primitives(g, relation, c, ds[j], p);
+                    assert(reach::test_edges(g, a) == cs);
+                    assert(cs[i] == c);
+                    assert(exists|k: int| 0 <= k < reach::test_edges(g, a).len()
+                        && reach::test_edges(g, a)[k] < a && reach::test_reaches_primitive(g, reach::test_edges(g, a)[k], p));
+                    assert(reach::test_reaches_primitive(g, a, p));
+                }
+            },
+            _ => {},
+        }
+    }
+
+    pub proof fn lemma_test_not_done_primitives(g: model::Graph, values: Seq<TestId>, root: TestId)
+        requires model::graph_wf(g), norm::test_not_state(g, Seq::empty(), values, root),
+        ensures values.len() == 1,
+            test_primitives(model::lift_test(g, values[0]@)) == test_primitives(model::lift_test(g, root@)),
+    {
+        let (origins, relation) = choose|origins: Seq<nat>, relation: Set<(nat, nat)>|
+            origins.len() == values.len() && norm::test_negation_witness(g, relation)
+            && (forall|i: int| 0 <= i < values.len() ==> relation.contains((origins[i], values[i]@)))
+            && norm::test_not_plan(g, Seq::empty(), origins) == Some(seq![root@]);
+        assert(origins == seq![root@]);
+        assert(values.len() == 1);
+        assert(0 <= 0 < values.len());
+        assert(origins[0] == root@);
+        assert(relation.contains((origins[0], values[0]@)));
+        assert(relation.contains((root@, values[0]@)));
+        norm::test_lemma_negation_witness_elim(g, relation);
+        reveal(norm::test_negation_row);
+        assert forall|p: model::Primitive| test_primitives(model::lift_test(g, values[0]@)).contains(p)
+            == test_primitives(model::lift_test(g, root@)).contains(p) by {
+            lemma_test_primitives_lift(g, values[0]@, p);
+            lemma_test_primitives_lift(g, root@, p);
+            lemma_test_negation_primitives(g, relation, root@, values[0]@, p);
+        }
+        assert(test_primitives(model::lift_test(g, values[0]@)) =~= test_primitives(model::lift_test(g, root@)));
+    }
+
+    pub proof fn lemma_test_member_bound(g: model::Graph, children: Seq<TestId>, and: bool, t: nat)
+        requires model::graph_wf(g), norm::test_ids_valid(g, children), norm::test_member(g, children, and, t),
+        ensures t < g.tests.len(),
+    {
+        let i = choose|i: int| 0 <= i < children.len() && norm::test_piece_contains(g, children[i]@, and, t);
+        crate::verify::finite_link::lemma_test_piece_link(g, children[i]@, and, t);
+    }
+
+    pub proof fn lemma_test_member_primitives(g: model::Graph, children: Seq<TestId>, and: bool, t: nat, p: model::Primitive)
+        requires model::graph_wf(g), norm::test_ids_valid(g, children), norm::test_member(g, children, and, t),
+            reach::test_reaches_primitive(g, t, p),
+        ensures exists|i: int| 0 <= i < children.len() && reach::test_reaches_primitive(g, children[i]@, p),
+    {
+        let i = choose|i: int| 0 <= i < children.len() && norm::test_piece_contains(g, children[i]@, and, t);
+        let c = children[i]@;
+        model::lemma_graph_test_wf(g, c);
+        match g.tests[c as int] {
+            model::TestNode::And(cs) => if and {
+                let j = cs.lemma_contains_to_index(t);
+                assert(cs[j] < c);
+                assert(reach::test_edges(g, c) == cs);
+                assert(reach::test_reaches_primitive(g, c, p));
+            },
+            model::TestNode::Or(cs) => if !and {
+                let j = cs.lemma_contains_to_index(t);
+                assert(cs[j] < c);
+                assert(reach::test_edges(g, c) == cs);
+                assert(reach::test_reaches_primitive(g, c, p));
+            },
+            _ => {},
+        }
+        assert(reach::test_reaches_primitive(g, children[i]@, p));
+    }
+
+    pub proof fn lemma_test_connective_primitives(a: model::Graph, b: model::Graph, children: Seq<TestId>, and: bool, t: nat, p: model::Primitive)
+        requires model::graph_wf(a), model::graph_wf(b), model::graph_extends(a, b),
+            norm::test_ids_valid(a, children), t < b.tests.len(),
+            norm::test_connective_result(a, b, children, and, t),
+            test_primitives(model::lift_test(b, t)).contains(p),
+        ensures exists|i: int| 0 <= i < children.len()
+            && test_primitives(model::lift_test(a, children[i]@)).contains(p),
+    {
+        lemma_test_primitives_lift(b, t, p);
+        model::lemma_graph_wf_elim(a);
+        if t == a.constants.test_true || t == a.constants.test_false {
+            assert(b.tests[t as int] == a.tests[t as int]);
+            assert(!reach::test_reaches_primitive(b, t, p));
+        } else if norm::test_member(a, children, and, t) {
+            lemma_test_member_bound(a, children, and, t);
+            reach::lemma_test_reaches_stable(a, b, t, p);
+            lemma_test_member_primitives(a, children, and, t, p);
+            let i = choose|i: int| 0 <= i < children.len() && reach::test_reaches_primitive(a, children[i]@, p);
+            lemma_test_primitives_lift(a, children[i]@, p);
+        } else {
+            model::lemma_graph_test_wf(b, t);
+            let j = choose|j: int| 0 <= j < reach::test_edges(b, t).len()
+                && reach::test_edges(b, t)[j] < t && reach::test_reaches_primitive(b, reach::test_edges(b, t)[j], p);
+            let c = reach::test_edges(b, t)[j];
+            assert(norm::test_member(a, children, and, c));
+            lemma_test_member_bound(a, children, and, c);
+            reach::lemma_test_reaches_stable(a, b, c, p);
+            lemma_test_member_primitives(a, children, and, c, p);
+            let i = choose|i: int| 0 <= i < children.len() && reach::test_reaches_primitive(a, children[i]@, p);
+            lemma_test_primitives_lift(a, children[i]@, p);
+        }
+    }
+
+    pub proof fn lemma_test_piece_vocab(inter: bool, psi: model::Test, phi: model::Test)
+        requires crate::verify::finite_impl::test_piece(inter, psi, phi),
+        ensures test_primitives(phi).subset_of(test_primitives(psi)),
+    {
+        assert forall|p: model::Primitive| test_primitives(phi).contains(p) implies
+            test_primitives(psi).contains(p) by {
+            match psi {
+                model::Test::And(cs) | model::Test::Or(cs) => {
+                    if phi != psi {
+                        let i = cs.lemma_contains_to_index(phi);
+                        lemma_test_primitive_prefix(psi, cs.len(), p);
+                        assert(test_primitives(cs[i]).contains(p));
+                    }
+                },
+                _ => {},
+            }
+        }
+    }
+
+    pub proof fn lemma_test_combo_vocab(inter: bool, xs: Set<language::Regex<model::Test>>, phi: model::Test, allowed: Set<model::Primitive>)
+        requires crate::verify::finite_impl::test_combo(inter, xs, phi),
+            forall|r: language::Regex<model::Test>| xs.contains(r) ==> regex_primitives(r).subset_of(allowed),
+        ensures test_primitives(phi).subset_of(allowed),
+    {
+        assert forall|psi: model::Test| crate::verify::finite_impl::piece_of(inter, xs, psi) implies
+            test_primitives(psi).subset_of(allowed) by {
+            let parent = choose|parent: model::Test| xs.contains(language::Regex::Test(parent))
+                && crate::verify::finite_impl::test_piece(inter, parent, psi);
+            lemma_test_piece_vocab(inter, parent, psi);
+            assert(regex_primitives(language::Regex::Test(parent)) == test_primitives(parent));
+        }
+        assert forall|p: model::Primitive| test_primitives(phi).contains(p) implies allowed.contains(p) by {
+            if !crate::verify::finite_impl::piece_of(inter, xs, phi) {
+                match phi {
+                    model::Test::And(cs) | model::Test::Or(cs) => {
+                        lemma_test_primitive_prefix(phi, cs.len(), p);
+                        let i = choose|i: int| 0 <= i < cs.len() && test_primitives(cs[i]).contains(p);
+                        assert(crate::verify::finite_impl::test_kids(phi)[i] == cs[i]);
+                        assert(crate::verify::finite_impl::piece_of(inter, xs, cs[i]));
+                        assert(test_primitives(cs[i]).subset_of(allowed));
+                    },
+                    _ => {},
+                }
+            }
+        }
+    }
+
+    pub proof fn lemma_sops_vocab(inter: bool, r: language::Regex<model::Test>, allowed: Set<model::Primitive>)
+        requires regex_primitives(r).subset_of(allowed),
+        ensures forall|o: language::Regex<model::Test>|
+            crate::verify::finite_impl::pre().sops(inter, r).contains(o) ==> regex_primitives(o).subset_of(allowed),
+    {
+        assert forall|o: language::Regex<model::Test>|
+            crate::verify::finite_impl::pre().sops(inter, r).contains(o) implies regex_primitives(o).subset_of(allowed) by {
+            match r {
+                language::Regex::Union(cs) | language::Regex::Intersect(cs) => {
+                    if o != r {
+                        let i = cs.lemma_contains_to_index(o);
+                        assert forall|p: model::Primitive| regex_primitives(o).contains(p) implies allowed.contains(p) by {
+                            lemma_regex_primitive_prefix(r, cs.len(), p);
+                            assert(regex_primitives(cs[i]).contains(p));
+                            assert(regex_primitives(r).contains(p));
+                        }
+                    }
+                },
+                _ => {},
+            }
+        }
+    }
+
+    pub proof fn lemma_nset_vocab(inter: bool, xs: Set<language::Regex<model::Test>>, out: language::Regex<model::Test>, allowed: Set<model::Primitive>)
+        requires (crate::verify::finite_impl::core().nset)(inter, xs, out),
+            forall|r: language::Regex<model::Test>| xs.contains(r) ==> regex_primitives(r).subset_of(allowed),
+        ensures regex_primitives(out).subset_of(allowed),
+    {
+        reveal(crate::verify::finite_states::Model::combo_from);
+        reveal(crate::verify::finite_states::Model::in_sops_of);
+        let m = crate::verify::finite_impl::pre();
+        assert(m.nset_shape(inter, xs, out));
+        assert forall|r: language::Regex<model::Test>| xs.contains(r) implies
+            forall|o: language::Regex<model::Test>| m.sops(inter, r).contains(o) ==> regex_primitives(o).subset_of(allowed) by {
+            lemma_sops_vocab(inter, r, allowed);
+        }
+        assert forall|o: language::Regex<model::Test>| m.sops(inter, out).contains(o) implies
+            regex_primitives(o).subset_of(allowed) by {
+            if m.in_sops_of(inter, xs, o) {
+                let r = choose|r: language::Regex<model::Test>| xs.contains(r) && m.sops(inter, r).contains(o);
+            } else if !m.is_const(out) {
+                let ts = choose|ts: Set<language::Regex<model::Test>>| m.combo_from(inter, xs, ts, o);
+                assert(m.combo_from(inter, xs, ts, o));
+                assert(forall|r: language::Regex<model::Test>| #![trigger ts.contains(r)] ts.contains(r) ==> m.is_test(r) && m.in_sops_of(inter, xs, r));
+                assert forall|r: language::Regex<model::Test>| ts.contains(r) implies regex_primitives(r).subset_of(allowed) by {
+                    assert(m.in_sops_of(inter, xs, r));
+                    let parent = choose|parent: language::Regex<model::Test>| xs.contains(parent) && m.sops(inter, parent).contains(r);
+                }
+                match o {
+                    language::Regex::Test(phi) => { lemma_test_combo_vocab(inter, ts, phi, allowed); },
+                    _ => {},
+                }
+            }
+        }
+        assert forall|p: model::Primitive| regex_primitives(out).contains(p) implies allowed.contains(p) by {
+            match out {
+                language::Regex::Union(cs) | language::Regex::Intersect(cs) => {
+                    if m.is_set(inter, out) {
+                        lemma_regex_primitive_prefix(out, cs.len(), p);
+                        let i = choose|i: int| 0 <= i < cs.len() && regex_primitives(cs[i]).contains(p);
+                        assert(m.sops(inter, out).contains(cs[i]));
+                    }
+                },
+                _ => {},
+            }
+            if !m.is_set(inter, out) { assert(m.sops(inter, out).contains(out)); }
+        }
+    }
+
+    pub proof fn lemma_built_vocab(inter: bool, base: spec_fn(language::Regex<model::Test>) -> bool,
+        out: language::Regex<model::Test>, allowed: Set<model::Primitive>)
+        requires crate::verify::finite_impl::m_impl().built(inter, base, out),
+            forall|r: language::Regex<model::Test>| base(r) ==> regex_primitives(r).subset_of(allowed),
+        ensures regex_primitives(out).subset_of(allowed),
+    {
+        broadcast use vstd::iset::lemma_iset_new;
+        crate::verify::finite_impl::lemma_models_agree();
+        let m = crate::verify::finite_impl::m_impl();
+        let carrier = ISet::new(|r: language::Regex<model::Test>| regex_primitives(r).subset_of(allowed));
+        assert(m.has_consts(carrier));
+        assert(m.nset_closed(inter, carrier)) by {
+            assert forall|xs: Set<language::Regex<model::Test>>, r: language::Regex<model::Test>|
+                (forall|x: language::Regex<model::Test>| xs.contains(x) ==> carrier.contains(x))
+                    && #[trigger] (m.nset)(inter, xs, r) implies carrier.contains(r) by {
+                assert forall|x: language::Regex<model::Test>| xs.contains(x) implies regex_primitives(x).subset_of(allowed) by {
+                    assert(carrier.contains(x));
+                }
+                lemma_nset_vocab(inter, xs, r, allowed);
+            }
+        }
+        assert(carrier.contains(out));
+    }
+
+    pub proof fn lemma_not_vocab(r: language::Regex<model::Test>)
+        ensures regex_primitives(crate::verify::finite_impl::r_not(r)).subset_of(regex_primitives(r)),
+    {
+        match r { language::Regex::Not(b) => {}, _ => {} }
+    }
+
+    pub proof fn lemma_flat_vocab(xs: Seq<language::Regex<model::Test>>, allowed: Set<model::Primitive>)
+        requires forall|i: int| 0 <= i < xs.len() ==> regex_primitives(xs[i]).subset_of(allowed),
+        ensures forall|r: language::Regex<model::Test>| crate::verify::finite_impl::pre().flat(xs).contains(r)
+            ==> regex_primitives(r).subset_of(allowed),
+        decreases xs.len(),
+    {
+        if xs.len() > 0 {
+            let m = crate::verify::finite_impl::pre();
+            lemma_flat_vocab(xs.drop_last(), allowed);
+            assert forall|r: language::Regex<model::Test>| m.flat(xs).contains(r) implies
+                regex_primitives(r).subset_of(allowed) by {
+                if !m.flat(xs.drop_last()).contains(r) {
+                    assert(m.piece(xs.last()).contains(r));
+                    match xs.last() {
+                        language::Regex::Concat(cs) => {
+                            let i = cs.lemma_contains_to_index(r);
+                            assert forall|p: model::Primitive| regex_primitives(r).contains(p) implies allowed.contains(p) by {
+                                lemma_regex_primitive_prefix(xs.last(), cs.len(), p);
+                                assert(regex_primitives(cs[i]).contains(p));
+                                assert(exists|j: int| 0 <= j < cs.len() && regex_primitives(regex_kids(xs.last())[j]).contains(p));
+                                assert(regex_primitives(xs.last()).contains(p));
+                            }
+                        },
+                        _ => {},
+                    }
+                }
+            }
+        }
+    }
+
+    pub proof fn lemma_cat_vocab(xs: Seq<language::Regex<model::Test>>, allowed: Set<model::Primitive>)
+        requires forall|i: int| 0 <= i < xs.len() ==> regex_primitives(xs[i]).subset_of(allowed),
+        ensures regex_primitives(crate::verify::finite_impl::r_cat(xs)).subset_of(allowed),
+    {
+        let m = crate::verify::finite_impl::pre();
+        let f = m.flat(xs);
+        lemma_flat_vocab(xs, allowed);
+        if !m.has_empty(xs) && f.len() > 1 {
+            let out = language::Regex::Concat(f);
+            assert forall|p: model::Primitive| regex_primitives(out).contains(p) implies allowed.contains(p) by {
+                lemma_regex_primitive_prefix(out, f.len(), p);
+                let i = choose|i: int| 0 <= i < f.len() && regex_primitives(f[i]).contains(p);
+                assert(f.contains(f[i]));
+            }
+        }
+        if !m.has_empty(xs) && f.len() == 1 { assert(f.contains(f[0])); }
+    }
+
+    pub proof fn lemma_regex_child_vocab(r: language::Regex<model::Test>, i: int)
+        requires r is Union || r is Intersect || r is Concat, 0 <= i < regex_kids(r).len(),
+        ensures regex_primitives(regex_kids(r)[i]).subset_of(regex_primitives(r)),
+    {
+        assert forall|p: model::Primitive| regex_primitives(regex_kids(r)[i]).contains(p) implies regex_primitives(r).contains(p) by {
+            lemma_regex_primitive_prefix(r, regex_kids(r).len(), p);
+            assert(exists|j: int| 0 <= j < regex_kids(r).len() && regex_primitives(regex_kids(r)[j]).contains(p));
+        }
+    }
+
+    pub proof fn lemma_model_constant_vocab(r: language::Regex<model::Test>)
+        requires crate::verify::finite_impl::m_impl().is_const(r),
+        ensures regex_primitives(r) == Set::empty(),
+    {
+        crate::verify::finite_impl::lemma_models_agree();
+        match r { language::Regex::Empty | language::Regex::Epsilon | language::Regex::All => {}, _ => {} }
+    }
+
+    pub proof fn lemma_model_literal_vocab(r: language::Regex<model::Test>, out: language::Regex<model::Test>)
+        requires crate::verify::finite_impl::regex_nf(r), (crate::verify::finite_impl::m_impl().lit)(r, out),
+        ensures regex_primitives(out).subset_of(regex_primitives(r)),
+        decreases crate::verify::finite_impl::r_size(r), 0nat,
+    {
+        let m = crate::verify::finite_impl::m_impl();
+        let allowed = regex_primitives(r);
+        crate::verify::finite_impl::theorem_impl_contract();
+        crate::verify::finite_impl::lemma_models_agree();
+        if !m.base_kind(r) {
+            match r {
+                language::Regex::Union(cs) | language::Regex::Intersect(cs) => {
+                    lemma_sops_vocab(r is Intersect, r, allowed);
+                    assert forall|w: language::Regex<model::Test>| m.ops_lit(r, w) implies regex_primitives(w).subset_of(allowed) by {
+                        let o = choose|o: language::Regex<model::Test>| (m.ops)(r).contains(o) && #[trigger] (m.lit)(o, w);
+                        cs.to_set_ensures();
+                        assert(cs.contains(o));
+                        let i = cs.lemma_contains_to_index(o);
+                        lemma_regex_child_vocab(r, i);
+                        assert(m.st(o));
+                        assert((m.size)(o) < (m.size)(r));
+                        lemma_model_literal_vocab(o, w);
+                        assert(m.sops(r is Intersect, r).contains(o));
+                    }
+                    lemma_built_vocab(r is Intersect, |w: language::Regex<model::Test>| m.ops_lit(r, w), out, allowed);
+                },
+                language::Regex::Not(b) => {
+                    assert forall|w: language::Regex<model::Test>| m.not_lit(r, w) implies regex_primitives(w).subset_of(allowed) by {
+                        let v = choose|v: language::Regex<model::Test>| #[trigger] (m.lit)(*b, v) && w == (m.nnot)(v);
+                        lemma_model_literal_vocab(*b, v);
+                        lemma_not_vocab(v);
+                    }
+                    lemma_built_vocab(true, |w: language::Regex<model::Test>| m.not_lit(r, w), out, allowed);
+                },
+                language::Regex::Star(b) => {
+                    assert forall|w: language::Regex<model::Test>| m.star_lit(r, w) implies regex_primitives(w).subset_of(allowed) by {
+                        let v = choose|v: language::Regex<model::Test>| #[trigger] (m.prod)(*b, v) && w == m.cat2(v, r);
+                        lemma_model_product_vocab(*b, v);
+                        lemma_cat_vocab(seq![v, r], allowed);
+                    }
+                    lemma_built_vocab(false, |w: language::Regex<model::Test>| m.star_lit(r, w), out, allowed);
+                },
+                language::Regex::Concat(cs) => {
+                    assert forall|i: int| 0 <= i < cs.len() implies regex_primitives(cs[i]).subset_of(allowed) by {
+                        lemma_regex_child_vocab(r, i);
+                    }
+                    assert forall|w: language::Regex<model::Test>| m.list_lit(r, w) implies regex_primitives(w).subset_of(allowed) by {
+                        if exists|i: int, v: language::Regex<model::Test>| 0 <= i < cs.len() - 1 && #[trigger] (m.prod)(cs[i], v)
+                            && w == (m.ncat)(seq![v] + cs.skip(i + 1)) {
+                            let (i, v) = choose|i: int, v: language::Regex<model::Test>| 0 <= i < cs.len() - 1
+                                && #[trigger] (m.prod)(cs[i], v) && w == (m.ncat)(seq![v] + cs.skip(i + 1));
+                            lemma_model_product_vocab(cs[i], v);
+                            let inputs = seq![v] + cs.skip(i + 1);
+                            assert forall|j: int| 0 <= j < inputs.len() implies regex_primitives(inputs[j]).subset_of(allowed) by {
+                                if j == 0 { assert(inputs[j] == v); }
+                                else { assert(inputs[j] == cs[i + j]); }
+                            }
+                            lemma_cat_vocab(inputs, allowed);
+                        } else {
+                            assert((m.lit)(cs.last(), w));
+                            lemma_model_literal_vocab(cs.last(), w);
+                            assert(regex_primitives(cs.last()).subset_of(allowed));
+                        }
+                    }
+                    lemma_built_vocab(false, |w: language::Regex<model::Test>| m.list_lit(r, w), out, allowed);
+                },
+                _ => {},
+            }
+        } else { lemma_model_constant_vocab(out); }
+    }
+
+    pub proof fn lemma_model_product_vocab(r: language::Regex<model::Test>, out: language::Regex<model::Test>)
+        requires crate::verify::finite_impl::regex_nf(r), (crate::verify::finite_impl::m_impl().prod)(r, out),
+        ensures regex_primitives(out).subset_of(regex_primitives(r)),
+        decreases crate::verify::finite_impl::r_size(r), 1nat,
+    {
+        let m = crate::verify::finite_impl::m_impl();
+        let allowed = regex_primitives(r);
+        crate::verify::finite_impl::theorem_impl_contract();
+        crate::verify::finite_impl::lemma_models_agree();
+        if !m.base_kind(r) {
+            match r {
+                language::Regex::Union(cs) => {
+                    if exists|o: language::Regex<model::Test>| (m.ops)(r).contains(o) && #[trigger] (m.prod)(o, out) {
+                        let o = choose|o: language::Regex<model::Test>| (m.ops)(r).contains(o) && #[trigger] (m.prod)(o, out);
+                        cs.to_set_ensures();
+                        assert(cs.contains(o));
+                        let i = cs.lemma_contains_to_index(o);
+                        lemma_regex_child_vocab(r, i);
+                        lemma_model_product_vocab(o, out);
+                        lemma_sops_vocab(false, r, allowed);
+                    } else { lemma_model_literal_vocab(r, out); }
+                },
+                language::Regex::Intersect(_) | language::Regex::Not(_) => {
+                    assert forall|w: language::Regex<model::Test>| (m.lit)(r, w) implies regex_primitives(w).subset_of(allowed) by {
+                        lemma_model_literal_vocab(r, w);
+                    }
+                    lemma_built_vocab(true, |w: language::Regex<model::Test>| (m.lit)(r, w), out, allowed);
+                },
+                language::Regex::Star(_) => { lemma_model_literal_vocab(r, out); },
+                language::Regex::Concat(cs) => {
+                    if (m.lit)(r, out) { lemma_model_literal_vocab(r, out); }
+                    else {
+                        lemma_model_product_vocab(cs.last(), out);
+                        lemma_regex_child_vocab(r, cs.len() as int - 1);
+                    }
+                },
+                _ => {},
+            }
+        } else { lemma_model_constant_vocab(out); }
+    }
+
+    pub proof fn lemma_model_successor_vocab(r: language::Regex<model::Test>, out: language::Regex<model::Test>)
+        requires crate::verify::finite_impl::regex_nf(r), (crate::verify::finite_impl::m_impl().succ)(r, out),
+        ensures regex_primitives(out).subset_of(regex_primitives(r)),
+    {
+        let m = crate::verify::finite_impl::m_impl();
+        let allowed = regex_primitives(r);
+        crate::verify::finite_impl::theorem_impl_contract();
+        crate::verify::finite_impl::lemma_models_agree();
+        if !m.base_kind(r) {
+            assert forall|w: language::Regex<model::Test>| (m.prod)(r, w) implies regex_primitives(w).subset_of(allowed) by {
+                lemma_model_product_vocab(r, w);
+            }
+            lemma_built_vocab(false, |w: language::Regex<model::Test>| (m.prod)(r, w), out, allowed);
+        } else { lemma_model_constant_vocab(out); }
+    }
 
     /// Stack availability is independent of whether a truth word has a realizing event.
     pub open spec fn test_stack_result(g: model::Graph, tasks: Seq<(TestId, bool)>, depth: nat) -> Option<nat>
@@ -2317,17 +3275,52 @@ pub(crate) mod verify {
         algebra::theorem_symbolic_derivative_correct(model::gsem(theta), event, model::lift_regex(g, root), word);
     }
 
+    pub proof fn lemma_regex_graph_child_vocab(g: model::Graph, root: nat, child: nat)
+        requires model::graph_wf(g), root < g.regexes.len(),
+            match g.regexes[root as int].kind {
+                model::RegexKindNode::Star(c) | model::RegexKindNode::Not(c) => child == c,
+                model::RegexKindNode::Union(cs) | model::RegexKindNode::Intersect(cs) | model::RegexKindNode::Concat(cs) => cs.contains(child),
+                _ => false,
+            },
+        ensures child < g.regexes.len(), regex_primitives(model::lift_regex(g, child)).subset_of(regex_primitives(model::lift_regex(g, root))),
+    {
+        model::lemma_graph_regex_wf(g, root);
+        norm::regex_unfold(g, root);
+        match g.regexes[root as int].kind {
+            model::RegexKindNode::Union(cs) | model::RegexKindNode::Intersect(cs) | model::RegexKindNode::Concat(cs) => {
+                let i = cs.lemma_contains_to_index(child);
+                lemma_regex_child_vocab(model::lift_regex(g, root), i);
+            },
+            _ => {},
+        }
+    }
+
+    pub open spec fn derivative_results_vocab(g: model::Graph, root: nat, results: Seq<TransitionId>) -> bool {
+        forall|i: int| 0 <= i < results.len() ==> derivative_vocab(g, root, results[i]@)
+    }
+
+    pub proof fn lemma_derivative_results_vocab_stable(a: model::Graph, b: model::Graph, root: nat, results: Seq<TransitionId>)
+        requires model::graph_wf(a), model::graph_extends(a, b), root < a.regexes.len(),
+            norm::transition_ids_valid(a, results), derivative_results_vocab(a, root, results),
+        ensures derivative_results_vocab(b, root, results),
+    {
+        assert forall|i: int| 0 <= i < results.len() implies derivative_vocab(b, root, results[i]@) by {
+            lemma_derivative_vocab_stable(a, b, root, results[i]@);
+        }
+    }
+
     /// Every cached derivative is correct and has the class bound of its state
     /// (`verify::finite_deriv::dbound`).
     pub open spec fn derivative_cache_wf(g: model::Graph, cache: Seq<Option<TransitionId>>) -> bool {
         forall|i: int| 0 <= i < cache.len() ==> match #[trigger] cache[i] {
-            Some(out) => derivative_correct(g, i as nat, out) && fder::dbound(g, i as nat, out@), None => true,
+            Some(out) => derivative_correct(g, i as nat, out) && fder::dbound(g, i as nat, out@)
+                && derivative_vocab(g, i as nat, out@), None => true,
         }
     }
 
     pub proof fn derivative_cached_bound(g: model::Graph, cache: Seq<Option<TransitionId>>, id: RegexId, out: TransitionId)
         requires derivative_cache_wf(g, cache), id@ < cache.len(), cache[id@ as int] == Some(out),
-        ensures out@ < g.transitions.len(),
+        ensures out@ < g.transitions.len(), derivative_vocab(g, id@, out@),
     {}
 
     pub proof fn derivative_cache_prefix_facts(before: Seq<Option<TransitionId>>, after: Seq<Option<TransitionId>>)
@@ -2822,11 +3815,13 @@ pub(crate) mod verify {
         }
         assert forall|cache: Seq<Option<TransitionId>>| derivative_cache_wf(a, cache) implies derivative_cache_wf(b, cache) by {
             assert forall|i: int| 0 <= i < cache.len() implies match #[trigger] cache[i] {
-                Some(out) => derivative_correct(b, i as nat, out) && fder::dbound(b, i as nat, out@), None => true,
+                Some(out) => derivative_correct(b, i as nat, out) && fder::dbound(b, i as nat, out@)
+                    && derivative_vocab(b, i as nat, out@), None => true,
             } by {
                 if let Some(out) = cache[i] {
                     derivative_correct_bounds(a, i as nat, out);
                     fder::lemma_dbound_stable(a, b, i as nat, out@);
+                    lemma_derivative_vocab_stable(a, b, i as nat, out@);
                 }
             }
         }
@@ -3410,6 +4405,8 @@ pub(crate) mod verify {
         }
     }
 
+    #[verifier::spinoff_prover]
+    #[verifier::rlimit(30)]
     pub proof fn test_expand(g: model::Graph, id: TestId, tasks: Seq<(TestId, bool)>, values: Seq<bool>, theta: Subst, event: EventView)
         requires model::graph_wf(g), id@ < g.tests.len(),
             g.tests[id@ as int] is And || g.tests[id@ as int] is Or,

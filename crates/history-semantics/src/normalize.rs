@@ -35,6 +35,8 @@ use crate::verify::finite_machine as fmach;
 use crate::verify::finite_impl as fimpl;
 #[cfg(verus_keep_ghost)]
 use crate::verify::finite_compile as fcmp;
+#[cfg(verus_keep_ghost)]
+use crate::symbolic::verify as vocab;
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 verus! {
@@ -764,6 +766,8 @@ pub(crate) trait TestNormalize: Sized {
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result {
                 Ok(id) => id@ < final(store).graph().tests.len()
+                    && vocab::test_primitives(model::lift_test(final(store).graph(), id@))
+                        == vocab::test_primitives(model::lift_test(final(store).graph(), this@))
                     && (forall|theta: Subst, event: EventView|
                         test_truth(final(store).graph(), theta, id@, event)
                             != test_truth(final(store).graph(), theta, this@, event)),
@@ -1136,7 +1140,10 @@ impl TestNormalize for TestId {
             state = Self::not_next(store, &mut tasks, &mut values);
         }
         state?;
-        proof! { test_lemma_not_done(store.graph(), values.view(), this); }
+        proof! {
+            test_lemma_not_done(store.graph(), values.view(), this);
+            vocab::lemma_test_not_done_primitives(store.graph(), values.view(), this);
+        }
         match values.pop() {
             Some(v) => Ok(v),
             None => Err(HistoryError::normalization_invariant()),
@@ -2010,6 +2017,8 @@ pub(crate) trait RegexNormalize: Sized {
                                 model::lift_regex(final(store).graph(), this@))), word),
                 Err(_) => true,
             },
+            result matches Ok(id) ==> vocab::regex_primitives(model::lift_regex(final(store).graph(), id@)).subset_of(
+                vocab::regex_primitives(model::lift_regex(final(store).graph(), this@))),
     )]
     fn star<G: KernelStore>(this: RegexId, store: &mut G) -> KernelResult<RegexId>;
 
@@ -2149,6 +2158,7 @@ impl RegexNormalize for RegexId {
 
     fn star<G: KernelStore>(this: RegexId, store: &mut G) -> KernelResult<RegexId> {
         proof! {
+            reveal_with_fuel(vocab::regex_primitives, 1);
             regex_unfold(store.graph(), this@);
             regex_constants(store.graph());
             regex_star_laws(store.graph(), this@);
@@ -3191,6 +3201,7 @@ pub(crate) trait TransitionNormalize: Sized {
                             == model::regex_lang(final(store).graph(), theta, regex@, word),
                 Err(_) => true,
             },
+            result matches Ok(id) ==> guard_vocab(final(store).graph(), id@) == Set::empty(),
     ;
 
     fn if_then_else<G: KernelStore>(
@@ -3217,6 +3228,9 @@ pub(crate) trait TransitionNormalize: Sized {
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
                     ==> transition_lang(final(store).graph(), theta, id, event, word)
                         == transition_if_combo(final(store).graph(), theta, test, then_id, else_id, event, word), Err(_) => true },
+            result matches Ok(id) ==> guard_vocab(final(store).graph(), id@).subset_of(
+                test_vocab(final(store).graph(), test@).union(guard_vocab(final(store).graph(), then_id@))
+                    .union(guard_vocab(final(store).graph(), else_id@))),
     ;
 
     fn intersect<G: KernelStore>(
@@ -3237,6 +3251,8 @@ pub(crate) trait TransitionNormalize: Sized {
                 && transition_result(final(store).graph(), ActionShape::Fold(model::transition_ids(children@), 0), id)
                 && (fcol::all_nf(old(store).graph(), model::transition_ids(children@))
                     ==> fsteps::run_bound(final(store).graph(), ActionShape::Fold(model::transition_ids(children@), 0), id@)), Err(_) => true },
+            result matches Ok(id) ==> guard_vocab(final(store).graph(), id@).subset_of(
+                guard_task_vocab(final(store).graph(), ActionShape::Fold(model::transition_ids(children@), 0))),
     ;
 
     fn not<G: KernelStore>(this: TransitionId, store: &mut G) -> (result: KernelResult<TransitionId>)
@@ -3254,6 +3270,7 @@ pub(crate) trait TransitionNormalize: Sized {
                 && transition_result(final(store).graph(), ActionShape::Not(this@), id)
                 && (ftr::nf_sum(old(store).graph(), this@) ==> fsteps::run_bound(final(store).graph(), ActionShape::Not(this@), id@)),
                 Err(_) => true },
+            result matches Ok(id) ==> guard_vocab(final(store).graph(), id@).subset_of(guard_vocab(final(store).graph(), this@)),
     ;
 
     fn append<G: KernelStore>(
@@ -3279,6 +3296,7 @@ pub(crate) trait TransitionNormalize: Sized {
                     ==> transition_lang(final(store).graph(), theta, id, event, word)
                         == transition_append_combo(final(store).graph(), theta, this, suffix@, event, word),
                 Err(_) => true },
+            result matches Ok(id) ==> guard_vocab(final(store).graph(), id@).subset_of(guard_vocab(final(store).graph(), this@)),
     ;
 
     fn intern<G: KernelStore>(
@@ -3304,6 +3322,7 @@ pub(crate) trait TransitionNormalize: Sized {
                     && tdepth(final(store).graph(), id@) == tdepth_node(final(store).graph(), node@),
                 Err(_) => true,
             },
+            result matches Ok(id) ==> guard_vocab(final(store).graph(), id@) == guard_node_vocab(final(store).graph(), node@),
     ;
 
     fn local_if<G: KernelStore>(
@@ -3334,6 +3353,9 @@ pub(crate) trait TransitionNormalize: Sized {
                             == transition_if_combo(final(store).graph(), theta, test, a, b, event, word),
                 Err(_) => true,
             },
+            result matches Ok(id) ==> guard_vocab(final(store).graph(), id@).subset_of(
+                test_vocab(final(store).graph(), test@).union(guard_vocab(final(store).graph(), a@))
+                    .union(guard_vocab(final(store).graph(), b@))),
     ;
 
     fn collect<G: KernelStore>(
@@ -3365,6 +3387,8 @@ pub(crate) trait TransitionNormalize: Sized {
                             == transition_combo(final(store).graph(), theta, children@, event, word, intersect),
                 Err(_) => true,
             },
+            result matches Ok(id) ==> guard_vocab(final(store).graph(), id@).subset_of(
+                guard_task_vocab(final(store).graph(), ActionShape::Fold(model::transition_ids(children@), 0))),
     ;
 
     fn collect_children<G: KernelStore>(
@@ -3430,7 +3454,7 @@ impl TransitionNormalize for TransitionId {
         proof! { model::lemma_graph_wf_elim(store.graph()); }
         store.checkpoint()?;
         let c = store.constants();
-        if regex == c.empty {
+        let result = if regex == c.empty {
             Ok(c.transition_empty)
         } else if regex == c.all {
             Ok(c.transition_all)
@@ -3438,7 +3462,15 @@ impl TransitionNormalize for TransitionId {
             Ok(c.transition_epsilon)
         } else {
             TransitionId::intern(store, TransitionView::Const(regex))
+        };
+        proof! {
+            if let Ok(id) = result {
+                lemma_guard_definition(store.graph(), id@);
+                transition_unfold(store.graph(), id@);
+                assert(guard_vocab(store.graph(), id@) == Set::empty());
+            }
         }
+        result
     }
 
     #[verus_verify]
@@ -3454,6 +3486,7 @@ impl TransitionNormalize for TransitionId {
         let id = TransitionId::local_if(store, test, then_id, else_id)?;
         let path = store.constants().test_true;
         proof! {
+            lemma_guard_constants(store.graph());
             assert(model::constants_wf(store.graph())) by { model::lemma_graph_wf_elim(store.graph()); }
             machine_driver_extension_future(entry, store.graph());
             machine_driver_if_future(store.graph(), test, then_id, else_id, id);
@@ -3461,7 +3494,13 @@ impl TransitionNormalize for TransitionId {
                 fbr::lemma_ite_start(entry, store.graph(), test@, then_id@, else_id@, id@, path@);
             }
         }
-        Action::Clean(id, path).run(store)
+        proof_decl! { let ghost before_clean = store.graph(); }
+        let result = Action::Clean(id, path).run(store);
+        proof! {
+            lemma_guards_stable(before_clean, store.graph());
+            lemma_guard_constants(store.graph());
+        }
+        result
     }
 
     #[verus_verify]
@@ -3508,7 +3547,10 @@ impl TransitionNormalize for TransitionId {
         node: TransitionView<'_>,
     ) -> KernelResult<TransitionId> {
         let id = store.intern_transition(node)?;
-        proof! { transition_unfold(store.graph(), id@); tdepth_lemma_unfold(store.graph(), id@); }
+        proof! {
+            transition_unfold(store.graph(), id@); tdepth_lemma_unfold(store.graph(), id@);
+            lemma_guard_node_unfold(store.graph(), id@);
+        }
         Ok(id)
     }
 
@@ -3522,7 +3564,7 @@ impl TransitionNormalize for TransitionId {
     ) -> KernelResult<TransitionId> {
         proof! { model::lemma_graph_wf_elim(store.graph()); tdepth_lemma_extends_forall(store.graph()); }
         let c = store.constants();
-        if test == c.test_true || a == b {
+        let result = if test == c.test_true || a == b {
             Ok(a)
         } else if test == c.test_false {
             Ok(b)
@@ -3535,11 +3577,16 @@ impl TransitionNormalize for TransitionId {
                     else_transition: b,
                 },
             )
+        };
+        proof! {
+            if let Ok(id) = result { lemma_guard_local_if(store.graph(), test@, a@, b@, id@); }
         }
+        result
     }
 
     verus! {
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
     fn collect<G: KernelStore>(
         store: &mut G,
         children: &[Self],
@@ -3552,9 +3599,12 @@ impl TransitionNormalize for TransitionId {
         hide(model::lift_regex);
         hide(Seq::no_duplicates);
         hide(model::unique_nodes);
+        hide(model::tables_wf);
         proof_decl! { let ghost original = children@; let ghost entry = store.graph();
             let ghost cs = model::transition_ids(children@); let ghost nf = fcol::all_nf(entry, cs); }
+        proof_decl! { let ghost allowed = guard_task_vocab(entry, ActionShape::Fold(cs, 0)); }
         proof! {
+            lemma_guard_constants(entry);
             tdepth_lemma_constants(entry);
             collect_lemma_bound(entry, original, intersect);
         }
@@ -3603,6 +3653,7 @@ impl TransitionNormalize for TransitionId {
                 pending.view(), flat.view(), constants.view(), false);
             collect_lemma_flat(store.graph(), original, pending.view(), flat.view(), constants.view(), intersect);
             assert(model::bounded(cs, entry.transitions.len()));
+            lemma_guard_collected(store.graph(), cs, intersect, flat.view(), constants.view());
             if nf {
                 assert(pending.view() =~= Seq::<TransitionId>::empty());
                 fcol::lemma_members_elems(entry, cs, intersect, flat.view(), constants.view());
@@ -3620,6 +3671,7 @@ impl TransitionNormalize for TransitionId {
             let t = TransitionId::constant(store, r)?;
             proof! {
                 transition_lemma_extends_transitive(before_group, after_regex, store.graph());
+                lemma_guards_stable(before_group, store.graph());
                 transition_collected_extends(before_group, store.graph(), original, prior_flat, constants.view(), intersect);
                 regex_equivalence_extends(after_regex, store.graph(), seq![r], constants.view(), intersect);
                 regex_combo_extends(after_regex, store.graph(), seq![r], intersect);
@@ -3645,6 +3697,12 @@ impl TransitionNormalize for TransitionId {
             if t != identity {
                 flat.push(t);
                 proof! {
+                    broadcast use vstd::set::group_set_lemmas;
+                    lemma_guard_task_stable(entry, store.graph(), ActionShape::Fold(cs, 0));
+                    assert(guard_vocab(store.graph(), t@).subset_of(allowed));
+                    assert forall|i: int| 0 <= i < flat.view().len() implies guard_vocab(store.graph(), flat.view()[i]@).subset_of(allowed) by {
+                        if i < prior_flat.len() { assert(flat.view()[i] == prior_flat[i]); }
+                    }
                     if nf {
                         assert forall|k: int| 0 <= k < flat.view().len() implies #[trigger] fcol::elem_flat(store.graph(), cs, intersect, flat.view()[k]@) by {
                             if k < prior_flat.len() { assert(flat.view()[k] == prior_flat[k]); }
@@ -3670,16 +3728,28 @@ impl TransitionNormalize for TransitionId {
             assert(collect_weight(store.graph(), flat.view(), intersect) <= collect_weight(store.graph(), original, intersect));
         }
         proof_decl! { let ghost unsorted = flat.view(); }
+        proof! {
+            lemma_guard_task_stable(entry, store.graph(), ActionShape::Fold(cs, 0));
+            assert forall|i: int| #![trigger unsorted[i]] 0 <= i < unsorted.len() implies guard_vocab(store.graph(), unsorted[i]@).subset_of(allowed) by {}
+        }
         flat.as_mut_slice().sort_unstable();
         proof! {
             transition_multiset_members(unsorted, flat.view());
             transition_member_ids_valid(store.graph(), unsorted, flat.view());
             transition_combo_members(store.graph(), unsorted, flat.view(), intersect);
+            assert forall|i: int| 0 <= i < flat.view().len() implies guard_vocab(store.graph(), flat.view()[i]@).subset_of(allowed) by {
+                assert(unsorted.contains(flat.view()[i]));
+                let j = choose|j: int| 0 <= j < unsorted.len() && unsorted[j] == flat.view()[i];
+            }
         }
         proof_decl! { let ghost sorted = flat.view(); }
         dedup_ids(&mut flat)?;
         proof! {
             transition_member_ids_valid(store.graph(), sorted, flat.view());
+            assert forall|i: int| 0 <= i < flat.view().len() implies guard_vocab(store.graph(), flat.view()[i]@).subset_of(allowed) by {
+                assert(sorted.contains(flat.view()[i]));
+                let j = choose|j: int| 0 <= j < sorted.len() && sorted[j] == flat.view()[i];
+            }
             transition_combo_members(store.graph(), sorted, flat.view(), intersect);
             transition_dedup_strict(sorted, flat.view());
             assert(transition_equivalent(store.graph(), original, flat.view(), intersect));
@@ -3725,14 +3795,32 @@ impl TransitionNormalize for TransitionId {
                 None => Err(HistoryError::normalization_invariant()),
             }
         } else {
-            TransitionId::intern(
+            proof_decl! { let ghost before_intern = store.graph(); }
+            let result = TransitionId::intern(
                 store,
                 if intersect {
                     TransitionView::Intersect(&flat)
                 } else {
                     TransitionView::Union(&flat)
                 },
-            )
+            );
+            proof! {
+                if let Ok(id) = result {
+                    transition_lemma_extends_transitive(entry, before_intern, store.graph());
+                    lemma_guards_stable(before_intern, store.graph());
+                    lemma_guard_task_stable(entry, store.graph(), ActionShape::Fold(cs, 0));
+                    assert forall|i: int| #![trigger crate::progress::verify::transition_edges(store.graph(), id@)[i]]
+                        0 <= i < crate::progress::verify::transition_edges(store.graph(), id@).len() implies
+                            guard_vocab(store.graph(), crate::progress::verify::transition_edges(store.graph(), id@)[i]).subset_of(allowed) by {
+                        assert(flat.view()[i]@ < before_intern.transitions.len());
+                        assert(guard_vocab(before_intern, flat.view()[i]@).subset_of(allowed));
+                        assert(guard_vocab(store.graph(), flat.view()[i]@).subset_of(allowed));
+                        assert(crate::progress::verify::transition_edges(store.graph(), id@)[i] == flat.view()[i]@);
+                    }
+                    lemma_guard_node(store.graph(), id@, allowed);
+                }
+            }
+            result
         }
     }
     }
@@ -3952,6 +4040,9 @@ impl Action {
                     transition_action_views(old(tasks).view()), prior, transition_action_views(final(tasks).view()), prior),
                 Err(_) => true,
             },
+            result is Ok ==> forall|prior: Seq<TransitionId>| guard_effect(store.graph(),
+                transition_action_views(old(tasks).view()), ActionShape::Clean(id@, path@), prior,
+                transition_action_views(final(tasks).view()), prior),
     )]
     fn clean_children<G: KernelStore>(
         store: &G,
@@ -3977,12 +4068,26 @@ impl Action {
             assert(tasks.view().last()@ == if intersect { ActionShape::Intersect(count as nat) } else { ActionShape::Union(count as nat) });
         }
         ChildAction::Clean(path).schedule(store, id, count, tasks)?;
+        proof! { lemma_guard_child_actions(store.graph(), id@, ChildShape::Clean(path@)); }
         proof! {
             assert(transition_action_views(tasks.view()) == transition_clean_child_tasks(store.graph(), id, path, intersect, base));
             assert forall|prior: Seq<TransitionId>| transition_effect(store.graph(), ActionShape::Clean(id@, path@),
                 base, prior, transition_action_views(tasks.view()), prior) by {
                 assert(transition_effect(store.graph(), ActionShape::Clean(id@, path@), base, prior,
                     transition_clean_child_tasks(store.graph(), id, path, intersect, base), prior));
+            }
+            assert forall|prior: Seq<TransitionId>| guard_effect(store.graph(), base,
+                ActionShape::Clean(id@, path@), prior, transition_action_views(tasks.view()), prior) by {
+                assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), base, prior, allowed)
+                    && guard_task_vocab(store.graph(), ActionShape::Clean(id@, path@)).subset_of(allowed)
+                    implies guard_config(store.graph(), transition_action_views(tasks.view()), prior, allowed) by {
+                    let added = transition_child_actions(store.graph(), id@, ChildShape::Clean(path@));
+                    assert forall|i: int| 0 <= i < transition_action_views(tasks.view()).len() implies
+                        guard_task_vocab(store.graph(), transition_action_views(tasks.view())[i]).subset_of(allowed) by {
+                        if i < base.len() { assert(transition_action_views(tasks.view())[i] == base[i]); }
+                        else if i > base.len() { assert(transition_action_views(tasks.view())[i] == added[i - base.len() as int - 1]); }
+                    }
+                }
             }
         }
         Ok(())
@@ -4009,6 +4114,8 @@ impl Action {
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
+                result is Ok ==> guard_effect(final(store).graph(), transition_action_views(old(tasks).view()),
+                    ActionShape::Pair(a@, b@), old(values).view(), transition_action_views(final(tasks).view()), final(values).view()),
             match result {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Pair(a@, b@),
                     transition_action_views(old(tasks).view()), old(values).view(),
@@ -4038,7 +4145,10 @@ impl Action {
             transition_configuration_future(store.graph(), p0, v0);
             model::lemma_graph_transition_wf(store.graph(), a@);
             model::lemma_graph_transition_wf(store.graph(), b@);
+            lemma_guard_children(store.graph(), a@);
+            lemma_guard_children(store.graph(), b@);
             graph_lemma_extends_refl(entry);
+            lemma_guard_constants(store.graph());
             tdepth_lemma_constants(entry);
         }
         let c = store.constants();
@@ -4050,8 +4160,13 @@ impl Action {
                 machine_pair_if_language(store.graph(), b, y, yt, ye);
             }
             if xe == c.transition_empty && ye == c.transition_empty {
+                proof_decl! { let ghost before_guard = store.graph(); }
                 let guard = TestId::connective(store, &[x, y], true)?;
                 proof! {
+                    broadcast use vstd::set::group_set_lemmas;
+                    lemma_test_connective_pair(before_guard, store.graph(), x, y, true, guard@);
+                    lemma_guards_stable(before_guard, store.graph());
+                    assert(test_vocab(store.graph(), guard@).subset_of(test_vocab(store.graph(), x@).union(test_vocab(store.graph(), y@))));
                     assert forall|theta: Subst, event: EventView| language::event_wf(theta)
                         implies model::test_holds(theta, model::lift_test(store.graph(), guard@), event)
                             == test_combo(store.graph(), theta, seq![x, y], event, true) by {
@@ -4130,6 +4245,27 @@ impl Action {
                     }
                 }
             }
+            proof! {
+                lemma_guards_stable(entry, store.graph());
+                assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), p0, v0, allowed)
+                    && guard_task_vocab(store.graph(), ActionShape::Pair(a@, b@)).subset_of(allowed)
+                    implies guard_config(store.graph(), transition_action_views(tasks.view()), values.view(), allowed) by {
+                    broadcast use vstd::set::group_set_lemmas;
+                    assert forall|i: int| 0 <= i < tasks.view().len() implies
+                        guard_task_vocab(store.graph(), transition_action_views(tasks.view())[i]).subset_of(allowed) by {
+                            if i < p0.len() {
+                                assert(transition_action_views(tasks.view())[i] == p0[i]);
+                            }
+                        }
+                    assert forall|i: int| 0 <= i < values.view().len() implies
+                        guard_vocab(store.graph(), values.view()[i]@).subset_of(allowed) by {
+                            if v0.contains(values.view()[i]) {
+                                let j = choose|j: int| 0 <= j < v0.len() && v0[j] == values.view()[i];
+                                assert(guard_vocab(store.graph(), v0[j]@).subset_of(allowed));
+                            }
+                        }
+                }
+            }
             Ok(())
         } else {
             Err(HistoryError::normalization_invariant())
@@ -4152,6 +4288,9 @@ impl Action {
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
+                result is Ok ==> guard_effect(final(store).graph(), transition_action_views(old(tasks).view()),
+                    ActionShape::Fold(model::transition_ids(xs.view()), index as nat), old(values).view(),
+                    transition_action_views(final(tasks).view()), final(values).view()),
             match result {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Fold(model::transition_ids(xs.view()), index as nat),
                     transition_action_views(old(tasks).view()), old(values).view(),
@@ -4179,6 +4318,7 @@ impl Action {
         proof! {
             transition_configuration_future(store.graph(), p0, v0);
             graph_lemma_extends_refl(entry);
+            lemma_guard_union(store.graph(), model::transition_ids(original), guard_task_vocab(store.graph(), ActionShape::Fold(model::transition_ids(original), index as nat)));
             assert(value_depths(entry, original) =~= tdepths(entry, model::transition_ids(original)));
         }
         {
@@ -4197,6 +4337,8 @@ impl Action {
                         proof_decl! { let ghost cs = children.view(); }
                         proof! {
                             assert(model::transition_ids(cs) == transition_children(store.graph(), flat@));
+                            lemma_guard_children(store.graph(), flat@);
+                            lemma_guard_union(store.graph(), model::transition_ids(cs), guard_vocab(store.graph(), flat@));
                             transition_lemma_children(store.graph(), flat@);
                             assert(store.graph().transitions[flat@ as int] == model::TransitionNode::Intersect(model::transition_ids(cs)));
                             machine_pair_fold_collection_effect(store.graph(), original, flat, cs, p0, v0);
@@ -4205,6 +4347,14 @@ impl Action {
                         values.push(first);
                         tasks.push(Action::Fold(children, 1));
                         proof! {
+                            broadcast use vstd::set::group_set_lemmas;
+                            assert forall|i: int| 0 <= i < cs.len() implies guard_vocab(store.graph(), cs[i]@).subset_of(guard_vocab(store.graph(), flat@)) by {
+                                assert(model::transition_ids(cs)[i] == cs[i]@);
+                                assert(crate::progress::verify::transition_edges(store.graph(), flat@)[i] == cs[i]@);
+                            }
+                            assert(first == cs[0]);
+                            assert(guard_vocab(store.graph(), first@).subset_of(guard_task_vocab(store.graph(), ActionShape::Fold(model::transition_ids(original), 0))));
+                            assert(guard_task_vocab(store.graph(), ActionShape::Fold(model::transition_ids(cs), 1)).subset_of(guard_task_vocab(store.graph(), ActionShape::Fold(model::transition_ids(original), 0))));
                             assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::Fold(model::transition_ids(cs), 1)));
                             if fsteps::xpre(entry, ActionShape::Fold(model::transition_ids(original), 0), p0, v0) {
                                 assert(first == cs[0]);
@@ -4215,6 +4365,7 @@ impl Action {
                     _ => {
                         values.push(flat);
                         proof! {
+                            assert(guard_vocab(store.graph(), flat@).subset_of(guard_task_vocab(store.graph(), ActionShape::Fold(model::transition_ids(original), 0))));
                             machine_pair_set_result(store.graph(), original, ActionShape::Fold(model::transition_ids(original), 0), flat);
                             transition_lemma_push_result(store.graph(), ActionShape::Fold(model::transition_ids(original), 0), p0, v0, flat);
                             machine_fold_flat(entry, store.graph(), p0, model::transition_ids(original), v0, flat);
@@ -4238,6 +4389,12 @@ impl Action {
                 tasks.push(Action::Fold(xs, next_index));
                 tasks.push(Action::Pair(a, b));
                 proof! {
+                    assert(a == v0[v0.len() - 1]);
+                    assert(guard_vocab(store.graph(), b@).subset_of(guard_task_vocab(store.graph(), ActionShape::Fold(model::transition_ids(original), index as nat))));
+                    assert forall|allowed: Set<model::Primitive>| #![trigger guard_config(store.graph(), p0, v0, allowed)]
+                        guard_config(store.graph(), p0, v0, allowed) implies guard_vocab(store.graph(), a@).subset_of(allowed) by {
+                        assert(guard_vocab(store.graph(), v0[v0.len() - 1]@).subset_of(allowed));
+                    }
                     machine_pair_fold_next_effect(store.graph(), original, index as nat, p0, v0);
                     assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::Fold(model::transition_ids(original), next_index as nat))
                         .push(ActionShape::Pair(a@, b@)));
@@ -4259,10 +4416,34 @@ impl Action {
                 }
             }
         }
+        proof! {
+            lemma_guards_stable(entry, store.graph());
+            lemma_guard_task_stable(entry, store.graph(), ActionShape::Fold(model::transition_ids(original), index as nat));
+            assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), p0, v0, allowed)
+                && guard_task_vocab(store.graph(), ActionShape::Fold(model::transition_ids(original), index as nat)).subset_of(allowed)
+                implies guard_config(store.graph(), transition_action_views(tasks.view()), values.view(), allowed) by {
+                broadcast use vstd::set::group_set_lemmas;
+                assert forall|i: int| 0 <= i < tasks.view().len() implies
+                    guard_task_vocab(store.graph(), transition_action_views(tasks.view())[i]).subset_of(allowed) by {
+                        if i < p0.len() {
+                            assert(transition_action_views(tasks.view())[i] == p0[i]);
+                        }
+                    }
+                assert forall|i: int| 0 <= i < values.view().len() implies
+                    guard_vocab(store.graph(), values.view()[i]@).subset_of(allowed) by {
+                        if v0.contains(values.view()[i]) {
+                            let j = choose|j: int| 0 <= j < v0.len() && v0[j] == values.view()[i];
+                            assert(guard_vocab(store.graph(), v0[j]@).subset_of(allowed));
+                        }
+                    }
+            }
+        }
         Ok(())
     }
 
     #[verus_verify]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
     #[verus_spec(result =>
         requires model::graph_wf(old(store).graph()), old(store).valid_store(),
             transition_configuration_valid(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view()),
@@ -4280,6 +4461,8 @@ impl Action {
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
+                result is Ok ==> guard_effect(final(store).graph(), transition_action_views(old(tasks).view()),
+                    ActionShape::Clean(id@, path@), old(values).view(), transition_action_views(final(tasks).view()), final(values).view()),
             match result {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Clean(id@, path@),
                     transition_action_views(old(tasks).view()), old(values).view(),
@@ -4306,6 +4489,7 @@ impl Action {
         // Expose only constants; full table facts unfold irrelevant recursive semantics.
         proof! { assert(model::constants_wf(store.graph())) by { model::lemma_graph_wf_elim(store.graph()); } model::lemma_graph_transition_wf(store.graph(), id@); }
         proof! { transition_configuration_future(store.graph(), p0, v0); graph_lemma_extends_refl(entry); }
+        proof! { lemma_guard_children(store.graph(), id@); }
         match id.head(store)? {
             TransitionHead::Const(_) => {
                 values.push(id);
@@ -4319,12 +4503,31 @@ impl Action {
             TransitionHead::If(test, a, b) => {
                 let yes = TestId::connective(store, &[path, test], true)?;
                 proof_decl! { let ghost after_yes = store.graph(); }
+                proof! {
+                    lemma_test_connective_pair(entry, after_yes, path, test, true, yes@);
+                    assert(test_vocab(after_yes, yes@).subset_of(test_vocab(entry, path@).union(test_vocab(entry, test@))));
+                }
                 let neg = TestId::not(test, store)?;
                 proof_decl! { let ghost after_negated = store.graph(); }
+                proof! {
+                    lemma_test_definition(after_negated, test@); lemma_test_definition(after_negated, neg@);
+                    assert(test_vocab(after_negated, test@) == test_vocab(after_negated, neg@));
+                }
                 let no = TestId::connective(store, &[path, neg], true)?;
                 proof! {
+                    broadcast use vstd::set::group_set_lemmas;
+                    lemma_test_connective_pair(after_negated, store.graph(), path, neg, true, no@);
                     transition_lemma_extends_transitive(after_yes, after_negated, store.graph());
                     transition_lemma_extends_transitive(entry, after_yes, store.graph());
+                    lemma_guards_stable(entry, store.graph());
+                    lemma_guards_stable(after_yes, store.graph());
+                    lemma_guards_stable(after_negated, store.graph());
+                    assert(test_vocab(store.graph(), yes@).subset_of(test_vocab(store.graph(), path@).union(test_vocab(store.graph(), test@))));
+                    assert(test_vocab(store.graph(), no@).subset_of(test_vocab(store.graph(), path@).union(test_vocab(store.graph(), test@))));
+                    lemma_guard_children(store.graph(), id@);
+                    assert(guard_task_vocab(store.graph(), ActionShape::Clean(a@, yes@)).subset_of(guard_task_vocab(store.graph(), ActionShape::Clean(id@, path@))));
+                    assert(guard_task_vocab(store.graph(), ActionShape::Clean(b@, no@)).subset_of(guard_task_vocab(store.graph(), ActionShape::Clean(id@, path@))));
+                    assert(guard_task_vocab(store.graph(), ActionShape::If(test@)).subset_of(guard_task_vocab(store.graph(), ActionShape::Clean(id@, path@))));
                     regex_test_connective_extends(after_yes, store.graph(), seq![path, test], yes, true);
                     transition_test_not_extends(after_negated, store.graph(), test, neg);
                     assert forall|theta: Subst, event: EventView| language::event_wf(theta)
@@ -4359,6 +4562,7 @@ impl Action {
             TransitionHead::Union(n) => {
                 Self::clean_children(store, id, n, false, path, tasks)?;
                 proof! {
+                    assert(guard_effect(store.graph(), p0, ActionShape::Clean(id@, path@), v0, transition_action_views(tasks.view()), v0));
                     machine_clean_children(store.graph(), p0, id, path, false, v0);
                     if fsteps::xpre(entry, ActionShape::Clean(id@, path@), p0, v0) {
                         fbr::lemma_clean_children(entry, store.graph(), p0, v0, id, path, false);
@@ -4368,6 +4572,7 @@ impl Action {
             TransitionHead::Intersect(n) => {
                 Self::clean_children(store, id, n, true, path, tasks)?;
                 proof! {
+                    assert(guard_effect(store.graph(), p0, ActionShape::Clean(id@, path@), v0, transition_action_views(tasks.view()), v0));
                     machine_clean_children(store.graph(), p0, id, path, true, v0);
                     if fsteps::xpre(entry, ActionShape::Clean(id@, path@), p0, v0) {
                         fbr::lemma_clean_children(entry, store.graph(), p0, v0, id, path, true);
@@ -4406,6 +4611,28 @@ impl Action {
                 }
             }
         }
+        proof! {
+            lemma_guards_stable(entry, store.graph());
+            lemma_guard_children(store.graph(), id@);
+            assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), p0, v0, allowed)
+                && guard_task_vocab(store.graph(), ActionShape::Clean(id@, path@)).subset_of(allowed)
+                implies guard_config(store.graph(), transition_action_views(tasks.view()), values.view(), allowed) by {
+                broadcast use vstd::set::group_set_lemmas;
+                assert forall|i: int| 0 <= i < tasks.view().len() implies
+                    guard_task_vocab(store.graph(), transition_action_views(tasks.view())[i]).subset_of(allowed) by {
+                        if i < p0.len() {
+                            assert(transition_action_views(tasks.view())[i] == p0[i]);
+                        }
+                    }
+                assert forall|i: int| 0 <= i < values.view().len() implies
+                    guard_vocab(store.graph(), values.view()[i]@).subset_of(allowed) by {
+                        if v0.contains(values.view()[i]) {
+                            let j = choose|j: int| 0 <= j < v0.len() && v0[j] == values.view()[i];
+                            assert(guard_vocab(store.graph(), v0[j]@).subset_of(allowed));
+                        }
+                    }
+            }
+        }
         Ok(())
     }
 
@@ -4428,6 +4655,8 @@ impl Action {
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
+                result is Ok ==> guard_effect(final(store).graph(), transition_action_views(old(tasks).view()),
+                    ActionShape::Not(id@), old(values).view(), transition_action_views(final(tasks).view()), final(values).view()),
             match result {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Not(id@),
                     transition_action_views(old(tasks).view()), old(values).view(),
@@ -4453,8 +4682,10 @@ impl Action {
         proof! {
             assert(model::constants_wf(store.graph())) by { model::lemma_graph_wf_elim(store.graph()); }
             model::lemma_graph_transition_wf(store.graph(), id@);
+            lemma_guard_children(store.graph(), id@);
             transition_configuration_future(entry, base, prior);
             graph_lemma_extends_refl(entry);
+            lemma_guard_constants(store.graph());
         }
         match id.head(store)? {
             TransitionHead::Const(r) => {
@@ -4487,6 +4718,8 @@ impl Action {
             TransitionHead::Append(_, _) => {
                 values.push(TransitionId::intern(store, TransitionView::Not(id))?);
                 proof! {
+                    reveal(guard_node_vocab);
+                    assert(guard_vocab(store.graph(), values.view().last()@) == guard_vocab(store.graph(), id@));
                     transition_lemma_result_same_term(store.graph(), ActionShape::Not(id@), values.view().last());
                     transition_lemma_push_result(store.graph(), ActionShape::Not(id@), base, prior, values.view().last());
                     assert(values.view() == prior.push(values.view().last()));
@@ -4500,6 +4733,9 @@ impl Action {
                 if a == c.transition_all && b == c.transition_empty {
                     let guard = TestId::not(test, store)?;
                     proof! {
+                        lemma_test_definition(store.graph(), test@); lemma_test_definition(store.graph(), guard@);
+                        assert(test_vocab(store.graph(), test@) == test_vocab(store.graph(), guard@));
+                        lemma_guards_stable(entry, store.graph());
                         assert forall|theta: Subst, event: EventView| language::event_wf(theta)
                             implies model::test_holds(theta, model::lift_test(store.graph(), guard@), event)
                                 == !model::test_holds(theta, model::lift_test(store.graph(), test@), event) by {
@@ -4511,6 +4747,9 @@ impl Action {
                     let out = TransitionId::local_if(store, guard, a, b)?;
                     tasks.push(Action::Clean(out, c.test_true));
                     proof! {
+                        lemma_guards_stable(before_if, store.graph());
+                        lemma_guard_constants(store.graph());
+                        lemma_guard_children(store.graph(), id@);
                         machine_unary_flip_result(before_if, store.graph(), id, test, a, b, guard, out);
                         machine_unary_clean_result_effect(store.graph(), ActionShape::Not(id@), out, base, prior);
                         assert(transition_action_views(tasks.view()) =~= base.push(ActionShape::Clean(out@, c.test_true@)));
@@ -4543,6 +4782,7 @@ impl Action {
                     assert(transition_tasks_valid(store.graph(), transition_action_views(tasks.view())));
                 }
                 ChildAction::Not.schedule(store, id, n, tasks)?;
+                proof! { broadcast use vstd::set::group_set_lemmas; lemma_guard_scheduled(store.graph(), id@, ChildShape::Not, ActionShape::Intersect(n as nat), ActionShape::Not(id@), base, prior); }
                 proof! {
                     machine_unary_children_effect(store.graph(), id, None, true, base, prior);
                     assert(transition_action_views(tasks.view()) =~= machine_unary_child_tasks(store.graph(), id, None, true, base));
@@ -4560,6 +4800,7 @@ impl Action {
                     assert(transition_tasks_valid(store.graph(), transition_action_views(tasks.view())));
                 }
                 ChildAction::Not.schedule(store, id, n, tasks)?;
+                proof! { broadcast use vstd::set::group_set_lemmas; lemma_guard_scheduled(store.graph(), id@, ChildShape::Not, ActionShape::Union(n as nat), ActionShape::Not(id@), base, prior); }
                 proof! {
                     machine_unary_children_effect(store.graph(), id, None, false, base, prior);
                     assert(transition_action_views(tasks.view()) =~= machine_unary_child_tasks(store.graph(), id, None, false, base));
@@ -4568,6 +4809,27 @@ impl Action {
                         fbr::lemma_unary_children(entry, store.graph(), base, prior, id, None, false);
                     }
                 }
+            }
+        }
+        proof! {
+            lemma_guards_stable(entry, store.graph());
+            assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), base, prior, allowed)
+                && guard_task_vocab(store.graph(), ActionShape::Not(id@)).subset_of(allowed)
+                implies guard_config(store.graph(), transition_action_views(tasks.view()), values.view(), allowed) by {
+                broadcast use vstd::set::group_set_lemmas;
+                assert forall|i: int| 0 <= i < tasks.view().len() implies
+                    guard_task_vocab(store.graph(), transition_action_views(tasks.view())[i]).subset_of(allowed) by {
+                        if i < base.len() {
+                            assert(transition_action_views(tasks.view())[i] == base[i]);
+                        }
+                    }
+                assert forall|i: int| 0 <= i < values.view().len() implies
+                    guard_vocab(store.graph(), values.view()[i]@).subset_of(allowed) by {
+                        if prior.contains(values.view()[i]) {
+                            let j = choose|j: int| 0 <= j < prior.len() && prior[j] == values.view()[i];
+                            assert(guard_vocab(store.graph(), prior[j]@).subset_of(allowed));
+                        }
+                    }
             }
         }
         Ok(())
@@ -4597,6 +4859,8 @@ impl Action {
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
+                result is Ok ==> guard_effect(final(store).graph(), transition_action_views(old(tasks).view()),
+                    ActionShape::Append(id@, r@), old(values).view(), transition_action_views(final(tasks).view()), final(values).view()),
             match result {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Append(id@, r@),
                     transition_action_views(old(tasks).view()), old(values).view(),
@@ -4623,9 +4887,11 @@ impl Action {
         proof! {
             assert(model::constants_wf(store.graph())) by { model::lemma_graph_wf_elim(store.graph()); }
             model::lemma_graph_transition_wf(store.graph(), id@);
+            lemma_guard_children(store.graph(), id@);
             model::lemma_graph_regex_wf(store.graph(), r@);
             transition_configuration_future(entry, base, prior);
             graph_lemma_extends_refl(entry);
+            lemma_guard_constants(store.graph());
             tdepth_lemma_constants(entry);
         }
         {
@@ -4687,6 +4953,7 @@ impl Action {
                             assert(transition_tasks_valid(store.graph(), transition_action_views(tasks.view())));
                         }
                         ChildAction::Append(r).schedule(store, id, n, tasks)?;
+                        proof! { broadcast use vstd::set::group_set_lemmas; lemma_guard_scheduled(store.graph(), id@, ChildShape::Append(r@), ActionShape::Union(n as nat), ActionShape::Append(id@, r@), base, prior); }
                         proof! {
                             machine_unary_children_effect(store.graph(), id, Some(r), false, base, prior);
                             assert(transition_action_views(tasks.view()) =~= machine_unary_child_tasks(store.graph(), id, Some(r), false, base));
@@ -4737,6 +5004,8 @@ impl Action {
                             },
                         )?);
                         proof! {
+                            reveal(guard_node_vocab);
+                            assert(guard_vocab(store.graph(), values.view().last()@) == guard_vocab(store.graph(), id@));
                             machine_unary_append_raw_result(before_intern, store.graph(), id, r, xs.view(), values.view().last());
                             transition_lemma_push_result(store.graph(), ActionShape::Append(id@, r@), base, prior, values.view().last());
                             transition_lemma_extends_transitive(entry, before_intern, store.graph());
@@ -4748,6 +5017,27 @@ impl Action {
                         }
                     }
                 }
+            }
+        }
+        proof! {
+            lemma_guards_stable(entry, store.graph());
+            assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), base, prior, allowed)
+                && guard_task_vocab(store.graph(), ActionShape::Append(id@, r@)).subset_of(allowed)
+                implies guard_config(store.graph(), transition_action_views(tasks.view()), values.view(), allowed) by {
+                broadcast use vstd::set::group_set_lemmas;
+                assert forall|i: int| 0 <= i < tasks.view().len() implies
+                    guard_task_vocab(store.graph(), transition_action_views(tasks.view())[i]).subset_of(allowed) by {
+                        if i < base.len() {
+                            assert(transition_action_views(tasks.view())[i] == base[i]);
+                        }
+                    }
+                assert forall|i: int| 0 <= i < values.view().len() implies
+                    guard_vocab(store.graph(), values.view()[i]@).subset_of(allowed) by {
+                        if prior.contains(values.view()[i]) {
+                            let j = choose|j: int| 0 <= j < prior.len() && prior[j] == values.view()[i];
+                            assert(guard_vocab(store.graph(), prior[j]@).subset_of(allowed));
+                        }
+                    }
             }
         }
         Ok(())
@@ -4777,6 +5067,8 @@ impl Action {
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
+                result is Ok ==> guard_effect(final(store).graph(), transition_action_views(old(tasks).view()),
+                    ActionShape::Pair(a@, b@), old(values).view(), transition_action_views(final(tasks).view()), final(values).view()),
             match result {
                 Ok(()) => transition_effect(final(store).graph(), ActionShape::Pair(a@, b@),
                     transition_action_views(old(tasks).view()), old(values).view(),
@@ -4806,7 +5098,10 @@ impl Action {
             transition_configuration_future(store.graph(), p0, v0);
             model::lemma_graph_transition_wf(store.graph(), a@);
             model::lemma_graph_transition_wf(store.graph(), b@);
+            lemma_guard_children(store.graph(), a@);
+            lemma_guard_children(store.graph(), b@);
             graph_lemma_extends_refl(entry);
+            lemma_guard_constants(store.graph());
             tdepth_lemma_constants(entry);
             tdepth_lemma_pos(entry, a@);
             tdepth_lemma_pos(entry, b@);
@@ -4870,6 +5165,7 @@ impl Action {
                             assert(transition_children(store.graph(), a@).len() == n);
                         }
                         ChildAction::PairLeft(b).schedule(store, a, n, tasks)?;
+                        proof! { broadcast use vstd::set::group_set_lemmas; lemma_guard_scheduled(store.graph(), a@, ChildShape::PairLeft(b@), ActionShape::Union(n as nat), ActionShape::Pair(a@, b@), p0, v0); }
                         proof! {
                             machine_pair_union_effect(store.graph(), a, b, true, p0, v0);
                             assert(transition_effect(store.graph(), ActionShape::Pair(a@, b@), p0, v0,
@@ -4892,6 +5188,7 @@ impl Action {
                             assert(transition_children(store.graph(), b@).len() == n);
                         }
                         ChildAction::PairRight(a).schedule(store, b, n, tasks)?;
+                        proof! { broadcast use vstd::set::group_set_lemmas; lemma_guard_scheduled(store.graph(), b@, ChildShape::PairRight(a@), ActionShape::Union(n as nat), ActionShape::Pair(a@, b@), p0, v0); }
                         proof! {
                             machine_pair_union_effect(store.graph(), a, b, false, p0, v0);
                             assert(transition_effect(store.graph(), ActionShape::Pair(a@, b@), p0, v0,
@@ -4938,6 +5235,10 @@ impl Action {
                     _ => {
                         values.push(TransitionId::collect(store, &[a, b], true)?);
                         proof! {
+                            broadcast use vstd::set::group_set_lemmas;
+                            lemma_guard_union(store.graph(), seq![a@, b@], guard_vocab(store.graph(), a@).union(guard_vocab(store.graph(), b@)));
+                            assert(model::transition_ids(seq![a, b]) =~= seq![a@, b@]);
+                            assert(guard_vocab(store.graph(), values.view().last()@).subset_of(guard_vocab(store.graph(), a@).union(guard_vocab(store.graph(), b@))));
                             let out = values.view().last();
                             machine_pair_set_result(store.graph(), seq![a, b], ActionShape::Pair(a@, b@), out);
                             transition_lemma_push_result(store.graph(), ActionShape::Pair(a@, b@), p0, v0, out);
@@ -4949,6 +5250,27 @@ impl Action {
                         }
                     }
                 }
+            }
+        }
+        proof! {
+            lemma_guards_stable(entry, store.graph());
+            assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), p0, v0, allowed)
+                && guard_task_vocab(store.graph(), ActionShape::Pair(a@, b@)).subset_of(allowed)
+                implies guard_config(store.graph(), transition_action_views(tasks.view()), values.view(), allowed) by {
+                broadcast use vstd::set::group_set_lemmas;
+                assert forall|i: int| 0 <= i < tasks.view().len() implies
+                    guard_task_vocab(store.graph(), transition_action_views(tasks.view())[i]).subset_of(allowed) by {
+                        if i < p0.len() {
+                            assert(transition_action_views(tasks.view())[i] == p0[i]);
+                        }
+                    }
+                assert forall|i: int| 0 <= i < values.view().len() implies
+                    guard_vocab(store.graph(), values.view()[i]@).subset_of(allowed) by {
+                        if v0.contains(values.view()[i]) {
+                            let j = choose|j: int| 0 <= j < v0.len() && v0[j] == values.view()[i];
+                            assert(guard_vocab(store.graph(), v0[j]@).subset_of(allowed));
+                        }
+                    }
             }
         }
         Ok(())
@@ -4973,6 +5295,8 @@ impl Action {
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
+                result is Ok ==> guard_effect(final(store).graph(), transition_action_views(old(tasks).view()),
+                    self@, old(values).view(), transition_action_views(final(tasks).view()), final(values).view()),
             match result {
                 Ok(()) => transition_effect(final(store).graph(), self@,
                     transition_action_views(old(tasks).view()), old(values).view(),
@@ -5002,6 +5326,7 @@ impl Action {
         proof_decl! { let ghost p0 = transition_action_views(tasks.view()); let ghost v0 = values.view();
         let ghost entry = store.graph(); }
         proof! { transition_configuration_future(store.graph(), p0, v0); graph_lemma_extends_refl(entry); }
+        proof! { lemma_guard_constants(store.graph()); }
         proof! { transition_lemma_stack_ready(store.graph(), p0, self@, v0); }
         store.checkpoint()?;
         let c = store.constants();
@@ -5010,6 +5335,14 @@ impl Action {
                 let xs = Self::take_values(values, n)?;
                 values.push(TransitionId::collect(store, &xs, false)?);
                 proof! {
+                    assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), p0, v0, allowed)
+                        implies guard_vocab(store.graph(), values.view().last()@).subset_of(allowed) by {
+                        broadcast use vstd::set::group_set_lemmas;
+                        lemma_guard_union(store.graph(), model::transition_ids(xs.view()), allowed);
+                        assert forall|i: int| 0 <= i < xs.view().len() implies guard_vocab(store.graph(), xs.view()[i]@).subset_of(allowed) by {
+                            assert(xs.view()[i] == v0[v0.len() - n + i]);
+                        }
+                    }
                     machine_driver_union_effect(store.graph(), n as nat, p0, v0, values.view().last());
                     assert(values.view() == v0.take(v0.len() as int - n as int).push(values.view().last()));
                     machine_driver_union(entry, store.graph(), p0, n as nat, v0, values.view().last());
@@ -5022,6 +5355,14 @@ impl Action {
                 let xs = Self::take_values(values, n)?;
                 tasks.push(Action::Fold(xs, 0));
                 proof! {
+                    assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), p0, v0, allowed)
+                        implies guard_task_vocab(store.graph(), transition_action_views(tasks.view()).last()).subset_of(allowed) by {
+                        lemma_guard_union(store.graph(), model::transition_ids(v0.subrange(v0.len() as int - n as int, v0.len() as int)), allowed);
+                        assert forall|i: int| #![trigger guard_vocab(store.graph(), model::transition_ids(v0.subrange(v0.len() as int - n as int, v0.len() as int))[i])]
+                            0 <= i < n implies guard_vocab(store.graph(), model::transition_ids(v0.subrange(v0.len() as int - n as int, v0.len() as int))[i]).subset_of(allowed) by {
+                            assert(model::transition_ids(v0.subrange(v0.len() as int - n as int, v0.len() as int))[i] == v0[v0.len() - n + i]@);
+                        }
+                    }
                     machine_driver_intersect_effect(store.graph(), n as nat, p0, v0);
                     assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::Fold(
                         model::transition_ids(v0.subrange(v0.len() as int - n as int, v0.len() as int)), 0)));
@@ -5144,6 +5485,27 @@ impl Action {
                 }
             }
         }
+        proof! {
+            lemma_guards_stable(entry, store.graph());
+            assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), p0, v0, allowed)
+                && guard_task_vocab(store.graph(), self@).subset_of(allowed)
+                implies guard_config(store.graph(), transition_action_views(tasks.view()), values.view(), allowed) by {
+                broadcast use vstd::set::group_set_lemmas;
+                assert forall|i: int| 0 <= i < tasks.view().len() implies
+                    guard_task_vocab(store.graph(), transition_action_views(tasks.view())[i]).subset_of(allowed) by {
+                        if i < p0.len() {
+                            assert(transition_action_views(tasks.view())[i] == p0[i]);
+                        }
+                    }
+                assert forall|i: int| 0 <= i < values.view().len() implies
+                    guard_vocab(store.graph(), values.view()[i]@).subset_of(allowed) by {
+                        if v0.contains(values.view()[i]) {
+                            let j = choose|j: int| 0 <= j < v0.len() && v0[j] == values.view()[i];
+                            assert(guard_vocab(store.graph(), v0[j]@).subset_of(allowed));
+                        }
+                    }
+            }
+        }
         Ok(())
     }
     }
@@ -5165,6 +5527,9 @@ impl Action {
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
+                result is Ok ==> forall|allowed: Set<model::Primitive>|
+                    guard_config(final(store).graph(), transition_action_views(old(tasks).view()), old(values).view(), allowed)
+                        ==> guard_config(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view(), allowed),
             match result {
                 Ok(()) => transition_program_refines(
                     transition_program(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view()),
@@ -5198,6 +5563,14 @@ impl Action {
         }
         task.step(store, tasks, values)?;
         proof! {
+            assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), p0, v0, allowed)
+                implies guard_config(store.graph(), transition_action_views(tasks.view()), values.view(), allowed) by {
+                assert forall|i: int| 0 <= i < pending.len() implies guard_task_vocab(store.graph(), pending[i]).subset_of(allowed) by {
+                    assert(p0[i] == pending[i]);
+                }
+                assert(guard_config(store.graph(), pending, v0, allowed));
+                assert(guard_task_vocab(store.graph(), shape).subset_of(allowed));
+            }
             transition_lemma_program_stable(entry, store.graph(), p0, v0);
             transition_lemma_effect_frame(store.graph(), shape, pending, v0, transition_action_views(tasks.view()), values.view());
             if fsteps::xcfg(entry, p0, v0) {
@@ -5229,10 +5602,12 @@ impl Action {
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
                 && transition_result(final(store).graph(), self@, id)
                 && (fsteps::xnf_task(old(store).graph(), self@) ==> fsteps::run_bound(final(store).graph(), self@, id@)), Err(_) => true },
+            result matches Ok(id) ==> guard_vocab(final(store).graph(), id@).subset_of(guard_task_vocab(final(store).graph(), self@)),
     )]
     fn run<G: KernelStore>(self, store: &mut G) -> KernelResult<TransitionId> {
         proof_decl! { let ghost entry = store.graph(); let ghost shape = self@;
         let ghost original = transition_program(entry, seq![shape], Seq::empty()); }
+        proof_decl! { let ghost allowed = guard_task_vocab(entry, shape); }
         let mut tasks = WorkVec::new();
         let mut values = WorkVec::new();
         tasks.push(self);
@@ -5266,6 +5641,7 @@ impl Action {
                 state.is_ok() ==> transition_program_refines(original,
                     transition_program(store.graph(), transition_action_views(tasks.view()), values.view())),
                 fsteps::xnf_task(entry, shape) && state.is_ok() ==> fsteps::xrun(store.graph(), shape, transition_action_views(tasks.view()), values.view()),
+                state.is_ok() ==> guard_config(store.graph(), transition_action_views(tasks.view()), values.view(), allowed),
             decreases if state.is_ok() {
                 machine_cost(store.graph(), transition_action_views(tasks.view()), values.view()) + 1
             } else { 0 },
@@ -5275,6 +5651,10 @@ impl Action {
             let ghost before_program = transition_program(before, transition_action_views(tasks.view()), values.view());
             let ghost before_tasks = transition_action_views(tasks.view()); let ghost before_values = values.view(); }
             state = Action::next(store, &mut tasks, &mut values);
+            proof! {
+                lemma_guard_config_stable(before, store.graph(), before_tasks, before_values, allowed);
+                lemma_guard_task_stable(entry, store.graph(), shape);
+            }
             proof! {
                 transition_lemma_extends_transitive(entry, before, store.graph());
                 if state.is_ok() {
@@ -5295,6 +5675,8 @@ impl Action {
             machine_driver_complete(store.graph(), shape, values.view());
             assert(transition_action_views(tasks.view()) =~= Seq::<ActionShape>::empty());
             if fsteps::xnf_task(entry, shape) { fbr::lemma_run_end(store.graph(), shape, values.view()); }
+            lemma_guard_task_stable(entry, store.graph(), shape);
+            assert(guard_vocab(store.graph(), values.view().last()@).subset_of(allowed));
         }
         match values.pop() {
             Some(v) => Ok(v),
@@ -5304,11 +5686,413 @@ impl Action {
 }
 
 #[cfg(verus_keep_ghost)]
-pub(crate) mod verify {
+pub mod verify {
     use super::*;
 
     verus! {
-            broadcast use junco_core::kernel::verify::group_kernel_views;
+    broadcast use junco_core::kernel::verify::group_kernel_views;
+
+    #[verifier::opaque]
+    pub open spec fn guard_vocab(g: model::Graph, t: nat) -> Set<model::Primitive> {
+        vocab::transition_primitives(model::lift_transition(g, t))
+    }
+
+    #[verifier::opaque]
+    pub open spec fn test_vocab(g: model::Graph, t: nat) -> Set<model::Primitive> {
+        vocab::test_primitives(model::lift_test(g, t))
+    }
+
+    #[verifier::opaque]
+    pub open spec fn guard_union_vocab(g: model::Graph, ids: Seq<nat>) -> Set<model::Primitive> {
+        vocab::transition_primitives(language::Transition::Union(ids.map_values(|t: nat| model::lift_transition(g, t))))
+    }
+
+    pub open spec fn guard_task_vocab(g: model::Graph, task: ActionShape) -> Set<model::Primitive> {
+        match task {
+            ActionShape::Clean(t, p) => guard_vocab(g, t).union(test_vocab(g, p)),
+            ActionShape::Not(t) | ActionShape::Append(t, _) => guard_vocab(g, t),
+            ActionShape::Pair(a, b) => guard_vocab(g, a).union(guard_vocab(g, b)),
+            ActionShape::If(t) => test_vocab(g, t),
+            ActionShape::CleanIf(t, p) => test_vocab(g, t).union(test_vocab(g, p)),
+            ActionShape::Fold(ids, _) => guard_union_vocab(g, ids),
+            _ => Set::empty(),
+        }
+    }
+
+    pub open spec fn guard_config(g: model::Graph, tasks: Seq<ActionShape>, values: Seq<TransitionId>, allowed: Set<model::Primitive>) -> bool {
+        (forall|i: int| 0 <= i < tasks.len() ==> guard_task_vocab(g, tasks[i]).subset_of(allowed))
+        && (forall|i: int| 0 <= i < values.len() ==> guard_vocab(g, values[i]@).subset_of(allowed))
+    }
+
+    pub open spec fn guard_effect(g: model::Graph, pending: Seq<ActionShape>, task: ActionShape, values: Seq<TransitionId>,
+        after: Seq<ActionShape>, out: Seq<TransitionId>) -> bool {
+        forall|allowed: Set<model::Primitive>| guard_config(g, pending, values, allowed)
+            && guard_task_vocab(g, task).subset_of(allowed) ==> guard_config(g, after, out, allowed)
+    }
+
+    pub proof fn lemma_guard_task_stable(a: model::Graph, b: model::Graph, task: ActionShape)
+        requires model::graph_wf(a), model::graph_extends(a, b), transition_action_valid(a, task),
+        ensures guard_task_vocab(a, task) == guard_task_vocab(b, task),
+    {
+        reveal(guard_union_vocab);
+        reveal(guard_vocab); reveal(test_vocab);
+        model::lemma_graph_wf_elim(a);
+        model::lemma_lift_stable_under_extends(a, b);
+        match task {
+            ActionShape::Fold(ids, _) => {
+                assert(ids.map_values(|t: nat| model::lift_transition(a, t))
+                    =~= ids.map_values(|t: nat| model::lift_transition(b, t)));
+            },
+            _ => {},
+        }
+    }
+
+    pub proof fn lemma_guard_config_stable(a: model::Graph, b: model::Graph, tasks: Seq<ActionShape>, values: Seq<TransitionId>, allowed: Set<model::Primitive>)
+        requires model::graph_wf(a), model::graph_extends(a, b), transition_tasks_valid(a, tasks), transition_ids_valid(a, values),
+        ensures guard_config(a, tasks, values, allowed) == guard_config(b, tasks, values, allowed),
+    {
+        reveal(guard_vocab); reveal(test_vocab);
+        model::lemma_graph_wf_elim(a);
+        model::lemma_lift_stable_under_extends(a, b);
+        assert forall|i: int| 0 <= i < tasks.len() implies guard_task_vocab(a, tasks[i]) == guard_task_vocab(b, tasks[i]) by {
+            lemma_guard_task_stable(a, b, tasks[i]);
+        }
+    }
+    pub proof fn lemma_guard_children(g: model::Graph, id: nat)
+        requires model::graph_wf(g), id < g.transitions.len(),
+        ensures forall|i: int| #![trigger crate::progress::verify::transition_edges(g, id)[i]] 0 <= i < crate::progress::verify::transition_edges(g, id).len()
+            ==> guard_vocab(g, crate::progress::verify::transition_edges(g, id)[i]).subset_of(guard_vocab(g, id)),
+            forall|i: int| #![trigger crate::progress::verify::transition_tests(g, id)[i]] 0 <= i < crate::progress::verify::transition_tests(g, id).len()
+            ==> test_vocab(g, crate::progress::verify::transition_tests(g, id)[i]).subset_of(guard_vocab(g, id)),
+            match g.transitions[id as int] {
+                model::TransitionNode::If(t, a, b) => test_vocab(g, t).subset_of(guard_vocab(g, id))
+                    && guard_vocab(g, a).subset_of(guard_vocab(g, id)) && guard_vocab(g, b).subset_of(guard_vocab(g, id)),
+                model::TransitionNode::Not(t) | model::TransitionNode::Append(t, _) => guard_vocab(g, t).subset_of(guard_vocab(g, id)),
+                model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => forall|i: int| 0 <= i < cs.len()
+                    ==> guard_vocab(g, cs[i]).subset_of(guard_vocab(g, id)),
+                _ => true,
+            },
+    {
+        broadcast use vstd::set::group_set_lemmas;
+        reveal(guard_vocab); reveal(test_vocab);
+        model::lemma_graph_transition_wf(g, id);
+        assert forall|i: int| #![trigger crate::progress::verify::transition_edges(g, id)[i]]
+            0 <= i < crate::progress::verify::transition_edges(g, id).len() implies
+                guard_vocab(g, crate::progress::verify::transition_edges(g, id)[i]).subset_of(guard_vocab(g, id)) by {
+            let child = crate::progress::verify::transition_edges(g, id)[i];
+            assert forall|p: model::Primitive| guard_vocab(g, child).contains(p) implies guard_vocab(g, id).contains(p) by {
+                vocab::lemma_transition_primitives_lift(g, child, p);
+                assert(crate::progress::verify::transition_reaches_primitive(g, id, p));
+                vocab::lemma_transition_primitives_lift(g, id, p);
+            }
+        }
+        assert forall|i: int| #![trigger crate::progress::verify::transition_tests(g, id)[i]]
+            0 <= i < crate::progress::verify::transition_tests(g, id).len() implies
+                test_vocab(g, crate::progress::verify::transition_tests(g, id)[i]).subset_of(guard_vocab(g, id)) by {
+            let child = crate::progress::verify::transition_tests(g, id)[i];
+            assert forall|p: model::Primitive| test_vocab(g, child).contains(p) implies guard_vocab(g, id).contains(p) by {
+                vocab::lemma_test_primitives_lift(g, child, p);
+                assert(crate::progress::verify::transition_reaches_primitive(g, id, p));
+                vocab::lemma_transition_primitives_lift(g, id, p);
+            }
+        }
+        match g.transitions[id as int] {
+            model::TransitionNode::If(t, a, b) => {
+                assert(crate::progress::verify::transition_tests(g, id)[0] == t);
+                assert(crate::progress::verify::transition_edges(g, id)[0] == a);
+                assert(crate::progress::verify::transition_edges(g, id)[1] == b);
+            },
+            model::TransitionNode::Not(t) | model::TransitionNode::Append(t, _) => {
+                assert(crate::progress::verify::transition_edges(g, id)[0] == t);
+            },
+            model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => {
+                assert forall|i: int| 0 <= i < cs.len() implies guard_vocab(g, cs[i]).subset_of(guard_vocab(g, id)) by {
+                    assert(crate::progress::verify::transition_edges(g, id)[i] == cs[i]);
+                }
+            },
+            _ => {},
+        }
+    }
+
+    pub proof fn lemma_guard_union(g: model::Graph, ids: Seq<nat>, allowed: Set<model::Primitive>)
+        ensures guard_union_vocab(g, ids).subset_of(allowed)
+            == (forall|i: int| 0 <= i < ids.len() ==> guard_vocab(g, ids[i]).subset_of(allowed)),
+    {
+        broadcast use vstd::set::group_set_lemmas;
+        reveal_with_fuel(vocab::transition_primitives, 2);
+        reveal(guard_union_vocab);
+        reveal(guard_vocab);
+        let cs = ids.map_values(|t: nat| model::lift_transition(g, t));
+        let tree = language::Transition::Union(cs);
+        assert(vocab::transition_primitives(tree) == vocab::transition_primitive_prefix(tree, cs.len()));
+        assert forall|p: model::Primitive| vocab::transition_primitives(tree).contains(p)
+            == (exists|i: int| 0 <= i < ids.len() && guard_vocab(g, ids[i]).contains(p)) by {
+            vocab::lemma_transition_primitive_prefix(tree, cs.len(), p);
+            if vocab::transition_primitives(tree).contains(p) {
+                let i = choose|i: int| 0 <= i < cs.len() && vocab::transition_primitives(cs[i]).contains(p);
+                assert(cs[i] == model::lift_transition(g, ids[i]));
+                assert(exists|j: int| 0 <= j < ids.len() && guard_vocab(g, ids[j]).contains(p));
+            }
+            if exists|i: int| 0 <= i < ids.len() && guard_vocab(g, ids[i]).contains(p) {
+                let i = choose|i: int| 0 <= i < ids.len() && guard_vocab(g, ids[i]).contains(p);
+                assert(cs[i] == model::lift_transition(g, ids[i]));
+                assert(exists|j: int| 0 <= j < cs.len() && vocab::transition_primitives(cs[j]).contains(p));
+            }
+        }
+        if !vocab::transition_primitives(tree).subset_of(allowed) {
+            let p = choose|p: model::Primitive| vocab::transition_primitives(tree).contains(p) && !allowed.contains(p);
+            let i = choose|i: int| 0 <= i < ids.len() && guard_vocab(g, ids[i]).contains(p);
+        }
+        assert forall|i: int| 0 <= i < ids.len() implies
+            vocab::transition_primitives(tree).subset_of(allowed) ==> guard_vocab(g, ids[i]).subset_of(allowed) by {
+            assert forall|p: model::Primitive| guard_vocab(g, ids[i]).contains(p) implies vocab::transition_primitives(tree).contains(p) by {}
+        }
+    }
+
+    pub proof fn lemma_guard_piece(g: model::Graph, root: nat, inter: bool, t: nat)
+        requires model::graph_wf(g), root < g.transitions.len(), fmach::tpiece(g, root, inter, t),
+        ensures t < g.transitions.len(), guard_vocab(g, t).subset_of(guard_vocab(g, root)),
+        decreases root,
+    {
+        broadcast use vstd::set::group_set_lemmas;
+        if t != root {
+            model::lemma_graph_transition_wf(g, root);
+            lemma_guard_children(g, root);
+            match g.transitions[root as int] {
+                model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => {
+                    let i = choose|i: int| 0 <= i < cs.len() && cs[i] < root && fmach::tpiece(g, cs[i], inter, t);
+                    lemma_guard_piece(g, cs[i], inter, t);
+                    assert(crate::progress::verify::transition_edges(g, root)[i] == cs[i]);
+                },
+                _ => {},
+            }
+        }
+    }
+
+    pub proof fn lemma_guard_collected(g: model::Graph, orig: Seq<nat>, inter: bool, flat: Seq<TransitionId>, constants: Seq<RegexId>)
+        requires model::graph_wf(g), model::bounded(orig, g.transitions.len()),
+            fcol::collect_members(g, orig, inter, Seq::empty(), flat, constants),
+        ensures forall|i: int| 0 <= i < flat.len() ==> guard_vocab(g, flat[i]@).subset_of(
+            guard_task_vocab(g, ActionShape::Fold(orig, 0))),
+    {
+        broadcast use vstd::set::group_set_lemmas;
+        let allowed = guard_task_vocab(g, ActionShape::Fold(orig, 0));
+        lemma_guard_union(g, orig, allowed);
+        assert forall|i: int| 0 <= i < flat.len() implies guard_vocab(g, flat[i]@).subset_of(allowed) by {
+            let j = choose|j: int| 0 <= j < orig.len() && fmach::tpiece(g, orig[j], inter, flat[i]@);
+            lemma_guard_piece(g, orig[j], inter, flat[i]@);
+            assert(guard_vocab(g, orig[j]).subset_of(allowed));
+        }
+    }
+
+    pub proof fn lemma_guard_node(g: model::Graph, id: nat, allowed: Set<model::Primitive>)
+        requires model::graph_wf(g), id < g.transitions.len(),
+            forall|i: int| #![trigger crate::progress::verify::transition_edges(g, id)[i]] 0 <= i < crate::progress::verify::transition_edges(g, id).len()
+                ==> guard_vocab(g, crate::progress::verify::transition_edges(g, id)[i]).subset_of(allowed),
+            forall|i: int| #![trigger crate::progress::verify::transition_tests(g, id)[i]] 0 <= i < crate::progress::verify::transition_tests(g, id).len()
+                ==> test_vocab(g, crate::progress::verify::transition_tests(g, id)[i]).subset_of(allowed),
+        ensures guard_vocab(g, id).subset_of(allowed),
+    {
+        broadcast use vstd::set::group_set_lemmas;
+        reveal(guard_vocab); reveal(test_vocab);
+        model::lemma_graph_transition_wf(g, id);
+        assert forall|p: model::Primitive| guard_vocab(g, id).contains(p) implies allowed.contains(p) by {
+            vocab::lemma_transition_primitives_lift(g, id, p);
+            reveal_with_fuel(crate::progress::verify::transition_reaches_primitive, 1);
+            if exists|i: int| 0 <= i < crate::progress::verify::transition_tests(g, id).len()
+                && crate::progress::verify::test_reaches_primitive(g, crate::progress::verify::transition_tests(g, id)[i], p) {
+                let i = choose|i: int| 0 <= i < crate::progress::verify::transition_tests(g, id).len()
+                    && crate::progress::verify::test_reaches_primitive(g, crate::progress::verify::transition_tests(g, id)[i], p);
+                vocab::lemma_test_primitives_lift(g, crate::progress::verify::transition_tests(g, id)[i], p);
+            } else {
+                let i = choose|i: int| 0 <= i < crate::progress::verify::transition_edges(g, id).len()
+                    && crate::progress::verify::transition_edges(g, id)[i] < id
+                    && crate::progress::verify::transition_reaches_primitive(g, crate::progress::verify::transition_edges(g, id)[i], p);
+                vocab::lemma_transition_primitives_lift(g, crate::progress::verify::transition_edges(g, id)[i], p);
+            }
+        }
+    }
+
+    pub open spec fn guard_child_extra(g: model::Graph, action: ChildShape) -> Set<model::Primitive> {
+        match action {
+            ChildShape::Clean(path) => test_vocab(g, path),
+            ChildShape::PairLeft(other) | ChildShape::PairRight(other) => guard_vocab(g, other),
+            _ => Set::empty(),
+        }
+    }
+
+    pub proof fn lemma_guard_child_actions(g: model::Graph, id: nat, action: ChildShape)
+        requires model::graph_wf(g), id < g.transitions.len(), transition_child_action_valid(g, action),
+        ensures forall|i: int| 0 <= i < transition_child_actions(g, id, action).len()
+            ==> guard_task_vocab(g, transition_child_actions(g, id, action)[i]).subset_of(
+                guard_vocab(g, id).union(guard_child_extra(g, action))),
+    {
+        broadcast use vstd::set::group_set_lemmas;
+        transition_lemma_children(g, id);
+        lemma_guard_children(g, id);
+        let cs = transition_children(g, id);
+        assert forall|i: int| 0 <= i < transition_child_actions(g, id, action).len() implies
+            guard_task_vocab(g, transition_child_actions(g, id, action)[i]).subset_of(
+                guard_vocab(g, id).union(guard_child_extra(g, action))) by {
+            let j = cs.len() as int - 1 - i;
+            assert(transition_child_actions(g, id, action)[i] == transition_child_shape(action, cs[j]));
+            assert(crate::progress::verify::transition_edges(g, id)[j] == cs[j]);
+        }
+    }
+
+    pub proof fn lemma_guard_scheduled(g: model::Graph, id: nat, action: ChildShape, marker: ActionShape, task: ActionShape,
+        pending: Seq<ActionShape>, values: Seq<TransitionId>)
+        requires model::graph_wf(g), id < g.transitions.len(), transition_child_action_valid(g, action),
+            guard_task_vocab(g, marker) == Set::empty(),
+            guard_vocab(g, id).union(guard_child_extra(g, action)).subset_of(guard_task_vocab(g, task)),
+        ensures guard_effect(g, pending, task, values, pending.push(marker) + transition_child_actions(g, id, action), values),
+    {
+        lemma_guard_child_actions(g, id, action);
+        let children = transition_child_actions(g, id, action);
+        let after = pending.push(marker) + children;
+        assert forall|allowed: Set<model::Primitive>| guard_config(g, pending, values, allowed)
+            && guard_task_vocab(g, task).subset_of(allowed) implies guard_config(g, after, values, allowed) by {
+            broadcast use vstd::set::group_set_lemmas;
+            assert forall|i: int| 0 <= i < after.len() implies guard_task_vocab(g, after[i]).subset_of(allowed) by {
+                if i < pending.len() {
+                    assert(after[i] == pending[i]);
+                } else if i == pending.len() {
+                    assert(after[i] == marker);
+                } else {
+                    let j = i - pending.len() - 1;
+                    assert(after[i] == children[j]);
+                }
+            }
+        }
+    }
+
+    pub proof fn lemma_test_connective_guards(a: model::Graph, b: model::Graph, ids: Seq<TestId>, and: bool, t: nat)
+        requires model::graph_wf(a), model::graph_wf(b), model::graph_extends(a, b), test_ids_valid(a, ids),
+            t < b.tests.len(), test_connective_result(a, b, ids, and, t),
+        ensures test_vocab(b, t).subset_of(vocab::test_primitives(model::Test::And(
+            ids.map_values(|id: TestId| model::lift_test(a, id@))))),
+    {
+        broadcast use vstd::set::group_set_lemmas;
+        reveal(test_vocab);
+        let cs = ids.map_values(|id: TestId| model::lift_test(a, id@));
+        let parent = model::Test::And(cs);
+        assert forall|p: model::Primitive| test_vocab(b, t).contains(p) implies vocab::test_primitives(parent).contains(p) by {
+            vocab::lemma_test_connective_primitives(a, b, ids, and, t, p);
+            let i = choose|i: int| 0 <= i < ids.len() && vocab::test_primitives(model::lift_test(a, ids[i]@)).contains(p);
+            vocab::lemma_test_primitive_prefix(parent, cs.len(), p);
+            assert(cs[i] == model::lift_test(a, ids[i]@));
+        }
+    }
+
+    pub proof fn lemma_test_connective_pair(a: model::Graph, b: model::Graph, x: TestId, y: TestId, and: bool, t: nat)
+        requires model::graph_wf(a), model::graph_wf(b), model::graph_extends(a, b), x@ < a.tests.len(), y@ < a.tests.len(),
+            t < b.tests.len(), test_connective_result(a, b, seq![x, y], and, t),
+        ensures test_vocab(b, t).subset_of(test_vocab(a, x@).union(test_vocab(a, y@))),
+    {
+        broadcast use vstd::set::group_set_lemmas;
+        lemma_test_connective_guards(a, b, seq![x, y], and, t);
+        let cs = seq![x, y].map_values(|id: TestId| model::lift_test(a, id@));
+        assert(cs =~= seq![model::lift_test(a, x@), model::lift_test(a, y@)]);
+        lemma_test_definition(a, x@); lemma_test_definition(a, y@);
+        vocab::lemma_test_pair_vocab(model::lift_test(a, x@), model::lift_test(a, y@));
+    }
+
+    pub proof fn lemma_test_definition(g: model::Graph, id: nat)
+        ensures test_vocab(g, id) == vocab::test_primitives(model::lift_test(g, id)),
+    { reveal(test_vocab); }
+
+    pub proof fn lemma_guard_definition(g: model::Graph, id: nat)
+        ensures guard_vocab(g, id) == vocab::transition_primitives(model::lift_transition(g, id)),
+    { reveal(guard_vocab); }
+
+    pub proof fn lemma_guard_subset(g: model::Graph, id: nat, allowed: Set<model::Primitive>)
+        requires guard_vocab(g, id).subset_of(allowed),
+        ensures vocab::transition_primitives(model::lift_transition(g, id)).subset_of(allowed),
+    { reveal(guard_vocab); }
+
+    pub proof fn lemma_guard_constants(g: model::Graph)
+        requires model::graph_wf(g),
+        ensures guard_vocab(g, g.constants.transition_empty) == Set::empty(),
+            guard_vocab(g, g.constants.transition_all) == Set::empty(),
+            guard_vocab(g, g.constants.transition_epsilon) == Set::empty(),
+            test_vocab(g, g.constants.test_true) == Set::empty(),
+            test_vocab(g, g.constants.test_false) == Set::empty(),
+    {
+        broadcast use vstd::set::group_set_lemmas;
+        reveal(guard_vocab); reveal(test_vocab);
+        model::lemma_graph_wf_elim(g);
+        transition_unfold(g, g.constants.transition_empty);
+        transition_unfold(g, g.constants.transition_all);
+        transition_unfold(g, g.constants.transition_epsilon);
+        reveal_with_fuel(vocab::transition_primitives, 1);
+        reveal_with_fuel(vocab::test_primitives, 1);
+        reveal_with_fuel(model::lift_test, 1);
+    }
+
+    pub proof fn lemma_guards_stable(a: model::Graph, b: model::Graph)
+        requires model::graph_wf(a), model::graph_extends(a, b),
+        ensures forall|id: nat| id < a.transitions.len() ==> guard_vocab(a, id) == guard_vocab(b, id),
+            forall|id: nat| id < a.tests.len() ==> test_vocab(a, id) == test_vocab(b, id),
+    {
+        reveal(guard_vocab); reveal(test_vocab);
+        model::lemma_graph_wf_elim(a);
+        model::lemma_lift_stable_under_extends(a, b);
+    }
+
+    pub proof fn lemma_guard_local_if(g: model::Graph, test: nat, a: nat, b: nat, out: nat)
+        requires model::graph_wf(g), test < g.tests.len(), a < g.transitions.len(), b < g.transitions.len(), out < g.transitions.len(),
+            out == a || out == b || g.transitions[out as int] == model::TransitionNode::If(test, a, b),
+        ensures guard_vocab(g, out).subset_of(test_vocab(g, test).union(guard_vocab(g, a)).union(guard_vocab(g, b))),
+    {
+        broadcast use vstd::set::group_set_lemmas;
+        if out != a && out != b {
+            let allowed = test_vocab(g, test).union(guard_vocab(g, a)).union(guard_vocab(g, b));
+            lemma_guard_node(g, out, allowed);
+        }
+    }
+
+    #[verifier::opaque]
+    pub open spec fn guard_node_vocab(g: model::Graph, node: model::TransitionNode) -> Set<model::Primitive> {
+        match node {
+            model::TransitionNode::Const(_) => Set::empty(),
+            model::TransitionNode::If(t, a, b) => test_vocab(g, t).union(guard_vocab(g, a)).union(guard_vocab(g, b)),
+            model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => guard_task_vocab(g, ActionShape::Fold(cs, 0)),
+            model::TransitionNode::Not(t) | model::TransitionNode::Append(t, _) => guard_vocab(g, t),
+        }
+    }
+
+    pub proof fn lemma_guard_node_unfold(g: model::Graph, id: nat)
+        requires model::graph_wf(g), id < g.transitions.len(),
+        ensures guard_vocab(g, id) == guard_node_vocab(g, g.transitions[id as int]),
+    {
+        reveal(guard_node_vocab);
+        broadcast use vstd::set::group_set_lemmas;
+        model::lemma_graph_transition_wf(g, id);
+        lemma_guard_children(g, id);
+        let node = g.transitions[id as int];
+        let allowed = guard_node_vocab(g, node);
+        match node {
+            model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => {
+                lemma_guard_union(g, cs, guard_vocab(g, id));
+                lemma_guard_union(g, cs, allowed);
+                assert forall|i: int| 0 <= i < cs.len() implies
+                    crate::progress::verify::transition_edges(g, id)[i] == cs[i] by {}
+            },
+            model::TransitionNode::If(t, a, b) => {
+                assert(crate::progress::verify::transition_tests(g, id)[0] == t);
+                assert(crate::progress::verify::transition_edges(g, id)[0] == a);
+                assert(crate::progress::verify::transition_edges(g, id)[1] == b);
+            },
+            model::TransitionNode::Not(t) | model::TransitionNode::Append(t, _) => {
+                assert(crate::progress::verify::transition_edges(g, id)[0] == t);
+            },
+            _ => {},
+        }
+        lemma_guard_node(g, id, allowed);
+        assert(allowed.subset_of(guard_vocab(g, id)));
+        assert(guard_vocab(g, id) =~= allowed);
+    }
+
             pub open spec fn test_ids_valid(g: model::Graph, ids: Seq<TestId>) -> bool {
                 forall|i: int| 0 <= i < ids.len() ==> ids[i]@ < g.tests.len()
             }
@@ -10001,7 +10785,7 @@ pub(crate) mod verify {
             if n == 0 {
                 assert(pp == 1);
                 assert(sp == 0);
-                assert(pp * (l + 1) == l + 1);
+                assert(pp * (l + 1) == l + 1) by (nonlinear_arith) requires pp == 1;
             } else {
                 assert(pp * (l + 1) >= sp + l + 1 && pp * (l + 1) >= n + 2) by (nonlinear_arith)
                     requires pp >= sp, pp >= n + 1, n >= 1, l >= 1;
@@ -10040,9 +10824,11 @@ pub(crate) mod verify {
 
     // ---------------------------------------------------------------- monotonicity
 
+    #[verifier::spinoff_prover]
     proof fn lemma_clean_steps_ok()
         ensures steps_ok(clean_cost_fn()),
     {
+        hide(clean_cost);
         reveal(steps_ok);
         assert forall|d: nat| #[trigger] clean_cost_fn()(d) <= clean_cost_fn()(d + 1)
             && (d >= 1 ==> 2 * clean_cost_fn()(d) <= clean_cost_fn()(d + 1)) by {
@@ -10050,9 +10836,11 @@ pub(crate) mod verify {
         }
     }
 
+    #[verifier::spinoff_prover]
     proof fn lemma_not_steps_ok()
         ensures steps_ok(not_cost_fn()),
     {
+        hide(not_cost);
         reveal(steps_ok);
         assert forall|d: nat| #[trigger] not_cost_fn()(d) <= not_cost_fn()(d + 1)
             && (d >= 1 ==> 2 * not_cost_fn()(d) <= not_cost_fn()(d + 1)) by {
@@ -10060,9 +10848,11 @@ pub(crate) mod verify {
         }
     }
 
+    #[verifier::spinoff_prover]
     proof fn lemma_append_steps_ok()
         ensures steps_ok(append_cost_fn()),
     {
+        hide(append_cost);
         reveal(steps_ok);
         assert forall|d: nat| #[trigger] append_cost_fn()(d) <= append_cost_fn()(d + 1)
             && (d >= 1 ==> 2 * append_cost_fn()(d) <= append_cost_fn()(d + 1)) by {

@@ -19,343 +19,925 @@
 //! that of `y`. Every premise relates a pair of smaller nodes, so recursion on pairs, memoised,
 //! decides the relation. It need not be transitive.
 
-use hashbrown::HashMap;
+use crate::native::NativeMap;
 use history_semantics::SymbolicLanguage;
 use junco_core::HistoryError;
-use junco_core::kernel::{RegexId, RegexKindView, TestId, TestView};
+use junco_core::kernel::{RegexId, RegexKindView, RegexView, TestId, TestView};
 use smallvec::SmallVec;
+use vstd::prelude::*;
+#[cfg(verus_keep_ghost)]
+use crate::native::representatives;
+#[cfg(verus_keep_ghost)]
+use crate::verify::simulation_exec::*;
+#[cfg(verus_keep_ghost)]
+use history_semantics::symbolic_language_verify as facade;
+#[cfg(verus_keep_ghost)]
+use history_semantics::verify::refinement::pruning as paper;
+#[cfg(verus_keep_ghost)]
+use junco_core::kernel::verify as model;
+#[cfg(verus_keep_ghost)]
+use junco_core::observation::SmallVecSpecFns;
+#[cfg(verus_keep_ghost)]
+use vstd::std_specs::cmp::{OrdSpec, PartialEqSpec};
+
+verus! {
+broadcast use junco_core::kernel::verify::group_kernel_views;
 
 /// The simulation between the residuals of one language, memoised per pair.
-#[derive(Default)]
 pub(crate) struct Simulation {
-    known: HashMap<(RegexId, RegexId), bool>,
-    known_tests: HashMap<(TestId, TestId), bool>,
+    pub(crate) known: NativeMap<(RegexId, RegexId), bool>,
+    pub(crate) known_tests: NativeMap<(TestId, TestId), bool>,
 }
 
 /// A residual's node, with its children copied out of the graph.
-enum Node {
-    Empty,
-    All,
-    Epsilon,
-    Test(TestId),
-    Union(SmallVec<[RegexId; 4]>),
-    Concat(SmallVec<[RegexId; 4]>),
-    Star(RegexId),
-    Intersect(SmallVec<[RegexId; 4]>),
-    Not(RegexId),
+pub(crate) enum Node {
+    Empty, All, Epsilon, Test(TestId), Union(SmallVec<[RegexId; 4]>),
+    Concat(SmallVec<[RegexId; 4]>), Star(RegexId), Intersect(SmallVec<[RegexId; 4]>), Not(RegexId),
 }
 
 /// A test's node, with the children of a conjunction or disjunction copied out of the graph.
-enum TestNode {
-    True,
-    False,
-    Atom,
-    And(SmallVec<[TestId; 4]>),
-    Or(SmallVec<[TestId; 4]>),
+pub(crate) enum TestNode {
+    True, False, Atom, And(SmallVec<[TestId; 4]>), Or(SmallVec<[TestId; 4]>),
 }
 
 impl Simulation {
-    /// Whether every member of `xs` lies below some member of `ys`, which is in increasing order.
-    pub(crate) fn covered(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        xs: &[RegexId],
-        ys: &[RegexId],
-    ) -> Result<bool, HistoryError> {
-        for &x in xs {
-            if ys.binary_search(&x).is_err() && !self.below_some(language, x, ys)? {
-                return Ok(false);
+    pub(crate) fn new() -> (s: Self)
+        ensures forall|l: SymbolicLanguage| memo_wf(s, l),
+            representatives(s.known) == Seq::empty(),
+            representatives(s.known_tests) == Seq::empty(),
+    {
+        Self { known: NativeMap::new(), known_tests: NativeMap::new() }
+    }
+
+    /// Whether every member of `xs` lies below some member of `ys`, in increasing order.
+    pub(crate) fn covered(&mut self, language: &mut SymbolicLanguage,
+        xs: &[RegexId], ys: &[RegexId]) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), ids_valid(*old(language), xs@), ids_valid(*old(language), ys@),
+            model::strictly_increasing(model::regex_ids(ys@)),
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        memo_grows(*old(self), *final(self), 2 * facade::graph(*old(language)).regexes.len()),
+            result matches Ok(true) ==> forall|i: int| #![trigger xs@[i]] 0 <= i < xs@.len()
+                ==> index_range(xs@.len(), i) && (exists|j: int| 0 <= j < ys@.len()
+                    && #[trigger] regex_le(*final(language), xs@[i], ys@[j])),
+        decreases 1nat, 2 * facade::graph(*old(language)).regexes.len(), 3nat,
+    {
+        let ghost entry = *self;
+        let ghost initial = *language;
+        let ghost bound = 2 * facade::graph(*language).regexes.len();
+        let ghost mut witnesses = Seq::<int>::empty();
+        let mut index = 0;
+        while index < xs.len()
+            invariant index <= xs@.len(), *language == initial,
+                entry == *old(self), initial == *old(language),
+                bound == 2 * facade::graph(initial).regexes.len(),
+                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                ids_valid(*language, xs@), ids_valid(*language, ys@),
+                model::strictly_increasing(model::regex_ids(ys@)),
+                memo_grows(entry, *self, bound),
+                witnesses.len() == index,
+                forall|i: int| #![trigger witnesses[i]] #![trigger index_range(index as nat, i)]
+                    0 <= i < index
+                    ==> 0 <= witnesses[i] < ys@.len()
+                        && regex_le(*language, xs@[i], ys@[witnesses[i]]),
+            decreases xs@.len() - index,
+        {
+            let x = xs[index];
+            let ghost mut witness = 0int;
+            assert forall|i: int, j: int| 0 <= i < j < ys@.len() implies
+                ys@[i].cmp_spec(&ys@[j]) is Less by {
+                assert(model::regex_ids(ys@)[i] == ys@[i]@);
+                assert(model::regex_ids(ys@)[j] == ys@[j]@);
             }
+            let found = ys.binary_search(&x);
+            if found.is_err() {
+                let ghost before = *self;
+                let covered = self.below_some(language, x, ys, Ghost(bound));
+                proof { lemma_growth_trans(entry, before, *self, bound, bound); }
+                if !covered? { return Ok(false); }
+                proof {
+                    witness = choose|j: int| 0 <= j < ys@.len()
+                        && regex_le(*language, x, ys@[j]);
+                }
+            } else {
+                let ghost j = found->Ok_0;
+                assert(x@ == ys@[j as int]@);
+                assert(regex_le(*language, x, ys@[j as int]));
+                proof { witness = j as int; }
+            }
+            proof { witnesses = witnesses.push(witness); }
+            index += 1;
+        }
+        assert forall|i: int| #![trigger xs@[i]] 0 <= i < xs@.len() implies
+            index_range(xs@.len(), i) && (exists|j: int| 0 <= j < ys@.len()
+                && #[trigger] regex_le(*language, xs@[i], ys@[j])) by {
+            assert(index_range(index as nat, i));
+            let j = witnesses[i];
+            assert(0 <= j < ys@.len() && regex_le(*language, xs@[i], ys@[j]));
         }
         Ok(true)
     }
 
-    /// Whether `x ≤ y`.
-    pub(crate) fn le(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        x: RegexId,
-        y: RegexId,
-    ) -> Result<bool, HistoryError> {
-        if x == y {
-            return Ok(true);
-        }
-        if let Some(known) = self.known.get(&(x, y)) {
-            return Ok(*known);
+    /// Whether `x` ≤ `y`.
+    pub(crate) fn le(&mut self, language: &mut SymbolicLanguage, x: RegexId, y: RegexId)
+        -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), x@ < facade::graph(*old(language)).regexes.len(),
+            y@ < facade::graph(*old(language)).regexes.len(),
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        memo_grows(*old(self), *final(self), x@ + y@ + 1),
+            result matches Ok(true) ==> regex_le(*final(language), x, y),
+        decreases 1nat, x@ + y@, 4nat,
+    {
+        let ghost entry = *self;
+        if x == y { return Ok(true); }
+        if let Some(known) = self.known.lookup(&(x, y)) {
+            proof {
+                if known {
+                    let i = choose|i: int| 0 <= i < representatives(self.known).len()
+                        && representatives(self.known)[i].1
+                        && (x, y).eq_spec(&representatives(self.known)[i].0);
+                    assert(regex_le(*language, x, y));
+                }
+            }
+            return Ok(known);
         }
         let (left, _) = node(language, x)?;
         let (right, nullable) = node(language, y)?;
-        let result = self.derive(language, x, &left, &right, y, nullable)?;
-        self.known.insert((x, y), result);
-        Ok(result)
+        let derived = self.derive(language, x, &left, &right, y, nullable)?;
+        proof { lemma_regex_absent(entry, *self, x, y); }
+        self.known.insert_fresh((x, y), derived);
+        Ok(derived)
     }
 
-    fn derive(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        x: RegexId,
-        left: &Node,
-        right: &Node,
-        y: RegexId,
-        nullable: bool,
-    ) -> Result<bool, HistoryError> {
-        if matches!(left, Node::Empty)
-            || matches!(right, Node::All)
+    fn derive(&mut self, language: &mut SymbolicLanguage, x: RegexId, left: &Node,
+        right: &Node, y: RegexId, nullable: bool) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), node_wf(*old(language), x, *left),
+            node_wf(*old(language), y, *right),
+            nullable == junco_core::verify::history_specs::nullable(facade::abs(*old(language), y)),
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        memo_grows(*old(self), *final(self), x@ + y@),
+            result matches Ok(true) ==> regex_le(*final(language), x, y),
+        decreases 1nat, x@ + y@, 3nat,
+    {
+        let ghost entry = *self;
+        let ghost bound = x@ + y@;
+        if matches!(left, Node::Empty) || matches!(right, Node::All)
             || matches!(left, Node::Epsilon) && nullable
         {
+            proof { lemma_rule(*language, x, y); }
             return Ok(true);
         }
-        if let Node::Union(members) = left
-            && self.each_below(language, members, y)?
-        {
-            return Ok(true);
+        if let Node::Union(members) = left {
+            proof { lemma_lifts(*language, members.view()); }
+            proof { lemma_regex_rank(members.view(), x@); }
+            assert forall|i: int| 0 <= i < members.view().len() implies
+                members.view()[i]@ + y@ < bound by { assert(members.view()[i]@ < x@); }
+            let ghost before = *self;
+            let checked = self.each_below(language, members, y, Ghost(bound));
+            proof { lemma_growth_trans(entry, before, *self, bound, bound); }
+            if checked? {
+                proof { lemma_rule(*language, x, y); }
+                return Ok(true);
+            }
         }
-        if let Node::Intersect(members) = right
-            && self.below_each(language, x, members)?
-        {
-            return Ok(true);
+        if let Node::Intersect(members) = right {
+            proof { lemma_lifts(*language, members.view()); }
+            proof { lemma_regex_rank(members.view(), y@); }
+            assert forall|i: int| 0 <= i < members.view().len() implies
+                x@ + members.view()[i]@ < bound by { assert(members.view()[i]@ < y@); }
+            let ghost before = *self;
+            let checked = self.below_each(language, x, members, Ghost(bound));
+            proof { lemma_growth_trans(entry, before, *self, bound, bound); }
+            if checked? {
+                proof { lemma_rule(*language, x, y); }
+                return Ok(true);
+            }
         }
-        if let Node::Union(members) = right
-            && self.below_some(language, x, members)?
-        {
-            return Ok(true);
+        if let Node::Union(members) = right {
+            proof { lemma_lifts(*language, members.view()); }
+            proof { lemma_regex_rank(members.view(), y@); }
+            assert forall|i: int| 0 <= i < members.view().len() implies
+                x@ + members.view()[i]@ < bound by { assert(members.view()[i]@ < y@); }
+            let ghost before = *self;
+            let checked = self.below_some(language, x, members, Ghost(bound));
+            proof { lemma_growth_trans(entry, before, *self, bound, bound); }
+            if checked? {
+                proof {
+                    let i = choose|i: int| 0 <= i < members.view().len()
+                        && regex_le(*language, x, members.view()[i]);
+                    assert(facade::abs(*language, y) ==
+                        junco_core::verify::history_specs::Regex::Union(lifts(*language, members.view())));
+                    assert(paper::lang_le(facade::abs(*language, x),
+                        lifts(*language, members.view())[i]));
+                    lemma_regex_some(semantic_le(), semantic_tle(),
+                        facade::abs(*language, x), facade::abs(*language, y),
+                        lifts(*language, members.view()), i);
+                    lemma_rule(*language, x, y);
+                }
+                return Ok(true);
+            }
         }
-        if let Node::Intersect(members) = left
-            && self.some_below(language, members, y)?
-        {
-            return Ok(true);
+        if let Node::Intersect(members) = left {
+            proof { lemma_lifts(*language, members.view()); }
+            proof { lemma_regex_rank(members.view(), x@); }
+            assert forall|i: int| 0 <= i < members.view().len() implies
+                members.view()[i]@ + y@ < bound by { assert(members.view()[i]@ < x@); }
+            let ghost before = *self;
+            let checked = self.some_below(language, members, y, Ghost(bound));
+            proof { lemma_growth_trans(entry, before, *self, bound, bound); }
+            if checked? {
+                proof {
+                    let i = choose|i: int| 0 <= i < members.view().len()
+                        && regex_le(*language, members.view()[i], y);
+                    assert(facade::abs(*language, x) ==
+                        junco_core::verify::history_specs::Regex::Intersect(lifts(*language, members.view())));
+                    assert(paper::lang_le(lifts(*language, members.view())[i],
+                        facade::abs(*language, y)));
+                    lemma_regex_some(semantic_le(), semantic_tle(),
+                        facade::abs(*language, x), facade::abs(*language, y),
+                        lifts(*language, members.view()), i);
+                    lemma_rule(*language, x, y);
+                }
+                return Ok(true);
+            }
         }
-        Ok(match (left, right) {
-            (Node::Not(inner), Node::Not(outer)) => self.le(language, *outer, *inner)?,
-            (Node::Test(phi), Node::Test(psi)) => self.test_le(language, *phi, *psi)?,
+        let checked = match (left, right) {
+            (Node::Not(inner), Node::Not(outer)) => {
+                let ghost before = *self;
+                let checked = self.le(language, *outer, *inner);
+                proof { lemma_growth_trans(entry, before, *self, (outer@ + inner@ + 1) as nat, bound); }
+                checked?
+            },
+            (Node::Test(phi), Node::Test(psi)) => {
+                let ghost before = *self;
+                let checked = self.test_le(language, *phi, *psi);
+                assert(memo_grows(before, *self, bound));
+                proof { lemma_growth_trans(entry, before, *self, bound, bound); }
+                checked?
+            },
             (Node::Star(inner), Node::Star(outer)) => {
-                self.le(language, *inner, *outer)? || self.le(language, x, *outer)?
-            }
-            (_, Node::Star(outer)) => self.le(language, x, *outer)?,
-            (_, Node::Concat(factors)) => self.factors_le(language, x, left, factors)?,
+                let ghost before = *self;
+                let checked = self.le(language, *inner, *outer);
+                proof { lemma_growth_trans(entry, before, *self, (inner@ + outer@ + 1) as nat, bound); }
+                if checked? { true } else {
+                    let ghost before = *self;
+                    let checked = self.le(language, x, *outer);
+                    proof { lemma_growth_trans(entry, before, *self, (x@ + outer@ + 1) as nat, bound); }
+                    checked?
+                }
+            },
+            (_, Node::Star(outer)) => {
+                let ghost before = *self;
+                let checked = self.le(language, x, *outer);
+                proof { lemma_growth_trans(entry, before, *self, (x@ + outer@ + 1) as nat, bound); }
+                checked?
+            },
+            (_, Node::Concat(factors)) => {
+                proof { lemma_lifts(*language, factors.view()); }
+                proof { lemma_regex_rank(factors.view(), y@); }
+                assert forall|i: int| 0 <= i < factors.view().len() implies
+                    x@ + factors.view()[i]@ < bound by { assert(factors.view()[i]@ < y@); }
+                let ghost before = *self;
+                let checked = self.factors_le(language, x, left, factors, Ghost(bound));
+                proof { lemma_growth_trans(entry, before, *self, bound, bound); }
+                checked?
+            },
             _ => false,
-        })
+        };
+        proof { if checked { lemma_rule(*language, x, y); } }
+        Ok(checked)
     }
 
-    /// Whether the factors of `x` lie below `ys` one by one, once `Σ*` factors are dropped from
-    /// either end of `ys`.
-    fn factors_le(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        x: RegexId,
-        left: &Node,
-        ys: &[RegexId],
-    ) -> Result<bool, HistoryError> {
+    /// Matches factors after dropping only universal padding at the ends.
+    fn factors_le(&mut self, language: &mut SymbolicLanguage, x: RegexId, left: &Node,
+        ys: &[RegexId], Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), node_wf(*old(language), x, *left),
+            ids_valid(*old(language), ys@),
+            forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        memo_grows(*old(self), *final(self), bound),
+            result matches Ok(true) ==> paper::cat_padded(semantic_le(),
+                facade::abs(*final(language), x), lifts(*final(language), ys@)),
+            result matches Ok(true) ==> paper::lang_le(facade::abs(*final(language), x),
+                junco_core::verify::history_specs::Regex::Concat(lifts(*final(language), ys@))),
+        decreases 1nat, bound, 2nat,
+    {
+        let ghost entry = *self;
+        let ghost initial = *language;
         let single = [x];
-        let xs: &[RegexId] = match left {
-            Node::Concat(factors) => factors,
-            _ => &single,
-        };
-        let Some(extra) = ys.len().checked_sub(xs.len()) else {
-            return Ok(false);
-        };
+        let xs: &[RegexId] = match left { Node::Concat(factors) => factors, _ => &single };
+        proof { if let Node::Concat(factors) = left { lemma_lifts(*language, factors.view()); } }
+        assert forall|i: int| 0 <= i < xs@.len() implies xs@[i]@ <= x@ by {
+            match left {
+                Node::Concat(factors) => {
+                    assert(xs@ == factors.view());
+                    lemma_regex_rank(factors.view(), x@);
+                    assert(factors.view()[i]@ < x@);
+                },
+                _ => { assert(xs@[i] == x); },
+            }
+        }
+        let Some(extra) = ys.len().checked_sub(xs.len()) else { return Ok(false); };
         let mut leading = 0;
-        while leading < extra && is_all(language, ys[leading])? {
-            leading += 1;
-        }
+        while leading < extra && is_all(language, ys[leading])?
+            invariant leading <= extra, extra + xs@.len() == ys@.len(), *language == initial,
+                entry == *old(self), initial == *old(language), *self == entry,
+                memo_wf(*self, *language), memo_grows(entry, *self, bound),
+                node_wf(*language, x, *left), ids_valid(*language, xs@),
+                ids_valid(*language, ys@),
+                forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ <= x@,
+                forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
+                lifts(*language, xs@) == match facade::abs(*language, x) {
+                    junco_core::verify::history_specs::Regex::Concat(cs) => cs,
+                    _ => seq![facade::abs(*language, x)],
+                },
+                facade::language_wf(*language),
+                forall|i: int| 0 <= i < leading ==> lifts(*language, ys@)[i] is All,
+            decreases extra - leading,
+        { leading += 1; }
         let mut trailing = 0;
-        while trailing < extra && is_all(language, ys[ys.len() - 1 - trailing])? {
-            trailing += 1;
-        }
-        for front in 0..=leading {
+        while trailing < extra && is_all(language, ys[ys.len() - 1 - trailing])?
+            invariant trailing <= extra, extra + xs@.len() == ys@.len(), *language == initial,
+                entry == *old(self), initial == *old(language), *self == entry,
+                memo_wf(*self, *language), memo_grows(entry, *self, bound),
+                node_wf(*language, x, *left), ids_valid(*language, xs@),
+                ids_valid(*language, ys@), leading <= extra,
+                forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ <= x@,
+                forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
+                forall|i: int| 0 <= i < leading ==> lifts(*language, ys@)[i] is All,
+                lifts(*language, xs@) == match facade::abs(*language, x) {
+                    junco_core::verify::history_specs::Regex::Concat(cs) => cs,
+                    _ => seq![facade::abs(*language, x)],
+                },
+                facade::language_wf(*language),
+                forall|i: int| ys@.len() - trailing <= i < ys@.len()
+                    ==> lifts(*language, ys@)[i] is All,
+            decreases extra - trailing,
+        { trailing += 1; }
+        let mut front = 0;
+        loop
+            invariant front <= leading, leading <= extra, trailing <= extra,
+                entry == *old(self), initial == *old(language),
+                extra + xs@.len() == ys@.len(), *language == initial,
+                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                node_wf(*language, x, *left), ids_valid(*language, xs@), ids_valid(*language, ys@),
+                memo_grows(entry, *self, bound),
+                forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ <= x@,
+                forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
+                forall|i: int| 0 <= i < leading ==> lifts(*language, ys@)[i] is All,
+                forall|i: int| ys@.len() - trailing <= i < ys@.len()
+                    ==> lifts(*language, ys@)[i] is All,
+                lifts(*language, xs@) == match facade::abs(*language, x) {
+                    junco_core::verify::history_specs::Regex::Concat(cs) => cs,
+                    _ => seq![facade::abs(*language, x)],
+                },
+            decreases leading - front,
+        {
             let back = extra - front;
-            if back <= trailing && self.pointwise(language, xs, &ys[front..ys.len() - back])? {
+            if back <= trailing {
+                let middle = &ys[front..ys.len() - back];
+                let ghost before = *self;
+                let checked = self.pointwise(language, xs, middle, Ghost(bound));
+                proof { lemma_growth_trans(entry, before, *self, bound, bound); }
+                if checked? {
+                    assert(paper::padding_ok(lifts(*language, ys@), front as nat,
+                        back as nat, xs@.len()));
+                    assert forall|i: int| #![trigger lifts(*language, ys@)[front + i]]
+                        0 <= i < xs@.len() implies
+                        paper::lang_le(lifts(*language, xs@)[i],
+                            lifts(*language, ys@)[front + i]) by {
+                        assert(middle@[i] == ys@[front + i]);
+                    }
+                    proof { lemma_padding(semantic_le(), facade::abs(*language, x), lifts(*language, xs@),
+                        lifts(*language, ys@), front as nat, back as nat); }
+                    return Ok(true);
+                }
+            }
+            if front == leading { break; }
+            front += 1;
+        }
+        Ok(false)
+    }
+
+    fn pointwise(&mut self, language: &mut SymbolicLanguage, xs: &[RegexId], ys: &[RegexId],
+        Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), ids_valid(*old(language), xs@), ids_valid(*old(language), ys@), xs@.len() == ys@.len(),
+            forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + ys@[i]@ < bound,
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        memo_grows(*old(self), *final(self), bound),
+            result matches Ok(true) ==> forall|i: int| 0 <= i < xs@.len() ==> regex_le(*final(language), xs@[i], ys@[i]),
+        decreases 1nat, bound, 1nat,
+    {
+        let ghost entry = *self;
+        let ghost initial = *language;
+        let mut index = 0;
+        while index < xs.len()
+            invariant index <= xs@.len(), *language == initial,
+                entry == *old(self), initial == *old(language),
+                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                ids_valid(*language, xs@), ids_valid(*language, ys@), xs@.len() == ys@.len(),
+                memo_grows(entry, *self, bound),
+                forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + ys@[i]@ < bound,
+                forall|i: int| 0 <= i < index ==> regex_le(*language, xs@[i], ys@[i]),
+            decreases xs@.len() - index,
+        {
+            let a = xs[index];
+            let b = ys[index];
+            let ghost before = *self;
+            let checked = self.le(language, a, b);
+            proof { lemma_growth_trans(entry, before, *self, (a@ + b@ + 1) as nat, bound); }
+            if !checked? { return Ok(false); }
+            index += 1;
+        }
+        Ok(true)
+    }
+
+    fn each_below(&mut self, language: &mut SymbolicLanguage, xs: &[RegexId], y: RegexId,
+        Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), ids_valid(*old(language), xs@), y@ < facade::graph(*old(language)).regexes.len(), 
+            forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + y@ < bound,
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        memo_grows(*old(self), *final(self), bound),
+            result matches Ok(true) ==> forall|i: int| 0 <= i < xs@.len() ==> regex_le(*final(language), xs@[i], y),
+        decreases 1nat, bound, 1nat,
+    {
+        let ghost entry = *self;
+        let ghost initial = *language;
+        let mut index = 0;
+        while index < xs.len()
+            invariant index <= xs@.len(), *language == initial,
+                entry == *old(self), initial == *old(language),
+                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                ids_valid(*language, xs@), y@ < facade::graph(*language).regexes.len(), 
+                memo_grows(entry, *self, bound),
+                forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + y@ < bound,
+                forall|i: int| 0 <= i < index ==> regex_le(*language, xs@[i], y),
+            decreases xs@.len() - index,
+        {
+            let a = xs[index];
+            let b = y;
+            let ghost before = *self;
+            let checked = self.le(language, a, b);
+            proof { lemma_growth_trans(entry, before, *self, (a@ + b@ + 1) as nat, bound); }
+            if !checked? { return Ok(false); }
+            index += 1;
+        }
+        Ok(true)
+    }
+
+    fn below_each(&mut self, language: &mut SymbolicLanguage, x: RegexId, ys: &[RegexId],
+        Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), x@ < facade::graph(*old(language)).regexes.len(), ids_valid(*old(language), ys@), 
+            forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        memo_grows(*old(self), *final(self), bound),
+            result matches Ok(true) ==> forall|i: int| 0 <= i < ys@.len() ==> regex_le(*final(language), x, ys@[i]),
+        decreases 1nat, bound, 1nat,
+    {
+        let ghost entry = *self;
+        let ghost initial = *language;
+        let mut index = 0;
+        while index < ys.len()
+            invariant index <= ys@.len(), *language == initial,
+                entry == *old(self), initial == *old(language),
+                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                x@ < facade::graph(*language).regexes.len(), ids_valid(*language, ys@), 
+                memo_grows(entry, *self, bound),
+                forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
+                forall|i: int| 0 <= i < index ==> regex_le(*language, x, ys@[i]),
+            decreases ys@.len() - index,
+        {
+            let a = x;
+            let b = ys[index];
+            let ghost before = *self;
+            let checked = self.le(language, a, b);
+            proof { lemma_growth_trans(entry, before, *self, (a@ + b@ + 1) as nat, bound); }
+            if !checked? { return Ok(false); }
+            index += 1;
+        }
+        Ok(true)
+    }
+
+    fn some_below(&mut self, language: &mut SymbolicLanguage, xs: &[RegexId], y: RegexId,
+        Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), ids_valid(*old(language), xs@), y@ < facade::graph(*old(language)).regexes.len(), 
+            forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + y@ < bound,
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        memo_grows(*old(self), *final(self), bound),
+            result matches Ok(true) ==> exists|i: int| 0 <= i < xs@.len() && regex_le(*final(language), xs@[i], y),
+        decreases 1nat, bound, 1nat,
+    {
+        let ghost entry = *self;
+        let ghost initial = *language;
+        let mut index = 0;
+        while index < xs.len()
+            invariant index <= xs@.len(), *language == initial,
+                entry == *old(self), initial == *old(language),
+                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                ids_valid(*language, xs@), y@ < facade::graph(*language).regexes.len(), 
+                memo_grows(entry, *self, bound),
+                forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + y@ < bound,
+                
+            decreases xs@.len() - index,
+        {
+            let a = xs[index];
+            let b = y;
+            let ghost before = *self;
+            let checked = self.le(language, a, b);
+            proof { lemma_growth_trans(entry, before, *self, (a@ + b@ + 1) as nat, bound); }
+            if checked? { return Ok(true); }
+            index += 1;
+        }
+        Ok(false)
+    }
+
+    fn below_some(&mut self, language: &mut SymbolicLanguage, x: RegexId, ys: &[RegexId],
+        Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), x@ < facade::graph(*old(language)).regexes.len(), ids_valid(*old(language), ys@), 
+            forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        memo_grows(*old(self), *final(self), bound),
+            result matches Ok(true) ==> exists|i: int| 0 <= i < ys@.len() && regex_le(*final(language), x, ys@[i]),
+        decreases 1nat, bound, 1nat,
+    {
+        let ghost entry = *self;
+        let ghost initial = *language;
+        let mut index = 0;
+        while index < ys.len()
+            invariant index <= ys@.len(), *language == initial,
+                entry == *old(self), initial == *old(language),
+                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                x@ < facade::graph(*language).regexes.len(), ids_valid(*language, ys@), 
+                memo_grows(entry, *self, bound),
+                forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
+                
+            decreases ys@.len() - index,
+        {
+            let a = x;
+            let b = ys[index];
+            let ghost before = *self;
+            let checked = self.le(language, a, b);
+            proof { lemma_growth_trans(entry, before, *self, (a@ + b@ + 1) as nat, bound); }
+            if checked? { return Ok(true); }
+            index += 1;
+        }
+        Ok(false)
+    }
+
+    /// Whether the one-event test implication is established by the syntactic rules.
+    fn test_le(&mut self, language: &mut SymbolicLanguage, phi: TestId, psi: TestId)
+        -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), phi@ < facade::graph(*old(language)).tests.len(),
+            psi@ < facade::graph(*old(language)).tests.len(),
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        tests_grow(*old(self), *final(self), phi@ + psi@ + 1),
+            result matches Ok(true) ==> test_le(*final(language), phi, psi),
+        decreases 0nat, phi@ + psi@, 4nat,
+    {
+        let ghost entry = *self;
+        if phi == psi { return Ok(true); }
+        if let Some(known) = self.known_tests.lookup(&(phi, psi)) {
+            proof {
+                if known {
+                    let i = choose|i: int| 0 <= i < representatives(self.known_tests).len()
+                        && representatives(self.known_tests)[i].1
+                        && (phi, psi).eq_spec(&representatives(self.known_tests)[i].0);
+                    assert(test_le(*language, phi, psi));
+                }
+            }
+            return Ok(known);
+        }
+        let left = test_node(language, phi)?;
+        let right = test_node(language, psi)?;
+        let checked = self.derive_test(language, phi, &left, &right, psi)?;
+        proof { lemma_test_absent(entry, *self, phi, psi); }
+        self.known_tests.insert_fresh((phi, psi), checked);
+        Ok(checked)
+    }
+
+    fn derive_test(&mut self, language: &mut SymbolicLanguage, phi: TestId, left: &TestNode,
+        right: &TestNode, psi: TestId) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), test_node_wf(*old(language), phi, *left),
+            test_node_wf(*old(language), psi, *right),
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        tests_grow(*old(self), *final(self), phi@ + psi@),
+            result matches Ok(true) ==> test_le(*final(language), phi, psi),
+        decreases 0nat, phi@ + psi@, 3nat,
+    {
+        let ghost entry = *self;
+        let ghost bound = phi@ + psi@;
+        if matches!(right, TestNode::True) || matches!(left, TestNode::False) {
+            proof { lemma_test_rule(*language, phi, psi); }
+            return Ok(true);
+        }
+        if let TestNode::Or(children) = left {
+            proof { lemma_test_rank(children.view(), phi@); }
+            assert forall|i: int| 0 <= i < children.view().len() implies
+                children.view()[i]@ + psi@ < bound by { assert(children.view()[i]@ < phi@); }
+            let ghost before = *self;
+            let checked = self.each_test_below(language, children, psi, Ghost(bound));
+            proof { lemma_tests_trans(entry, before, *self, bound, bound); }
+            if checked? {
+                proof { lemma_test_rule(*language, phi, psi); }
+                return Ok(true);
+            }
+        }
+        if let TestNode::And(children) = right {
+            proof { lemma_test_rank(children.view(), psi@); }
+            assert forall|i: int| 0 <= i < children.view().len() implies
+                phi@ + children.view()[i]@ < bound by { assert(children.view()[i]@ < psi@); }
+            let ghost before = *self;
+            let checked = self.below_each_test(language, phi, children, Ghost(bound));
+            proof { lemma_tests_trans(entry, before, *self, bound, bound); }
+            if checked? {
+                proof { lemma_test_rule(*language, phi, psi); }
+                return Ok(true);
+            }
+        }
+        if let TestNode::And(children) = left {
+            proof { lemma_test_rank(children.view(), phi@); }
+            assert forall|i: int| 0 <= i < children.view().len() implies
+                children.view()[i]@ + psi@ < bound by { assert(children.view()[i]@ < phi@); }
+            let ghost before = *self;
+            let checked = self.some_test_below(language, children, psi, Ghost(bound));
+            proof { lemma_tests_trans(entry, before, *self, bound, bound); }
+            if checked? {
+                proof {
+                    let i = choose|i: int| 0 <= i < children.view().len()
+                        && test_le(*language, children.view()[i], psi);
+                    assert(model::lift_test(facade::graph(*language), phi@)
+                        == model::Test::And(test_lifts(*language, children.view())));
+                    assert(paper::test_le_sem(test_lifts(*language, children.view())[i],
+                        model::lift_test(facade::graph(*language), psi@)));
+                    lemma_test_some(semantic_tle(), model::lift_test(facade::graph(*language), phi@),
+                        model::lift_test(facade::graph(*language), psi@),
+                        test_lifts(*language, children.view()), i);
+                    lemma_test_rule(*language, phi, psi);
+                }
+                return Ok(true);
+            }
+        }
+        if let TestNode::Or(children) = right {
+            proof { lemma_test_rank(children.view(), psi@); }
+            assert forall|i: int| 0 <= i < children.view().len() implies
+                phi@ + children.view()[i]@ < bound by { assert(children.view()[i]@ < psi@); }
+            let ghost before = *self;
+            let checked = self.below_some_test(language, phi, children, Ghost(bound));
+            proof { lemma_tests_trans(entry, before, *self, bound, bound); }
+            if checked? {
+                proof {
+                    let i = choose|i: int| 0 <= i < children.view().len()
+                        && test_le(*language, phi, children.view()[i]);
+                    assert(model::lift_test(facade::graph(*language), psi@)
+                        == model::Test::Or(test_lifts(*language, children.view())));
+                    assert(paper::test_le_sem(model::lift_test(facade::graph(*language), phi@),
+                        test_lifts(*language, children.view())[i]));
+                    lemma_test_some(semantic_tle(), model::lift_test(facade::graph(*language), phi@),
+                        model::lift_test(facade::graph(*language), psi@),
+                        test_lifts(*language, children.view()), i);
+                    lemma_test_rule(*language, phi, psi);
+                }
                 return Ok(true);
             }
         }
         Ok(false)
     }
 
-    fn pointwise(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        xs: &[RegexId],
-        ys: &[RegexId],
-    ) -> Result<bool, HistoryError> {
-        for (x, y) in xs.iter().zip(ys) {
-            if !self.le(language, *x, *y)? {
-                return Ok(false);
-            }
+    fn each_test_below(&mut self, language: &mut SymbolicLanguage, phis: &[TestId], psi: TestId,
+        Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), test_ids_valid(*old(language), phis@), psi@ < facade::graph(*old(language)).tests.len(),
+            forall|i: int| 0 <= i < phis@.len() ==> phis@[i]@ + psi@ < bound,
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        tests_grow(*old(self), *final(self), bound),
+            result matches Ok(true) ==> forall|i: int| 0 <= i < phis@.len() ==> test_le(*final(language), phis@[i], psi),
+        decreases 0nat, bound, 1nat,
+    {
+        let ghost entry = *self;
+        let ghost initial = *language;
+        let mut index = 0;
+        while index < phis.len()
+            invariant index <= phis@.len(), *language == initial,
+                entry == *old(self), initial == *old(language),
+                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                test_ids_valid(*language, phis@), psi@ < facade::graph(*language).tests.len(), tests_grow(entry, *self, bound),
+                forall|i: int| 0 <= i < phis@.len() ==> phis@[i]@ + psi@ < bound,
+                forall|i: int| 0 <= i < index ==> test_le(*language, phis@[i], psi),
+            decreases phis@.len() - index,
+        {
+            let a = phis[index];
+            let b = psi;
+            let ghost before = *self;
+            let checked = self.test_le(language, a, b);
+            proof { lemma_tests_trans(entry, before, *self, (a@ + b@ + 1) as nat, bound); }
+            if !checked? { return Ok(false); }
+            index += 1;
         }
         Ok(true)
     }
 
-    fn each_below(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        xs: &[RegexId],
-        y: RegexId,
-    ) -> Result<bool, HistoryError> {
-        for &x in xs {
-            if !self.le(language, x, y)? {
-                return Ok(false);
-            }
+    fn below_each_test(&mut self, language: &mut SymbolicLanguage, phi: TestId, psis: &[TestId],
+        Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), phi@ < facade::graph(*old(language)).tests.len(), test_ids_valid(*old(language), psis@),
+            forall|i: int| 0 <= i < psis@.len() ==> phi@ + psis@[i]@ < bound,
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        tests_grow(*old(self), *final(self), bound),
+            result matches Ok(true) ==> forall|i: int| 0 <= i < psis@.len() ==> test_le(*final(language), phi, psis@[i]),
+        decreases 0nat, bound, 1nat,
+    {
+        let ghost entry = *self;
+        let ghost initial = *language;
+        let mut index = 0;
+        while index < psis.len()
+            invariant index <= psis@.len(), *language == initial,
+                entry == *old(self), initial == *old(language),
+                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                phi@ < facade::graph(*language).tests.len(), test_ids_valid(*language, psis@), tests_grow(entry, *self, bound),
+                forall|i: int| 0 <= i < psis@.len() ==> phi@ + psis@[i]@ < bound,
+                forall|i: int| 0 <= i < index ==> test_le(*language, phi, psis@[i]),
+            decreases psis@.len() - index,
+        {
+            let a = phi;
+            let b = psis[index];
+            let ghost before = *self;
+            let checked = self.test_le(language, a, b);
+            proof { lemma_tests_trans(entry, before, *self, (a@ + b@ + 1) as nat, bound); }
+            if !checked? { return Ok(false); }
+            index += 1;
         }
         Ok(true)
     }
 
-    fn below_each(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        x: RegexId,
-        ys: &[RegexId],
-    ) -> Result<bool, HistoryError> {
-        for &y in ys {
-            if !self.le(language, x, y)? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
-    fn some_below(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        xs: &[RegexId],
-        y: RegexId,
-    ) -> Result<bool, HistoryError> {
-        for &x in xs {
-            if self.le(language, x, y)? {
-                return Ok(true);
-            }
+    fn some_test_below(&mut self, language: &mut SymbolicLanguage, phis: &[TestId], psi: TestId,
+        Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), test_ids_valid(*old(language), phis@), psi@ < facade::graph(*old(language)).tests.len(),
+            forall|i: int| 0 <= i < phis@.len() ==> phis@[i]@ + psi@ < bound,
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        tests_grow(*old(self), *final(self), bound),
+            result matches Ok(true) ==> exists|i: int| 0 <= i < phis@.len() && test_le(*final(language), phis@[i], psi),
+        decreases 0nat, bound, 1nat,
+    {
+        let ghost entry = *self;
+        let ghost initial = *language;
+        let mut index = 0;
+        while index < phis.len()
+            invariant index <= phis@.len(), *language == initial,
+                entry == *old(self), initial == *old(language),
+                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                test_ids_valid(*language, phis@), psi@ < facade::graph(*language).tests.len(), tests_grow(entry, *self, bound),
+                forall|i: int| 0 <= i < phis@.len() ==> phis@[i]@ + psi@ < bound,
+                
+            decreases phis@.len() - index,
+        {
+            let a = phis[index];
+            let b = psi;
+            let ghost before = *self;
+            let checked = self.test_le(language, a, b);
+            proof { lemma_tests_trans(entry, before, *self, (a@ + b@ + 1) as nat, bound); }
+            if checked? { return Ok(true); }
+            index += 1;
         }
         Ok(false)
     }
 
-    fn below_some(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        x: RegexId,
-        ys: &[RegexId],
-    ) -> Result<bool, HistoryError> {
-        for &y in ys {
-            if self.le(language, x, y)? {
-                return Ok(true);
-            }
+    fn below_some_test(&mut self, language: &mut SymbolicLanguage, phi: TestId, psis: &[TestId],
+        Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
+        requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
+            memo_obligations(), phi@ < facade::graph(*old(language)).tests.len(), test_ids_valid(*old(language), psis@),
+            forall|i: int| 0 <= i < psis@.len() ==> phi@ + psis@[i]@ < bound,
+        ensures
+        *final(language) == *old(language), memo_wf(*final(self), *final(language)),
+        tests_grow(*old(self), *final(self), bound),
+            result matches Ok(true) ==> exists|i: int| 0 <= i < psis@.len() && test_le(*final(language), phi, psis@[i]),
+        decreases 0nat, bound, 1nat,
+    {
+        let ghost entry = *self;
+        let ghost initial = *language;
+        let mut index = 0;
+        while index < psis.len()
+            invariant index <= psis@.len(), *language == initial,
+                entry == *old(self), initial == *old(language),
+                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                phi@ < facade::graph(*language).tests.len(), test_ids_valid(*language, psis@), tests_grow(entry, *self, bound),
+                forall|i: int| 0 <= i < psis@.len() ==> phi@ + psis@[i]@ < bound,
+                
+            decreases psis@.len() - index,
+        {
+            let a = phi;
+            let b = psis[index];
+            let ghost before = *self;
+            let checked = self.test_le(language, a, b);
+            proof { lemma_tests_trans(entry, before, *self, (a@ + b@ + 1) as nat, bound); }
+            if checked? { return Ok(true); }
+            index += 1;
         }
         Ok(false)
     }
 }
 
-fn node(language: &mut SymbolicLanguage, id: RegexId) -> Result<(Node, bool), HistoryError> {
-    language.read_regex(id, |view| {
-        let node = match view.kind {
+fn copy_regex_ids(ids: &[RegexId]) -> (copied: SmallVec<[RegexId; 4]>)
+    ensures copied.view() == ids@,
+{
+    let mut copied = SmallVec::new();
+    copied.extend_from_slice(ids);
+    copied
+}
+
+fn copy_test_ids(ids: &[TestId]) -> (copied: SmallVec<[TestId; 4]>)
+    ensures copied.view() == ids@,
+{
+    let mut copied = SmallVec::new();
+    copied.extend_from_slice(ids);
+    copied
+}
+
+fn node(language: &mut SymbolicLanguage, id: RegexId) -> (result: Result<(Node, bool), HistoryError>)
+    requires facade::language_wf(*old(language)),
+    ensures *final(language) == *old(language),
+        result matches Ok((n, nullable)) ==> node_wf(*final(language), id, n)
+            && nullable == junco_core::verify::history_specs::nullable(facade::abs(*final(language), id)),
+{
+    let result = language.read_regex(id, |view: RegexView<'_>| -> (copied: (Node, bool))
+        ensures copied.0@ == view.kind@, copied.1 == view.nullable,
+    {
+        let n = match view.kind {
             RegexKindView::Empty => Node::Empty,
             RegexKindView::All => Node::All,
             RegexKindView::Epsilon => Node::Epsilon,
-            RegexKindView::Test(test) => Node::Test(test),
-            RegexKindView::Union(members) => Node::Union(SmallVec::from_slice(members)),
-            RegexKindView::Concat(factors) => Node::Concat(SmallVec::from_slice(factors)),
-            RegexKindView::Star(inner) => Node::Star(inner),
-            RegexKindView::Intersect(members) => Node::Intersect(SmallVec::from_slice(members)),
-            RegexKindView::Not(inner) => Node::Not(inner),
+            RegexKindView::Test(t) => Node::Test(t),
+            RegexKindView::Union(cs) => Node::Union(copy_regex_ids(cs)),
+            RegexKindView::Concat(cs) => Node::Concat(copy_regex_ids(cs)),
+            RegexKindView::Star(r) => Node::Star(r),
+            RegexKindView::Intersect(cs) => Node::Intersect(copy_regex_ids(cs)),
+            RegexKindView::Not(r) => Node::Not(r),
         };
-        (node, view.nullable)
-    })
+        (n, view.nullable)
+    });
+    proof { if let Ok((n, _)) = &result { lemma_node(*language, id, *n); } }
+    result
 }
 
-fn is_all(language: &mut SymbolicLanguage, id: RegexId) -> Result<bool, HistoryError> {
-    language.read_regex(id, |view| matches!(view.kind, RegexKindView::All))
+fn is_all(language: &mut SymbolicLanguage, id: RegexId) -> (result: Result<bool, HistoryError>)
+    requires facade::language_wf(*old(language)),
+    ensures *final(language) == *old(language),
+        result matches Ok(true) ==> facade::abs(*final(language), id) is All,
+{
+    let result = language.read_regex(id, |view: RegexView<'_>| -> (all: bool)
+        ensures all == (view.kind@ is All),
+    { matches!(view.kind, RegexKindView::All) });
+    proof {
+        if let Ok(true) = result {
+            facade::lemma_language_wf(*language);
+            history_semantics::normalize_verify::regex_unfold(facade::graph(*language), id@);
+        }
+    }
+    result
 }
 
-fn test_node(language: &mut SymbolicLanguage, id: TestId) -> Result<TestNode, HistoryError> {
-    language.read_test(id, |view| match view {
-        TestView::True => TestNode::True,
-        TestView::False => TestNode::False,
-        TestView::Atom { .. } => TestNode::Atom,
-        TestView::And(conjuncts) => TestNode::And(SmallVec::from_slice(conjuncts)),
-        TestView::Or(disjuncts) => TestNode::Or(SmallVec::from_slice(disjuncts)),
-    })
+fn test_node(language: &mut SymbolicLanguage, id: TestId)
+    -> (result: Result<TestNode, HistoryError>)
+    requires facade::language_wf(*old(language)),
+    ensures *final(language) == *old(language),
+        result matches Ok(n) ==> test_node_wf(*final(language), id, n),
+{
+    let result = language.read_test(id, |view: TestView<'_>| -> (n: TestNode)
+        ensures test_matches(n, view@),
+    {
+        match view {
+            TestView::True => TestNode::True,
+            TestView::False => TestNode::False,
+            TestView::Atom { .. } => TestNode::Atom,
+            TestView::And(cs) => TestNode::And(copy_test_ids(cs)),
+            TestView::Or(cs) => TestNode::Or(copy_test_ids(cs)),
+        }
+    });
+    proof { if let Ok(n) = &result { lemma_test_node(*language, id, *n); } }
+    result
 }
-
-impl Simulation {
-    /// Whether every event that satisfies `phi` satisfies `psi`, by the rules for tests.
-    fn test_le(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        phi: TestId,
-        psi: TestId,
-    ) -> Result<bool, HistoryError> {
-        if phi == psi {
-            return Ok(true);
-        }
-        if let Some(known) = self.known_tests.get(&(phi, psi)) {
-            return Ok(*known);
-        }
-        let (left, right) = (test_node(language, phi)?, test_node(language, psi)?);
-        let result = self.derive_test(language, phi, &left, &right, psi)?;
-        self.known_tests.insert((phi, psi), result);
-        Ok(result)
-    }
-
-    fn derive_test(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        phi: TestId,
-        left: &TestNode,
-        right: &TestNode,
-        psi: TestId,
-    ) -> Result<bool, HistoryError> {
-        if matches!(right, TestNode::True) || matches!(left, TestNode::False) {
-            return Ok(true);
-        }
-        if let TestNode::Or(disjuncts) = left
-            && self.each_test_below(language, disjuncts, psi)?
-        {
-            return Ok(true);
-        }
-        if let TestNode::And(conjuncts) = right
-            && self.below_each_test(language, phi, conjuncts)?
-        {
-            return Ok(true);
-        }
-        if let TestNode::And(conjuncts) = left {
-            for &conjunct in conjuncts {
-                if self.test_le(language, conjunct, psi)? {
-                    return Ok(true);
-                }
-            }
-        }
-        if let TestNode::Or(disjuncts) = right {
-            for &disjunct in disjuncts {
-                if self.test_le(language, phi, disjunct)? {
-                    return Ok(true);
-                }
-            }
-        }
-        Ok(false)
-    }
-
-    fn each_test_below(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        phis: &[TestId],
-        psi: TestId,
-    ) -> Result<bool, HistoryError> {
-        for &phi in phis {
-            if !self.test_le(language, phi, psi)? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
-    fn below_each_test(
-        &mut self,
-        language: &mut SymbolicLanguage,
-        phi: TestId,
-        psis: &[TestId],
-    ) -> Result<bool, HistoryError> {
-        for &psi in psis {
-            if !self.test_le(language, phi, psi)? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
 }

@@ -38,6 +38,7 @@ pub trait FlatEncoder<C>: Sized {
     spec fn domain() -> Domain<C>;
     spec fn maps(&self) -> Codebook<C>;
     spec fn obeys_encoding_spec(&self) -> bool;
+    spec fn encoding_calls(&self) -> nat;
 
     open spec fn state_wf(&self) -> bool { true }
 
@@ -60,6 +61,7 @@ pub trait FlatEncoder<C>: Sized {
             encoder_wf_clause!(Self, old(self)) ==> {
             encoder_wf_clause!(Self, final(self))
             && extends(old(self).maps(), final(self).maps(), Self::equality())
+            && final(self).encoding_calls() == old(self).encoding_calls() + 1
             && match result {
                 Ok(id) => Self::domain()(field, *value)
                     && encoded(final(self).maps(), Self::equality(), field, *value, id),
@@ -134,6 +136,8 @@ fn encode_head<C, M: FlatEncoder<C>>(source: &FlatHead<C>, field: Component, enc
         result matches Ok(head) ==> head_shape(*source, head),
         final(encoder).restoration() == old(encoder).restoration(),
         final(encoder).errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+        encoder_wf::<C, M>(*old(encoder)) ==>
+            final(encoder).encoding_calls() <= old(encoder).encoding_calls() + 1,
         old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
             ==> no_internal_error(result)
                 && (head_in_domain(*source, field, M::domain())
@@ -157,6 +161,8 @@ fn encode_test<C, M: FlatEncoder<C>, L: Limits>(source: &FlatTest<C>, encoder: &
         result matches Ok(test) ==> test_shape(*source, test),
         final(encoder).restoration() == old(encoder).restoration(),
         final(encoder).errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+        encoder_wf::<C, M>(*old(encoder)) ==>
+            final(encoder).encoding_calls() <= old(encoder).encoding_calls() + 1,
         old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
             ==> no_internal_error(result)
                 && (test_in_domain(*source, M::domain())
@@ -211,6 +217,9 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
             && crate::flat::verify::structural_wf(target),
         final(encoder).restoration() == old(encoder).restoration(),
         final(encoder).errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+        encoder_wf::<C, M>(*old(encoder)) ==>
+            final(encoder).encoding_calls() <= old(encoder).encoding_calls()
+                + 3 + source.tests@.len(),
         old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
             ==> no_internal_error(result)
                 && (crate::flat::verify::structural_wf(*source)
@@ -224,6 +233,7 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
     if source.validate().is_err() { return Err(invalid_source()); }
     let ghost initial_maps = encoder.maps();
     let ghost verified = encoder_wf::<C, M>(*encoder);
+    let ghost initial_calls = encoder.encoding_calls();
     proof {
         assert(verified == encoder_wf::<C, M>(*old(encoder)));
         assert(verified ==> encoder_wf::<C, M>(*encoder));
@@ -275,6 +285,8 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
             encoder.restoration() == old(encoder).restoration(),
             encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
             initial_maps == old(encoder).maps(), verified == encoder_wf::<C, M>(*old(encoder)),
+            initial_calls == old(encoder).encoding_calls(),
+            verified ==> encoder.encoding_calls() <= initial_calls + 3 + index,
             builder.tests_view().len() == index, builder.regexes_view().len() == 0,
             (forall|i: int| 0 <= i < 3 ==> head_shape(source.head@[i], builder.head_view()[i])),
             (forall|i: int| 0 <= i < index ==> test_shape(source.tests@[i], builder.tests_view()[i])),
@@ -325,6 +337,8 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
             encoder.restoration() == old(encoder).restoration(),
             encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
             initial_maps == old(encoder).maps(), verified == encoder_wf::<C, M>(*old(encoder)),
+            initial_calls == old(encoder).encoding_calls(),
+            verified ==> encoder.encoding_calls() <= initial_calls + 3 + source.tests@.len(),
             regex_tables_same(source.regexes@.take(index as int), builder.regexes_view()),
             builder.tests_view().len() == source.tests@.len(),
             builder.regexes_view().len() == index,

@@ -31,25 +31,43 @@
 //! value ([`Value`]), because a generic [`Event`](history_syntax::Event) cannot be built from
 //! components.
 //!
-//! Rules are validated and lowered by [`junco_core::flatten_rule`] and [`junco_core::lower_flat`],
-//! as for the runtime. Each search compiles one graph that may be charged 16 MiB; a search that
-//! exceeds it is reported as [`Inclusion::Exhausted`]. The classes of events and the search are
-//! not verified.
+//! Rules are validated and lowered from borrowed inputs by
+//! [`junco_core::flatten::flatten_rule_parts`] and [`junco_core::lower_flat`], without cloning
+//! caller-owned syntax. Each search compiles one graph that may be charged 16 MiB; a search that
+//! exceeds it is reported as [`Inclusion::Exhausted`]. Verus links the native search and
+//! reconstruction to typed tail inclusion under the documented native laws and sufficient
+//! resource-capacity preconditions.
 
 #![no_std]
-#![forbid(unsafe_code)]
+#![cfg_attr(not(verus_keep_ghost), forbid(unsafe_code))]
+#![cfg_attr(verus_keep_ghost, feature(proc_macro_hygiene, allocator_api))]
 #![deny(missing_docs)]
 
 extern crate alloc;
 
+#[cfg(feature = "runtime")]
 mod analyzer;
+#[cfg(feature = "runtime")]
 mod constraint;
+#[cfg(feature = "runtime")]
+mod native;
+#[cfg(feature = "runtime")]
 mod prune;
+#[cfg(feature = "runtime")]
 mod search;
+#[cfg(feature = "runtime")]
 mod simulation;
+#[cfg(feature = "runtime")]
 mod tables;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "runtime"))]
 mod tests;
 
+#[cfg(all(verus_keep_ghost, feature = "runtime"))]
+pub mod verify;
+
+#[cfg(all(verus_keep_ghost, feature = "runtime"))]
+pub use native::{hash_coherent as native_hash_coherent, key_obligations as native_key_obligations};
+
+#[cfg(feature = "runtime")]
 pub use analyzer::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, Value};
