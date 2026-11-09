@@ -898,6 +898,7 @@ pub(crate) trait TestNormalize: Sized {
             None => return Err(HistoryError::normalization_invariant()),
         };
         // De Morgan preserves every normalized reduction; only canonical ID ordering changes.
+        proof! { junco_core::kernel::TestId::lemma_obeys_cmp(); }
         children.sort_unstable();
         proof_decl! { let ghost sorted = children@; }
         proof! {
@@ -1263,6 +1264,7 @@ impl TestNormalize for TestId {
             return Ok(absorber);
         }
         proof_decl! { let ghost collected = flat.view(); }
+        proof! { junco_core::kernel::TestId::lemma_obeys_cmp(); }
         flat.as_mut_slice().sort_unstable();
         proof_decl! { let ghost sorted = flat.view(); }
         dedup_ids(&mut flat)?;
@@ -2518,6 +2520,7 @@ impl RegexNormalize for RegexId {
             }
         }
         proof_decl! { let ghost unsorted = others.view(); }
+        proof! { junco_core::kernel::RegexId::lemma_obeys_cmp(); }
         others.as_mut_slice().sort_unstable();
         proof! {
             regex_multiset_members(unsorted, others.view());
@@ -3413,6 +3416,7 @@ impl TransitionNormalize for TransitionId {
             assert(collect_weight(store.graph(), flat.view(), intersect) <= collect_weight(store.graph(), original, intersect));
         }
         proof_decl! { let ghost unsorted = flat.view(); }
+        proof! { junco_core::kernel::TransitionId::lemma_obeys_cmp(); }
         flat.as_mut_slice().sort_unstable();
         proof! {
             transition_multiset_members(unsorted, flat.view());

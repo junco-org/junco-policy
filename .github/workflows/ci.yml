@@ -57,6 +57,32 @@ jobs:
         # Release: generation re-checks the whole history at every step (166s debug vs 23s release).
         run: cargo test --locked --release --manifest-path fuzz/Cargo.toml --lib
 
+  spec-check:
+    name: Test assumed specifications (verus-spec-check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: 1.98.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust 1.98.1
+        run: rustup toolchain install 1.98.1 --profile minimal
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            spec-check/target
+          key: spec-check-cargo-${{ runner.os }}-${{ hashFiles('spec-check/Cargo.lock') }}
+          restore-keys: spec-check-cargo-${{ runner.os }}-
+
+      - name: Test assumed specifications against std and smallvec
+        run: ./scripts/spec-check.sh
+
   verify-core:
     name: Verify history packages (Verus 0.2026.10.04.426d8b0)
     runs-on: ubuntu-latest

@@ -16,6 +16,7 @@ use history_store::cache::verify::*;
 use history_store::cache::{EventClass, GraphCaches, Guard};
 use history_store::graph::{CanonicalStore, RuntimeKernel, allocation, sequence_bytes};
 use history_store::store::Event;
+use junco_core::bits::checked_shl;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
 use junco_core::limits::Limits;
@@ -583,8 +584,7 @@ impl CompiledPair {
         }
         let shift = u32::try_from(count)
             .map_err(|_| HistoryError::invariant("invalid guard atom count"))?;
-        let classes = 1_u64
-            .checked_shl(shift)
+        let classes = checked_shl(1, shift)
             .ok_or_else(|| HistoryError::invariant("invalid guard class count"))?;
         proof! { assert(classes >= 2) by(bit_vector) requires classes == (1u64 << shift), 1 <= shift <= 8; }
         let mut mask = classes - 1;
@@ -949,7 +949,7 @@ impl CompiledPair {
                     failure
                 );
                 *truth_word |= loop_try!(
-                    1_u64.checked_shl(bit).ok_or_else(verus_exec_expr! {
+                    checked_shl(1, bit).ok_or_else(verus_exec_expr! {
                         || -> (error: HistoryError)
                             ensures error is Invariant,
                         { HistoryError::invariant("invalid truth bit") }
@@ -1155,7 +1155,7 @@ impl CompiledPair {
                 Ok(shift) => shift,
                 Err(_) => continue,
             };
-            let classes = match 1_u64.checked_shl(shift) {
+            let classes = match checked_shl(1, shift) {
                 Some(classes) => classes,
                 None => continue,
             };
@@ -1482,6 +1482,7 @@ impl CompiledPair {
         }
         store.checkpoint()?;
         proof_decl! { let ghost collected = primitives@; }
+        proof! { junco_core::kernel::TestId::lemma_obeys_cmp(); }
         let primitive_slice = primitives.as_mut_slice();
         primitive_slice.sort_unstable();
         proof_decl! { let ghost sorted = primitives@; }
