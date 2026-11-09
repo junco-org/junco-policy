@@ -5,8 +5,8 @@
 use crate::normalize::verify as norm;
 use crate::verify::finite_impl::*;
 use crate::verify::finite_link::*;
-use crate::verify::finite_machine::*;
 use crate::verify::finite_machine::piece_of;
+use crate::verify::finite_machine::*;
 use crate::verify::finite_trans::*;
 use junco_core::kernel::verify as model;
 use junco_core::kernel::{RegexId, TransitionId};

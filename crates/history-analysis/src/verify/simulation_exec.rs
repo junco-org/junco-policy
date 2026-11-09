@@ -2,11 +2,12 @@
 
 use crate::native::{key_obligations, representatives};
 use crate::simulation::{Node, Simulation, TestNode};
-use history_semantics::{SymbolicLanguage, normalize_verify as norm,
-    symbolic_language_verify as facade};
 use history_semantics::verify::refinement::pruning as paper;
-use junco_core::kernel::{RegexId, TestId};
+use history_semantics::{
+    SymbolicLanguage, normalize_verify as norm, symbolic_language_verify as facade,
+};
 use junco_core::kernel::verify as model;
+use junco_core::kernel::{RegexId, TestId};
 use junco_core::observation::SmallVecSpecFns;
 use junco_core::verify::history_specs::{self as language, Regex};
 use vstd::prelude::*;

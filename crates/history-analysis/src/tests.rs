@@ -339,7 +339,6 @@ fn a_register_and_a_constant_give_five_letters() {
     assert_eq!(counts, [2, 3]);
 }
 
-
 #[test]
 fn declared_actions_leave_no_other_action() {
     // An event whose action is none of the declared ones exists only if actions are infinite.

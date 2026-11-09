@@ -1,10 +1,10 @@
 #[cfg(verus_keep_ghost)]
 use crate::normalize::verify as norm;
-#[cfg(verus_keep_ghost)]
-use crate::symbolic::verify as vocab;
 use crate::normalize::{RegexNormalize, TestNormalize};
 use crate::progress::CompiledPair;
 use crate::runtime::RuleRuntime;
+#[cfg(verus_keep_ghost)]
+use crate::symbolic::verify as vocab;
 use alloc::vec::Vec;
 use history_store::graph::{CanonicalStore, RuntimeKernel, allocation};
 use history_store::store::Event as NumericEvent;

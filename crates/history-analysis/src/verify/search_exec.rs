@@ -4,10 +4,12 @@ use crate::constraint::{Atom, ConstraintId, ConstraintTable, Letter, Universes};
 use crate::native::{key_obligations, members};
 use crate::search::{Item, Search};
 use crate::verify::{atom_set, atoms_wf, ndomains, table_wf};
-use history_semantics::{SymbolicLanguage, symbolic_language_verify as facade};
 use history_semantics::symbolic_verify as symbolic;
-use history_semantics::verify::{finite_impl, refinement::{encoding, finiteness, implementation,
-    inclusion, search as paper}};
+use history_semantics::verify::{
+    finite_impl,
+    refinement::{encoding, finiteness, implementation, inclusion, search as paper},
+};
+use history_semantics::{SymbolicLanguage, symbolic_language_verify as facade};
 use junco_core::kernel::{RegexId, TestId, verify as model};
 use junco_core::observation::SmallVecSpecFns;
 use junco_core::verify::history_specs::{self as language, EventView, Regex, Subst};

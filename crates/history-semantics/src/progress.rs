@@ -5,11 +5,11 @@
 use super::normalize::verify as norm;
 #[cfg(verus_keep_ghost)]
 use super::symbolic;
-#[cfg(verus_keep_ghost)]
-use crate::verify::finite_interp as fint;
 use crate::WorkVec;
 use crate::normalize::RegexNormalize;
 use crate::symbolic::{AtomTruth, RegexDerivative, TransitionInterpret};
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_interp as fint;
 use alloc::{collections::BTreeSet, vec::Vec};
 #[cfg(feature = "cache")]
 use history_store::cache::SUCCESSOR_CAPACITY;
@@ -1385,7 +1385,7 @@ impl CompiledPair {
                         } => {
                             work.push(Walk::Transition(child));
                             proof! { assert(walk_supported(base, root@, work.view().last())); }
-                        },
+                        }
                     }
                 }
                 Walk::TransitionChildren(id, index) => {
@@ -1487,7 +1487,7 @@ impl CompiledPair {
                         TestView::And(_) | TestView::Or(_) => {
                             work.push(Walk::TestChildren(id, 0));
                             proof! { assert(walk_supported(base, root@, work.view().last())); }
-                        },
+                        }
                     }
                 }
                 Walk::TestChildren(id, index) => {

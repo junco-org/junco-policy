@@ -1,27 +1,29 @@
 //! Ghost views and contracts linking the executable analyzer to the frozen refinement layers.
 
-pub(crate) mod simulation_exec;
+pub(crate) mod constraint_unique;
 pub(crate) mod prune_exec;
-pub(crate) mod search_exec;
 pub(crate) mod reconstruction;
+pub(crate) mod search_exec;
+pub(crate) mod simulation_exec;
 pub(crate) mod typed_numeric;
 pub(crate) mod verdict;
-pub(crate) mod constraint_unique;
 
+use crate::analyzer::Constants;
+use crate::constraint::equality::{constraint_key, register_key};
+use crate::constraint::{
+    Atom, Class, Constraint, ConstraintTable, Letter, Operand, Operands, RegisterConstraint,
+    Universe, Universes,
+};
 use alloc::vec::Vec;
 use history_semantics::verify::refinement::*;
-use crate::analyzer::Constants;
 use history_syntax::Event;
-use junco_core::ComponentValue;
-use vstd::prelude::*;
-use crate::constraint::{Atom, Class, Constraint, ConstraintTable, Letter, Operand, Operands,
-    RegisterConstraint, Universe, Universes};
-use crate::constraint::equality::{register_key, constraint_key};
+use history_syntax::event::specs::EventSpec;
 use history_syntax::syntax::Component;
+use junco_core::ComponentValue;
 use junco_core::kernel::verify as model;
 use junco_core::observation::SmallVecSpecFns;
 use junco_core::verify::history_specs::{self as language, EventView, Subst};
-use history_syntax::event::specs::EventSpec;
+use vstd::prelude::*;
 
 verus! {
 pub(crate) open spec fn constant_book<E: Event>(c: Constants<E>)
@@ -2238,272 +2240,272 @@ pub(crate) proof fn lemma_set_map_equal<A, B>(values: Set<A>, first: spec_fn(A) 
 }
 
 pub(crate) mod table {
-use super::*;
-use crate::tables::Tables;
-use history_semantics::compile_verify as numeric;
-use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTest};
-use junco_core::flat::verify as flat;
+    use super::*;
+    use crate::tables::Tables;
+    use history_semantics::compile_verify as numeric;
+    use junco_core::flat::verify as flat;
+    use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTest};
 
-verus! {
-broadcast use {vstd::seq::group_seq_lemmas, vstd::std_specs::vec::group_vec_axioms};
-impl View for Tables {
-    type V = FlatPair<u64>;
-    open(crate) spec fn view(&self) -> FlatPair<u64> {
-        FlatPair { head: [FlatHead::Any, FlatHead::Any, FlatHead::Any],
-            tests: self.tests, regexes: self.regexes, root: 0 }
-    }
-}
-
-pub(crate) open spec fn test_dag(test: FlatTest<u64>, index: nat) -> bool {
-    match test {
-        FlatTest::And(children) | FlatTest::Or(children) =>
-            flat::references_before(children@, index),
-        _ => true,
-    }
-}
-
-pub(crate) open spec fn dag(pair: FlatPair<u64>) -> bool {
-    (forall|i: int| 0 <= i < pair.tests@.len() ==> test_dag(#[trigger] pair.tests@[i], i as nat))
-    && (forall|i: int| 0 <= i < pair.regexes@.len() ==>
-        flat::regex_wf(#[trigger] pair.regexes@[i], i as nat, pair.tests@.len()))
-}
-
-pub(crate) proof fn lemma_dag_elim(pair: FlatPair<u64>)
-    requires dag(pair),
-    ensures forall|i: int| 0 <= i < pair.tests@.len()
-        ==> test_dag(#[trigger] pair.tests@[i], i as nat),
-        forall|i: int| 0 <= i < pair.regexes@.len()
-            ==> flat::regex_wf(#[trigger] pair.regexes@[i], i as nat, pair.tests@.len()),
-{}
-
-pub(crate) proof fn lemma_structural_dag(pair: FlatPair<u64>)
-    requires flat::structural_wf(pair),
-    ensures dag(pair), pair.root < pair.regexes@.len(),
-{
-    reveal(flat::structural_wf);
-    reveal(flat::prefix_wf);
-    assert forall|i: int| 0 <= i < pair.tests@.len() implies
-        test_dag(pair.tests@[i], i as nat) by {
-        assert(flat::test_wf(pair.head@, pair.tests@[i], i as nat));
-        reveal(flat::test_wf);
-    }
-}
-
-pub(crate) open spec fn frame(before: FlatPair<u64>, after: FlatPair<u64>) -> bool {
-    before.tests@.len() <= after.tests@.len()
-    && before.regexes@.len() <= after.regexes@.len()
-    && (forall|i: int| 0 <= i < before.tests@.len()
-        ==> #[trigger] after.tests@[i] == before.tests@[i])
-    && (forall|i: int| 0 <= i < before.regexes@.len()
-        ==> #[trigger] after.regexes@[i] == before.regexes@[i])
-}
-
-pub(crate) open spec fn shifted(a: Seq<u32>, b: Seq<u32>, by: nat) -> bool {
-    a.len() == b.len() && forall|i: int| 0 <= i < a.len()
-        ==> b[i] as nat == a[i] as nat + by
-}
-
-pub(crate) open spec fn test_shift(a: FlatTest<u64>, b: FlatTest<u64>, by: nat) -> bool {
-    match (a, b) {
-        (FlatTest::Bool(x), FlatTest::Bool(y)) => x == y,
-        (FlatTest::Atom { field: f, term: t, positive: p },
-         FlatTest::Atom { field: g, term: u, positive: q }) => f == g && t == u && p == q,
-        (FlatTest::And(x), FlatTest::And(y)) | (FlatTest::Or(x), FlatTest::Or(y)) =>
-            shifted(x@, y@, by),
-        _ => false,
-    }
-}
-
-pub(crate) open spec fn regex_shift(a: FlatRegex, b: FlatRegex, tests: nat, regexes: nat) -> bool {
-    match (a, b) {
-        (FlatRegex::Empty, FlatRegex::Empty) | (FlatRegex::All, FlatRegex::All)
-        | (FlatRegex::Epsilon, FlatRegex::Epsilon) => true,
-        (FlatRegex::Test(x), FlatRegex::Test(y)) => y as nat == x as nat + tests,
-        (FlatRegex::Star(x), FlatRegex::Star(y))
-        | (FlatRegex::Complement(x), FlatRegex::Complement(y)) => y as nat == x as nat + regexes,
-        (FlatRegex::Concat(x), FlatRegex::Concat(y)) | (FlatRegex::Union(x), FlatRegex::Union(y))
-        | (FlatRegex::Intersect(x), FlatRegex::Intersect(y)) => shifted(x@, y@, regexes),
-        _ => false,
-    }
-}
-
-pub(crate) open spec fn tests_copied(source: FlatPair<u64>, target: FlatPair<u64>, by: nat, count: nat) -> bool {
-    count <= source.tests@.len() && by + count <= target.tests@.len()
-    && forall|i: int| 0 <= i < count ==>
-        test_shift(source.tests@[i], target.tests@[(by + i) as int], by)
-}
-
-pub(crate) open spec fn regexes_copied(source: FlatPair<u64>, target: FlatPair<u64>,
-    tests: nat, regexes: nat, count: nat) -> bool {
-    count <= source.regexes@.len() && regexes + count <= target.regexes@.len()
-    && forall|i: int| 0 <= i < count ==>
-        regex_shift(source.regexes@[i], target.regexes@[(regexes + i) as int], tests, regexes)
-}
-
-pub(crate) proof fn lemma_test_shift_wf(a: FlatTest<u64>, b: FlatTest<u64>, index: nat, by: nat)
-    requires test_dag(a, index), test_shift(a, b, by),
-    ensures test_dag(b, index + by),
-{
-    match (a, b) {
-        (FlatTest::And(x), FlatTest::And(y)) | (FlatTest::Or(x), FlatTest::Or(y)) => {
-            assert forall|i: int| 0 <= i < y@.len() implies y@[i] < index + by by {
-                assert(x@[i] < index);
-            }
-        },
-        _ => {},
-    }
-}
-
-pub(crate) proof fn lemma_regex_shift_wf(a: FlatRegex, b: FlatRegex,
-    index: nat, tests: nat, test_base: nat, regex_base: nat)
-    requires flat::regex_wf(a, index, tests), regex_shift(a, b, test_base, regex_base),
-    ensures flat::regex_wf(b, index + regex_base, tests + test_base),
-{
-    match (a, b) {
-        (FlatRegex::Concat(x), FlatRegex::Concat(y)) | (FlatRegex::Union(x), FlatRegex::Union(y))
-        | (FlatRegex::Intersect(x), FlatRegex::Intersect(y)) => {
-            assert forall|i: int| 0 <= i < y@.len() implies y@[i] < index + regex_base by {
-                assert(x@[i] < index);
-            }
-        },
-        _ => {},
-    }
-}
-
-pub(crate) proof fn lemma_test_copy(source: FlatPair<u64>, target: FlatPair<u64>,
-    by: nat, count: nat, index: nat, theta: Subst, event: EventView)
-    requires dag(source), tests_copied(source, target, by, count), index < count,
-    ensures numeric::source_test(source, index, theta, event)
-        == numeric::source_test(target, index + by, theta, event),
-    decreases index,
-{
-    reveal_with_fuel(numeric::source_test, 1);
-    assert(test_dag(source.tests@[index as int], index));
-    assert(test_shift(source.tests@[index as int], target.tests@[(index + by) as int], by));
-    match (source.tests@[index as int], target.tests@[(index + by) as int]) {
-        (FlatTest::And(x), FlatTest::And(y)) | (FlatTest::Or(x), FlatTest::Or(y)) => {
-            assert forall|i: int| 0 <= i < x@.len() implies
-                numeric::source_test(source, x@[i] as nat, theta, event)
-                    == numeric::source_test(target, y@[i] as nat, theta, event) by {
-                assert(x@[i] < index);
-                lemma_test_copy(source, target, by, count, x@[i] as nat, theta, event);
-            }
-        },
-        _ => {},
-    }
-}
-
-pub(crate) proof fn lemma_regex_copy(source: FlatPair<u64>, target: FlatPair<u64>,
-    tests: nat, regexes: nat, count: nat, index: nat, theta: Subst, word: Seq<EventView>)
-    requires dag(source), tests_copied(source, target, tests, source.tests@.len()),
-        regexes_copied(source, target, tests, regexes, count), index < count,
-    ensures numeric::source_regex(source, index, theta, word)
-        == numeric::source_regex(target, index + regexes, theta, word),
-    decreases index,
-{
-    reveal_with_fuel(numeric::source_regex, 1);
-    assert(flat::regex_wf(source.regexes@[index as int], index, source.tests@.len()));
-    assert(regex_shift(source.regexes@[index as int], target.regexes@[(index + regexes) as int], tests, regexes));
-    match (source.regexes@[index as int], target.regexes@[(index + regexes) as int]) {
-        (FlatRegex::Test(x), FlatRegex::Test(y)) => {
-            if word.len() == 1 {
-                lemma_test_copy(source, target, tests, source.tests@.len(), x as nat, theta, word[0]);
-            }
-        },
-        (FlatRegex::Union(x), FlatRegex::Union(y)) | (FlatRegex::Intersect(x), FlatRegex::Intersect(y)) => {
-            assert forall|i: int| 0 <= i < x@.len() implies
-                numeric::source_regex(source, x@[i] as nat, theta, word)
-                    == numeric::source_regex(target, y@[i] as nat, theta, word) by {
-                assert(x@[i] < index);
-                lemma_regex_copy(source, target, tests, regexes, count, x@[i] as nat, theta, word);
-            }
-        },
-        (FlatRegex::Concat(x), FlatRegex::Concat(y)) => {
-            assert forall|i: int, part: Seq<EventView>| 0 <= i < x@.len() implies
-                numeric::source_regex(source, x@[i] as nat, theta, part)
-                    == numeric::source_regex(target, y@[i] as nat, theta, part) by {
-                assert(x@[i] < index);
-                lemma_regex_copy(source, target, tests, regexes, count, x@[i] as nat, theta, part);
-            }
-            if numeric::source_regex(source, index, theta, word) {
-                let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == x@.len()
-                    && parts.flatten() == word && forall|i: int| 0 <= i < x@.len()
-                        ==> x@[i] < index && numeric::source_regex(source, x@[i] as nat, theta, parts[i]);
-                assert forall|i: int| 0 <= i < y@.len() implies
-                    y@[i] < index + regexes
-                        && numeric::source_regex(target, y@[i] as nat, theta, parts[i]) by {}
-                assert(numeric::source_regex(target, index + regexes, theta, word));
-            }
-            if numeric::source_regex(target, index + regexes, theta, word) {
-                let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == y@.len()
-                    && parts.flatten() == word && forall|i: int| 0 <= i < y@.len()
-                        ==> y@[i] < index + regexes
-                            && numeric::source_regex(target, y@[i] as nat, theta, parts[i]);
-                assert forall|i: int| 0 <= i < x@.len() implies
-                    x@[i] < index && numeric::source_regex(source, x@[i] as nat, theta, parts[i]) by {}
-                assert(numeric::source_regex(source, index, theta, word));
-            }
-        },
-        (FlatRegex::Star(x), FlatRegex::Star(y)) => {
-            assert forall|part: Seq<EventView>| numeric::source_regex(source, x as nat, theta, part)
-                == #[trigger] numeric::source_regex(target, y as nat, theta, part) by {
-                lemma_regex_copy(source, target, tests, regexes, count, x as nat, theta, part);
-            }
-            if numeric::source_regex(source, index, theta, word) {
-                let parts = choose|parts: Seq<Seq<EventView>>| parts.flatten() == word
-                    && forall|i: int| 0 <= i < parts.len()
-                        ==> numeric::source_regex(source, x as nat, theta, parts[i]);
-                assert forall|i: int| 0 <= i < parts.len() implies
-                    numeric::source_regex(target, y as nat, theta, parts[i]) by {}
-                assert(numeric::source_regex(target, index + regexes, theta, word));
-            }
-            if numeric::source_regex(target, index + regexes, theta, word) {
-                let parts = choose|parts: Seq<Seq<EventView>>| parts.flatten() == word
-                    && forall|i: int| 0 <= i < parts.len()
-                        ==> numeric::source_regex(target, y as nat, theta, parts[i]);
-                assert forall|i: int| 0 <= i < parts.len() implies
-                    numeric::source_regex(source, x as nat, theta, parts[i]) by {}
-                assert(numeric::source_regex(source, index, theta, word));
-            }
-        },
-        (FlatRegex::Complement(x), FlatRegex::Complement(y)) => {
-            lemma_regex_copy(source, target, tests, regexes, count, x as nat, theta, word);
-        },
-        _ => {},
-    }
-}
-
-pub(crate) proof fn lemma_frame_languages(before: FlatPair<u64>, after: FlatPair<u64>)
-    requires dag(before), frame(before, after),
-    ensures forall|index: nat, theta: Subst, word: Seq<EventView>| index < before.regexes@.len()
-        ==> numeric::source_regex(before, index, theta, word)
-            == numeric::source_regex(after, index, theta, word),
-{
-    assert forall|i: int| 0 <= i < before.tests@.len() implies
-        test_shift(before.tests@[i], after.tests@[i], 0) by {
-        assert(before.tests@[i] == after.tests@[i]);
-        match before.tests@[i] {
-            FlatTest::And(xs) | FlatTest::Or(xs) => { assert(shifted(xs@, xs@, 0)); },
-            _ => {},
+    verus! {
+    broadcast use {vstd::seq::group_seq_lemmas, vstd::std_specs::vec::group_vec_axioms};
+    impl View for Tables {
+        type V = FlatPair<u64>;
+        open(crate) spec fn view(&self) -> FlatPair<u64> {
+            FlatPair { head: [FlatHead::Any, FlatHead::Any, FlatHead::Any],
+                tests: self.tests, regexes: self.regexes, root: 0 }
         }
     }
-    assert forall|i: int| 0 <= i < before.regexes@.len() implies
-        regex_shift(before.regexes@[i], after.regexes@[i], 0, 0) by {
-        assert(before.regexes@[i] == after.regexes@[i]);
-        match before.regexes@[i] {
-            FlatRegex::Concat(xs) | FlatRegex::Union(xs) | FlatRegex::Intersect(xs) => {
-                assert(shifted(xs@, xs@, 0));
+
+    pub(crate) open spec fn test_dag(test: FlatTest<u64>, index: nat) -> bool {
+        match test {
+            FlatTest::And(children) | FlatTest::Or(children) =>
+                flat::references_before(children@, index),
+            _ => true,
+        }
+    }
+
+    pub(crate) open spec fn dag(pair: FlatPair<u64>) -> bool {
+        (forall|i: int| 0 <= i < pair.tests@.len() ==> test_dag(#[trigger] pair.tests@[i], i as nat))
+        && (forall|i: int| 0 <= i < pair.regexes@.len() ==>
+            flat::regex_wf(#[trigger] pair.regexes@[i], i as nat, pair.tests@.len()))
+    }
+
+    pub(crate) proof fn lemma_dag_elim(pair: FlatPair<u64>)
+        requires dag(pair),
+        ensures forall|i: int| 0 <= i < pair.tests@.len()
+            ==> test_dag(#[trigger] pair.tests@[i], i as nat),
+            forall|i: int| 0 <= i < pair.regexes@.len()
+                ==> flat::regex_wf(#[trigger] pair.regexes@[i], i as nat, pair.tests@.len()),
+    {}
+
+    pub(crate) proof fn lemma_structural_dag(pair: FlatPair<u64>)
+        requires flat::structural_wf(pair),
+        ensures dag(pair), pair.root < pair.regexes@.len(),
+    {
+        reveal(flat::structural_wf);
+        reveal(flat::prefix_wf);
+        assert forall|i: int| 0 <= i < pair.tests@.len() implies
+            test_dag(pair.tests@[i], i as nat) by {
+            assert(flat::test_wf(pair.head@, pair.tests@[i], i as nat));
+            reveal(flat::test_wf);
+        }
+    }
+
+    pub(crate) open spec fn frame(before: FlatPair<u64>, after: FlatPair<u64>) -> bool {
+        before.tests@.len() <= after.tests@.len()
+        && before.regexes@.len() <= after.regexes@.len()
+        && (forall|i: int| 0 <= i < before.tests@.len()
+            ==> #[trigger] after.tests@[i] == before.tests@[i])
+        && (forall|i: int| 0 <= i < before.regexes@.len()
+            ==> #[trigger] after.regexes@[i] == before.regexes@[i])
+    }
+
+    pub(crate) open spec fn shifted(a: Seq<u32>, b: Seq<u32>, by: nat) -> bool {
+        a.len() == b.len() && forall|i: int| 0 <= i < a.len()
+            ==> b[i] as nat == a[i] as nat + by
+    }
+
+    pub(crate) open spec fn test_shift(a: FlatTest<u64>, b: FlatTest<u64>, by: nat) -> bool {
+        match (a, b) {
+            (FlatTest::Bool(x), FlatTest::Bool(y)) => x == y,
+            (FlatTest::Atom { field: f, term: t, positive: p },
+             FlatTest::Atom { field: g, term: u, positive: q }) => f == g && t == u && p == q,
+            (FlatTest::And(x), FlatTest::And(y)) | (FlatTest::Or(x), FlatTest::Or(y)) =>
+                shifted(x@, y@, by),
+            _ => false,
+        }
+    }
+
+    pub(crate) open spec fn regex_shift(a: FlatRegex, b: FlatRegex, tests: nat, regexes: nat) -> bool {
+        match (a, b) {
+            (FlatRegex::Empty, FlatRegex::Empty) | (FlatRegex::All, FlatRegex::All)
+            | (FlatRegex::Epsilon, FlatRegex::Epsilon) => true,
+            (FlatRegex::Test(x), FlatRegex::Test(y)) => y as nat == x as nat + tests,
+            (FlatRegex::Star(x), FlatRegex::Star(y))
+            | (FlatRegex::Complement(x), FlatRegex::Complement(y)) => y as nat == x as nat + regexes,
+            (FlatRegex::Concat(x), FlatRegex::Concat(y)) | (FlatRegex::Union(x), FlatRegex::Union(y))
+            | (FlatRegex::Intersect(x), FlatRegex::Intersect(y)) => shifted(x@, y@, regexes),
+            _ => false,
+        }
+    }
+
+    pub(crate) open spec fn tests_copied(source: FlatPair<u64>, target: FlatPair<u64>, by: nat, count: nat) -> bool {
+        count <= source.tests@.len() && by + count <= target.tests@.len()
+        && forall|i: int| 0 <= i < count ==>
+            test_shift(source.tests@[i], target.tests@[(by + i) as int], by)
+    }
+
+    pub(crate) open spec fn regexes_copied(source: FlatPair<u64>, target: FlatPair<u64>,
+        tests: nat, regexes: nat, count: nat) -> bool {
+        count <= source.regexes@.len() && regexes + count <= target.regexes@.len()
+        && forall|i: int| 0 <= i < count ==>
+            regex_shift(source.regexes@[i], target.regexes@[(regexes + i) as int], tests, regexes)
+    }
+
+    pub(crate) proof fn lemma_test_shift_wf(a: FlatTest<u64>, b: FlatTest<u64>, index: nat, by: nat)
+        requires test_dag(a, index), test_shift(a, b, by),
+        ensures test_dag(b, index + by),
+    {
+        match (a, b) {
+            (FlatTest::And(x), FlatTest::And(y)) | (FlatTest::Or(x), FlatTest::Or(y)) => {
+                assert forall|i: int| 0 <= i < y@.len() implies y@[i] < index + by by {
+                    assert(x@[i] < index);
+                }
             },
             _ => {},
         }
     }
-    assert forall|index: nat, theta: Subst, word: Seq<EventView>| index < before.regexes@.len()
-        implies numeric::source_regex(before, index, theta, word)
-            == numeric::source_regex(after, index, theta, word) by {
-        lemma_regex_copy(before, after, 0, 0, before.regexes@.len(), index, theta, word);
+
+    pub(crate) proof fn lemma_regex_shift_wf(a: FlatRegex, b: FlatRegex,
+        index: nat, tests: nat, test_base: nat, regex_base: nat)
+        requires flat::regex_wf(a, index, tests), regex_shift(a, b, test_base, regex_base),
+        ensures flat::regex_wf(b, index + regex_base, tests + test_base),
+    {
+        match (a, b) {
+            (FlatRegex::Concat(x), FlatRegex::Concat(y)) | (FlatRegex::Union(x), FlatRegex::Union(y))
+            | (FlatRegex::Intersect(x), FlatRegex::Intersect(y)) => {
+                assert forall|i: int| 0 <= i < y@.len() implies y@[i] < index + regex_base by {
+                    assert(x@[i] < index);
+                }
+            },
+            _ => {},
+        }
     }
-}
-}
+
+    pub(crate) proof fn lemma_test_copy(source: FlatPair<u64>, target: FlatPair<u64>,
+        by: nat, count: nat, index: nat, theta: Subst, event: EventView)
+        requires dag(source), tests_copied(source, target, by, count), index < count,
+        ensures numeric::source_test(source, index, theta, event)
+            == numeric::source_test(target, index + by, theta, event),
+        decreases index,
+    {
+        reveal_with_fuel(numeric::source_test, 1);
+        assert(test_dag(source.tests@[index as int], index));
+        assert(test_shift(source.tests@[index as int], target.tests@[(index + by) as int], by));
+        match (source.tests@[index as int], target.tests@[(index + by) as int]) {
+            (FlatTest::And(x), FlatTest::And(y)) | (FlatTest::Or(x), FlatTest::Or(y)) => {
+                assert forall|i: int| 0 <= i < x@.len() implies
+                    numeric::source_test(source, x@[i] as nat, theta, event)
+                        == numeric::source_test(target, y@[i] as nat, theta, event) by {
+                    assert(x@[i] < index);
+                    lemma_test_copy(source, target, by, count, x@[i] as nat, theta, event);
+                }
+            },
+            _ => {},
+        }
+    }
+
+    pub(crate) proof fn lemma_regex_copy(source: FlatPair<u64>, target: FlatPair<u64>,
+        tests: nat, regexes: nat, count: nat, index: nat, theta: Subst, word: Seq<EventView>)
+        requires dag(source), tests_copied(source, target, tests, source.tests@.len()),
+            regexes_copied(source, target, tests, regexes, count), index < count,
+        ensures numeric::source_regex(source, index, theta, word)
+            == numeric::source_regex(target, index + regexes, theta, word),
+        decreases index,
+    {
+        reveal_with_fuel(numeric::source_regex, 1);
+        assert(flat::regex_wf(source.regexes@[index as int], index, source.tests@.len()));
+        assert(regex_shift(source.regexes@[index as int], target.regexes@[(index + regexes) as int], tests, regexes));
+        match (source.regexes@[index as int], target.regexes@[(index + regexes) as int]) {
+            (FlatRegex::Test(x), FlatRegex::Test(y)) => {
+                if word.len() == 1 {
+                    lemma_test_copy(source, target, tests, source.tests@.len(), x as nat, theta, word[0]);
+                }
+            },
+            (FlatRegex::Union(x), FlatRegex::Union(y)) | (FlatRegex::Intersect(x), FlatRegex::Intersect(y)) => {
+                assert forall|i: int| 0 <= i < x@.len() implies
+                    numeric::source_regex(source, x@[i] as nat, theta, word)
+                        == numeric::source_regex(target, y@[i] as nat, theta, word) by {
+                    assert(x@[i] < index);
+                    lemma_regex_copy(source, target, tests, regexes, count, x@[i] as nat, theta, word);
+                }
+            },
+            (FlatRegex::Concat(x), FlatRegex::Concat(y)) => {
+                assert forall|i: int, part: Seq<EventView>| 0 <= i < x@.len() implies
+                    numeric::source_regex(source, x@[i] as nat, theta, part)
+                        == numeric::source_regex(target, y@[i] as nat, theta, part) by {
+                    assert(x@[i] < index);
+                    lemma_regex_copy(source, target, tests, regexes, count, x@[i] as nat, theta, part);
+                }
+                if numeric::source_regex(source, index, theta, word) {
+                    let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == x@.len()
+                        && parts.flatten() == word && forall|i: int| 0 <= i < x@.len()
+                            ==> x@[i] < index && numeric::source_regex(source, x@[i] as nat, theta, parts[i]);
+                    assert forall|i: int| 0 <= i < y@.len() implies
+                        y@[i] < index + regexes
+                            && numeric::source_regex(target, y@[i] as nat, theta, parts[i]) by {}
+                    assert(numeric::source_regex(target, index + regexes, theta, word));
+                }
+                if numeric::source_regex(target, index + regexes, theta, word) {
+                    let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == y@.len()
+                        && parts.flatten() == word && forall|i: int| 0 <= i < y@.len()
+                            ==> y@[i] < index + regexes
+                                && numeric::source_regex(target, y@[i] as nat, theta, parts[i]);
+                    assert forall|i: int| 0 <= i < x@.len() implies
+                        x@[i] < index && numeric::source_regex(source, x@[i] as nat, theta, parts[i]) by {}
+                    assert(numeric::source_regex(source, index, theta, word));
+                }
+            },
+            (FlatRegex::Star(x), FlatRegex::Star(y)) => {
+                assert forall|part: Seq<EventView>| numeric::source_regex(source, x as nat, theta, part)
+                    == #[trigger] numeric::source_regex(target, y as nat, theta, part) by {
+                    lemma_regex_copy(source, target, tests, regexes, count, x as nat, theta, part);
+                }
+                if numeric::source_regex(source, index, theta, word) {
+                    let parts = choose|parts: Seq<Seq<EventView>>| parts.flatten() == word
+                        && forall|i: int| 0 <= i < parts.len()
+                            ==> numeric::source_regex(source, x as nat, theta, parts[i]);
+                    assert forall|i: int| 0 <= i < parts.len() implies
+                        numeric::source_regex(target, y as nat, theta, parts[i]) by {}
+                    assert(numeric::source_regex(target, index + regexes, theta, word));
+                }
+                if numeric::source_regex(target, index + regexes, theta, word) {
+                    let parts = choose|parts: Seq<Seq<EventView>>| parts.flatten() == word
+                        && forall|i: int| 0 <= i < parts.len()
+                            ==> numeric::source_regex(target, y as nat, theta, parts[i]);
+                    assert forall|i: int| 0 <= i < parts.len() implies
+                        numeric::source_regex(source, x as nat, theta, parts[i]) by {}
+                    assert(numeric::source_regex(source, index, theta, word));
+                }
+            },
+            (FlatRegex::Complement(x), FlatRegex::Complement(y)) => {
+                lemma_regex_copy(source, target, tests, regexes, count, x as nat, theta, word);
+            },
+            _ => {},
+        }
+    }
+
+    pub(crate) proof fn lemma_frame_languages(before: FlatPair<u64>, after: FlatPair<u64>)
+        requires dag(before), frame(before, after),
+        ensures forall|index: nat, theta: Subst, word: Seq<EventView>| index < before.regexes@.len()
+            ==> numeric::source_regex(before, index, theta, word)
+                == numeric::source_regex(after, index, theta, word),
+    {
+        assert forall|i: int| 0 <= i < before.tests@.len() implies
+            test_shift(before.tests@[i], after.tests@[i], 0) by {
+            assert(before.tests@[i] == after.tests@[i]);
+            match before.tests@[i] {
+                FlatTest::And(xs) | FlatTest::Or(xs) => { assert(shifted(xs@, xs@, 0)); },
+                _ => {},
+            }
+        }
+        assert forall|i: int| 0 <= i < before.regexes@.len() implies
+            regex_shift(before.regexes@[i], after.regexes@[i], 0, 0) by {
+            assert(before.regexes@[i] == after.regexes@[i]);
+            match before.regexes@[i] {
+                FlatRegex::Concat(xs) | FlatRegex::Union(xs) | FlatRegex::Intersect(xs) => {
+                    assert(shifted(xs@, xs@, 0));
+                },
+                _ => {},
+            }
+        }
+        assert forall|index: nat, theta: Subst, word: Seq<EventView>| index < before.regexes@.len()
+            implies numeric::source_regex(before, index, theta, word)
+                == numeric::source_regex(after, index, theta, word) by {
+            lemma_regex_copy(before, after, 0, 0, before.regexes@.len(), index, theta, word);
+        }
+    }
+    }
 }
 
 verus! {
@@ -2517,668 +2519,668 @@ pub open(crate) spec fn analyzer_obligations<E: Event>() -> bool {
 pub use frontend::{analyzer_state_wf, constructor_capacity, query_capacity};
 
 pub(crate) mod frontend {
-use super::*;
-use crate::analyzer::{Domains, PolicyAnalyzer};
-use junco_core::flat::{FlatHead, FlatPair};
-use junco_core::verify::{encoding as enc, flatten as fl};
-use vstd::std_specs::cmp::PartialEqSpec;
+    use super::*;
+    use crate::analyzer::{Domains, PolicyAnalyzer};
+    use junco_core::flat::{FlatHead, FlatPair};
+    use junco_core::verify::{encoding as enc, flatten as fl};
+    use vstd::std_specs::cmp::PartialEqSpec;
 
-verus! {
-broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas, vstd::set::group_set_lemmas};
+    verus! {
+    broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas, vstd::set::group_set_lemmas};
 
-pub(crate) open spec fn value_field<E: Event>(v: ComponentValue<E>) -> Component {
-    match v { ComponentValue::Principal(_) => Component::Principal,
-        ComponentValue::Action(_) => Component::Action,
-        ComponentValue::Resource(_) => Component::Resource }
-}
+    pub(crate) open spec fn value_field<E: Event>(v: ComponentValue<E>) -> Component {
+        match v { ComponentValue::Principal(_) => Component::Principal,
+            ComponentValue::Action(_) => Component::Action,
+            ComponentValue::Resource(_) => Component::Resource }
+    }
 
-pub(crate) open spec fn entries<E: Event>(values: Seq<ComponentValue<E>>) -> Seq<(ComponentValue<E>, u64)> {
-    values.map(|i: int, v: ComponentValue<E>| (v, (i + 1) as u64))
-}
+    pub(crate) open spec fn entries<E: Event>(values: Seq<ComponentValue<E>>) -> Seq<(ComponentValue<E>, u64)> {
+        values.map(|i: int, v: ComponentValue<E>| (v, (i + 1) as u64))
+    }
 
-pub(crate) open spec fn field_entries<E: Event>(values: Seq<ComponentValue<E>>, field: Component)
-    -> Seq<(ComponentValue<E>, u64)> {
-    entries(values).filter(|p: (ComponentValue<E>, u64)| value_field(p.0) == field)
-}
+    pub(crate) open spec fn field_entries<E: Event>(values: Seq<ComponentValue<E>>, field: Component)
+        -> Seq<(ComponentValue<E>, u64)> {
+        entries(values).filter(|p: (ComponentValue<E>, u64)| value_field(p.0) == field)
+    }
 
-pub(crate) open spec fn constants_wf<E: Event>(c: Constants<E>) -> bool {
-    &&& c.values@.len() <= u32::MAX
-    &&& crate::native::representatives(c.ids)
-        == c.values@.map(|i: int, v: ComponentValue<E>| (v, (i + 1) as u32))
-    &&& forall|i: int, j: int| 0 <= i < j < c.values@.len()
-        ==> !c.values@[i].eq_spec(&c.values@[j])
-}
+    pub(crate) open spec fn constants_wf<E: Event>(c: Constants<E>) -> bool {
+        &&& c.values@.len() <= u32::MAX
+        &&& crate::native::representatives(c.ids)
+            == c.values@.map(|i: int, v: ComponentValue<E>| (v, (i + 1) as u32))
+        &&& forall|i: int, j: int| 0 <= i < j < c.values@.len()
+            ==> !c.values@[i].eq_spec(&c.values@[j])
+    }
 
-pub(crate) open spec fn constants_frame<E: Event>(a: Constants<E>, b: Constants<E>) -> bool {
-    a.values@.is_prefix_of(b.values@)
-}
+    pub(crate) open spec fn constants_frame<E: Event>(a: Constants<E>, b: Constants<E>) -> bool {
+        a.values@.is_prefix_of(b.values@)
+    }
 
-pub(crate) open spec fn stored_code<E: Event>(c: Constants<E>, v: ComponentValue<E>, id: u32) -> bool {
-    id > 0 && id <= c.values@.len() && v.eq_spec(&c.values@[id as int - 1])
-}
+    pub(crate) open spec fn stored_code<E: Event>(c: Constants<E>, v: ComponentValue<E>, id: u32) -> bool {
+        id > 0 && id <= c.values@.len() && v.eq_spec(&c.values@[id as int - 1])
+    }
 
-pub(crate) proof fn lemma_field_book<E: Event>(c: Constants<E>, field: Component)
-    ensures constant_book(c)[junco_core::flat::verify::field_index(field)] == field_entries(c.values@, field),
-{
-    let p = |entry: (ComponentValue<E>, u64)| value_field(entry.0) == field;
-    let q = match field {
-        Component::Principal => |entry: (ComponentValue<E>, u64)| entry.0 is Principal,
-        Component::Action => |entry: (ComponentValue<E>, u64)| entry.0 is Action,
-        Component::Resource => |entry: (ComponentValue<E>, u64)| entry.0 is Resource,
-    };
-    assert forall|x: (ComponentValue<E>, u64)| #[trigger] p(x) == q(x) by { match x.0 { ComponentValue::Principal(_) => {}, ComponentValue::Action(_) => {}, ComponentValue::Resource(_) => {} } }
-    assert(entries(c.values@).filter(p) == entries(c.values@).filter(q)) by {
+    pub(crate) proof fn lemma_field_book<E: Event>(c: Constants<E>, field: Component)
+        ensures constant_book(c)[junco_core::flat::verify::field_index(field)] == field_entries(c.values@, field),
+    {
+        let p = |entry: (ComponentValue<E>, u64)| value_field(entry.0) == field;
+        let q = match field {
+            Component::Principal => |entry: (ComponentValue<E>, u64)| entry.0 is Principal,
+            Component::Action => |entry: (ComponentValue<E>, u64)| entry.0 is Action,
+            Component::Resource => |entry: (ComponentValue<E>, u64)| entry.0 is Resource,
+        };
+        assert forall|x: (ComponentValue<E>, u64)| #[trigger] p(x) == q(x) by { match x.0 { ComponentValue::Principal(_) => {}, ComponentValue::Action(_) => {}, ComponentValue::Resource(_) => {} } }
+        assert(entries(c.values@).filter(p) == entries(c.values@).filter(q)) by {
+            reveal(Seq::filter);
+            lemma_filter_ext(entries(c.values@), p, q);
+        }
+    }
+
+    proof fn lemma_filter_ext<T>(s: Seq<T>, p: spec_fn(T) -> bool, q: spec_fn(T) -> bool)
+        requires forall|x: T| #[trigger] p(x) == q(x),
+        ensures s.filter(p) == s.filter(q),
+        decreases s.len(),
+    {
         reveal(Seq::filter);
-        lemma_filter_ext(entries(c.values@), p, q);
+        if s.len() > 0 { lemma_filter_ext(s.drop_last(), p, q); }
     }
-}
 
-proof fn lemma_filter_ext<T>(s: Seq<T>, p: spec_fn(T) -> bool, q: spec_fn(T) -> bool)
-    requires forall|x: T| #[trigger] p(x) == q(x),
-    ensures s.filter(p) == s.filter(q),
-    decreases s.len(),
-{
-    reveal(Seq::filter);
-    if s.len() > 0 { lemma_filter_ext(s.drop_last(), p, q); }
-}
-
-pub(crate) proof fn lemma_field_entry_source<E: Event>(values: Seq<ComponentValue<E>>, field: Component, i: int)
-    requires 0 <= i < field_entries(values, field).len(),
-    ensures exists|j: int| 0 <= j < values.len() && field_entries(values, field)[i]
-        == (values[j], (j + 1) as u64),
-        value_field(field_entries(values, field)[i].0) == field,
-{
-    let p = |x: (ComponentValue<E>, u64)| value_field(x.0) == field;
-    entries(values).lemma_filter_pred(p, i);
-    entries(values).lemma_filter_contains_rev(p, field_entries(values, field)[i]);
-    let j = choose|j: int| 0 <= j < entries(values).len()
-        && entries(values)[j] == field_entries(values, field)[i];
-    assert(entries(values)[j] == (values[j], (j + 1) as u64));
-}
-
-proof fn lemma_component_eq<E: Event>(f: Component, a: ComponentValue<E>, b: ComponentValue<E>)
-    requires fl::component_domain::<E>()(f, a), fl::component_domain::<E>()(f, b),
-    ensures fl::component_equality::<E>()(f, a, b) == a.eq_spec(&b),
-{
-    match (f, a, b) {
-        (Component::Principal, ComponentValue::Principal(_), ComponentValue::Principal(_)) => {},
-        (Component::Action, ComponentValue::Action(_), ComponentValue::Action(_)) => {},
-        (Component::Resource, ComponentValue::Resource(_), ComponentValue::Resource(_)) => {},
-        _ => {},
+    pub(crate) proof fn lemma_field_entry_source<E: Event>(values: Seq<ComponentValue<E>>, field: Component, i: int)
+        requires 0 <= i < field_entries(values, field).len(),
+        ensures exists|j: int| 0 <= j < values.len() && field_entries(values, field)[i]
+            == (values[j], (j + 1) as u64),
+            value_field(field_entries(values, field)[i].0) == field,
+    {
+        let p = |x: (ComponentValue<E>, u64)| value_field(x.0) == field;
+        entries(values).lemma_filter_pred(p, i);
+        entries(values).lemma_filter_contains_rev(p, field_entries(values, field)[i]);
+        let j = choose|j: int| 0 <= j < entries(values).len()
+            && entries(values)[j] == field_entries(values, field)[i];
+        assert(entries(values)[j] == (values[j], (j + 1) as u64));
     }
-}
 
-pub(crate) proof fn lemma_constants_maps<E: Event>(c: Constants<E>)
-    requires constants_wf(c), analyzer_obligations::<E>(),
-    ensures enc::maps_wf(constant_book(c), fl::component_equality::<E>(), fl::component_domain::<E>()),
-{
-    assert forall|f: Component, a: ComponentValue<E>| #[trigger] fl::component_domain::<E>()(f, a) implies fl::component_equality::<E>()(f, a, a) by {
-        lemma_component_eq(f, a, a); assert(a.eq_spec(&a));
+    proof fn lemma_component_eq<E: Event>(f: Component, a: ComponentValue<E>, b: ComponentValue<E>)
+        requires fl::component_domain::<E>()(f, a), fl::component_domain::<E>()(f, b),
+        ensures fl::component_equality::<E>()(f, a, b) == a.eq_spec(&b),
+    {
+        match (f, a, b) {
+            (Component::Principal, ComponentValue::Principal(_), ComponentValue::Principal(_)) => {},
+            (Component::Action, ComponentValue::Action(_), ComponentValue::Action(_)) => {},
+            (Component::Resource, ComponentValue::Resource(_), ComponentValue::Resource(_)) => {},
+            _ => {},
+        }
     }
-    assert forall|f: Component, a: ComponentValue<E>, b: ComponentValue<E>| fl::component_domain::<E>()(f, a) && fl::component_domain::<E>()(f, b)
-        implies #[trigger] fl::component_equality::<E>()(f, a, b) == fl::component_equality::<E>()(f, b, a) by {
-        lemma_component_eq(f, a, b); lemma_component_eq(f, b, a); assert(a.eq_spec(&b) == b.eq_spec(&a));
-    }
-    assert forall|f: Component, a: ComponentValue<E>, b: ComponentValue<E>, d: ComponentValue<E>|
-        fl::component_domain::<E>()(f, a) && fl::component_domain::<E>()(f, b) && fl::component_domain::<E>()(f, d)
-            && #[trigger] fl::component_equality::<E>()(f, a, b) && #[trigger] fl::component_equality::<E>()(f, b, d)
-        implies fl::component_equality::<E>()(f, a, d) by {
-        lemma_component_eq(f, a, b); lemma_component_eq(f, b, d); lemma_component_eq(f, a, d);
-        assert(a.eq_spec(&b)); assert(b.eq_spec(&d)); assert(a.eq_spec(&d));
-    }
-    assert(enc::equality_laws(fl::component_equality::<E>(), fl::component_domain::<E>()));
-    assert forall|f: int, i: int| 0 <= f < 3 && 0 <= i < constant_book(c)[f].len()
-        implies fl::component_domain::<E>()(enc::field_at(f), constant_book(c)[f][i].0)
-            && constant_book(c)[f][i].1 > 0 by {
-        let field = enc::field_at(f);
-        assert(junco_core::flat::verify::field_index(field) == f);
-        lemma_field_book(c, field);
-        lemma_field_entry_source(c.values@, field, i);
-        let j = choose|j: int| 0 <= j < c.values@.len()
-            && field_entries(c.values@, field)[i] == (c.values@[j], (j + 1) as u64);
-        match constant_book(c)[f][i].0 { ComponentValue::Principal(_) => {}, ComponentValue::Action(_) => {}, ComponentValue::Resource(_) => {} }
-    }
-    assert forall|f: int, i: int, k: int| 0 <= f < 3 && 0 <= i < constant_book(c)[f].len()
-        && 0 <= k < constant_book(c)[f].len() implies
-        fl::component_equality::<E>()(enc::field_at(f), constant_book(c)[f][i].0, constant_book(c)[f][k].0)
-            == (constant_book(c)[f][i].1 == constant_book(c)[f][k].1) by {
-        let field = enc::field_at(f);
-        assert(junco_core::flat::verify::field_index(field) == f);
-        lemma_field_book(c, field);
-        lemma_field_entry_source(c.values@, field, i);
-        lemma_field_entry_source(c.values@, field, k);
-        let j = choose|j: int| 0 <= j < c.values@.len() && field_entries(c.values@, field)[i] == (c.values@[j], (j + 1) as u64);
-        let l = choose|l: int| 0 <= l < c.values@.len() && field_entries(c.values@, field)[k] == (c.values@[l], (l + 1) as u64);
-        if j < l { assert(!c.values@[j].eq_spec(&c.values@[l])); }
-        if l < j { assert(!c.values@[l].eq_spec(&c.values@[j])); }
-        match (c.values@[j], c.values@[l]) { (ComponentValue::Principal(_), ComponentValue::Principal(_)) => {}, (ComponentValue::Action(_), ComponentValue::Action(_)) => {}, (ComponentValue::Resource(_), ComponentValue::Resource(_)) => {}, _ => {} }
-    }
-}
 
-pub(crate) proof fn lemma_stored_encoded<E: Event>(c: Constants<E>, v: ComponentValue<E>, id: u32)
-    requires constants_wf(c), stored_code(c, v, id),
-    ensures enc::encoded(constant_book(c), fl::component_equality::<E>(), value_field(v), v, id as u64),
-{
-    let field = value_field(v);
-    let j = id as int - 1;
-    assert(value_field(c.values@[j]) == field) by { match (v, c.values@[j]) { (ComponentValue::Principal(_), ComponentValue::Principal(_)) => {}, (ComponentValue::Action(_), ComponentValue::Action(_)) => {}, (ComponentValue::Resource(_), ComponentValue::Resource(_)) => {}, _ => {} } }
-    lemma_field_book(c, field);
-    entries(c.values@).lemma_filter_contains(|p: (ComponentValue<E>, u64)| value_field(p.0) == field, j);
-    let i = choose|i: int| 0 <= i < field_entries(c.values@, field).len()
-        && field_entries(c.values@, field)[i] == entries(c.values@)[j];
-    assert(enc::encoded(constant_book(c), fl::component_equality::<E>(), field, v, id as u64));
-}
-
-pub(crate) proof fn lemma_constants_extend<E: Event>(a: Constants<E>, b: Constants<E>)
-    requires constants_wf(a), constants_wf(b), constants_frame(a, b),
-    ensures enc::extends(constant_book(a), constant_book(b), fl::component_equality::<E>()),
-{
-    assert forall|field: Component, v: ComponentValue<E>, id: u64|
-        enc::encoded(constant_book(a), fl::component_equality::<E>(), field, v, id)
-        implies enc::encoded(constant_book(b), fl::component_equality::<E>(), field, v, id) by {
-        lemma_field_book(a, field);
-        let f = junco_core::flat::verify::field_index(field);
-        let i = choose|i: int| 0 <= i < constant_book(a)[f].len() && constant_book(a)[f][i].1 == id
-            && fl::component_equality::<E>()(field, v, constant_book(a)[f][i].0);
-        lemma_field_entry_source(a.values@, field, i);
-        let j = choose|j: int| 0 <= j < a.values@.len() && field_entries(a.values@, field)[i] == (a.values@[j], (j + 1) as u64);
-        assert(b.values@[j] == a.values@[j]);
-        assert(stored_code(b, v, id as u32));
-        assert(value_field(v) == field);
-        lemma_stored_encoded(b, v, id as u32);
-    }
-}
-
-pub(crate) open spec fn universe_id<E: Event>(c: Constants<E>, values: Seq<ComponentValue<E>>, id: u32) -> bool {
-    exists|j: int| 0 <= j < values.len() && stored_code(c, values[j], id)
-}
-
-pub(crate) open spec fn universe_value<E: Event>(c: Constants<E>, ids: Seq<u32>, value: ComponentValue<E>) -> bool {
-    exists|i: int| 0 <= i < ids.len() && stored_code(c, value, ids[i])
-}
-
-pub(crate) open spec fn universe_encoded<E: Event>(c: Constants<E>, ids: Seq<u32>, values: Seq<ComponentValue<E>>) -> bool {
-    &&& ids.no_duplicates()
-    &&& forall|i: int| 0 <= i < ids.len() ==> #[trigger] universe_id(c, values, ids[i])
-    &&& forall|j: int| 0 <= j < values.len() ==> #[trigger] universe_value(c, ids, values[j])
-}
-
-pub(crate) proof fn lemma_stored_frame<E: Event>(a: Constants<E>, b: Constants<E>, v: ComponentValue<E>, id: u32)
-    requires constants_frame(a, b), stored_code(a, v, id),
-    ensures stored_code(b, v, id),
-{}
-
-pub(crate) proof fn lemma_universe_frame<E: Event>(a: Constants<E>, b: Constants<E>, ids: Seq<u32>, values: Seq<ComponentValue<E>>)
-    requires constants_frame(a, b), universe_encoded(a, ids, values),
-    ensures universe_encoded(b, ids, values),
-{
-    hide(stored_code);
-    hide(constants_frame);
-    assert forall|i: int| 0 <= i < ids.len() implies #[trigger] universe_id(b, values, ids[i]) by {
-        assert(universe_id(a, values, ids[i]));
-        let j = choose|j: int| 0 <= j < values.len() && stored_code(a, values[j], ids[i]);
-        lemma_stored_frame(a, b, values[j], ids[i]);
-    }
-    assert forall|j: int| 0 <= j < values.len() implies #[trigger] universe_value(b, ids, values[j]) by {
-        assert(universe_value(a, ids, values[j]));
-        let i = choose|i: int| 0 <= i < ids.len() && stored_code(a, values[j], ids[i]);
-        lemma_stored_frame(a, b, values[j], ids[i]);
-    }
-}
-
-pub(crate) open spec fn option_len<T>(values: Option<Vec<T>>) -> nat {
-    match values { Some(v) => v@.len(), None => 0 }
-}
-
-/// Sufficient constructor capacity: the total number of declared values fits the u32 code space.
-pub closed spec fn constructor_capacity<E: Event>(domains: Domains<E>) -> bool {
-    option_len(domains.principals) + option_len(domains.actions) + option_len(domains.resources) <= u32::MAX
-}
-
-pub(crate) open spec fn encode_capacity<E: Event>(a: PolicyAnalyzer<E>, source: FlatPair<ComponentValue<E>>) -> bool {
-    a.constants.values@.len() + 3 + source.tests@.len() <= u32::MAX
-}
-
-/// Sufficient capacities for constant ids and the per-state split and letter products.
-/// Constraint-id and fresh-value exhaustion are runtime errors, not preconditions.
-pub open(crate) spec fn query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>) -> bool {
-    // Traversal costs overbound the query's vocabulary.
-    let count = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
-    count <= u32::MAX && (count + 2) * (count + 2) * (count + 2) <= usize::MAX
-}
-
-pub(crate) open spec fn pins(head: Seq<FlatHead<u64>>) -> encoding::NHead {
-    encoding::NHead { principal: encoding::head_code(head[0]), action: encoding::head_code(head[1]), resource: encoding::head_code(head[2]) }
-}
-
-pub(crate) open spec fn numeric_head_wf(head: Seq<FlatHead<u64>>) -> bool {
-    head.len() == 3 && forall|i: int| #![trigger head[i]] 0 <= i < 3 ==> match head[i] { FlatHead::Constant(v) => v <= u32::MAX, _ => true }
-}
-
-pub(crate) proof fn lemma_lowered_head_bound<E: Event>(c: Constants<E>, source: FlatPair<ComponentValue<E>>, target: FlatPair<u64>)
-    requires constants_wf(c), enc::lowering(source, target, constant_book(c), fl::component_equality::<E>()),
-    ensures numeric_head_wf(target.head@),
-{
-    assert forall|i: int| #![trigger target.head@[i]] 0 <= i < 3 implies match target.head@[i] { FlatHead::Constant(v) => v <= u32::MAX, _ => true } by {
-        if let FlatHead::Constant(id) = target.head@[i] {
-            let field = enc::field_at(i);
+    pub(crate) proof fn lemma_constants_maps<E: Event>(c: Constants<E>)
+        requires constants_wf(c), analyzer_obligations::<E>(),
+        ensures enc::maps_wf(constant_book(c), fl::component_equality::<E>(), fl::component_domain::<E>()),
+    {
+        assert forall|f: Component, a: ComponentValue<E>| #[trigger] fl::component_domain::<E>()(f, a) implies fl::component_equality::<E>()(f, a, a) by {
+            lemma_component_eq(f, a, a); assert(a.eq_spec(&a));
+        }
+        assert forall|f: Component, a: ComponentValue<E>, b: ComponentValue<E>| fl::component_domain::<E>()(f, a) && fl::component_domain::<E>()(f, b)
+            implies #[trigger] fl::component_equality::<E>()(f, a, b) == fl::component_equality::<E>()(f, b, a) by {
+            lemma_component_eq(f, a, b); lemma_component_eq(f, b, a); assert(a.eq_spec(&b) == b.eq_spec(&a));
+        }
+        assert forall|f: Component, a: ComponentValue<E>, b: ComponentValue<E>, d: ComponentValue<E>|
+            fl::component_domain::<E>()(f, a) && fl::component_domain::<E>()(f, b) && fl::component_domain::<E>()(f, d)
+                && #[trigger] fl::component_equality::<E>()(f, a, b) && #[trigger] fl::component_equality::<E>()(f, b, d)
+            implies fl::component_equality::<E>()(f, a, d) by {
+            lemma_component_eq(f, a, b); lemma_component_eq(f, b, d); lemma_component_eq(f, a, d);
+            assert(a.eq_spec(&b)); assert(b.eq_spec(&d)); assert(a.eq_spec(&d));
+        }
+        assert(enc::equality_laws(fl::component_equality::<E>(), fl::component_domain::<E>()));
+        assert forall|f: int, i: int| 0 <= f < 3 && 0 <= i < constant_book(c)[f].len()
+            implies fl::component_domain::<E>()(enc::field_at(f), constant_book(c)[f][i].0)
+                && constant_book(c)[f][i].1 > 0 by {
+            let field = enc::field_at(f);
+            assert(junco_core::flat::verify::field_index(field) == f);
             lemma_field_book(c, field);
-            let value = match source.head@[i] { FlatHead::Constant(v) => v, _ => arbitrary() };
-            let j = choose|j: int| 0 <= j < constant_book(c)[i].len() && constant_book(c)[i][j].1 == id && fl::component_equality::<E>()(field, value, constant_book(c)[i][j].0);
-            lemma_field_entry_source(c.values@, field, j);
+            lemma_field_entry_source(c.values@, field, i);
+            let j = choose|j: int| 0 <= j < c.values@.len()
+                && field_entries(c.values@, field)[i] == (c.values@[j], (j + 1) as u64);
+            match constant_book(c)[f][i].0 { ComponentValue::Principal(_) => {}, ComponentValue::Action(_) => {}, ComponentValue::Resource(_) => {} }
+        }
+        assert forall|f: int, i: int, k: int| 0 <= f < 3 && 0 <= i < constant_book(c)[f].len()
+            && 0 <= k < constant_book(c)[f].len() implies
+            fl::component_equality::<E>()(enc::field_at(f), constant_book(c)[f][i].0, constant_book(c)[f][k].0)
+                == (constant_book(c)[f][i].1 == constant_book(c)[f][k].1) by {
+            let field = enc::field_at(f);
+            assert(junco_core::flat::verify::field_index(field) == f);
+            lemma_field_book(c, field);
+            lemma_field_entry_source(c.values@, field, i);
+            lemma_field_entry_source(c.values@, field, k);
+            let j = choose|j: int| 0 <= j < c.values@.len() && field_entries(c.values@, field)[i] == (c.values@[j], (j + 1) as u64);
+            let l = choose|l: int| 0 <= l < c.values@.len() && field_entries(c.values@, field)[k] == (c.values@[l], (l + 1) as u64);
+            if j < l { assert(!c.values@[j].eq_spec(&c.values@[l])); }
+            if l < j { assert(!c.values@[l].eq_spec(&c.values@[j])); }
+            match (c.values@[j], c.values@[l]) { (ComponentValue::Principal(_), ComponentValue::Principal(_)) => {}, (ComponentValue::Action(_), ComponentValue::Action(_)) => {}, (ComponentValue::Resource(_), ComponentValue::Resource(_)) => {}, _ => {} }
         }
     }
-}
 
-pub(crate) open spec fn encoding_head_code(head: FlatHead<u64>) -> Option<nat> { encoding::head_code(head) }
+    pub(crate) proof fn lemma_stored_encoded<E: Event>(c: Constants<E>, v: ComponentValue<E>, id: u32)
+        requires constants_wf(c), stored_code(c, v, id),
+        ensures enc::encoded(constant_book(c), fl::component_equality::<E>(), value_field(v), v, id as u64),
+    {
+        let field = value_field(v);
+        let j = id as int - 1;
+        assert(value_field(c.values@[j]) == field) by { match (v, c.values@[j]) { (ComponentValue::Principal(_), ComponentValue::Principal(_)) => {}, (ComponentValue::Action(_), ComponentValue::Action(_)) => {}, (ComponentValue::Resource(_), ComponentValue::Resource(_)) => {}, _ => {} } }
+        lemma_field_book(c, field);
+        entries(c.values@).lemma_filter_contains(|p: (ComponentValue<E>, u64)| value_field(p.0) == field, j);
+        let i = choose|i: int| 0 <= i < field_entries(c.values@, field).len()
+            && field_entries(c.values@, field)[i] == entries(c.values@)[j];
+        assert(enc::encoded(constant_book(c), fl::component_equality::<E>(), field, v, id as u64));
+    }
 
-pub(crate) open spec fn declared_universe<E: Event, T>(c: Constants<E>, u: Universe, vs: Option<Vec<T>>, f: spec_fn(T) -> ComponentValue<E>) -> bool {
-    match (u, vs) { (None, None) => true, (Some(ids), Some(values)) => universe_encoded(c, (*ids)@, values@.map_values(f)), _ => false }
-}
-
-pub(crate) open spec fn declared_domains_encoded<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
-    declared_universe(a.constants, a.universes[0], d.principals, |v: E::Principal| ComponentValue::<E>::Principal(v))
-        && declared_universe(a.constants, a.universes[1], d.actions, |v: E::Action| ComponentValue::<E>::Action(v))
-        && declared_universe(a.constants, a.universes[2], d.resources, |v: E::Resource| ComponentValue::<E>::Resource(v))
-}
-
-pub(crate) open spec fn selected_values<E: Event>(c: Constants<E>, u: Universe) -> Option<Set<ComponentValue<E>>> {
-    match u { None => None, Some(ids) => Some((*ids)@.to_set().map(|id: u32| c.values@[id as int - 1])) }
-}
-
-pub(crate) open spec fn principal_of<E: Event>(v: ComponentValue<E>) -> E::Principal {
-    match v { ComponentValue::Principal(x) => x, _ => arbitrary() }
-}
-pub(crate) open spec fn action_of<E: Event>(v: ComponentValue<E>) -> E::Action {
-    match v { ComponentValue::Action(x) => x, _ => arbitrary() }
-}
-pub(crate) open spec fn resource_of<E: Event>(v: ComponentValue<E>) -> E::Resource {
-    match v { ComponentValue::Resource(x) => x, _ => arbitrary() }
-}
-
-pub(crate) open spec fn principal_values<E: Event>(values: Set<ComponentValue<E>>) -> Set<E::Principal> {
-    values.filter(|v: ComponentValue<E>| v is Principal).map(|v: ComponentValue<E>| principal_of::<E>(v))
-}
-pub(crate) open spec fn action_values<E: Event>(values: Set<ComponentValue<E>>) -> Set<E::Action> {
-    values.filter(|v: ComponentValue<E>| v is Action).map(|v: ComponentValue<E>| action_of::<E>(v))
-}
-pub(crate) open spec fn resource_values<E: Event>(values: Set<ComponentValue<E>>) -> Set<E::Resource> {
-    values.filter(|v: ComponentValue<E>| v is Resource).map(|v: ComponentValue<E>| resource_of::<E>(v))
-}
-
-impl<E: Event> View for PolicyAnalyzer<E> {
-    type V = analyzer::AnalyzerView<E::Principal, E::Action, E::Resource>;
-    open(crate) spec fn view(&self) -> Self::V {
-        analyzer::AnalyzerView {
-            domains: semantics::DomainsView {
-                principal: match selected_values(self.constants, self.universes[0]) { None => None, Some(vs) => Some(principal_values::<E>(vs)) },
-                action: match selected_values(self.constants, self.universes[1]) { None => None, Some(vs) => Some(action_values::<E>(vs)) },
-                resource: match selected_values(self.constants, self.universes[2]) { None => None, Some(vs) => Some(resource_values::<E>(vs)) },
-            },
-            rules: Seq::empty(),
-            known_principals: principal_values::<E>(self.constants.values@.to_set()),
-            known_actions: action_values::<E>(self.constants.values@.to_set()),
-            known_resources: resource_values::<E>(self.constants.values@.to_set()),
+    pub(crate) proof fn lemma_constants_extend<E: Event>(a: Constants<E>, b: Constants<E>)
+        requires constants_wf(a), constants_wf(b), constants_frame(a, b),
+        ensures enc::extends(constant_book(a), constant_book(b), fl::component_equality::<E>()),
+    {
+        assert forall|field: Component, v: ComponentValue<E>, id: u64|
+            enc::encoded(constant_book(a), fl::component_equality::<E>(), field, v, id)
+            implies enc::encoded(constant_book(b), fl::component_equality::<E>(), field, v, id) by {
+            lemma_field_book(a, field);
+            let f = junco_core::flat::verify::field_index(field);
+            let i = choose|i: int| 0 <= i < constant_book(a)[f].len() && constant_book(a)[f][i].1 == id
+                && fl::component_equality::<E>()(field, v, constant_book(a)[f][i].0);
+            lemma_field_entry_source(a.values@, field, i);
+            let j = choose|j: int| 0 <= j < a.values@.len() && field_entries(a.values@, field)[i] == (a.values@[j], (j + 1) as u64);
+            assert(b.values@[j] == a.values@[j]);
+            assert(stored_code(b, v, id as u32));
+            assert(value_field(v) == field);
+            lemma_stored_encoded(b, v, id as u32);
         }
     }
-}
 
-pub(crate) open spec fn universes_wf<E: Event>(c: Constants<E>, us: Universes) -> bool {
-    forall|f: int| #![trigger us[f]] 0 <= f < 3 ==> match us[f] { None => true, Some(ids) => (*ids)@.no_duplicates()
-        && forall|j: int| 0 <= j < (*ids)@.len() ==> 0 < (*ids)@[j] <= c.values@.len()
-            && value_field(c.values@[(*ids)@[j] as int - 1]) == enc::field_at(f) }
-}
+    pub(crate) open spec fn universe_id<E: Event>(c: Constants<E>, values: Seq<ComponentValue<E>>, id: u32) -> bool {
+        exists|j: int| 0 <= j < values.len() && stored_code(c, values[j], id)
+    }
 
-/// Constant-book and declared-universe invariants preserved by analyzer queries.
-pub open(crate) spec fn analyzer_state_wf<E: Event>(a: PolicyAnalyzer<E>) -> bool {
-    constants_wf(a.constants) && universes_wf(a.constants, a.universes)
-}
+    pub(crate) open spec fn universe_value<E: Event>(c: Constants<E>, ids: Seq<u32>, value: ComponentValue<E>) -> bool {
+        exists|i: int| 0 <= i < ids.len() && stored_code(c, value, ids[i])
+    }
 
-pub(crate) proof fn lemma_universes_frame<E: Event>(a: Constants<E>, b: Constants<E>, us: Universes)
-    requires constants_frame(a, b), universes_wf(a, us),
-    ensures universes_wf(b, us), selected_values(a, us[0]) == selected_values(b, us[0]),
-        selected_values(a, us[1]) == selected_values(b, us[1]), selected_values(a, us[2]) == selected_values(b, us[2]),
-{
-    assert forall|f: int| 0 <= f < 3 implies selected_values(a, us[f]) == selected_values(b, us[f]) by {
-        if let Some(ids) = us[f] {
-            super::lemma_set_map_equal((*ids)@.to_set(), |id: u32| a.values@[id as int - 1], |id: u32| b.values@[id as int - 1]);
+    pub(crate) open spec fn universe_encoded<E: Event>(c: Constants<E>, ids: Seq<u32>, values: Seq<ComponentValue<E>>) -> bool {
+        &&& ids.no_duplicates()
+        &&& forall|i: int| 0 <= i < ids.len() ==> #[trigger] universe_id(c, values, ids[i])
+        &&& forall|j: int| 0 <= j < values.len() ==> #[trigger] universe_value(c, ids, values[j])
+    }
+
+    pub(crate) proof fn lemma_stored_frame<E: Event>(a: Constants<E>, b: Constants<E>, v: ComponentValue<E>, id: u32)
+        requires constants_frame(a, b), stored_code(a, v, id),
+        ensures stored_code(b, v, id),
+    {}
+
+    pub(crate) proof fn lemma_universe_frame<E: Event>(a: Constants<E>, b: Constants<E>, ids: Seq<u32>, values: Seq<ComponentValue<E>>)
+        requires constants_frame(a, b), universe_encoded(a, ids, values),
+        ensures universe_encoded(b, ids, values),
+    {
+        hide(stored_code);
+        hide(constants_frame);
+        assert forall|i: int| 0 <= i < ids.len() implies #[trigger] universe_id(b, values, ids[i]) by {
+            assert(universe_id(a, values, ids[i]));
+            let j = choose|j: int| 0 <= j < values.len() && stored_code(a, values[j], ids[i]);
+            lemma_stored_frame(a, b, values[j], ids[i]);
+        }
+        assert forall|j: int| 0 <= j < values.len() implies #[trigger] universe_value(b, ids, values[j]) by {
+            assert(universe_value(a, ids, values[j]));
+            let i = choose|i: int| 0 <= i < ids.len() && stored_code(a, values[j], ids[i]);
+            lemma_stored_frame(a, b, values[j], ids[i]);
         }
     }
-}
+
+    pub(crate) open spec fn option_len<T>(values: Option<Vec<T>>) -> nat {
+        match values { Some(v) => v@.len(), None => 0 }
+    }
+
+    /// Sufficient constructor capacity: the total number of declared values fits the u32 code space.
+    pub closed spec fn constructor_capacity<E: Event>(domains: Domains<E>) -> bool {
+        option_len(domains.principals) + option_len(domains.actions) + option_len(domains.resources) <= u32::MAX
+    }
+
+    pub(crate) open spec fn encode_capacity<E: Event>(a: PolicyAnalyzer<E>, source: FlatPair<ComponentValue<E>>) -> bool {
+        a.constants.values@.len() + 3 + source.tests@.len() <= u32::MAX
+    }
+
+    /// Sufficient capacities for constant ids and the per-state split and letter products.
+    /// Constraint-id and fresh-value exhaustion are runtime errors, not preconditions.
+    pub open(crate) spec fn query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>) -> bool {
+        // Traversal costs overbound the query's vocabulary.
+        let count = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
+        count <= u32::MAX && (count + 2) * (count + 2) * (count + 2) <= usize::MAX
+    }
+
+    pub(crate) open spec fn pins(head: Seq<FlatHead<u64>>) -> encoding::NHead {
+        encoding::NHead { principal: encoding::head_code(head[0]), action: encoding::head_code(head[1]), resource: encoding::head_code(head[2]) }
+    }
+
+    pub(crate) open spec fn numeric_head_wf(head: Seq<FlatHead<u64>>) -> bool {
+        head.len() == 3 && forall|i: int| #![trigger head[i]] 0 <= i < 3 ==> match head[i] { FlatHead::Constant(v) => v <= u32::MAX, _ => true }
+    }
+
+    pub(crate) proof fn lemma_lowered_head_bound<E: Event>(c: Constants<E>, source: FlatPair<ComponentValue<E>>, target: FlatPair<u64>)
+        requires constants_wf(c), enc::lowering(source, target, constant_book(c), fl::component_equality::<E>()),
+        ensures numeric_head_wf(target.head@),
+    {
+        assert forall|i: int| #![trigger target.head@[i]] 0 <= i < 3 implies match target.head@[i] { FlatHead::Constant(v) => v <= u32::MAX, _ => true } by {
+            if let FlatHead::Constant(id) = target.head@[i] {
+                let field = enc::field_at(i);
+                lemma_field_book(c, field);
+                let value = match source.head@[i] { FlatHead::Constant(v) => v, _ => arbitrary() };
+                let j = choose|j: int| 0 <= j < constant_book(c)[i].len() && constant_book(c)[i][j].1 == id && fl::component_equality::<E>()(field, value, constant_book(c)[i][j].0);
+                lemma_field_entry_source(c.values@, field, j);
+            }
+        }
+    }
+
+    pub(crate) open spec fn encoding_head_code(head: FlatHead<u64>) -> Option<nat> { encoding::head_code(head) }
+
+    pub(crate) open spec fn declared_universe<E: Event, T>(c: Constants<E>, u: Universe, vs: Option<Vec<T>>, f: spec_fn(T) -> ComponentValue<E>) -> bool {
+        match (u, vs) { (None, None) => true, (Some(ids), Some(values)) => universe_encoded(c, (*ids)@, values@.map_values(f)), _ => false }
+    }
+
+    pub(crate) open spec fn declared_domains_encoded<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
+        declared_universe(a.constants, a.universes[0], d.principals, |v: E::Principal| ComponentValue::<E>::Principal(v))
+            && declared_universe(a.constants, a.universes[1], d.actions, |v: E::Action| ComponentValue::<E>::Action(v))
+            && declared_universe(a.constants, a.universes[2], d.resources, |v: E::Resource| ComponentValue::<E>::Resource(v))
+    }
+
+    pub(crate) open spec fn selected_values<E: Event>(c: Constants<E>, u: Universe) -> Option<Set<ComponentValue<E>>> {
+        match u { None => None, Some(ids) => Some((*ids)@.to_set().map(|id: u32| c.values@[id as int - 1])) }
+    }
+
+    pub(crate) open spec fn principal_of<E: Event>(v: ComponentValue<E>) -> E::Principal {
+        match v { ComponentValue::Principal(x) => x, _ => arbitrary() }
+    }
+    pub(crate) open spec fn action_of<E: Event>(v: ComponentValue<E>) -> E::Action {
+        match v { ComponentValue::Action(x) => x, _ => arbitrary() }
+    }
+    pub(crate) open spec fn resource_of<E: Event>(v: ComponentValue<E>) -> E::Resource {
+        match v { ComponentValue::Resource(x) => x, _ => arbitrary() }
+    }
+
+    pub(crate) open spec fn principal_values<E: Event>(values: Set<ComponentValue<E>>) -> Set<E::Principal> {
+        values.filter(|v: ComponentValue<E>| v is Principal).map(|v: ComponentValue<E>| principal_of::<E>(v))
+    }
+    pub(crate) open spec fn action_values<E: Event>(values: Set<ComponentValue<E>>) -> Set<E::Action> {
+        values.filter(|v: ComponentValue<E>| v is Action).map(|v: ComponentValue<E>| action_of::<E>(v))
+    }
+    pub(crate) open spec fn resource_values<E: Event>(values: Set<ComponentValue<E>>) -> Set<E::Resource> {
+        values.filter(|v: ComponentValue<E>| v is Resource).map(|v: ComponentValue<E>| resource_of::<E>(v))
+    }
+
+    impl<E: Event> View for PolicyAnalyzer<E> {
+        type V = analyzer::AnalyzerView<E::Principal, E::Action, E::Resource>;
+        open(crate) spec fn view(&self) -> Self::V {
+            analyzer::AnalyzerView {
+                domains: semantics::DomainsView {
+                    principal: match selected_values(self.constants, self.universes[0]) { None => None, Some(vs) => Some(principal_values::<E>(vs)) },
+                    action: match selected_values(self.constants, self.universes[1]) { None => None, Some(vs) => Some(action_values::<E>(vs)) },
+                    resource: match selected_values(self.constants, self.universes[2]) { None => None, Some(vs) => Some(resource_values::<E>(vs)) },
+                },
+                rules: Seq::empty(),
+                known_principals: principal_values::<E>(self.constants.values@.to_set()),
+                known_actions: action_values::<E>(self.constants.values@.to_set()),
+                known_resources: resource_values::<E>(self.constants.values@.to_set()),
+            }
+        }
+    }
+
+    pub(crate) open spec fn universes_wf<E: Event>(c: Constants<E>, us: Universes) -> bool {
+        forall|f: int| #![trigger us[f]] 0 <= f < 3 ==> match us[f] { None => true, Some(ids) => (*ids)@.no_duplicates()
+            && forall|j: int| 0 <= j < (*ids)@.len() ==> 0 < (*ids)@[j] <= c.values@.len()
+                && value_field(c.values@[(*ids)@[j] as int - 1]) == enc::field_at(f) }
+    }
+
+    /// Constant-book and declared-universe invariants preserved by analyzer queries.
+    pub open(crate) spec fn analyzer_state_wf<E: Event>(a: PolicyAnalyzer<E>) -> bool {
+        constants_wf(a.constants) && universes_wf(a.constants, a.universes)
+    }
+
+    pub(crate) proof fn lemma_universes_frame<E: Event>(a: Constants<E>, b: Constants<E>, us: Universes)
+        requires constants_frame(a, b), universes_wf(a, us),
+        ensures universes_wf(b, us), selected_values(a, us[0]) == selected_values(b, us[0]),
+            selected_values(a, us[1]) == selected_values(b, us[1]), selected_values(a, us[2]) == selected_values(b, us[2]),
+    {
+        assert forall|f: int| 0 <= f < 3 implies selected_values(a, us[f]) == selected_values(b, us[f]) by {
+            if let Some(ids) = us[f] {
+                super::lemma_set_map_equal((*ids)@.to_set(), |id: u32| a.values@[id as int - 1], |id: u32| b.values@[id as int - 1]);
+            }
+        }
+    }
 
 
-pub closed spec fn constructor_result<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
-    constants_wf(a.constants) && a.constants.values@.len() <= option_len(d.principals) + option_len(d.actions) + option_len(d.resources)
-        && declared_domains_encoded(a, d) && analyzer_state_wf(a) && analyzer::analyzer_wf(a@)
-        && declared_domain_equivalence(a, d)
-}
+    pub closed spec fn constructor_result<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
+        constants_wf(a.constants) && a.constants.values@.len() <= option_len(d.principals) + option_len(d.actions) + option_len(d.resources)
+            && declared_domains_encoded(a, d) && analyzer_state_wf(a) && analyzer::analyzer_wf(a@)
+            && declared_domain_equivalence(a, d)
+    }
 
 
-pub(crate) proof fn lemma_constructor_contract<E: Event>()
-    ensures forall|d: Domains<E>| #[trigger] constructor_capacity(d)
-        == (option_len(d.principals) + option_len(d.actions) + option_len(d.resources) <= u32::MAX),
-        forall|a: PolicyAnalyzer<E>, d: Domains<E>| #[trigger] constructor_result(a, d)
-        == (constants_wf(a.constants) && a.constants.values@.len() <= option_len(d.principals) + option_len(d.actions) + option_len(d.resources)
-            && declared_domains_encoded(a, d) && analyzer_state_wf(a) && analyzer::analyzer_wf(a@) && declared_domain_equivalence(a, d)),
-{}
+    pub(crate) proof fn lemma_constructor_contract<E: Event>()
+        ensures forall|d: Domains<E>| #[trigger] constructor_capacity(d)
+            == (option_len(d.principals) + option_len(d.actions) + option_len(d.resources) <= u32::MAX),
+            forall|a: PolicyAnalyzer<E>, d: Domains<E>| #[trigger] constructor_result(a, d)
+            == (constants_wf(a.constants) && a.constants.values@.len() <= option_len(d.principals) + option_len(d.actions) + option_len(d.resources)
+                && declared_domains_encoded(a, d) && analyzer_state_wf(a) && analyzer::analyzer_wf(a@) && declared_domain_equivalence(a, d)),
+    {}
 
-pub(crate) proof fn lemma_declared_frame<E: Event, T>(a: Constants<E>, b: Constants<E>, u: Universe, vs: Option<Vec<T>>, f: spec_fn(T) -> ComponentValue<E>)
-    requires constants_frame(a, b), declared_universe(a, u, vs, f),
-    ensures declared_universe(b, u, vs, f),
-{
-    if let (Some(ids), Some(values)) = (u, vs) { lemma_universe_frame(a, b, (*ids)@, values@.map_values(f)); }
-}
+    pub(crate) proof fn lemma_declared_frame<E: Event, T>(a: Constants<E>, b: Constants<E>, u: Universe, vs: Option<Vec<T>>, f: spec_fn(T) -> ComponentValue<E>)
+        requires constants_frame(a, b), declared_universe(a, u, vs, f),
+        ensures declared_universe(b, u, vs, f),
+    {
+        if let (Some(ids), Some(values)) = (u, vs) { lemma_universe_frame(a, b, (*ids)@, values@.map_values(f)); }
+    }
 
-pub(crate) proof fn lemma_declared_wf<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
-    requires declared_domains_encoded(a, d),
-    ensures universes_wf(a.constants, a.universes), analyzer::analyzer_wf(a@),
-{
-    assert forall|f: int| #![trigger a.universes[f]] 0 <= f < 3 implies match a.universes[f] {
-        None => true, Some(ids) => (*ids)@.no_duplicates() && forall|j: int| 0 <= j < (*ids)@.len()
-            ==> 0 < (*ids)@[j] <= a.constants.values@.len()
-                && value_field(a.constants.values@[(*ids)@[j] as int - 1]) == enc::field_at(f)
-    } by {
-        if f == 0 {} else if f == 1 {} else {}
-        if let Some(ids) = a.universes[f] {
-            assert forall|j: int| 0 <= j < (*ids)@.len() implies
-                0 < (*ids)@[j] <= a.constants.values@.len()
-                    && value_field(a.constants.values@[(*ids)@[j] as int - 1]) == enc::field_at(f) by {
-                if f == 0 {
-                    let values = match d.principals { Some(vs) => vs@, _ => arbitrary() };
-                    let tagged = values.map_values(|v: E::Principal| ComponentValue::<E>::Principal(v));
-                    assert(universe_id(a.constants, tagged, (*ids)@[j]));
-                    let k = choose|k: int| 0 <= k < tagged.len() && stored_code(a.constants, tagged[k], (*ids)@[j]);
-                    assert(tagged[k] == ComponentValue::<E>::Principal(values[k]));
-                    match a.constants.values@[(*ids)@[j] as int - 1] { ComponentValue::Principal(_) => {}, _ => {} }
-                } else if f == 1 {
-                    let values = match d.actions { Some(vs) => vs@, _ => arbitrary() };
-                    let tagged = values.map_values(|v: E::Action| ComponentValue::<E>::Action(v));
-                    assert(universe_id(a.constants, tagged, (*ids)@[j]));
-                    let k = choose|k: int| 0 <= k < tagged.len() && stored_code(a.constants, tagged[k], (*ids)@[j]);
-                    assert(tagged[k] == ComponentValue::<E>::Action(values[k]));
-                    match a.constants.values@[(*ids)@[j] as int - 1] { ComponentValue::Action(_) => {}, _ => {} }
-                } else {
-                    let values = match d.resources { Some(vs) => vs@, _ => arbitrary() };
-                    let tagged = values.map_values(|v: E::Resource| ComponentValue::<E>::Resource(v));
-                    assert(universe_id(a.constants, tagged, (*ids)@[j]));
-                    let k = choose|k: int| 0 <= k < tagged.len() && stored_code(a.constants, tagged[k], (*ids)@[j]);
-                    assert(tagged[k] == ComponentValue::<E>::Resource(values[k]));
-                    match a.constants.values@[(*ids)@[j] as int - 1] { ComponentValue::Resource(_) => {}, _ => {} }
+    pub(crate) proof fn lemma_declared_wf<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
+        requires declared_domains_encoded(a, d),
+        ensures universes_wf(a.constants, a.universes), analyzer::analyzer_wf(a@),
+    {
+        assert forall|f: int| #![trigger a.universes[f]] 0 <= f < 3 implies match a.universes[f] {
+            None => true, Some(ids) => (*ids)@.no_duplicates() && forall|j: int| 0 <= j < (*ids)@.len()
+                ==> 0 < (*ids)@[j] <= a.constants.values@.len()
+                    && value_field(a.constants.values@[(*ids)@[j] as int - 1]) == enc::field_at(f)
+        } by {
+            if f == 0 {} else if f == 1 {} else {}
+            if let Some(ids) = a.universes[f] {
+                assert forall|j: int| 0 <= j < (*ids)@.len() implies
+                    0 < (*ids)@[j] <= a.constants.values@.len()
+                        && value_field(a.constants.values@[(*ids)@[j] as int - 1]) == enc::field_at(f) by {
+                    if f == 0 {
+                        let values = match d.principals { Some(vs) => vs@, _ => arbitrary() };
+                        let tagged = values.map_values(|v: E::Principal| ComponentValue::<E>::Principal(v));
+                        assert(universe_id(a.constants, tagged, (*ids)@[j]));
+                        let k = choose|k: int| 0 <= k < tagged.len() && stored_code(a.constants, tagged[k], (*ids)@[j]);
+                        assert(tagged[k] == ComponentValue::<E>::Principal(values[k]));
+                        match a.constants.values@[(*ids)@[j] as int - 1] { ComponentValue::Principal(_) => {}, _ => {} }
+                    } else if f == 1 {
+                        let values = match d.actions { Some(vs) => vs@, _ => arbitrary() };
+                        let tagged = values.map_values(|v: E::Action| ComponentValue::<E>::Action(v));
+                        assert(universe_id(a.constants, tagged, (*ids)@[j]));
+                        let k = choose|k: int| 0 <= k < tagged.len() && stored_code(a.constants, tagged[k], (*ids)@[j]);
+                        assert(tagged[k] == ComponentValue::<E>::Action(values[k]));
+                        match a.constants.values@[(*ids)@[j] as int - 1] { ComponentValue::Action(_) => {}, _ => {} }
+                    } else {
+                        let values = match d.resources { Some(vs) => vs@, _ => arbitrary() };
+                        let tagged = values.map_values(|v: E::Resource| ComponentValue::<E>::Resource(v));
+                        assert(universe_id(a.constants, tagged, (*ids)@[j]));
+                        let k = choose|k: int| 0 <= k < tagged.len() && stored_code(a.constants, tagged[k], (*ids)@[j]);
+                        assert(tagged[k] == ComponentValue::<E>::Resource(values[k]));
+                        match a.constants.values@[(*ids)@[j] as int - 1] { ComponentValue::Resource(_) => {}, _ => {} }
+                    }
                 }
             }
         }
     }
-}
 
-impl<E: Event> View for Domains<E> {
-    type V = semantics::DomainsView<E::Principal, E::Action, E::Resource>;
-    open(crate) spec fn view(&self) -> Self::V {
-        semantics::DomainsView {
-            principal: match self.principals { None => None, Some(vs) => Some(vs@.to_set()) },
-            action: match self.actions { None => None, Some(vs) => Some(vs@.to_set()) },
-            resource: match self.resources { None => None, Some(vs) => Some(vs@.to_set()) },
+    impl<E: Event> View for Domains<E> {
+        type V = semantics::DomainsView<E::Principal, E::Action, E::Resource>;
+        open(crate) spec fn view(&self) -> Self::V {
+            semantics::DomainsView {
+                principal: match self.principals { None => None, Some(vs) => Some(vs@.to_set()) },
+                action: match self.actions { None => None, Some(vs) => Some(vs@.to_set()) },
+                resource: match self.resources { None => None, Some(vs) => Some(vs@.to_set()) },
+            }
         }
     }
-}
 
-pub(crate) proof fn lemma_empty_constants<E: Event>(c: Constants<E>)
-    requires c.values@ == Seq::<ComponentValue<E>>::empty(), crate::native::representatives(c.ids) == Seq::<(ComponentValue<E>, u32)>::empty(),
-    ensures constants_wf(c),
-{
-    assert(c.values@.map(|i: int, v: ComponentValue<E>| (v, (i + 1) as u32)) =~= Seq::<(ComponentValue<E>, u32)>::empty());
-}
-
-pub(crate) proof fn lemma_universe_empty<E: Event>(c: Constants<E>)
-    ensures universe_encoded(c, Seq::<u32>::empty(), Seq::<ComponentValue<E>>::empty()),
-{}
-
-pub(crate) proof fn lemma_universe_step<E: Event>(c: Constants<E>, ids: Seq<u32>, next: Seq<u32>, vs: Seq<ComponentValue<E>>, v: ComponentValue<E>, id: u32)
-    requires universe_encoded(c, ids, vs), stored_code(c, v, id),
-        next == if ids.contains(id) { ids } else { ids.push(id) },
-    ensures universe_encoded(c, next, vs.push(v)),
-{
-    hide(stored_code);
-    if ids.contains(id) { assert(next == ids); } else { assert(next[ids.len() as int] == id); }
-    assert(next.contains(id));
-    assert forall|i: int, j: int| 0 <= i < j < next.len() implies next[i] != next[j] by {
-        if j < ids.len() { assert(ids[i] != ids[j]); }
-        else { assert(!ids.contains(id)); assert(ids[i] != id); }
+    pub(crate) proof fn lemma_empty_constants<E: Event>(c: Constants<E>)
+        requires c.values@ == Seq::<ComponentValue<E>>::empty(), crate::native::representatives(c.ids) == Seq::<(ComponentValue<E>, u32)>::empty(),
+        ensures constants_wf(c),
+    {
+        assert(c.values@.map(|i: int, v: ComponentValue<E>| (v, (i + 1) as u32)) =~= Seq::<(ComponentValue<E>, u32)>::empty());
     }
-    assert forall|i: int| 0 <= i < next.len() implies #[trigger] universe_id(c, vs.push(v), next[i]) by {
-        if i < ids.len() {
-            assert(universe_id(c, vs, ids[i]));
-            let j = choose|j: int| 0 <= j < vs.len() && stored_code(c, vs[j], ids[i]);
-            assert(stored_code(c, vs.push(v)[j], next[i]));
-        } else { assert(stored_code(c, vs.push(v)[vs.len() as int], next[i])); }
+
+    pub(crate) proof fn lemma_universe_empty<E: Event>(c: Constants<E>)
+        ensures universe_encoded(c, Seq::<u32>::empty(), Seq::<ComponentValue<E>>::empty()),
+    {}
+
+    pub(crate) proof fn lemma_universe_step<E: Event>(c: Constants<E>, ids: Seq<u32>, next: Seq<u32>, vs: Seq<ComponentValue<E>>, v: ComponentValue<E>, id: u32)
+        requires universe_encoded(c, ids, vs), stored_code(c, v, id),
+            next == if ids.contains(id) { ids } else { ids.push(id) },
+        ensures universe_encoded(c, next, vs.push(v)),
+    {
+        hide(stored_code);
+        if ids.contains(id) { assert(next == ids); } else { assert(next[ids.len() as int] == id); }
+        assert(next.contains(id));
+        assert forall|i: int, j: int| 0 <= i < j < next.len() implies next[i] != next[j] by {
+            if j < ids.len() { assert(ids[i] != ids[j]); }
+            else { assert(!ids.contains(id)); assert(ids[i] != id); }
+        }
+        assert forall|i: int| 0 <= i < next.len() implies #[trigger] universe_id(c, vs.push(v), next[i]) by {
+            if i < ids.len() {
+                assert(universe_id(c, vs, ids[i]));
+                let j = choose|j: int| 0 <= j < vs.len() && stored_code(c, vs[j], ids[i]);
+                assert(stored_code(c, vs.push(v)[j], next[i]));
+            } else { assert(stored_code(c, vs.push(v)[vs.len() as int], next[i])); }
+        }
+        assert forall|j: int| 0 <= j < vs.push(v).len() implies #[trigger] universe_value(c, next, vs.push(v)[j]) by {
+            if j < vs.len() {
+                assert(universe_value(c, ids, vs[j]));
+                let i = choose|i: int| 0 <= i < ids.len() && stored_code(c, vs[j], ids[i]);
+                assert(stored_code(c, vs.push(v)[j], next[i]));
+            } else {
+                assert(next.contains(id));
+                let i = choose|i: int| 0 <= i < next.len() && next[i] == id;
+                assert(stored_code(c, vs.push(v)[j], next[i]));
+            }
+        }
     }
-    assert forall|j: int| 0 <= j < vs.push(v).len() implies #[trigger] universe_value(c, next, vs.push(v)[j]) by {
-        if j < vs.len() {
-            assert(universe_value(c, ids, vs[j]));
-            let i = choose|i: int| 0 <= i < ids.len() && stored_code(c, vs[j], ids[i]);
-            assert(stored_code(c, vs.push(v)[j], next[i]));
+
+    proof fn lemma_book_length<E: Event>(values: Seq<ComponentValue<E>>)
+        ensures field_entries(values, Component::Principal).len() + field_entries(values, Component::Action).len()
+            + field_entries(values, Component::Resource).len() == values.len(),
+        decreases values.len(),
+    {
+        if values.len() > 0 {
+            let prior = values.drop_last();
+            lemma_book_length(prior);
+            let last = values.last();
+            let entry = (last, values.len() as u64);
+            assert(entries(values) =~= entries(prior).push(entry));
+            entries(prior).lemma_filter_len_push(|p: (ComponentValue<E>, u64)| value_field(p.0) == Component::Principal, entry);
+            entries(prior).lemma_filter_len_push(|p: (ComponentValue<E>, u64)| value_field(p.0) == Component::Action, entry);
+            entries(prior).lemma_filter_len_push(|p: (ComponentValue<E>, u64)| value_field(p.0) == Component::Resource, entry);
+            match last { ComponentValue::Principal(_) => {}, ComponentValue::Action(_) => {}, ComponentValue::Resource(_) => {} }
         } else {
-            assert(next.contains(id));
-            let i = choose|i: int| 0 <= i < next.len() && next[i] == id;
-            assert(stored_code(c, vs.push(v)[j], next[i]));
+            reveal(Seq::filter);
         }
     }
-}
 
-proof fn lemma_book_length<E: Event>(values: Seq<ComponentValue<E>>)
-    ensures field_entries(values, Component::Principal).len() + field_entries(values, Component::Action).len()
-        + field_entries(values, Component::Resource).len() == values.len(),
-    decreases values.len(),
-{
-    if values.len() > 0 {
-        let prior = values.drop_last();
-        lemma_book_length(prior);
-        let last = values.last();
-        let entry = (last, values.len() as u64);
-        assert(entries(values) =~= entries(prior).push(entry));
-        entries(prior).lemma_filter_len_push(|p: (ComponentValue<E>, u64)| value_field(p.0) == Component::Principal, entry);
-        entries(prior).lemma_filter_len_push(|p: (ComponentValue<E>, u64)| value_field(p.0) == Component::Action, entry);
-        entries(prior).lemma_filter_len_push(|p: (ComponentValue<E>, u64)| value_field(p.0) == Component::Resource, entry);
-        match last { ComponentValue::Principal(_) => {}, ComponentValue::Action(_) => {}, ComponentValue::Resource(_) => {} }
-    } else {
-        reveal(Seq::filter);
+    pub(crate) proof fn lemma_constant_book_length<E: Event>(c: Constants<E>)
+        ensures constant_book(c)[0].len() + constant_book(c)[1].len() + constant_book(c)[2].len() == c.values@.len(),
+    {
+        lemma_field_book(c, Component::Principal);
+        lemma_field_book(c, Component::Action);
+        lemma_field_book(c, Component::Resource);
+        lemma_book_length(c.values@);
     }
-}
 
-pub(crate) proof fn lemma_constant_book_length<E: Event>(c: Constants<E>)
-    ensures constant_book(c)[0].len() + constant_book(c)[1].len() + constant_book(c)[2].len() == c.values@.len(),
-{
-    lemma_field_book(c, Component::Principal);
-    lemma_field_book(c, Component::Action);
-    lemma_field_book(c, Component::Resource);
-    lemma_book_length(c.values@);
-}
-
-pub(crate) open spec fn tagged_codes<E: Event, T>(c: Constants<E>, u: Universe, domain: Option<Set<T>>, tag: spec_fn(T) -> ComponentValue<E>) -> bool {
-    match (u, domain) {
-        (None, None) => true,
-        (Some(ids), Some(values)) => {
-            &&& forall|x: T| #[trigger] values.contains(x)
-                == (exists|i: int| 0 <= i < (*ids)@.len() && c.values@[(*ids)@[i] as int - 1] == tag(x))
-        },
-        _ => false,
-    }
-}
-
-proof fn lemma_native_sym<E: Event>(a: ComponentValue<E>, b: ComponentValue<E>)
-    requires analyzer_obligations::<E>(),
-    ensures a.eq_spec(&b) == b.eq_spec(&a),
-{}
-
-proof fn lemma_native_trans<E: Event>(a: ComponentValue<E>, b: ComponentValue<E>, c: ComponentValue<E>)
-    requires analyzer_obligations::<E>(), a.eq_spec(&b), b.eq_spec(&c),
-    ensures a.eq_spec(&c),
-{}
-
-proof fn lemma_declared_domain<E: Event, T: PartialEq>(c: Constants<E>, u: Universe, raw: Option<Vec<T>>, domain: Option<Set<T>>, tag: spec_fn(T) -> ComponentValue<E>, project: spec_fn(ComponentValue<E>) -> T)
-    requires analyzer_obligations::<E>(), declared_universe(c, u, raw, tag), tagged_codes(c, u, domain, tag),
-        forall|x: T, y: T| #[trigger] tag(x).eq_spec(&tag(y)) == x.eq_spec(&y),
-        u matches Some(ids) ==> forall|i: int| #![trigger (*ids)@[i]] 0 <= i < (*ids)@.len()
-            ==> tag(project(c.values@[(*ids)@[i] as int - 1])) == c.values@[(*ids)@[i] as int - 1],
-    ensures forall|x: T| #[trigger] semantics::in_domain(domain, x)
-        == semantics::in_domain(match raw { None => None, Some(vs) => Some(vs@.to_set()) }, x),
-{
-    hide(analyzer_obligations);
-    if let (Some(ids), Some(vs), Some(values)) = (u, raw, domain) {
-        assert forall|x: T| semantics::in_domain(domain, x) implies semantics::in_domain(Some(vs@.to_set()), x) by {
-            let y = choose|y: T| values.contains(y) && x.eq_spec(&y);
-            let i = choose|i: int| 0 <= i < (*ids)@.len() && c.values@[(*ids)@[i] as int - 1] == tag(y);
-            assert(universe_id(c, vs@.map_values(tag), (*ids)@[i]));
-            let j = choose|j: int| 0 <= j < vs@.map_values(tag).len() && stored_code(c, vs@.map_values(tag)[j], (*ids)@[i]);
-            assert(vs@.map_values(tag)[j] == tag(vs@[j]));
-            assert(tag(x).eq_spec(&tag(y)));
-            assert(tag(vs@[j]).eq_spec(&tag(y)));
-            lemma_native_sym(tag(y), tag(vs@[j]));
-            lemma_native_trans(tag(x), tag(y), tag(vs@[j]));
-            assert(x.eq_spec(&vs@[j]));
-            assert(vs@.to_set().contains(vs@[j]));
-        }
-        assert forall|x: T| semantics::in_domain(Some(vs@.to_set()), x) implies semantics::in_domain(domain, x) by {
-            let y = choose|y: T| vs@.to_set().contains(y) && x.eq_spec(&y);
-            let j = choose|j: int| 0 <= j < vs@.len() && vs@[j] == y;
-            assert(vs@.map_values(tag)[j] == tag(y));
-            assert(universe_value(c, (*ids)@, tag(y)));
-            let i = choose|i: int| 0 <= i < (*ids)@.len() && stored_code(c, tag(y), (*ids)@[i]);
-            let rep = c.values@[(*ids)@[i] as int - 1];
-            let z = project(rep);
-            assert(values.contains(z));
-            assert(tag(y).eq_spec(&tag(z)));
-            assert(tag(x).eq_spec(&tag(y)));
-            lemma_native_trans(tag(x), tag(y), tag(z));
-            assert(x.eq_spec(&z));
+    pub(crate) open spec fn tagged_codes<E: Event, T>(c: Constants<E>, u: Universe, domain: Option<Set<T>>, tag: spec_fn(T) -> ComponentValue<E>) -> bool {
+        match (u, domain) {
+            (None, None) => true,
+            (Some(ids), Some(values)) => {
+                &&& forall|x: T| #[trigger] values.contains(x)
+                    == (exists|i: int| 0 <= i < (*ids)@.len() && c.values@[(*ids)@[i] as int - 1] == tag(x))
+            },
+            _ => false,
         }
     }
-}
 
-pub(crate) open spec fn declared_domain_equivalence<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
-    &&& forall|x: E::Principal| #[trigger] semantics::in_domain(a@.domains.principal, x) == semantics::in_domain(d@.principal, x)
-    &&& forall|x: E::Action| #[trigger] semantics::in_domain(a@.domains.action, x) == semantics::in_domain(d@.action, x)
-    &&& forall|x: E::Resource| #[trigger] semantics::in_domain(a@.domains.resource, x) == semantics::in_domain(d@.resource, x)
-}
+    proof fn lemma_native_sym<E: Event>(a: ComponentValue<E>, b: ComponentValue<E>)
+        requires analyzer_obligations::<E>(),
+        ensures a.eq_spec(&b) == b.eq_spec(&a),
+    {}
 
-proof fn lemma_tag_projection<E: Event, T>(values: Set<ComponentValue<E>>, tag: spec_fn(T) -> ComponentValue<E>, project: spec_fn(ComponentValue<E>) -> T, pred: spec_fn(ComponentValue<E>) -> bool)
-    requires forall|x: T| #[trigger] project(tag(x)) == x && pred(tag(x)),
-        forall|v: ComponentValue<E>| #[trigger] pred(v) ==> tag(project(v)) == v,
-    ensures forall|x: T| #[trigger] values.filter(pred).map(project).contains(x) == values.contains(tag(x)),
-{
-    assert forall|x: T| values.filter(pred).map(project).contains(x) implies values.contains(tag(x)) by {
-        let v = choose|v: ComponentValue<E>| values.filter(pred).contains(v) && project(v) == x;
-        assert(tag(x) == v);
+    proof fn lemma_native_trans<E: Event>(a: ComponentValue<E>, b: ComponentValue<E>, c: ComponentValue<E>)
+        requires analyzer_obligations::<E>(), a.eq_spec(&b), b.eq_spec(&c),
+        ensures a.eq_spec(&c),
+    {}
+
+    proof fn lemma_declared_domain<E: Event, T: PartialEq>(c: Constants<E>, u: Universe, raw: Option<Vec<T>>, domain: Option<Set<T>>, tag: spec_fn(T) -> ComponentValue<E>, project: spec_fn(ComponentValue<E>) -> T)
+        requires analyzer_obligations::<E>(), declared_universe(c, u, raw, tag), tagged_codes(c, u, domain, tag),
+            forall|x: T, y: T| #[trigger] tag(x).eq_spec(&tag(y)) == x.eq_spec(&y),
+            u matches Some(ids) ==> forall|i: int| #![trigger (*ids)@[i]] 0 <= i < (*ids)@.len()
+                ==> tag(project(c.values@[(*ids)@[i] as int - 1])) == c.values@[(*ids)@[i] as int - 1],
+        ensures forall|x: T| #[trigger] semantics::in_domain(domain, x)
+            == semantics::in_domain(match raw { None => None, Some(vs) => Some(vs@.to_set()) }, x),
+    {
+        hide(analyzer_obligations);
+        if let (Some(ids), Some(vs), Some(values)) = (u, raw, domain) {
+            assert forall|x: T| semantics::in_domain(domain, x) implies semantics::in_domain(Some(vs@.to_set()), x) by {
+                let y = choose|y: T| values.contains(y) && x.eq_spec(&y);
+                let i = choose|i: int| 0 <= i < (*ids)@.len() && c.values@[(*ids)@[i] as int - 1] == tag(y);
+                assert(universe_id(c, vs@.map_values(tag), (*ids)@[i]));
+                let j = choose|j: int| 0 <= j < vs@.map_values(tag).len() && stored_code(c, vs@.map_values(tag)[j], (*ids)@[i]);
+                assert(vs@.map_values(tag)[j] == tag(vs@[j]));
+                assert(tag(x).eq_spec(&tag(y)));
+                assert(tag(vs@[j]).eq_spec(&tag(y)));
+                lemma_native_sym(tag(y), tag(vs@[j]));
+                lemma_native_trans(tag(x), tag(y), tag(vs@[j]));
+                assert(x.eq_spec(&vs@[j]));
+                assert(vs@.to_set().contains(vs@[j]));
+            }
+            assert forall|x: T| semantics::in_domain(Some(vs@.to_set()), x) implies semantics::in_domain(domain, x) by {
+                let y = choose|y: T| vs@.to_set().contains(y) && x.eq_spec(&y);
+                let j = choose|j: int| 0 <= j < vs@.len() && vs@[j] == y;
+                assert(vs@.map_values(tag)[j] == tag(y));
+                assert(universe_value(c, (*ids)@, tag(y)));
+                let i = choose|i: int| 0 <= i < (*ids)@.len() && stored_code(c, tag(y), (*ids)@[i]);
+                let rep = c.values@[(*ids)@[i] as int - 1];
+                let z = project(rep);
+                assert(values.contains(z));
+                assert(tag(y).eq_spec(&tag(z)));
+                assert(tag(x).eq_spec(&tag(y)));
+                lemma_native_trans(tag(x), tag(y), tag(z));
+                assert(x.eq_spec(&z));
+            }
+        }
     }
-    assert forall|x: T| values.contains(tag(x)) implies values.filter(pred).map(project).contains(x) by {
-        assert(project(tag(x)) == x);
-        assert(pred(tag(x)));
-        vstd::set::lemma_set_filter(values, pred, tag(x));
-        assert(values.filter(pred).contains(tag(x)));
+
+    pub(crate) open spec fn declared_domain_equivalence<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
+        &&& forall|x: E::Principal| #[trigger] semantics::in_domain(a@.domains.principal, x) == semantics::in_domain(d@.principal, x)
+        &&& forall|x: E::Action| #[trigger] semantics::in_domain(a@.domains.action, x) == semantics::in_domain(d@.action, x)
+        &&& forall|x: E::Resource| #[trigger] semantics::in_domain(a@.domains.resource, x) == semantics::in_domain(d@.resource, x)
     }
-}
 
-pub(crate) open spec fn selected_code_values<E: Event>(c: Constants<E>, ids: Seq<u32>) -> Set<ComponentValue<E>> {
-    ids.to_set().map(|id: u32| c.values@[id as int - 1])
-}
-
-proof fn lemma_selected_members<E: Event>(c: Constants<E>, ids: Seq<u32>)
-    ensures forall|v: ComponentValue<E>| #[trigger] selected_code_values(c, ids).contains(v)
-        == (exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v),
-{
-    let selected = ids.to_set().map(|id: u32| c.values@[id as int - 1]);
-    assert forall|v: ComponentValue<E>| selected.contains(v) implies exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v by {
-        let id = choose|id: u32| ids.to_set().contains(id) && c.values@[id as int - 1] == v;
-        let i = choose|i: int| 0 <= i < ids.len() && ids[i] == id;
-        assert(c.values@[ids[i] as int - 1] == v);
+    proof fn lemma_tag_projection<E: Event, T>(values: Set<ComponentValue<E>>, tag: spec_fn(T) -> ComponentValue<E>, project: spec_fn(ComponentValue<E>) -> T, pred: spec_fn(ComponentValue<E>) -> bool)
+        requires forall|x: T| #[trigger] project(tag(x)) == x && pred(tag(x)),
+            forall|v: ComponentValue<E>| #[trigger] pred(v) ==> tag(project(v)) == v,
+        ensures forall|x: T| #[trigger] values.filter(pred).map(project).contains(x) == values.contains(tag(x)),
+    {
+        assert forall|x: T| values.filter(pred).map(project).contains(x) implies values.contains(tag(x)) by {
+            let v = choose|v: ComponentValue<E>| values.filter(pred).contains(v) && project(v) == x;
+            assert(tag(x) == v);
+        }
+        assert forall|x: T| values.contains(tag(x)) implies values.filter(pred).map(project).contains(x) by {
+            assert(project(tag(x)) == x);
+            assert(pred(tag(x)));
+            vstd::set::lemma_set_filter(values, pred, tag(x));
+            assert(values.filter(pred).contains(tag(x)));
+        }
     }
-    assert forall|v: ComponentValue<E>| (exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v) implies selected.contains(v) by {
-        let i = choose|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v;
-        assert(ids.to_set().contains(ids[i]));
-        assert(selected.contains(c.values@[ids[i] as int - 1]));
+
+    pub(crate) open spec fn selected_code_values<E: Event>(c: Constants<E>, ids: Seq<u32>) -> Set<ComponentValue<E>> {
+        ids.to_set().map(|id: u32| c.values@[id as int - 1])
     }
-}
+
+    proof fn lemma_selected_members<E: Event>(c: Constants<E>, ids: Seq<u32>)
+        ensures forall|v: ComponentValue<E>| #[trigger] selected_code_values(c, ids).contains(v)
+            == (exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v),
+    {
+        let selected = ids.to_set().map(|id: u32| c.values@[id as int - 1]);
+        assert forall|v: ComponentValue<E>| selected.contains(v) implies exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v by {
+            let id = choose|id: u32| ids.to_set().contains(id) && c.values@[id as int - 1] == v;
+            let i = choose|i: int| 0 <= i < ids.len() && ids[i] == id;
+            assert(c.values@[ids[i] as int - 1] == v);
+        }
+        assert forall|v: ComponentValue<E>| (exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v) implies selected.contains(v) by {
+            let i = choose|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v;
+            assert(ids.to_set().contains(ids[i]));
+            assert(selected.contains(c.values@[ids[i] as int - 1]));
+        }
+    }
 
 
-pub(crate) proof fn lemma_constructor_domains<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
-    requires analyzer_obligations::<E>(), declared_domains_encoded(a, d), universes_wf(a.constants, a.universes),
-    ensures declared_domain_equivalence(a, d),
-{
-    if let Some(ids) = a.universes[0] {
-        let values = (*ids)@.to_set().map(|id: u32| a.constants.values@[id as int - 1]);
-        lemma_selected_members(a.constants, (*ids)@);
-        lemma_tag_projection(values, |x: E::Principal| ComponentValue::<E>::Principal(x), |v: ComponentValue<E>| principal_of::<E>(v), |v: ComponentValue<E>| v is Principal);
-        assert(a@.domains.principal == Some(principal_values::<E>(values)));
-        assert(values == selected_code_values(a.constants, (*ids)@));
-        assert forall|x: E::Principal| #[trigger] principal_values::<E>(values).contains(x) == values.contains(ComponentValue::<E>::Principal(x)) by {}
-        assert forall|x: E::Principal| #[trigger] principal_values::<E>(values).contains(x)
-            == (exists|i: int| 0 <= i < (*ids)@.len() && a.constants.values@[(*ids)@[i] as int - 1] == ComponentValue::<E>::Principal(x)) by {}
+    pub(crate) proof fn lemma_constructor_domains<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
+        requires analyzer_obligations::<E>(), declared_domains_encoded(a, d), universes_wf(a.constants, a.universes),
+        ensures declared_domain_equivalence(a, d),
+    {
+        if let Some(ids) = a.universes[0] {
+            let values = (*ids)@.to_set().map(|id: u32| a.constants.values@[id as int - 1]);
+            lemma_selected_members(a.constants, (*ids)@);
+            lemma_tag_projection(values, |x: E::Principal| ComponentValue::<E>::Principal(x), |v: ComponentValue<E>| principal_of::<E>(v), |v: ComponentValue<E>| v is Principal);
+            assert(a@.domains.principal == Some(principal_values::<E>(values)));
+            assert(values == selected_code_values(a.constants, (*ids)@));
+            assert forall|x: E::Principal| #[trigger] principal_values::<E>(values).contains(x) == values.contains(ComponentValue::<E>::Principal(x)) by {}
+            assert forall|x: E::Principal| #[trigger] principal_values::<E>(values).contains(x)
+                == (exists|i: int| 0 <= i < (*ids)@.len() && a.constants.values@[(*ids)@[i] as int - 1] == ComponentValue::<E>::Principal(x)) by {}
+            assert(tagged_codes(a.constants, a.universes[0], a@.domains.principal, |x: E::Principal| ComponentValue::<E>::Principal(x)));
+        }
+        if let Some(ids) = a.universes[1] {
+            let values = (*ids)@.to_set().map(|id: u32| a.constants.values@[id as int - 1]);
+            lemma_selected_members(a.constants, (*ids)@);
+            lemma_tag_projection(values, |x: E::Action| ComponentValue::<E>::Action(x), |v: ComponentValue<E>| action_of::<E>(v), |v: ComponentValue<E>| v is Action);
+            assert(a@.domains.action == Some(action_values::<E>(values)));
+            assert(values == selected_code_values(a.constants, (*ids)@));
+            assert forall|x: E::Action| #[trigger] action_values::<E>(values).contains(x) == values.contains(ComponentValue::<E>::Action(x)) by {}
+            assert forall|x: E::Action| #[trigger] action_values::<E>(values).contains(x)
+                == (exists|i: int| 0 <= i < (*ids)@.len() && a.constants.values@[(*ids)@[i] as int - 1] == ComponentValue::<E>::Action(x)) by {}
+            assert(tagged_codes(a.constants, a.universes[1], a@.domains.action, |x: E::Action| ComponentValue::<E>::Action(x)));
+        }
+        if let Some(ids) = a.universes[2] {
+            let values = (*ids)@.to_set().map(|id: u32| a.constants.values@[id as int - 1]);
+            lemma_selected_members(a.constants, (*ids)@);
+            lemma_tag_projection(values, |x: E::Resource| ComponentValue::<E>::Resource(x), |v: ComponentValue<E>| resource_of::<E>(v), |v: ComponentValue<E>| v is Resource);
+            assert(a@.domains.resource == Some(resource_values::<E>(values)));
+            assert(values == selected_code_values(a.constants, (*ids)@));
+            assert forall|x: E::Resource| #[trigger] resource_values::<E>(values).contains(x) == values.contains(ComponentValue::<E>::Resource(x)) by {}
+            assert forall|x: E::Resource| #[trigger] resource_values::<E>(values).contains(x)
+                == (exists|i: int| 0 <= i < (*ids)@.len() && a.constants.values@[(*ids)@[i] as int - 1] == ComponentValue::<E>::Resource(x)) by {}
+            assert(tagged_codes(a.constants, a.universes[2], a@.domains.resource, |x: E::Resource| ComponentValue::<E>::Resource(x)));
+        }
         assert(tagged_codes(a.constants, a.universes[0], a@.domains.principal, |x: E::Principal| ComponentValue::<E>::Principal(x)));
-    }
-    if let Some(ids) = a.universes[1] {
-        let values = (*ids)@.to_set().map(|id: u32| a.constants.values@[id as int - 1]);
-        lemma_selected_members(a.constants, (*ids)@);
-        lemma_tag_projection(values, |x: E::Action| ComponentValue::<E>::Action(x), |v: ComponentValue<E>| action_of::<E>(v), |v: ComponentValue<E>| v is Action);
-        assert(a@.domains.action == Some(action_values::<E>(values)));
-        assert(values == selected_code_values(a.constants, (*ids)@));
-        assert forall|x: E::Action| #[trigger] action_values::<E>(values).contains(x) == values.contains(ComponentValue::<E>::Action(x)) by {}
-        assert forall|x: E::Action| #[trigger] action_values::<E>(values).contains(x)
-            == (exists|i: int| 0 <= i < (*ids)@.len() && a.constants.values@[(*ids)@[i] as int - 1] == ComponentValue::<E>::Action(x)) by {}
         assert(tagged_codes(a.constants, a.universes[1], a@.domains.action, |x: E::Action| ComponentValue::<E>::Action(x)));
-    }
-    if let Some(ids) = a.universes[2] {
-        let values = (*ids)@.to_set().map(|id: u32| a.constants.values@[id as int - 1]);
-        lemma_selected_members(a.constants, (*ids)@);
-        lemma_tag_projection(values, |x: E::Resource| ComponentValue::<E>::Resource(x), |v: ComponentValue<E>| resource_of::<E>(v), |v: ComponentValue<E>| v is Resource);
-        assert(a@.domains.resource == Some(resource_values::<E>(values)));
-        assert(values == selected_code_values(a.constants, (*ids)@));
-        assert forall|x: E::Resource| #[trigger] resource_values::<E>(values).contains(x) == values.contains(ComponentValue::<E>::Resource(x)) by {}
-        assert forall|x: E::Resource| #[trigger] resource_values::<E>(values).contains(x)
-            == (exists|i: int| 0 <= i < (*ids)@.len() && a.constants.values@[(*ids)@[i] as int - 1] == ComponentValue::<E>::Resource(x)) by {}
         assert(tagged_codes(a.constants, a.universes[2], a@.domains.resource, |x: E::Resource| ComponentValue::<E>::Resource(x)));
+        lemma_declared_domain(a.constants, a.universes[0], d.principals, a@.domains.principal, |x: E::Principal| ComponentValue::<E>::Principal(x), |v: ComponentValue<E>| principal_of::<E>(v));
+        lemma_declared_domain(a.constants, a.universes[1], d.actions, a@.domains.action, |x: E::Action| ComponentValue::<E>::Action(x), |v: ComponentValue<E>| action_of::<E>(v));
+        lemma_declared_domain(a.constants, a.universes[2], d.resources, a@.domains.resource, |x: E::Resource| ComponentValue::<E>::Resource(x), |v: ComponentValue<E>| resource_of::<E>(v));
     }
-    assert(tagged_codes(a.constants, a.universes[0], a@.domains.principal, |x: E::Principal| ComponentValue::<E>::Principal(x)));
-    assert(tagged_codes(a.constants, a.universes[1], a@.domains.action, |x: E::Action| ComponentValue::<E>::Action(x)));
-    assert(tagged_codes(a.constants, a.universes[2], a@.domains.resource, |x: E::Resource| ComponentValue::<E>::Resource(x)));
-    lemma_declared_domain(a.constants, a.universes[0], d.principals, a@.domains.principal, |x: E::Principal| ComponentValue::<E>::Principal(x), |v: ComponentValue<E>| principal_of::<E>(v));
-    lemma_declared_domain(a.constants, a.universes[1], d.actions, a@.domains.action, |x: E::Action| ComponentValue::<E>::Action(x), |v: ComponentValue<E>| action_of::<E>(v));
-    lemma_declared_domain(a.constants, a.universes[2], d.resources, a@.domains.resource, |x: E::Resource| ComponentValue::<E>::Resource(x), |v: ComponentValue<E>| resource_of::<E>(v));
-}
 
-pub(crate) proof fn lemma_empty_constructor_capacity<E: Event>()
-    ensures constructor_capacity(Domains::<E> { principals: None, actions: None, resources: None }),
-{}
+    pub(crate) proof fn lemma_empty_constructor_capacity<E: Event>()
+        ensures constructor_capacity(Domains::<E> { principals: None, actions: None, resources: None }),
+    {}
 
-pub(crate) proof fn lemma_query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
-    requires query_capacity(a, left, right),
-    ensures ({
+    pub(crate) proof fn lemma_query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
+        requires query_capacity(a, left, right),
+        ensures ({
+            let count = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
+            count <= u32::MAX && forall|v: [Set<nat>; 3]|
+                v[0].len() <= count && v[1].len() <= count && v[2].len() <= count
+                    ==> #[trigger] super::search_exec::resource_capacity(v)
+        }),
+    {
         let count = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
-        count <= u32::MAX && forall|v: [Set<nat>; 3]|
-            v[0].len() <= count && v[1].len() <= count && v[2].len() <= count
-                ==> #[trigger] super::search_exec::resource_capacity(v)
-    }),
-{
-    let count = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
-    let m = count + 2;
-    assert forall|v: [Set<nat>; 3]| v[0].len() <= count && v[1].len() <= count && v[2].len() <= count
-        implies #[trigger] super::search_exec::resource_capacity(v) by {
-        let x = v[0].len() + 2; let y = v[1].len() + 2; let z = v[2].len() + 2;
-        assert(m <= m * m * m && x * y <= m * m * m && x * y * z <= m * m * m) by(nonlinear_arith)
-            requires x <= m, y <= m, z <= m, 2 <= x, 2 <= y, 2 <= z;
+        let m = count + 2;
+        assert forall|v: [Set<nat>; 3]| v[0].len() <= count && v[1].len() <= count && v[2].len() <= count
+            implies #[trigger] super::search_exec::resource_capacity(v) by {
+            let x = v[0].len() + 2; let y = v[1].len() + 2; let z = v[2].len() + 2;
+            assert(m <= m * m * m && x * y <= m * m * m && x * y * z <= m * m * m) by(nonlinear_arith)
+                requires x <= m, y <= m, z <= m, 2 <= x, 2 <= y, 2 <= z;
+        }
     }
-}
 
-/// `query_capacity` is not vacuous: on every word size it holds whenever the vocabulary bound is
-/// at most 1000 (the paper's running example needs about 40).
-pub(crate) proof fn lemma_query_capacity_nonvacuous<E: Event>(a: PolicyAnalyzer<E>,
-    left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
-    requires a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) <= 1000,
-    ensures query_capacity(a, left, right),
-{
-    let m = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) + 2;
-    assert(m * m * m <= 1002 * 1002 * 1002) by(nonlinear_arith)
-        requires m <= 1002;
-    assert(1002nat * 1002nat * 1002nat <= u32::MAX as nat) by(compute_only);
-    assert(u32::MAX as nat <= usize::MAX as nat);
-}
-}
+    /// `query_capacity` is not vacuous: on every word size it holds whenever the vocabulary bound is
+    /// at most 1000 (the paper's running example needs about 40).
+    pub(crate) proof fn lemma_query_capacity_nonvacuous<E: Event>(a: PolicyAnalyzer<E>,
+        left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
+        requires a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) <= 1000,
+        ensures query_capacity(a, left, right),
+    {
+        let m = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) + 2;
+        assert(m * m * m <= 1002 * 1002 * 1002) by(nonlinear_arith)
+            requires m <= 1002;
+        assert(1002nat * 1002nat * 1002nat <= u32::MAX as nat) by(compute_only);
+        assert(u32::MAX as nat <= usize::MAX as nat);
+    }
+    }
 }

@@ -1,17 +1,17 @@
 //! Numeric tables of one search, assembled from the encoded tails of analysed rules.
 
-use alloc::vec::Vec;
-use junco_core::HistoryError;
-use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
-use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::table::*;
+use alloc::vec::Vec;
 #[cfg(verus_keep_ghost)]
 use history_semantics::compile_verify as numeric;
+use junco_core::HistoryError;
 #[cfg(verus_keep_ghost)]
 use junco_core::flat::verify as flat;
+use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::{EventView, Subst};
+use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
 verus! {
@@ -25,11 +25,16 @@ pub(crate) struct Tables {
     pub(crate) regexes: Vec<FlatRegex>,
 }
 
+// A derived `Default` would carry no Verus contract.
+#[allow(clippy::derivable_impls)]
 #[verus_verify]
 impl Default for Tables {
     #[verus_spec(result => ensures result@.tests@.len() == 0, result@.regexes@.len() == 0)]
     fn default() -> Self {
-        Self { tests: Vec::new(), regexes: Vec::new() }
+        Self {
+            tests: Vec::new(),
+            regexes: Vec::new(),
+        }
     }
 }
 
@@ -201,11 +206,9 @@ impl Tables {
                 numeric::source_regex(pair, pair.root as nat, theta, word)
                     == (numeric::source_regex(self@, left as nat, theta, word)
                         && !numeric::source_regex(self@, right as nat, theta, word)))]
-    pub(crate) fn difference(
-        self,
-        left: u32,
-        right: u32,
-    ) -> Result<FlatPair<u64>, HistoryError> {
+    // vstd specifies `Vec::push`, not the `vec!` macro.
+    #[allow(clippy::vec_init_then_push)]
+    pub(crate) fn difference(self, left: u32, right: u32) -> Result<FlatPair<u64>, HistoryError> {
         proof_decl! { let ghost before = self@; }
         proof! {
             reveal(<Tables as View>::view); reveal(dag); reveal(frame);
@@ -293,7 +296,11 @@ fn copy_test(test: &FlatTest<u64>, by: u32) -> Result<FlatTest<u64>, HistoryErro
         FlatTest::And(children) => FlatTest::And(shift(children, by)?),
         FlatTest::Or(children) => FlatTest::Or(shift(children, by)?),
         FlatTest::Bool(value) => FlatTest::Bool(*value),
-        FlatTest::Atom { field, term, positive } => FlatTest::Atom {
+        FlatTest::Atom {
+            field,
+            term,
+            positive,
+        } => FlatTest::Atom {
             field: *field,
             term: match term {
                 FlatTerm::Constant(value) => FlatTerm::Constant(*value),

@@ -9,7 +9,9 @@
 use crate::normalize::verify as norm;
 use crate::verify::finite_impl::*;
 use crate::verify::finite_states::*;
-use crate::verify::refinement::finiteness::{lemma_lift_regex_injective, lemma_lift_test_injective};
+use crate::verify::refinement::finiteness::{
+    lemma_lift_regex_injective, lemma_lift_test_injective,
+};
 use junco_core::kernel::verify as model;
 use junco_core::kernel::{RegexId, TestId};
 use junco_core::verify::history_specs::Regex;

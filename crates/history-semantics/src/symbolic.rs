@@ -13,13 +13,13 @@ use crate::normalize::{RegexNormalize, TransitionNormalize};
 #[cfg(verus_keep_ghost)]
 use crate::progress::verify as reach;
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_algebra as algebra;
-#[cfg(verus_keep_ghost)]
 use crate::verify::finite_deriv as fder;
 #[cfg(verus_keep_ghost)]
 use crate::verify::finite_interp as fint;
 #[cfg(verus_keep_ghost)]
 use crate::verify::finite_trans as ftr;
+#[cfg(verus_keep_ghost)]
+use crate::verify::history_algebra as algebra;
 #[cfg(verus_keep_ghost)]
 use alloc::boxed::Box;
 use alloc::vec::Vec;

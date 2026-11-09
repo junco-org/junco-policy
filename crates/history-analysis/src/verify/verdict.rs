@@ -1,18 +1,20 @@
 //! Numeric input provenance used by the executable tail-inclusion verdict.
 
-use super::*;
 use super::frontend::*;
 use super::reconstruction::code_field;
 use super::search_exec::{self as exec, root_vocabulary};
-use crate::analyzer::{Constants, PolicyAnalyzer};
+use super::*;
 use super::{reconstruction as slots, typed_numeric as typed};
+use crate::analyzer::{Constants, PolicyAnalyzer};
 use crate::analyzer::{Counterexample, Inclusion};
+use history_semantics::{
+    SymbolicLanguage, compile_verify as numeric, symbolic_language_verify as facade,
+    symbolic_verify as symbolic,
+};
 use history_syntax::Rule;
 use junco_core::flat::FlatRule;
-use junco_core::verify::dsl as tdsl;
-use history_semantics::{SymbolicLanguage, compile_verify as numeric,
-    symbolic_language_verify as facade, symbolic_verify as symbolic};
 use junco_core::flat::{FlatHead, FlatPair, FlatTerm, FlatTest};
+use junco_core::verify::dsl as tdsl;
 use junco_core::verify::{encoding as enc, flatten as fl};
 use vstd::prelude::*;
 

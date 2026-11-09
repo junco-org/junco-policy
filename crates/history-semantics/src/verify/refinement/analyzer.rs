@@ -22,11 +22,11 @@
 //! needs finitely many reachable items (`search::stmt_search_terminates`), which is OPEN for the
 //! implementation (see `finiteness`).
 use super::semantics::*;
+use history_store::typed::verify::eq_equivalence;
 use history_syntax::verify::dsl::{HeadView, RegexView, RuleView};
 use junco_core::verify::dsl as tdsl;
 use junco_core::verify::dsl::EventView as TEvent;
 use vstd::prelude::*;
-use history_store::typed::verify::eq_equivalence;
 use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {

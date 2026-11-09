@@ -9,20 +9,20 @@
 //! the analyzer uses (the runtime uses head bindings, with 0 at unbound components), and
 //! renaming invariance for fresh values.
 use super::semantics::*;
+use crate::compile::verify as numeric;
 use history_syntax::Event;
 use history_syntax::syntax::{Component, Rule, RuleMode};
 use history_syntax::verify::dsl::RuleView;
 use junco_core::ComponentValue;
+use junco_core::flat::verify as portable;
 use junco_core::flat::{FlatHead, FlatPair, FlatRule};
+use junco_core::flat::{FlatRegex, FlatTerm, FlatTest};
 use junco_core::kernel::verify as model;
 use junco_core::verify::dsl::EventView as TEvent;
 use junco_core::verify::encoding as enc;
 use junco_core::verify::flatten as fl;
 use junco_core::verify::history_specs as language;
 use junco_core::verify::history_specs::{EventView, Regex, Subst};
-use crate::compile::verify as numeric;
-use junco_core::flat::{FlatRegex, FlatTerm, FlatTest};
-use junco_core::flat::verify as portable;
 use vstd::prelude::*;
 
 verus! {

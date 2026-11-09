@@ -6,22 +6,22 @@
 //! one value instead. Relative to such a constraint, a letter names one class of events that no
 //! atom of the set can tell apart: for each component, the operand it equals, or none of them.
 
-use alloc::rc::Rc;
-use alloc::vec::Vec;
+#[cfg(verus_keep_ghost)]
+use self::equality::{constraint_key, register_key};
 use crate::native::NativeMap;
-use junco_core::HistoryError;
-use smallvec::SmallVec;
-use vstd::prelude::*;
-#[cfg(verus_keep_ghost)]
-use junco_core::observation::SmallVecSpecFns;
-#[cfg(verus_keep_ghost)]
-use crate::verify::*;
-#[cfg(verus_keep_ghost)]
-use self::equality::{register_key, constraint_key};
 #[cfg(verus_keep_ghost)]
 use crate::verify::constraint_unique::*;
 #[cfg(verus_keep_ghost)]
-use history_semantics::verify::refinement::{implementation, inclusion, encoding};
+use crate::verify::*;
+use alloc::rc::Rc;
+use alloc::vec::Vec;
+#[cfg(verus_keep_ghost)]
+use history_semantics::verify::refinement::{encoding, implementation, inclusion};
+use junco_core::HistoryError;
+#[cfg(verus_keep_ghost)]
+use junco_core::observation::SmallVecSpecFns;
+use smallvec::SmallVec;
+use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
 #[cfg(verus_keep_ghost)]
@@ -64,6 +64,9 @@ pub(crate) struct Atom {
 }
 
 /// What a constraint states about one register.
+// The verified `eq` compares the variant and its ids in order, exactly what the derived `Hash`
+// hashes, so the two agree.
+#[allow(clippy::derived_hash_with_manual_eq)]
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Debug, Eq, Hash)]
@@ -189,7 +192,9 @@ impl RegisterConstraint {
             decreases universe@.len() - index))]
         while index < universe.len() {
             let value = universe[index];
-            if !self.entails_differ(value) { return Some(value); }
+            if !self.entails_differ(value) {
+                return Some(value);
+            }
             index += 1;
         }
         None
@@ -210,6 +215,8 @@ impl RegisterConstraint {
 }
 
 /// Satisfiable conjunction of register literals, one entry per component.
+// The verified `eq` compares the three registers in order, as the derived `Hash` hashes them.
+#[allow(clippy::derived_hash_with_manual_eq)]
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Debug, Eq, Hash)]
@@ -243,9 +250,12 @@ impl Constraint {
         }
         if constraint.0[0].satisfiable(&universes[0])
             && constraint.0[1].satisfiable(&universes[1])
-            && constraint.0[2].satisfiable(&universes[2]) {
+            && constraint.0[2].satisfiable(&universes[2])
+        {
             Some(constraint)
-        } else { None }
+        } else {
+            None
+        }
     }
 
     /// Whether every valuation satisfying `self` satisfies `other`, read syntactically.
@@ -253,7 +263,8 @@ impl Constraint {
         ensures result ==> forall|d: encoding::NDomains|
             inclusion::entails(d, implementation::constraint_of(self@), implementation::constraint_of(other@)))]
     pub(crate) fn entails(&self, other: &Self) -> bool {
-        let result = self.0[0].entails(&other.0[0]) && self.0[1].entails(&other.0[1])
+        let result = self.0[0].entails(&other.0[0])
+            && self.0[1].entails(&other.0[1])
             && self.0[2].entails(&other.0[2]);
         proof! { if result { lemma_constraint_entails(self@, other@); } }
         result
@@ -280,7 +291,10 @@ pub(crate) struct ConstraintTable {
 impl ConstraintTable {
     #[verus_spec(result => ensures table_wf(result), result@.len() == 0)]
     pub(crate) fn new() -> Self {
-        Self { constraints: Vec::new(), ids: NativeMap::new() }
+        Self {
+            constraints: Vec::new(),
+            ids: NativeMap::new(),
+        }
     }
 
     #[verus_spec(result => requires table_wf(*old(self)), constraint_wf(constraint),
@@ -383,8 +397,10 @@ impl Operands {
     #[verus_spec(result => requires atoms_wf(atoms@),
         ensures operands_of(result, atoms@))]
     pub(crate) fn of(atoms: &[Atom]) -> Self {
-        let mut operands = Self { register: [false; 3],
-            constants: [SmallVec::new(), SmallVec::new(), SmallVec::new()] };
+        let mut operands = Self {
+            register: [false; 3],
+            constants: [SmallVec::new(), SmallVec::new(), SmallVec::new()],
+        };
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
             index <= atoms@.len(), atoms_wf(atoms@),
@@ -437,9 +453,24 @@ pub(crate) fn split(
     operands: &Operands,
     universes: &Universes,
 ) -> Vec<Constraint> {
-    let first = split_register(&constraint.0[0], operands.register[0], &operands.constants[0], &universes[0]);
-    let second = split_register(&constraint.0[1], operands.register[1], &operands.constants[1], &universes[1]);
-    let third = split_register(&constraint.0[2], operands.register[2], &operands.constants[2], &universes[2]);
+    let first = split_register(
+        &constraint.0[0],
+        operands.register[0],
+        &operands.constants[0],
+        &universes[0],
+    );
+    let second = split_register(
+        &constraint.0[1],
+        operands.register[1],
+        &operands.constants[1],
+        &universes[1],
+    );
+    let third = split_register(
+        &constraint.0[2],
+        operands.register[2],
+        &operands.constants[2],
+        &universes[2],
+    );
     let result = product_constraints([&first, &second, &third]);
     proof! { lemma_split_contract(*constraint, *operands, *universes, result@); }
     result
@@ -456,9 +487,24 @@ pub(crate) fn split(
         letter_alpha_unique(*constraint, *operands, *universes, result@))]
 fn letters(constraint: &Constraint, operands: &Operands, universes: &Universes) -> Vec<Letter> {
     let registers = register_classes(constraint);
-    let first = class_choices(&constraint.0[0], operands.register[0], &operands.constants[0], &universes[0]);
-    let second = class_choices(&constraint.0[1], operands.register[1], &operands.constants[1], &universes[1]);
-    let third = class_choices(&constraint.0[2], operands.register[2], &operands.constants[2], &universes[2]);
+    let first = class_choices(
+        &constraint.0[0],
+        operands.register[0],
+        &operands.constants[0],
+        &universes[0],
+    );
+    let second = class_choices(
+        &constraint.0[1],
+        operands.register[1],
+        &operands.constants[1],
+        &universes[1],
+    );
+    let third = class_choices(
+        &constraint.0[2],
+        operands.register[2],
+        &operands.constants[2],
+        &universes[2],
+    );
     let result = product_letters([&first, &second, &third], registers);
     proof! {
         lemma_letters_contract(*constraint, *operands, *universes, result@);
@@ -471,7 +517,11 @@ fn letters(constraint: &Constraint, operands: &Operands, universes: &Universes) 
 #[verus_spec(result => ensures forall|i: int| 0 <= i < 3
     ==> result[i] == raw_register_class(constraint.0[i]))]
 fn register_classes(constraint: &Constraint) -> [Class; COMPONENTS] {
-    [class_of(&constraint.0[0]), class_of(&constraint.0[1]), class_of(&constraint.0[2])]
+    [
+        class_of(&constraint.0[0]),
+        class_of(&constraint.0[1]),
+        class_of(&constraint.0[2]),
+    ]
 }
 
 /// `Steps(Γ, A)`, grouped by refined constraint.
@@ -509,7 +559,10 @@ pub(crate) fn steps(
             && letter_alpha_unique(source[i], operands, *universes, result@[i].1@),
         decreases count - index))]
     while index < count {
-        let refined = match iter.next() { Some(value) => value, None => unreachable!() };
+        let refined = match iter.next() {
+            Some(value) => value,
+            None => unreachable!(),
+        };
         proof! {
             assert(refined == source[index as int]);
             lemma_constraint_view_at(source, index as int);
@@ -534,7 +587,6 @@ pub(crate) fn steps(
     }
     result
 }
-
 
 #[verus_verify]
 #[verus_spec(result => ensures canonical(final(values).view()),
@@ -571,13 +623,17 @@ fn normalize_ids<A: smallvec::Array<Item = ConstId>>(values: &mut SmallVec<A>) {
             assert(sorted.subrange(0, index as int + 1)
                 =~= sorted.subrange(0, index as int).push(value));
         }
-        let duplicate = if index == 0 { false } else {
+        let duplicate = if index == 0 {
+            false
+        } else {
             proof! { assert(write > 0); }
             let prior = slice[write - 1];
             prior == value
         };
         if !duplicate {
-            if write != index { values.as_mut_slice()[write] = value; }
+            if write != index {
+                values.as_mut_slice()[write] = value;
+            }
             write += 1;
         }
         index += 1;
@@ -602,91 +658,95 @@ fn normalize_ids<A: smallvec::Array<Item = ConstId>>(values: &mut SmallVec<A>) {
 }
 
 pub(crate) mod equality {
-use super::*;
+    use super::*;
 
-#[cfg(verus_keep_ghost)]
-verus! {
-/// The exact ordered key used by native register equality, including noncanonical inputs.
-pub open(crate) spec fn register_key(register: RegisterConstraint) -> (Option<u32>, Seq<u32>) {
-    match register {
-        RegisterConstraint::Equals(v) => (Some(v), Seq::empty()),
-        RegisterConstraint::Differs(vs) => (None, vs.view()),
+    #[cfg(verus_keep_ghost)]
+    verus! {
+    /// The exact ordered key used by native register equality, including noncanonical inputs.
+    pub open(crate) spec fn register_key(register: RegisterConstraint) -> (Option<u32>, Seq<u32>) {
+        match register {
+            RegisterConstraint::Equals(v) => (Some(v), Seq::empty()),
+            RegisterConstraint::Differs(vs) => (None, vs.view()),
+        }
     }
-}
 
-/// The three exact ordered register keys used by native constraint equality.
-pub open(crate) spec fn constraint_key(constraint: Constraint) -> Seq<(Option<u32>, Seq<u32>)> {
-    Seq::new(3, |i: int| register_key(constraint.0[i]))
-}
-impl vstd::std_specs::cmp::PartialEqSpecImpl for RegisterConstraint {
-    open spec fn obeys_eq_spec() -> bool { true }
-    open(crate) spec fn eq_spec(&self, other: &Self) -> bool {
-        register_key(*self) == register_key(*other)
+    /// The three exact ordered register keys used by native constraint equality.
+    pub open(crate) spec fn constraint_key(constraint: Constraint) -> Seq<(Option<u32>, Seq<u32>)> {
+        Seq::new(3, |i: int| register_key(constraint.0[i]))
     }
-}
-}
+    impl vstd::std_specs::cmp::PartialEqSpecImpl for RegisterConstraint {
+        open spec fn obeys_eq_spec() -> bool { true }
+        open(crate) spec fn eq_spec(&self, other: &Self) -> bool {
+            register_key(*self) == register_key(*other)
+        }
+    }
+    }
 
-#[verus_verify]
-impl PartialEq for RegisterConstraint {
-    #[verus_spec(result => ensures result == (register_key(*self) == register_key(*other)))]
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Equals(a), Self::Equals(b)) => *a == *b,
-            (Self::Differs(a), Self::Differs(b)) => {
-                let left: &[ConstId] = a;
-                let right: &[ConstId] = b;
-                if left.len() != right.len() { return false; }
-                let mut index = 0;
-                #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+    #[verus_verify]
+    impl PartialEq for RegisterConstraint {
+        #[verus_spec(result => ensures result == (register_key(*self) == register_key(*other)))]
+        fn eq(&self, other: &Self) -> bool {
+            match (self, other) {
+                (Self::Equals(a), Self::Equals(b)) => *a == *b,
+                (Self::Differs(a), Self::Differs(b)) => {
+                    let left: &[ConstId] = a;
+                    let right: &[ConstId] = b;
+                    if left.len() != right.len() {
+                        return false;
+                    }
+                    let mut index = 0;
+                    #[cfg_attr(verus_keep_ghost, verus_spec(invariant
                     index <= left@.len(), left@.len() == right@.len(),
                     register_key(*self) == (None, left@), register_key(*other) == (None, right@),
                     forall|i: int| 0 <= i < index ==> left@[i] == right@[i],
                     decreases left@.len() - index))]
-                while index < left.len() {
-                    if left[index] != right[index] { return false; }
-                    index += 1;
+                    while index < left.len() {
+                        if left[index] != right[index] {
+                            return false;
+                        }
+                        index += 1;
+                    }
+                    proof! { assert(left@ =~= right@); }
+                    true
                 }
-                proof! { assert(left@ =~= right@); }
-                true
-            },
-            _ => false,
-        }
-    }
-}
-
-
-#[cfg(verus_keep_ghost)]
-verus! {
-impl vstd::std_specs::cmp::PartialEqSpecImpl for Constraint {
-    open spec fn obeys_eq_spec() -> bool { true }
-    open(crate) spec fn eq_spec(&self, other: &Self) -> bool {
-        constraint_key(*self) == constraint_key(*other)
-    }
-}
-}
-
-#[verus_verify]
-impl PartialEq for Constraint {
-    #[verus_spec(result => ensures result == (constraint_key(*self) == constraint_key(*other)))]
-    fn eq(&self, other: &Self) -> bool {
-        let equal = self.0[0] == other.0[0] && self.0[1] == other.0[1] && self.0[2] == other.0[2];
-        proof! {
-            assert(constraint_key(*self).len() == 3);
-            assert(constraint_key(*other).len() == 3);
-            assert(equal == (constraint_key(*self)[0] == constraint_key(*other)[0]
-                && constraint_key(*self)[1] == constraint_key(*other)[1]
-                && constraint_key(*self)[2] == constraint_key(*other)[2]));
-            if equal {
-                assert forall|i: int| 0 <= i < 3 implies
-                    constraint_key(*self)[i] == constraint_key(*other)[i] by {
-                    if i == 0 {} else if i == 1 {} else { assert(i == 2); }
-                }
-                assert(constraint_key(*self) =~= constraint_key(*other));
+                _ => false,
             }
         }
-        equal
     }
-}
+
+    #[cfg(verus_keep_ghost)]
+    verus! {
+    impl vstd::std_specs::cmp::PartialEqSpecImpl for Constraint {
+        open spec fn obeys_eq_spec() -> bool { true }
+        open(crate) spec fn eq_spec(&self, other: &Self) -> bool {
+            constraint_key(*self) == constraint_key(*other)
+        }
+    }
+    }
+
+    #[verus_verify]
+    impl PartialEq for Constraint {
+        #[verus_spec(result => ensures result == (constraint_key(*self) == constraint_key(*other)))]
+        fn eq(&self, other: &Self) -> bool {
+            let equal =
+                self.0[0] == other.0[0] && self.0[1] == other.0[1] && self.0[2] == other.0[2];
+            proof! {
+                assert(constraint_key(*self).len() == 3);
+                assert(constraint_key(*other).len() == 3);
+                assert(equal == (constraint_key(*self)[0] == constraint_key(*other)[0]
+                    && constraint_key(*self)[1] == constraint_key(*other)[1]
+                    && constraint_key(*self)[2] == constraint_key(*other)[2]));
+                if equal {
+                    assert forall|i: int| 0 <= i < 3 implies
+                        constraint_key(*self)[i] == constraint_key(*other)[i] by {
+                        if i == 0 {} else if i == 1 {} else { assert(i == 2); }
+                    }
+                    assert(constraint_key(*self) =~= constraint_key(*other));
+                }
+            }
+            equal
+        }
+    }
 }
 
 #[verus_verify]
@@ -697,15 +757,24 @@ impl PartialEq for Constraint {
         result@.len() <= usize::MAX,
         universe_distinct(*universe) ==> register_sequence(result@).no_duplicates(),
         forall|i: int| 0 <= i < result@.len() ==> register_wf(result@[i]))]
-fn split_register(current: &RegisterConstraint, register: bool, constants: &[ConstId],
-    universe: &Universe) -> RegisterChoices {
+fn split_register(
+    current: &RegisterConstraint,
+    register: bool,
+    constants: &[ConstId],
+    universe: &Universe,
+) -> RegisterChoices {
     let mut equals = SmallVec::<[ConstId; 4]>::new();
     if !register || matches!(current, RegisterConstraint::Equals(_)) {
-        let result = RegisterChoices { equals, last: Some(current.copy()) };
+        let result = RegisterChoices {
+            equals,
+            last: Some(current.copy()),
+        };
         proof! { lemma_register_choices(result); lemma_register_choices_distinct(result); }
         return result;
     }
-    let RegisterConstraint::Differs(differs) = current else { unreachable!() };
+    let RegisterConstraint::Differs(differs) = current else {
+        unreachable!()
+    };
     proof! { lemma_codes(differs.view()); lemma_codes(constants@); }
     if let Some(values) = universe {
         let slice: &[ConstId] = values;
@@ -776,7 +845,9 @@ fn split_register(current: &RegisterConstraint, register: bool, constants: &[Con
         if equals.view().len() == 0 { assert(codes(equals.view()) =~= Set::<nat>::empty()); }
         else { assert(codes(equals.view()).contains(equals.view()[0] as nat)); assert(codes(equals.view()).len() > 0); }
     }
-    let last = if equals.is_empty() { current.copy() } else {
+    let last = if equals.is_empty() {
+        current.copy()
+    } else {
         let mut all_differ = SmallVec::new();
         all_differ.extend_from_slice(differs);
         all_differ.extend_from_slice(&equals);
@@ -786,7 +857,10 @@ fn split_register(current: &RegisterConstraint, register: bool, constants: &[Con
         proof! { assert(codes(all_differ.view()) == codes(differs.view()).union(codes(equals.view()))); }
         RegisterConstraint::Differs(all_differ)
     };
-    let result = RegisterChoices { equals, last: Some(last) };
+    let result = RegisterChoices {
+        equals,
+        last: Some(last),
+    };
     proof! {
         lemma_register_choices(result);
         assert(constants@.no_duplicates());
@@ -866,7 +940,11 @@ fn product_constraints(choices: [&RegisterChoices; COMPONENTS]) -> Vec<Constrain
                 axes == [choices[0]@, choices[1]@, choices[2]@],
                 decreases n2 - third))]
             while third < n2 {
-                let next = Constraint([choices[0].get(first), choices[1].get(second), choices[2].get(third)]);
+                let next = Constraint([
+                    choices[0].get(first),
+                    choices[1].get(second),
+                    choices[2].get(third),
+                ]);
                 proof_decl! { let ghost previous = result@; let ghost copied = next; }
                 result.push(next);
                 proof! {
@@ -934,15 +1012,17 @@ fn in_universe(universe: &Universe, value: ConstId) -> bool {
             }
             proof! { lemma_codes(slice@); }
             false
-        },
+        }
     }
 }
 
 #[verus_verify]
 #[verus_spec(result => ensures result@ == register_class(current@), result == raw_register_class(*current))]
 fn class_of(current: &RegisterConstraint) -> Class {
-    match current { RegisterConstraint::Equals(value) => Class::Constant(*value),
-        RegisterConstraint::Differs(_) => Class::Register }
+    match current {
+        RegisterConstraint::Equals(value) => Class::Constant(*value),
+        RegisterConstraint::Differs(_) => Class::Register,
+    }
 }
 
 #[verus_verify]
@@ -950,8 +1030,14 @@ fn class_of(current: &RegisterConstraint) -> Class {
     ensures option_views(result@) == class_options(current@, register, codes(constants@), *universe),
         class_choices_wf(result), result@.len() == option_views(result@).len(), result@.len() <= usize::MAX,
         class_sequence(result@).no_duplicates())]
-fn class_choices(current: &RegisterConstraint, register: bool, constants: &[ConstId],
-    universe: &Universe) -> ClassChoices {
+// Nested so the proof statements stay inside the `if let` scope; Verus does not take let chains.
+#[allow(clippy::collapsible_if)]
+fn class_choices(
+    current: &RegisterConstraint,
+    register: bool,
+    constants: &[ConstId],
+    universe: &Universe,
+) -> ClassChoices {
     let mut names = SmallVec::<[ConstId; 4]>::new();
     let mut index = 0;
     proof_decl! { let ghost domain = domain_view(*universe); }
@@ -964,10 +1050,12 @@ fn class_choices(current: &RegisterConstraint, register: bool, constants: &[Cons
     while index < constants.len() {
         let value = constants[index];
         proof! { constants@.subrange(0, index as int).lemma_filter_push(value,
-            |v: u32| match domain { None => true, Some(vs) => vs.contains(v as nat) }); }
-        if in_universe(universe, value) { names.push(value); }
+        |v: u32| match domain { None => true, Some(vs) => vs.contains(v as nat) }); }
+        if in_universe(universe, value) {
+            names.push(value);
+        }
         proof! { assert(constants@.subrange(0, index as int + 1)
-            =~= constants@.subrange(0, index as int).push(value)); }
+        =~= constants@.subrange(0, index as int).push(value)); }
         index += 1;
     }
     proof! {
@@ -1001,7 +1089,12 @@ fn class_choices(current: &RegisterConstraint, register: bool, constants: &[Cons
             proof! { lemma_codes(slice@); assert(junco_core::verify::history_assumptions::strictly_sorted(slice@)); }
             if slice.binary_search(&value).is_err() {
                 proof! { lemma_first_other_at(values@, codes(slice@), index as int); }
-                let result = ClassChoices { names, register: is_register, infinite: false, other: Some(value) };
+                let result = ClassChoices {
+                    names,
+                    register: is_register,
+                    infinite: false,
+                    other: Some(value),
+                };
                 proof! {
                     lemma_class_choices(result);
                     lemma_class_choices_distinct(result);
@@ -1013,7 +1106,12 @@ fn class_choices(current: &RegisterConstraint, register: bool, constants: &[Cons
         }
         proof! { lemma_first_other(values@, codes(slice@)); }
     }
-    let result = ClassChoices { names, register: is_register, infinite: universe.is_none(), other: None };
+    let result = ClassChoices {
+        names,
+        register: is_register,
+        infinite: universe.is_none(),
+        other: None,
+    };
     proof! {
         lemma_class_choices(result);
         lemma_class_choices_distinct(result);
@@ -1032,7 +1130,10 @@ fn class_choices(current: &RegisterConstraint, register: bool, constants: &[Cons
             ==> letter_sequence(result@).no_duplicates(),
         letter_views(result@) == letter_product(option_views(choices[0]@),
             option_views(choices[1]@), option_views(choices[2]@), registers))]
-fn product_letters(choices: [&ClassChoices; COMPONENTS], registers: [Class; COMPONENTS]) -> Vec<Letter> {
+fn product_letters(
+    choices: [&ClassChoices; COMPONENTS],
+    registers: [Class; COMPONENTS],
+) -> Vec<Letter> {
     let n0 = choices[0].len();
     let n1 = choices[1].len();
     let n2 = choices[2].len();
@@ -1083,7 +1184,14 @@ fn product_letters(choices: [&ClassChoices; COMPONENTS], registers: [Class; COMP
                 letter_positions(axes, registers, result@),
                 decreases n2 - third))]
             while third < n2 {
-                let next = Letter { classes: [choices[0].get(first), choices[1].get(second), choices[2].get(third)], registers };
+                let next = Letter {
+                    classes: [
+                        choices[0].get(first),
+                        choices[1].get(second),
+                        choices[2].get(third),
+                    ],
+                    registers,
+                };
                 proof_decl! { let ghost previous = result@; let ghost copied = next; }
                 result.push(next);
                 proof! {
@@ -1146,14 +1254,17 @@ impl RegisterChoices {
         ensures result@ == self@[index as int]@, register_wf(result))]
     fn get(&self, index: usize) -> RegisterConstraint {
         let values: &[ConstId] = &self.equals;
-        if index < values.len() { RegisterConstraint::Equals(values[index]) }
-        else { match &self.last {
-            Some(r) => {
-                proof! { assert(self@[index as int] == *r); assert(register_wf(*r)); }
-                r.copy()
-            },
-            None => unreachable!(),
-        } }
+        if index < values.len() {
+            RegisterConstraint::Equals(values[index])
+        } else {
+            match &self.last {
+                Some(r) => {
+                    proof! { assert(self@[index as int] == *r); assert(register_wf(*r)); }
+                    r.copy()
+                }
+                None => unreachable!(),
+            }
+        }
     }
 }
 
@@ -1169,17 +1280,35 @@ pub(crate) struct ClassChoices {
 impl ClassChoices {
     #[verus_spec(result => requires self@.len() <= usize::MAX, ensures result == self@.len())]
     fn len(&self) -> usize {
-        self.names.len() + if self.infinite { 1 } else { 0 }
-            + if self.register { 1 } else { 0 } + if self.other.is_some() { 1 } else { 0 }
+        self.names.len()
+            + if self.infinite { 1 } else { 0 }
+            + if self.register { 1 } else { 0 }
+            + if self.other.is_some() { 1 } else { 0 }
     }
 
     #[verus_spec(result => requires index < self@.len(), self@.len() <= usize::MAX,
         ensures result == self@[index as int])]
     fn get(&self, mut index: usize) -> Option<Class> {
-        if self.infinite { if index == 0 { return None; } index -= 1; }
-        if self.register { if index == 0 { return Some(Class::Register); } index -= 1; }
+        if self.infinite {
+            if index == 0 {
+                return None;
+            }
+            index -= 1;
+        }
+        if self.register {
+            if index == 0 {
+                return Some(Class::Register);
+            }
+            index -= 1;
+        }
         let values: &[ConstId] = &self.names;
-        if index < values.len() { Some(Class::Constant(values[index])) }
-        else { match self.other { Some(value) => Some(Class::Constant(value)), None => unreachable!() } }
+        if index < values.len() {
+            Some(Class::Constant(values[index]))
+        } else {
+            match self.other {
+                Some(value) => Some(Class::Constant(value)),
+                None => unreachable!(),
+            }
+        }
     }
 }

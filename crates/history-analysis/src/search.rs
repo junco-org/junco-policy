@@ -8,9 +8,9 @@
 //! first expanded state whose residual accepts the empty history ends the search, and its parent
 //! chain yields a counterexample of minimum length.
 
+use crate::native::NativeSet;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use crate::native::NativeSet;
 use history_semantics::SymbolicLanguage;
 use junco_core::HistoryError;
 use junco_core::kernel::{Primitive, RegexId, Term, TransitionId};
@@ -21,27 +21,27 @@ use crate::constraint::{
 };
 use crate::prune::{Antichain, Decomposition};
 use crate::simulation::Simulation;
-use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::table_wf;
 #[cfg(verus_keep_ghost)]
-use crate::verify::{search_exec::*, atoms_wf, component_of};
-#[cfg(verus_keep_ghost)]
-use history_semantics::verify::refinement::{implementation, search as paper_search};
-#[cfg(verus_keep_ghost)]
-use history_semantics::symbolic_verify as symbolic;
-#[cfg(verus_keep_ghost)]
-use history_semantics::symbolic_language_verify as facade;
+use crate::verify::{atoms_wf, component_of, search_exec::*};
 #[cfg(verus_keep_ghost)]
 use crate::verify::{prune_exec::*, simulation_exec::*};
 #[cfg(verus_keep_ghost)]
+use history_semantics::symbolic_language_verify as facade;
+#[cfg(verus_keep_ghost)]
+use history_semantics::symbolic_verify as symbolic;
+#[cfg(verus_keep_ghost)]
 use history_semantics::verify::refinement::pruning as paper_pruning;
+#[cfg(verus_keep_ghost)]
+use history_semantics::verify::refinement::{implementation, search as paper_search};
+#[cfg(verus_keep_ghost)]
+use junco_core::{kernel::verify as model, observation::SmallVecSpecFns};
+use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::iter::IteratorSpec;
-#[cfg(verus_keep_ghost)]
-use junco_core::{kernel::verify as model, observation::SmallVecSpecFns};
 
 #[cfg(verus_keep_ghost)]
 verus! { broadcast use model::group_kernel_views; }
@@ -79,7 +79,7 @@ pub(crate) struct Refutation {
         paper_search::Item { constraint:implementation::constraint_of(constraint@),
             state:model::lift_regex(facade::graph(*old(language)),facade::root(*old(language))) },outcome_view(outcome))
             && refutation_ready(outcome,*universes,root_vocabulary(*old(language),*universes,constraint@)))]
-#[cfg_attr(verus_keep_ghost,verifier::rlimit(30))]
+#[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
 pub(crate) fn search(
     language: &mut SymbolicLanguage,
     universes: &Universes,
@@ -158,13 +158,13 @@ pub(crate) struct Search<'search> {
     #[cfg(verus_keep_ghost)]
     pub(crate) alphabets: Ghost<Map<nat, Set<model::Primitive>>>,
     #[cfg(verus_keep_ghost)]
-    pub(crate) seen_records: Ghost<Seq<(ConstraintId,RegexId,nat)>>,
+    pub(crate) seen_records: Ghost<Seq<(ConstraintId, RegexId, nat)>>,
     #[cfg(verus_keep_ghost)]
     pub(crate) archive: Ghost<Map<paper_search::Item, Set<paper_search::Case>>>,
     #[cfg(verus_keep_ghost)]
     pub(crate) start: Ghost<paper_search::Item>,
     #[cfg(verus_keep_ghost)]
-    pub(crate) vocabulary: Ghost<[Set<nat>;3]>,
+    pub(crate) vocabulary: Ghost<[Set<nat>; 3]>,
 }
 
 impl Search<'_> {
@@ -253,6 +253,9 @@ impl Search<'_> {
     verus! {
     /// Inserts the successor of the item by each step of its constraint and the atoms its
     /// derivative tests.
+    // `?` on `intern` exceeds the verifier's resource limit on the letter loop that follows, and
+    // the `verus!` expansion writes the `Item` pattern's shorthand fields out in full.
+    #[allow(clippy::question_mark, non_shorthand_field_patterns)]
     fn expand(&mut self, index: usize) -> (result: Result<(), HistoryError>)
         requires running(*old(self),index as nat,old(self).start@,old(self).vocabulary@),
             search_obligations(),index < old(self).items@.len(),
@@ -737,8 +740,10 @@ impl Search<'_> {
             && crate::verify::atom_set(atoms@).subset_of(facade::residual_primitives(*final(language),residual))
             && forall|i: int| 0 <= i < atoms@.len() ==> model::lift_test(facade::graph(*final(language)),
                 facade::atom_ids(*final(language), t)[i]@) == model::Test::Atom(atoms@[i]@, true))]
-fn derive_atoms(language: &mut SymbolicLanguage, residual: RegexId)
-    -> Result<(TransitionId, Vec<Atom>), HistoryError> {
+fn derive_atoms(
+    language: &mut SymbolicLanguage,
+    residual: RegexId,
+) -> Result<(TransitionId, Vec<Atom>), HistoryError> {
     let (transition, primitives) = language.derive(residual)?;
     proof_decl! { let ghost original = primitives@; }
     // Validate first so the specified infallible collect can reuse the primitive allocation.
@@ -789,19 +794,23 @@ fn derive_atoms(language: &mut SymbolicLanguage, residual: RegexId)
 
 #[verus_verify]
 #[verus_spec(result => ensures result.is_ok() == atom_valid(primitive))]
-fn validate_atom(primitive: Primitive) -> Result<(),HistoryError> {
-    let Primitive::Eq { field,term } = primitive;
+fn validate_atom(primitive: Primitive) -> Result<(), HistoryError> {
+    let Primitive::Eq { field, term } = primitive;
     match term {
         Term::Constant(code) => {
             if code > u32::MAX as u64 {
-                return Err(HistoryError::invariant("constant code is not a constant id"));
+                return Err(HistoryError::invariant(
+                    "constant code is not a constant id",
+                ));
             }
-        },
+        }
         Term::Variable(component) => {
             if component != field {
-                return Err(HistoryError::invariant("tail variable compared with another component"));
+                return Err(HistoryError::invariant(
+                    "tail variable compared with another component",
+                ));
             }
-        },
+        }
     }
     Ok(())
 }
@@ -827,6 +836,8 @@ fn atom(primitive: Primitive) -> Atom {
 #[verus_verify]
 #[verus_spec(result => requires atoms_wf(atoms@),
     ensures truth_bits(atoms@, *letter, result.view()))]
+// vstd specifies `%` but not `is_multiple_of`.
+#[allow(clippy::manual_is_multiple_of)]
 fn truth(atoms: &[Atom], letter: &Letter) -> SmallVec<[u64; 2]> {
     let mut words: SmallVec<[u64; 2]> = SmallVec::new();
     let count = atoms.len() / 64 + if atoms.len() % 64 == 0 { 0 } else { 1 };

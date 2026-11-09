@@ -12,7 +12,9 @@
 //! (`finite_machine::aref`) the abstract run of the configuration it came from ([`istep`]), so
 //! the loop keeps the abstract run below the values of the root ([`iinv`]).
 use crate::normalize::verify as norm;
-use crate::symbolic::verify::{child_interp_tasks, interp_append_ids, interp_tasks_wf, transition_children, transition_suffix};
+use crate::symbolic::verify::{
+    child_interp_tasks, interp_append_ids, interp_tasks_wf, transition_children, transition_suffix,
+};
 use crate::verify::finite_collect::*;
 use crate::verify::finite_impl::*;
 use crate::verify::finite_link::*;

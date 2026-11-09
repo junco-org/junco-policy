@@ -6,16 +6,16 @@
 
 use crate::analyzer::{Constants, PolicyAnalyzer};
 use crate::verify::{self as views, frontend::*};
-use history_syntax::{Component, Event, Rule};
-use junco_core::{ComponentValue};
-use junco_core::flat::{FlatHead, FlatTerm, FlatTest, FlatRegex, FlatPair, FlatRule};
-use junco_core::flat::verify as portable;
-use junco_core::verify::{encoding as enc, flatten as fl, dsl as tdsl};
-use junco_core::verify::history_specs::{self as language, EventView, Subst};
 use history_semantics::compile_verify as numeric;
-use history_semantics::verify::refinement::{encoding, semantics, analyzer, implementation};
-use vstd::std_specs::cmp::PartialEqSpec;
+use history_semantics::verify::refinement::{analyzer, encoding, implementation, semantics};
+use history_syntax::{Component, Event, Rule};
+use junco_core::ComponentValue;
+use junco_core::flat::verify as portable;
+use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatRule, FlatTerm, FlatTest};
+use junco_core::verify::history_specs::{self as language, EventView, Subst};
+use junco_core::verify::{dsl as tdsl, encoding as enc, flatten as fl};
 use vstd::prelude::*;
+use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
 broadcast use {vstd::seq::group_seq_lemmas, vstd::std_specs::vec::group_vec_axioms};

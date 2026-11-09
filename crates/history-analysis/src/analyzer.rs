@@ -1,37 +1,37 @@
 //! Tail inclusion for every candidate matching a head.
 
-use alloc::rc::Rc;
-use alloc::vec::Vec;
 use crate::native::NativeMap;
-use history_semantics::SymbolicLanguage;
-use history_syntax::{Component, Event, Head, RegexExpr, RuleMode};
-#[cfg(verus_keep_ghost)]
-use history_syntax::Rule;
-use junco_core::compile::validate_component;
-use junco_core::flat::{FlatHead, FlatPair};
-use junco_core::limits::Unmetered;
-use junco_core::observation::ObservationWorld;
-use junco_core::{
-    CompileError, ComponentValue, FlatEncoder, HistoryError, lower_flat,
-};
-use junco_core::flatten::flatten_rule_parts;
-use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::frontend::*;
-#[cfg(verus_keep_ghost)]
-use junco_core::verify::{encoding as enc, flatten as fl};
-#[cfg(verus_keep_ghost)]
-use vstd::std_specs::cmp::PartialEqSpec;
 #[cfg(verus_keep_ghost)]
 use crate::verify::verdict::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::{self as views, search_exec as exec};
+use alloc::rc::Rc;
+use alloc::vec::Vec;
+use history_semantics::SymbolicLanguage;
 #[cfg(verus_keep_ghost)]
-use history_semantics::{symbolic_language_verify as facade, compile_verify as numeric};
+use history_semantics::verify::refinement::{
+    analyzer as verdict, implementation, inclusion, search as paper,
+};
 #[cfg(verus_keep_ghost)]
-use history_semantics::verify::refinement::{analyzer as verdict, implementation, inclusion, search as paper};
+use history_semantics::{compile_verify as numeric, symbolic_language_verify as facade};
+#[cfg(verus_keep_ghost)]
+use history_syntax::Rule;
+use history_syntax::{Component, Event, Head, RegexExpr, RuleMode};
+use junco_core::compile::validate_component;
+use junco_core::flat::{FlatHead, FlatPair};
+use junco_core::flatten::flatten_rule_parts;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
+use junco_core::limits::Unmetered;
+use junco_core::observation::ObservationWorld;
+#[cfg(verus_keep_ghost)]
+use junco_core::verify::{encoding as enc, flatten as fl};
+use junco_core::{CompileError, ComponentValue, FlatEncoder, HistoryError, lower_flat};
+use vstd::prelude::*;
+#[cfg(verus_keep_ghost)]
+use vstd::std_specs::cmp::PartialEqSpec;
 
 #[cfg(verus_keep_ghost)]
 verus! {
@@ -339,6 +339,8 @@ pub struct PolicyAnalyzer<E: Event> {
 verus! {
 impl<E: Event> PolicyAnalyzer<E> {
     /// Creates an analyzer for events whose components take the values of `domains`.
+    // Each `match` keeps a Verus closure contract that `Option::map` would not carry.
+    #[allow(clippy::manual_map)]
     pub fn new(domains: Domains<E>) -> (result: Self)
         requires crate::verify::analyzer_obligations::<E>(), constructor_capacity(domains),
         ensures constructor_result(result, domains),
@@ -612,7 +614,6 @@ impl<E: Event> PolicyAnalyzer<E> {
 }
 
 impl<E: Event> PolicyAnalyzer<E> {
-
     /// Builds a candidate and history from a refuting constraint and letter sequence.
     ///
     /// A register takes the constant the constraint pins it to, the first remaining value of a
@@ -625,12 +626,17 @@ impl<E: Event> PolicyAnalyzer<E> {
             self.universes, *constraint, letters@, alphabets@),
         ensures result matches Ok(c) ==> crate::verify::reconstruction::reconstructed(self.constants,
             self.universes, *constraint, letters@, alphabets@, c))]
-    fn counterexample(&self, constraint: &Constraint, letters: &[Letter],
+    fn counterexample(
+        &self,
+        constraint: &Constraint,
+        letters: &[Letter],
         #[cfg(verus_keep_ghost)] alphabets: Ghost<Seq<Set<junco_core::kernel::verify::Primitive>>>,
     ) -> Result<Counterexample<E>, HistoryError> {
         #[cfg(verus_keep_ghost)]
-        use crate::verify::{reconstruction::*, lemma_constraint_possible, lemma_codes,
-            component_of, component_index, register_sat, register_possible, domain_view};
+        use crate::verify::{
+            component_index, component_of, domain_view, lemma_codes, lemma_constraint_possible,
+            reconstruction::*, register_possible, register_sat,
+        };
         proof! {
             lemma_known_codes(self.constants);
             lemma_constraint_possible(*constraint, self.universes);
@@ -669,17 +675,21 @@ impl<E: Event> PolicyAnalyzer<E> {
                                 assert(false);
                             }
                             panic!("constraints are satisfiable in their universe")
-                        },
+                        }
                     }
-                },
+                }
                 (RegisterConstraint::Differs(_), None) => {
                     let slot = Slot::Fresh(fresh);
                     fresh = match fresh.checked_add(1) {
                         Some(next) => next,
-                        None => return Err(HistoryError::IdExhausted { domain: "fresh value" }),
+                        None => {
+                            return Err(HistoryError::IdExhausted {
+                                domain: "fresh value",
+                            });
+                        }
                     };
                     slot
-                },
+                }
             };
             proof! {
                 let field = component_of(component);
@@ -760,10 +770,14 @@ impl<E: Event> PolicyAnalyzer<E> {
                         let slot = Slot::Fresh(fresh);
                         fresh = match fresh.checked_add(1) {
                             Some(next) => next,
-                            None => return Err(HistoryError::IdExhausted { domain: "fresh value" }),
+                            None => {
+                                return Err(HistoryError::IdExhausted {
+                                    domain: "fresh value",
+                                });
+                            }
                         };
                         slot
-                    },
+                    }
                 };
                 proof! {
                     assert(history_field_matches(slot_views(candidate), letter@, component as int, slot@));
@@ -777,7 +791,10 @@ impl<E: Event> PolicyAnalyzer<E> {
             proof! { slots_history = slots_history.push(slot_views(slots)); }
             index += 1;
         }
-        let result = Counterexample { candidate: candidate_values, history: values };
+        let result = Counterexample {
+            candidate: candidate_values,
+            history: values,
+        };
         proof! {
             assert(constructed(self.constants, self.universes, *constraint, letters@, slot_views(candidate), slots_history));
             assert(result@.history =~= slots_history.map(
@@ -805,7 +822,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                 _ => {
                     proof! { assert(false); }
                     unreachable!("principal constants are principals")
-                },
+                }
             },
         };
         let action = match slots[1] {
@@ -815,7 +832,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                 _ => {
                     proof! { assert(false); }
                     unreachable!("action constants are actions")
-                },
+                }
             },
         };
         let resource = match slots[2] {
@@ -825,10 +842,13 @@ impl<E: Event> PolicyAnalyzer<E> {
                 _ => {
                     proof! { assert(false); }
                     unreachable!("resource constants are resources")
-                },
+                }
             },
         };
-        Components { principal, action, resource }
+        Components {
+            principal,
+            action,
+            resource,
+        }
     }
-
 }

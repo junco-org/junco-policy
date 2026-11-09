@@ -27,7 +27,9 @@
 use super::encoding::*;
 use super::inclusion::*;
 use super::search::*;
-use crate::verify::finite_states::{Model, reachable, theorem_finite_reachable, lemma_powerset_finite, lemma_big_union_finite};
+use crate::verify::finite_states::{
+    Model, lemma_big_union_finite, lemma_powerset_finite, reachable, theorem_finite_reachable,
+};
 use history_syntax::syntax::Component;
 use junco_core::kernel::verify as model;
 use junco_core::verify::history_specs::Regex;

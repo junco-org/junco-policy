@@ -9,11 +9,11 @@ use crate::normalize::verify as norm;
 use crate::verify::finite_impl::*;
 use crate::verify::finite_link::*;
 use crate::verify::finite_trans::lemma_cat_nf;
+use alloc::boxed::Box;
 use junco_core::kernel::verify as model;
 use junco_core::kernel::{RegexId, TestId};
 use junco_core::verify::history_specs::Regex;
 use vstd::prelude::*;
-use alloc::boxed::Box;
 
 verus! {
 

@@ -1,15 +1,15 @@
 //! Layer 2: constraints, `Split`, constrained inclusion, and the policy reduction
 //! (`inclusion.tex:39-100`, Proposition B.1 `appendix.tex:434-481`), over numeric rules.
 use super::encoding::*;
+use super::semantics::violated_by;
+use crate::verify::finite_states::lemma_powerset_finite;
 use alloc::boxed::Box;
 use history_syntax::syntax::{Component, RuleMode};
 use junco_core::kernel::verify as model;
 use junco_core::verify::history_specs as language;
 use junco_core::verify::history_specs::{EventView, Regex, Subst};
-use super::semantics::violated_by;
 use vstd::iset_lib::lemma_iset_subset_finite;
 use vstd::prelude::*;
-use crate::verify::finite_states::lemma_powerset_finite;
 
 verus! {
 

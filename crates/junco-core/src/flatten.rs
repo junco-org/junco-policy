@@ -879,8 +879,5 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
         assert(regex_represents::<E>(source.tests@, source.regexes@, source.root as nat, rule.tail@, rule.head@));
         assert(crate::verify::encoding::constants_in_domain(source, component_domain::<E>()));
     }
-    Ok(FlatRule {
-        mode,
-        source,
-    })
+    Ok(FlatRule { mode, source })
 }

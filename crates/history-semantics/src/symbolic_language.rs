@@ -25,14 +25,14 @@ use junco_core::limits::Unmetered;
 use junco_core::observation::ObservationWorld;
 use smallvec::SmallVec;
 
-use crate::progress::CompiledPair;
-use crate::symbolic::RegexDerivative;
 #[cfg(verus_keep_ghost)]
 use crate::compile::verify as numeric;
 #[cfg(verus_keep_ghost)]
 use crate::normalize::verify as norm;
+use crate::progress::CompiledPair;
 #[cfg(verus_keep_ghost)]
 use crate::progress::verify as reach;
+use crate::symbolic::RegexDerivative;
 #[cfg(verus_keep_ghost)]
 use crate::symbolic::verify as symbolic;
 #[cfg(verus_keep_ghost)]
@@ -117,11 +117,14 @@ impl SymbolicLanguage {
             result matches Ok(value) ==> residual@ < graph(*final(self)).regexes.len()
                 && value == language::nullable(abs(*final(self), residual)))]
     pub fn nullable(&mut self, residual: RegexId) -> Result<bool, HistoryError> {
-        self.read_regex(residual, verus_exec_expr! {
-            |node: RegexView<'_>| -> (value: bool)
-                ensures value == node.nullable,
-            { node.nullable }
-        })
+        self.read_regex(
+            residual,
+            verus_exec_expr! {
+                |node: RegexView<'_>| -> (value: bool)
+                    ensures value == node.nullable,
+                { node.nullable }
+            },
+        )
     }
 
     /// Reads the node of `residual`: its kind with its children, and its nullability. Unions and
@@ -217,7 +220,8 @@ impl SymbolicLanguage {
                 world: &mut world,
             };
             kernel.regex(residual)?;
-            let result = RegexId::derivative(residual, &mut kernel, &mut self.pair.caches.derivatives);
+            let result =
+                RegexId::derivative(residual, &mut kernel, &mut self.pair.caches.derivatives);
             proof! {
                 reveal(frame);
                 reach::lemma_pair_symbolic_frame(entry, self.pair);
@@ -326,10 +330,7 @@ impl SymbolicLanguage {
             .ensure_atoms(transition, &mut limits, &mut world)?;
         let mut words = SmallVec::new();
         words.extend_from_slice(truth);
-        let key = EventClass {
-            transition,
-            words,
-        };
+        let key = EventClass { transition, words };
         let result = self.pair.successor(key, &mut limits, &mut world);
         proof! { symbolic::derivative_extends(entry.store.graph(), self.pair.store.graph()); }
         result

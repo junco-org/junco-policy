@@ -13,11 +13,11 @@
 //! [`lemma_lit_fold`]/[`lemma_prod_fold`], and `succ` is every state allowed by (S0)/(S1).
 //! [`theorem_impl_contract`] proves the contract.
 use crate::verify::finite_states::*;
+use alloc::boxed::Box;
 use junco_core::kernel::verify as model;
 use junco_core::verify::history_specs::Regex;
 use vstd::iset_lib::lemma_iset_subset_finite;
 use vstd::prelude::*;
-use alloc::boxed::Box;
 
 verus! {
 

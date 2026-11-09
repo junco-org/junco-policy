@@ -3,30 +3,31 @@
 //! Required parts are compared by identity; excluded pieces are compared by simulation.
 //! Inserted states are never removed, preserving breadth-first counterexample order.
 
-use alloc::boxed::Box;
-use alloc::vec::Vec;
 use crate::native::NativeGroups;
-use history_semantics::SymbolicLanguage;
-use junco_core::HistoryError;
-use junco_core::kernel::{RegexId, RegexKindView, RegexView};
-use smallvec::SmallVec;
-use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::{prune_exec::*, simulation_exec::*, table_wf};
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use history_semantics::SymbolicLanguage;
 #[cfg(verus_keep_ghost)]
-use history_semantics::{symbolic_language_verify as facade, normalize_verify as norm};
+use history_semantics::verify::refinement::{
+    encoding, implementation, pruning as paper, search as paper_search,
+};
 #[cfg(verus_keep_ghost)]
-use history_semantics::verify::refinement::{pruning as paper, search as paper_search, encoding, implementation};
-#[cfg(verus_keep_ghost)]
-use junco_core::{kernel::verify as model, observation::SmallVecSpecFns};
+use history_semantics::{normalize_verify as norm, symbolic_language_verify as facade};
+use junco_core::HistoryError;
+use junco_core::kernel::{RegexId, RegexKindView, RegexView};
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::Regex;
+#[cfg(verus_keep_ghost)]
+use junco_core::{kernel::verify as model, observation::SmallVecSpecFns};
+use smallvec::SmallVec;
+use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
 
 use crate::constraint::{Constraint, ConstraintId, ConstraintTable};
 use crate::simulation::Simulation;
-
 
 #[cfg(verus_keep_ghost)]
 verus! { broadcast use model::group_kernel_views; }
@@ -52,13 +53,16 @@ impl Decomposition {
         ensures *final(language) == *old(language),
             result matches Ok(d) ==> residual@ < facade::graph(*final(language)).regexes.len()
                 && decomposition_of(facade::graph(*final(language)), facade::abs(*final(language),residual),d))]
-    pub(crate) fn of(language: &mut SymbolicLanguage, residual: RegexId) -> Result<Self, HistoryError> {
+    pub(crate) fn of(
+        language: &mut SymbolicLanguage,
+        residual: RegexId,
+    ) -> Result<Self, HistoryError> {
         proof_decl! { let ghost g = facade::graph(*language); }
         proof! { facade::lemma_language_wf(*language); }
-        let root = node(language,residual)?;
+        let root = node(language, residual)?;
         proof! { norm::regex_unfold(g,residual@); }
-        let mut parts = SmallVec::<[RegexId;4]>::new();
-        let mut pieces = SmallVec::<[RegexId;8]>::new();
+        let mut parts = SmallVec::<[RegexId; 4]>::new();
+        let mut pieces = SmallVec::<[RegexId; 8]>::new();
         proof! { lemma_lifted(g,parts.view()); lemma_lifted(g,pieces.view()); }
         match root {
             Root::Intersect(children) => {
@@ -84,7 +88,7 @@ impl Decomposition {
                 while index < children.len() {
                     let slice: &[RegexId] = &children;
                     let child = slice[index];
-                    let child_node = complemented(language,child)?;
+                    let child_node = complemented(language, child)?;
                     proof! {
                         norm::regex_unfold(g,child@);
                         lemma_positive_push(g,children.view().take(index as int),child);
@@ -96,7 +100,7 @@ impl Decomposition {
                         Some(inner) => {
                             proof! { lemma_negative_not(g,children.view().take(index as int),child,inner); }
                             proof_decl! { let ghost before = pieces.view(); }
-                            pieces = push_pieces(language,inner,pieces)?;
+                            pieces = push_pieces(language, inner, pieces)?;
                             proof! {
                                 assert forall|n: Regex<model::Test>| lifted(g,pieces.view()).contains(n)
                                     == negative(g,children.view().take(index as int + 1),n) by {
@@ -109,7 +113,7 @@ impl Decomposition {
                                             || paper::union_ops(model::lift_regex(g,inner@)).contains(n)));
                                 }
                             }
-                        },
+                        }
                         None => {
                             proof! {
                                 lemma_lifted_push(g,parts.view(),child);
@@ -117,7 +121,7 @@ impl Decomposition {
                                 lemma_ordered_push(parts.view(),child);
                             }
                             parts.push(child);
-                        },
+                        }
                     }
                     proof! {
                         assert forall|i: int| 0 <= i < parts.view().len()
@@ -137,9 +141,9 @@ impl Decomposition {
                     assert forall|p: Regex<model::Test>| paper::excluded(facade::abs(*language,residual),p)
                         == lifted(g,pieces.view()).contains(p) by {}
                 }
-            },
+            }
             Root::Not(child) => {
-                pieces = push_pieces(language,child,pieces)?;
+                pieces = push_pieces(language, child, pieces)?;
                 proof! {
                     lemma_not(model::lift_regex(g,child@));
                     assert forall|p: Regex<model::Test>| paper::required(facade::abs(*language,residual),p)
@@ -147,7 +151,7 @@ impl Decomposition {
                     assert forall|p: Regex<model::Test>| paper::excluded(facade::abs(*language,residual),p)
                         == lifted(g,pieces.view()).contains(p) by {}
                 }
-            },
+            }
             Root::Other => {
                 proof! { lemma_lifted_push(g,parts.view(),residual); }
                 parts.push(residual);
@@ -159,7 +163,7 @@ impl Decomposition {
                     assert forall|p: Regex<model::Test>| paper::excluded(facade::abs(*language,residual),p)
                         == lifted(g,pieces.view()).contains(p) by {}
                 }
-            },
+            }
         }
         proof_decl! { let ghost collected = pieces.view(); }
         normalize_pieces(&mut pieces);
@@ -167,7 +171,7 @@ impl Decomposition {
             lemma_valid_set(g,collected,pieces.view());
             assert(lifted(g,pieces.view()) == lifted(g,collected));
         }
-        let d = Self { parts,pieces };
+        let d = Self { parts, pieces };
         proof! {
             lemma_lifted(g,d.parts.view()); lemma_lifted(g,d.pieces.view());
             assert(decomposition_of(g,facade::abs(*language,residual),d));
@@ -181,9 +185,14 @@ impl Decomposition {
         ensures *final(language) == *old(language),memo_wf(*final(simulation),*final(language)),
             result == Ok(true) ==> forall|q: Regex<model::Test>|
                 decomposition_of(facade::graph(*final(language)),q,*self) ==> paper::dead(semantic_le(),q))]
-    pub(crate) fn dead(&self,language: &mut SymbolicLanguage,
-        simulation: &mut Simulation) -> Result<bool,HistoryError> {
-        if self.pieces.is_empty() { return Ok(false); }
+    pub(crate) fn dead(
+        &self,
+        language: &mut SymbolicLanguage,
+        simulation: &mut Simulation,
+    ) -> Result<bool, HistoryError> {
+        if self.pieces.is_empty() {
+            return Ok(false);
+        }
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost,verus_spec(invariant
             *language == *old(language),facade::language_wf(*language),
@@ -193,9 +202,9 @@ impl Decomposition {
         while index < self.parts.len() {
             let parts: &[RegexId] = &self.parts;
             let part = parts[index];
-            let members = push_pieces(language,part,SmallVec::new())?;
+            let members = push_pieces(language, part, SmallVec::new())?;
             proof! { lemma_ordered(self.pieces.view()); }
-            if simulation.covered(language,&members,&self.pieces)? {
+            if simulation.covered(language, &members, &self.pieces)? {
                 proof! {
                     assert forall|i: int| #![trigger members.view()[i]] 0 <= i < members.view().len()
                         implies exists|j: int| 0 <= j < self.pieces.view().len()
@@ -223,22 +232,25 @@ impl Decomposition {
         residual@ < facade::graph(*final(language)).regexes.len()
         && root_matches(root,facade::graph(*final(language)).regexes[residual@ as int].kind)
         && root_semantics(facade::graph(*final(language)),residual,root))]
-fn node(language: &mut SymbolicLanguage,residual: RegexId) -> Result<Root,HistoryError> {
-    let result = language.read_regex(residual,verus_exec_expr! {
-        |view: RegexView<'_>| -> (root: Root)
-            ensures root_matches(root,view@.kind),
-        {
-            match view.kind {
-                RegexKindView::Intersect(children) => {
-                    let mut copied = SmallVec::new();
-                    copied.extend_from_slice(children);
-                    Root::Intersect(copied)
-                },
-                RegexKindView::Not(child) => Root::Not(child),
-                _ => Root::Other,
+fn node(language: &mut SymbolicLanguage, residual: RegexId) -> Result<Root, HistoryError> {
+    let result = language.read_regex(
+        residual,
+        verus_exec_expr! {
+            |view: RegexView<'_>| -> (root: Root)
+                ensures root_matches(root,view@.kind),
+            {
+                match view.kind {
+                    RegexKindView::Intersect(children) => {
+                        let mut copied = SmallVec::new();
+                        copied.extend_from_slice(children);
+                        Root::Intersect(copied)
+                    },
+                    RegexKindView::Not(child) => Root::Not(child),
+                    _ => Root::Other,
+                }
             }
-        }
-    })?;
+        },
+    )?;
     proof! {
         facade::lemma_language_wf(*language);
         norm::regex_unfold(facade::graph(*language),residual@);
@@ -256,7 +268,10 @@ fn node(language: &mut SymbolicLanguage,residual: RegexId) -> Result<Root,Histor
                 && facade::abs(*final(language),residual) == Regex::Not(Box::new(facade::abs(*final(language),inner))),
             None => !(facade::abs(*final(language),residual) is Not),
         })]
-fn complemented(language: &mut SymbolicLanguage,residual: RegexId) -> Result<Option<RegexId>,HistoryError> {
+fn complemented(
+    language: &mut SymbolicLanguage,
+    residual: RegexId,
+) -> Result<Option<RegexId>, HistoryError> {
     let result = language.read_regex(residual,verus_exec_expr! {
         |view: RegexView<'_>| -> (child: Option<RegexId>)
             ensures match child { Some(inner) => view@.kind == model::RegexKindNode::Not(inner@),
@@ -276,8 +291,11 @@ fn complemented(language: &mut SymbolicLanguage,residual: RegexId) -> Result<Opt
         && forall|n: Regex<model::Test>| #[trigger] lifted(facade::graph(*final(language)),values.view()).contains(n)
             == (lifted(facade::graph(*old(language)),pieces.view()).contains(n)
                 || paper::union_ops(facade::abs(*final(language),residual)).contains(n)))]
-fn push_pieces(language: &mut SymbolicLanguage,residual: RegexId,
-    pieces: SmallVec<[RegexId;8]>) -> Result<SmallVec<[RegexId;8]>,HistoryError> {
+fn push_pieces(
+    language: &mut SymbolicLanguage,
+    residual: RegexId,
+    pieces: SmallVec<[RegexId; 8]>,
+) -> Result<SmallVec<[RegexId; 8]>, HistoryError> {
     proof_decl! { let ghost before = pieces.view(); let ghost g = facade::graph(*language); }
     proof! { facade::lemma_language_wf(*language); }
     let values = language.read_regex(residual,verus_exec_expr! {
@@ -345,7 +363,7 @@ fn push_pieces(language: &mut SymbolicLanguage,residual: RegexId,
 #[verus_verify]
 #[verus_spec(result => ensures final(values).view().to_set() == old(values).view().to_set(),
     ordered(final(values).view()))]
-fn normalize_pieces(values: &mut SmallVec<[RegexId;8]>) {
+fn normalize_pieces(values: &mut SmallVec<[RegexId; 8]>) {
     proof_decl! { let ghost before = values.view(); }
     proof! { RegexId::lemma_obeys_cmp(); }
     values.as_mut_slice().sort_unstable();
@@ -375,12 +393,16 @@ fn normalize_pieces(values: &mut SmallVec<[RegexId;8]>) {
             norm::lemma_dedup_push(sorted.take(index as int),value);
             assert(sorted.take(index as int + 1) =~= sorted.take(index as int).push(value));
         }
-        let duplicate = if index == 0 { false } else {
+        let duplicate = if index == 0 {
+            false
+        } else {
             proof! { assert(write > 0); }
-            slice[write-1] == value
+            slice[write - 1] == value
         };
         if !duplicate {
-            if write != index { values.as_mut_slice()[write] = value; }
+            if write != index {
+                values.as_mut_slice()[write] = value;
+            }
             write += 1;
         }
         index += 1;
@@ -401,7 +423,7 @@ fn normalize_pieces(values: &mut SmallVec<[RegexId;8]>) {
 
 #[verus_verify]
 pub(crate) struct Antichain {
-    pub(crate) groups: NativeGroups<SmallVec<[RegexId;4]>,Entry>,
+    pub(crate) groups: NativeGroups<SmallVec<[RegexId; 4]>, Entry>,
 }
 
 #[verus_verify]
@@ -414,7 +436,11 @@ pub(crate) struct Entry {
 impl Antichain {
     #[verus_spec(result => ensures forall|g: model::Graph,table: ConstraintTable,nodes: Seq<paper_search::Node>|
         antichain_wf(result,g,table,nodes))]
-    pub(crate) fn new() -> Self { Self { groups: NativeGroups::new() } }
+    pub(crate) fn new() -> Self {
+        Self {
+            groups: NativeGroups::new(),
+        }
+    }
 
     #[verus_spec(result => requires facade::language_wf(*old(language)),table_wf(*constraints),
         constraint < constraints@.len(),entries_valid(*self,facade::graph(*old(language)),*constraints),
@@ -428,12 +454,18 @@ impl Antichain {
                 && antichain_wf(*self,facade::graph(*final(language)),*constraints,nodes) ==>
                 #[trigger] dominates_some(domains,nodes,
                     paper_search::Item { constraint: implementation::constraint_of(constraints@[constraint as int]),state:q }))]
-    pub(crate) fn subsumes(&self,language: &mut SymbolicLanguage,simulation: &mut Simulation,
-        constraints: &ConstraintTable,constraint: ConstraintId,state: &Decomposition) -> Result<bool,HistoryError> {
+    pub(crate) fn subsumes(
+        &self,
+        language: &mut SymbolicLanguage,
+        simulation: &mut Simulation,
+        constraints: &ConstraintTable,
+        constraint: ConstraintId,
+        state: &Decomposition,
+    ) -> Result<bool, HistoryError> {
         let c = constraints.get(constraint);
         let parts = &state.parts;
         let result = if parts.len() > ENUMERATED_PARTS {
-            self.group_subsumes(language,simulation,constraints,c,parts,state)
+            self.group_subsumes(language, simulation, constraints, c, parts, state)
         } else {
             let limit = 1usize << parts.len();
             let mut mask = 0;
@@ -467,7 +499,8 @@ impl Antichain {
                     }
                     bit += 1;
                 }
-                found = self.group_subsumes(language,simulation,constraints,c,&subset,state)?;
+                found =
+                    self.group_subsumes(language, simulation, constraints, c, &subset, state)?;
                 mask += 1;
             }
             Ok(found)
@@ -493,10 +526,18 @@ impl Antichain {
         memo_wf(*old(simulation),*old(language)),memo_obligations(),
         ensures *final(language) == *old(language),memo_wf(*final(simulation),*final(language)),
             result == Ok(true) ==> raw_subsumes(*self,facade::graph(*final(language)),*constraints,constraint@,*state))]
-    fn group_subsumes(&self,language: &mut SymbolicLanguage,simulation: &mut Simulation,
-        constraints: &ConstraintTable,constraint: &Constraint,parts: &SmallVec<[RegexId;4]>,
-        state: &Decomposition) -> Result<bool,HistoryError> {
-        let Some(entries) = self.groups.get(parts) else { return Ok(false); };
+    fn group_subsumes(
+        &self,
+        language: &mut SymbolicLanguage,
+        simulation: &mut Simulation,
+        constraints: &ConstraintTable,
+        constraint: &Constraint,
+        parts: &SmallVec<[RegexId; 4]>,
+        state: &Decomposition,
+    ) -> Result<bool, HistoryError> {
+        let Some(entries) = self.groups.get(parts) else {
+            return Ok(false);
+        };
         proof_decl! {
             let ghost key = choose|key: SmallVec<[RegexId;4]>|
                 crate::native::groups(self.groups).dom().contains(key)
@@ -521,7 +562,8 @@ impl Antichain {
             proof! { assert(older@ == entry.pieces@); assert(excluded@ == state.pieces.view()); }
             proof! { lemma_ordered(state.pieces.view()); }
             if constraint.entails(constraints.get(entry.constraint))
-                && simulation.covered(language,older,excluded)? {
+                && simulation.covered(language, older, excluded)?
+            {
                 proof! {
                     assert forall|j: int| #![trigger entry.pieces@[j]] 0 <= j < entry.pieces@.len()
                         implies exists|k: int| 0 <= k < state.pieces.view().len()
@@ -549,7 +591,7 @@ impl Antichain {
             antichain_wf(*old(self),g,table,nodes) && constraint < table@.len()
             && node.item.constraint == implementation::constraint_of(table@[constraint as int])
             && decomposition_of(g,node.item.state,state) ==> antichain_wf(*final(self),g,table,nodes.push(node)))]
-    pub(crate) fn insert(&mut self,constraint: ConstraintId,state: Decomposition) {
+    pub(crate) fn insert(&mut self, constraint: ConstraintId, state: Decomposition) {
         proof_decl! { let ghost before = *self; let ghost old_state = state; }
         let slice: &[RegexId] = &state.pieces;
         let mut pieces = Vec::with_capacity(slice.len());
@@ -557,11 +599,17 @@ impl Antichain {
         #[cfg_attr(verus_keep_ghost,verus_spec(invariant
             index <= slice@.len(),pieces@ == slice@.take(index as int),
             slice@ == old_state.pieces.view(),decreases slice@.len()-index))]
-        while index < slice.len() { pieces.push(slice[index]); index += 1; }
+        while index < slice.len() {
+            pieces.push(slice[index]);
+            index += 1;
+        }
         proof! { assert(pieces@ =~= old_state.pieces.view()); }
-        let entry = Entry { constraint,pieces:pieces.into_boxed_slice() };
+        let entry = Entry {
+            constraint,
+            pieces: pieces.into_boxed_slice(),
+        };
         proof_decl! { let ghost stored = entry; }
-        self.groups.push(state.parts,entry);
+        self.groups.push(state.parts, entry);
         proof! {
             reveal(antichain_wf); reveal(entries_valid); reveal(entry_matches);
             assert forall|g: model::Graph,table: ConstraintTable,nodes: Seq<paper_search::Node>,node: paper_search::Node|

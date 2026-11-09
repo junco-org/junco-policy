@@ -1,11 +1,13 @@
 //! Required/excluded decomposition and antichain domination contracts.
 
-use alloc::boxed::Box;
 use crate::constraint::ConstraintTable;
 use crate::native::{groups, key_obligations};
 use crate::prune::{Antichain, Decomposition, Entry, Root};
 use crate::verify::simulation_exec::semantic_le;
-use history_semantics::verify::refinement::{encoding, implementation, inclusion, pruning as paper, search};
+use alloc::boxed::Box;
+use history_semantics::verify::refinement::{
+    encoding, implementation, inclusion, pruning as paper, search,
+};
 use junco_core::kernel::{RegexId, verify as model};
 use junco_core::observation::SmallVecSpecFns;
 use junco_core::verify::history_specs::Regex;

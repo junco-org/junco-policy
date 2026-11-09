@@ -1,15 +1,17 @@
 //! Slot and letter coherence shared by search and counterexample reconstruction.
 
-use crate::analyzer::{Constants, Components, Counterexample, Inclusion, Slot, Value};
-use super::{component_of, component_index, constraint_wf, domain_view,
-    lemma_constraint_sat, register_sat, register_entails, ndomains};
-use super::frontend::{value_field, constants_wf, universes_wf};
+use super::frontend::{constants_wf, universes_wf, value_field};
+use super::{
+    component_index, component_of, constraint_wf, domain_view, lemma_constraint_sat, ndomains,
+    register_entails, register_sat,
+};
+use crate::analyzer::{Components, Constants, Counterexample, Inclusion, Slot, Value};
 use crate::constraint::{Constraint, Letter, Universes};
-use history_semantics::verify::refinement::{inclusion, search};
-use junco_core::verify::history_specs::{self as language};
 use history_semantics::verify::refinement::{analyzer, encoding, implementation};
+use history_semantics::verify::refinement::{inclusion, search};
 use history_syntax::{Event, syntax::Component};
 use junco_core::kernel::verify as model;
+use junco_core::verify::history_specs::{self as language};
 use vstd::prelude::*;
 
 verus! {

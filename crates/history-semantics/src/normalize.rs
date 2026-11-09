@@ -3,6 +3,24 @@
 
 use crate::WorkVec;
 #[cfg(verus_keep_ghost)]
+use crate::symbolic::verify as vocab;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_branch as fbr;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_collect as fcol;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_compile as fcmp;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_impl as fimpl;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_link as flink;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_machine as fmach;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_steps as fsteps;
+#[cfg(verus_keep_ghost)]
+use crate::verify::finite_trans as ftr;
+#[cfg(verus_keep_ghost)]
 use alloc::boxed::Box;
 use junco_core::error::HistoryError;
 #[cfg(verus_keep_ghost)]
@@ -19,24 +37,6 @@ use junco_core::verify::history_specs::{EventView, Subst};
 use junco_core::{loop_try, scan};
 #[cfg(verus_keep_ghost)]
 use verify::*;
-#[cfg(verus_keep_ghost)]
-use crate::verify::finite_collect as fcol;
-#[cfg(verus_keep_ghost)]
-use crate::verify::finite_steps as fsteps;
-#[cfg(verus_keep_ghost)]
-use crate::verify::finite_branch as fbr;
-#[cfg(verus_keep_ghost)]
-use crate::verify::finite_trans as ftr;
-#[cfg(verus_keep_ghost)]
-use crate::verify::finite_link as flink;
-#[cfg(verus_keep_ghost)]
-use crate::verify::finite_machine as fmach;
-#[cfg(verus_keep_ghost)]
-use crate::verify::finite_impl as fimpl;
-#[cfg(verus_keep_ghost)]
-use crate::verify::finite_compile as fcmp;
-#[cfg(verus_keep_ghost)]
-use crate::symbolic::verify as vocab;
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 verus! {

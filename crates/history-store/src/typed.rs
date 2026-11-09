@@ -1539,7 +1539,8 @@ mod tests {
             let mut encoder = BorrowedEncoder {
                 books: &mut books.components,
                 numeric_store: &store.numeric_store,
-                #[cfg(verus_keep_ghost)] calls: Ghost(0nat),
+                #[cfg(verus_keep_ghost)]
+                calls: Ghost(0nat),
             };
             let value = Key {
                 identity: 8,

@@ -16,11 +16,11 @@ use crate::verify::finite_machine::*;
 use crate::verify::finite_states::*;
 use crate::verify::finite_steps::*;
 use crate::verify::finite_trans::*;
+use alloc::boxed::Box;
 use junco_core::kernel::verify as model;
 use junco_core::kernel::{RegexId, TransitionId};
 use junco_core::verify::history_specs::Regex;
 use vstd::prelude::*;
-use alloc::boxed::Box;
 
 verus! {
 

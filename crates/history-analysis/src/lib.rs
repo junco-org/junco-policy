@@ -67,7 +67,9 @@ mod tests;
 pub mod verify;
 
 #[cfg(all(verus_keep_ghost, feature = "runtime"))]
-pub use native::{hash_coherent as native_hash_coherent, key_obligations as native_key_obligations};
+pub use native::{
+    hash_coherent as native_hash_coherent, key_obligations as native_key_obligations,
+};
 
 #[cfg(feature = "runtime")]
 pub use analyzer::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, Value};
