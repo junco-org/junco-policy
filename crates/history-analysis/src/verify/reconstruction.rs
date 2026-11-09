@@ -193,7 +193,6 @@ pub(crate) open spec fn reconstruction_input<E: Event>(constants: Constants<E>,
     &&& constants_wf(constants) && universes_wf(constants, universes)
     &&& constraint_wf(constraint)
     &&& inclusion::satisfiable(ndomains(universes), implementation::constraint_of(constraint@))
-    &&& 3 * (letters.len() + 1) <= usize::MAX
     &&& alphabets.len() == letters.len()
     &&& forall|c: Component| register_codes_ok(constants, c,
         implementation::register_of(constraint@, c))

@@ -110,7 +110,7 @@ pub(crate) fn search(
         #[cfg(verus_keep_ghost)]
         vocabulary: verus_exec_expr! { Ghost(vocabulary) },
     };
-    let constraint = search.constraints.intern(constraint);
+    let constraint = search.constraints.intern(constraint)?;
     let root = search.language.root();
     proof! {
         assert(memo_wf(search.simulation,*search.language));
@@ -176,7 +176,17 @@ impl Search<'_> {
             && refutation_ready(outcome,*old(self).universes,old(self).vocabulary@),
     {
         proof_decl! { let ghost initial = *self; let ghost start = self.start@; let ghost vocabulary = self.vocabulary@; let ghost universes = *self.universes; }
-        proof! { reveal(running); reveal(vocabulary_wf); lemma_queue_bound(*self,vocabulary); }
+        // Termination follows Lemma 4.4 for the implementation's model: one finite item set,
+        // fixed before the loop, contains every item the search can queue.
+        proof_decl! { let ghost bound = choose|f: Set<paper_search::Item>| items_bound_ok(universes,start,f); }
+        proof! {
+            reveal(running); reveal(vocabulary_wf);
+            let f = history_semantics::verify::refinement::finiteness::theorem_impl_items_bound(
+                crate::verify::ndomains(universes),
+                |q: junco_core::verify::history_specs::Regex<model::Test>| symbolic::regex_primitives(q),start);
+            assert(items_bound_ok(universes,start,f));
+            assert(items_bound_ok(universes,start,bound));
+        }
         let mut next = 0;
         while next < self.items.len()
             invariant
@@ -185,10 +195,14 @@ impl Search<'_> {
                 *self.universes == universes,
                 start == initial.start@,vocabulary == initial.vocabulary@,universes == *initial.universes,
                 start == old(self).start@,vocabulary == old(self).vocabulary@,universes == *old(self).universes,
-            decreases constraint_family(vocabulary).len()*(u32::MAX as nat+1)-next,
+                items_bound_ok(universes,start,bound),
+            decreases bound.len()-next,
         {
             proof! { reveal(running); reveal(vocabulary_wf); }
-            proof! { lemma_running_limits(*self,next as nat,start,vocabulary); }
+            proof! {
+                lemma_running_limits(*self,next as nat,start,vocabulary);
+                lemma_running_items_bound(*self,next as nat,start,vocabulary,bound);
+            }
             proof_decl! { let ghost before_nullable = *self; }
             let nullable = self.language.nullable(self.items[next].residual)?;
             proof! {
@@ -217,7 +231,10 @@ impl Search<'_> {
                 return result;
             }
             self.expand(next)?;
-            proof! { lemma_running_limits(*self,next as nat+1,start,vocabulary); }
+            proof! {
+                lemma_running_limits(*self,next as nat+1,start,vocabulary);
+                lemma_running_items_bound(*self,next as nat+1,start,vocabulary,bound);
+            }
             next += 1;
         }
         proof! {
@@ -342,9 +359,11 @@ impl Search<'_> {
             proof! {
                 reveal(expansion_state); reveal(vocabulary_wf);
                 assert(refined == groups[group as int].0);
-                lemma_table_family_bound(self.constraints,vocabulary);
             }
-            let refined = self.constraints.intern(refined);
+            let refined = match self.constraints.intern(refined) {
+                Ok(id) => id,
+                Err(error) => return Err(error),
+            };
             proof! {
                 crate::verify::lemma_constraint_key_view(self.constraints.constraints@[refined as int],original_refined);
                 assert forall|k: int| 0 <= k < self.constraints@.len() implies
@@ -647,9 +666,7 @@ impl Search<'_> {
             reveal(refutation_ready);
             lemma_chain_ready(*self,index as int,self.constraints@[self.items@[index as int].constraint as int]);
             reveal(vocabulary_wf);
-            lemma_queue_bound(*self,self.vocabulary@);
             lemma_letter_chain_len(self.items@,index as int);
-            assert(3*(letter_chain(self.items@,index as int).len()+1) <= usize::MAX);
         }
         let constraint = self.constraints.get(self.items[index].constraint).copy();
         let mut letters = Vec::new();

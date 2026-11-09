@@ -9,6 +9,7 @@
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use crate::native::NativeMap;
+use junco_core::HistoryError;
 use smallvec::SmallVec;
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
@@ -280,23 +281,31 @@ impl ConstraintTable {
     }
 
     #[verus_spec(result => requires table_wf(*old(self)), constraint_wf(constraint),
-        crate::native::key_obligations::<Constraint>(), old(self).constraints@.len() <= u32::MAX,
-        ensures table_wf(*final(self)), result < final(self).constraints@.len(),
-            constraint_key(final(self).constraints@[result as int]) == constraint_key(constraint),
+        crate::native::key_obligations::<Constraint>(),
+        ensures table_wf(*final(self)),
+            result matches Ok(id) ==> id < final(self).constraints@.len()
+                && constraint_key(final(self).constraints@[id as int]) == constraint_key(constraint),
             old(self)@.is_prefix_of(final(self)@),
             final(self)@.len() <= old(self)@.len() + 1,
             forall|i: int| old(self)@.len() <= i < final(self)@.len()
                 ==> final(self)@[i] == constraint@,
             forall|i: int| 0 <= i < old(self).constraints@.len()
                 ==> final(self).constraints@[i] == old(self).constraints@[i])]
-    pub(crate) fn intern(&mut self, constraint: Constraint) -> ConstraintId {
+    pub(crate) fn intern(&mut self, constraint: Constraint) -> Result<ConstraintId, HistoryError> {
         if let Some(id) = self.ids.lookup(&constraint) {
-            return id;
+            return Ok(id);
         }
-        let id = ConstraintId::try_from(self.constraints.len()).expect("constraint ids fit in u32");
+        let id = match ConstraintId::try_from(self.constraints.len()) {
+            Ok(id) => id,
+            Err(_) => {
+                return Err(HistoryError::IdExhausted {
+                    domain: "constraint",
+                });
+            }
+        };
         self.constraints.push(constraint.copy());
         self.ids.insert_fresh(constraint, id);
-        id
+        Ok(id)
     }
 
     #[verus_spec(result => requires table_wf(*self), id < self.constraints@.len(),

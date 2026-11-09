@@ -2739,13 +2739,12 @@ pub(crate) open spec fn encode_capacity<E: Event>(a: PolicyAnalyzer<E>, source: 
     a.constants.values@.len() + 3 + source.tests@.len() <= u32::MAX
 }
 
-/// Sufficient capacities for encoding, native search IDs/products, and fresh counters.
-pub closed spec fn query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>) -> bool {
-    // shortcut: traversal overbounds vocabulary; use field-local counts if it excludes queries.
+/// Sufficient capacities for constant ids and the per-state split and letter products.
+/// Constraint-id and fresh-value exhaustion are runtime errors, not preconditions.
+pub open(crate) spec fn query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>) -> bool {
+    // Traversal costs overbound the query's vocabulary.
     let count = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
-    count <= u32::MAX && forall|v: [Set<nat>; 3]|
-        v[0].len() <= count && v[1].len() <= count && v[2].len() <= count
-            ==> #[trigger] super::search_exec::resource_capacity(v)
+    count <= u32::MAX && (count + 2) * (count + 2) * (count + 2) <= usize::MAX
 }
 
 pub(crate) open spec fn pins(head: Seq<FlatHead<u64>>) -> encoding::NHead {
@@ -3150,12 +3149,36 @@ pub(crate) proof fn lemma_empty_constructor_capacity<E: Event>()
 {}
 
 pub(crate) proof fn lemma_query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
-    ensures query_capacity(a, left, right) == {
+    requires query_capacity(a, left, right),
+    ensures ({
         let count = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
         count <= u32::MAX && forall|v: [Set<nat>; 3]|
             v[0].len() <= count && v[1].len() <= count && v[2].len() <= count
                 ==> #[trigger] super::search_exec::resource_capacity(v)
-    },
-{}
+    }),
+{
+    let count = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
+    let m = count + 2;
+    assert forall|v: [Set<nat>; 3]| v[0].len() <= count && v[1].len() <= count && v[2].len() <= count
+        implies #[trigger] super::search_exec::resource_capacity(v) by {
+        let x = v[0].len() + 2; let y = v[1].len() + 2; let z = v[2].len() + 2;
+        assert(m <= m * m * m && x * y <= m * m * m && x * y * z <= m * m * m) by(nonlinear_arith)
+            requires x <= m, y <= m, z <= m, 2 <= x, 2 <= y, 2 <= z;
+    }
+}
+
+/// `query_capacity` is not vacuous: on every word size it holds whenever the vocabulary bound is
+/// at most 1000 (the paper's running example needs about 40).
+pub(crate) proof fn lemma_query_capacity_nonvacuous<E: Event>(a: PolicyAnalyzer<E>,
+    left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
+    requires a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) <= 1000,
+    ensures query_capacity(a, left, right),
+{
+    let m = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) + 2;
+    assert(m * m * m <= 1002 * 1002 * 1002) by(nonlinear_arith)
+        requires m <= 1002;
+    assert(1002nat * 1002nat * 1002nat <= u32::MAX as nat) by(compute_only);
+    assert(u32::MAX as nat <= usize::MAX as nat);
+}
 }
 }

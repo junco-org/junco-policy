@@ -413,10 +413,13 @@ Already verified and reused: `derivative_correct`, `successor_entries_wf` (succe
     preallocated result vector; numerical slot rows and search alphabets are ghost evidence only.
     The native analyzer's 13 tests pass; reconstruction and executable verdict contracts verify
     in focused and complete CI checks; both analyzer configurations verify with 0 errors.
-28. **Sufficient query resources.** `query_capacity` includes native search-product, constraint-id,
-    queue, and fresh-counter bounds in addition to constant-id capacity. Its vocabulary-cardinality
-    bound is conservative: it uses the existing book plus both flattening traversal costs, not a
-    bound on mathematical history values. Inputs outside it retain their original runtime behavior.
+28. **Sufficient query resources.** `query_capacity` (`open(crate)`) requires `count ≤ u32::MAX`
+    and `(count + 2)³ ≤ usize::MAX`, where `count` is the existing book size plus 6 plus both
+    flattening traversal costs, a conservative bound on the query's vocabulary. It covers constant
+    ids and the per-state split/letter products only. An earlier version also bounded constraint
+    ids, the queue and fresh counters by the size of the whole constraint family,
+    `(n + 2ⁿ)³ ≤ u32::MAX`; that forced `count ≤ 10` and excluded every query with a test atom in
+    each tail. Those limits are now runtime errors (item 30).
 29. **Query input cloning (implementation counterexample).** `tail_included` constructs rules
     with derived `Head`/`RegexExpr` clones. A well-typed `Copy` principal whose custom `Clone`
     returns `Principal(n + 1)` has coherent equality, hashing and event projections, yet a head
@@ -427,6 +430,27 @@ Already verified and reused: `derivative_correct`, `successor_entries_wf` (succe
     existing iterative implementation; `flatten_rule` preserves its API and contract. The query
     now passes original head/tail references and does not invoke their Clone hooks. The corrected
     probe returns principal 0, and all 13 analyzer tests pass. No clone trust boundary is added.
+30. **Constraint-id and fresh-value exhaustion are errors (author decision Q12).**
+    `ConstraintTable::intern` returns `HistoryError::IdExhausted { domain: "constraint" }` instead
+    of panicking when the id does not fit `u32`; counterexample reconstruction allocates fresh
+    values with `checked_add` and returns `IdExhausted { domain: "fresh value" }` on overflow.
+    Both propagate as `Err`, which carries no claim, like table overflow (Q6). Neither limit is
+    reachable before memory is exhausted, and termination depends on neither (item 31).
+    `lemma_query_capacity_nonvacuous` proves that `query_capacity` holds on every word size
+    whenever `count ≤ 1000`.
+31. **Termination of the real search from Lemma 4.4.** The loop in `Search::run` decreases
+    `|bound| − next`, where `bound` is one item set fixed before the loop by
+    `finiteness::theorem_impl_items_bound`: the items over the states `m_impl` reaches from the
+    start state (`theorem_finite_reachable`), with constraints over the start constraint and the
+    literals of those states' atoms or the declared domains. Every successor the code computes is
+    an `m_impl` step (`lemma_impl_successor_abstracts`, from the derivative and successor
+    contracts on the real graph), so the run's archive satisfies `archive_follows`, and
+    `lemma_running_items_bound` bounds the queue by the paper's `lemma_trace_nodes_bounded`.
+    `m_impl` is a verified over-approximation of the implemented step, not an assumed model of
+    it. The previous measure, `|constraint_family| · 2³²` from the `u32` id space, and its
+    helper lemmas are removed. All affected configurations verify with 0 errors (semantics
+    1575 / 1580 / `public_specs` 19; analyzer 483 / 483), and the native analyzer and semantics
+    tests pass.
 
 
 
@@ -445,6 +469,10 @@ to constructor/query contracts (chosen by the author during proof completion).
 
 Q11 keep the remaining native overflow behavior/signatures as well; use verified size
 preconditions for product, constraint-id, and fresh-counter limits if not otherwise derivable.
+Superseded by Q12 for constraint ids and fresh values.
+
+Q12 report constraint-id and fresh-value exhaustion as `Err` (`IdExhausted`) rather than bound
+them by preconditions (§9 item 30). Product and constant-id bounds remain preconditions.
 
 ### Original questions
 

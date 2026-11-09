@@ -596,9 +596,9 @@ impl<E: Event> PolicyAnalyzer<E> {
             }
             SearchOutcome::Refuted(refutation) => {
                 #[cfg(verus_keep_ghost)]
-                let counterexample = self.counterexample(&refutation.constraint, &refutation.letters, refutation.alphabets);
+                let counterexample = self.counterexample(&refutation.constraint, &refutation.letters, refutation.alphabets)?;
                 #[cfg(not(verus_keep_ghost))]
-                let counterexample = self.counterexample(&refutation.constraint, &refutation.letters);
+                let counterexample = self.counterexample(&refutation.constraint, &refutation.letters)?;
                 proof {
                     reveal(exec::refutation_ready);
                     lemma_counterexample(*self, input, start.state, refutation.constraint,
@@ -617,16 +617,17 @@ impl<E: Event> PolicyAnalyzer<E> {
     ///
     /// A register takes the constant the constraint pins it to, the first remaining value of a
     /// finite domain, or a fresh value. A component that a letter leaves unmatched takes a fresh
-    /// value, distinct from every other one; a finite component never is unmatched.
+    /// value, distinct from every other one; a finite component never is unmatched. Fails with
+    /// [`HistoryError::IdExhausted`] if the fresh values do not fit `usize`.
     #[verus_verify]
     #[verus_spec(result =>
         requires crate::verify::reconstruction::reconstruction_input(self.constants,
             self.universes, *constraint, letters@, alphabets@),
-        ensures crate::verify::reconstruction::reconstructed(self.constants,
-            self.universes, *constraint, letters@, alphabets@, result))]
+        ensures result matches Ok(c) ==> crate::verify::reconstruction::reconstructed(self.constants,
+            self.universes, *constraint, letters@, alphabets@, c))]
     fn counterexample(&self, constraint: &Constraint, letters: &[Letter],
         #[cfg(verus_keep_ghost)] alphabets: Ghost<Seq<Set<junco_core::kernel::verify::Primitive>>>,
-    ) -> Counterexample<E> {
+    ) -> Result<Counterexample<E>, HistoryError> {
         #[cfg(verus_keep_ghost)]
         use crate::verify::{reconstruction::*, lemma_constraint_possible, lemma_codes,
             component_of, component_index, register_sat, register_possible, domain_view};
@@ -673,7 +674,10 @@ impl<E: Event> PolicyAnalyzer<E> {
                 },
                 (RegisterConstraint::Differs(_), None) => {
                     let slot = Slot::Fresh(fresh);
-                    fresh += 1;
+                    fresh = match fresh.checked_add(1) {
+                        Some(next) => next,
+                        None => return Err(HistoryError::IdExhausted { domain: "fresh value" }),
+                    };
                     slot
                 },
             };
@@ -754,7 +758,10 @@ impl<E: Event> PolicyAnalyzer<E> {
                     Some(Class::Register) => candidate[component],
                     None => {
                         let slot = Slot::Fresh(fresh);
-                        fresh += 1;
+                        fresh = match fresh.checked_add(1) {
+                            Some(next) => next,
+                            None => return Err(HistoryError::IdExhausted { domain: "fresh value" }),
+                        };
                         slot
                     },
                 };
@@ -781,7 +788,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                 slot_views(candidate), slots_history);
             assert(reconstructed(self.constants, self.universes, *constraint, letters@, alphabets@, result));
         }
-        result
+        Ok(result)
     }
 
     #[verus_verify]

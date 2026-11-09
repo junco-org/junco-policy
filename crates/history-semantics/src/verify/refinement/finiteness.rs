@@ -391,10 +391,14 @@ pub open spec fn item_maker(pw: ISet<Set<Literal>>) -> spec_fn(Regex<model::Test
     |s: Regex<model::Test>| pw.map(|g: Set<Literal>| Item { constraint: g, state: s })
 }
 
-pub proof fn lemma_items_from_states(d: NDomains, cases_of: spec_fn(Item) -> Set<Case>,
-    atoms_of: spec_fn(Regex<model::Test>) -> Set<model::Primitive>, start: Item, f: Set<Regex<model::Test>>)
-    requires cases_from_atoms(d, cases_of, atoms_of), states_within(cases_of, start, f),
-    ensures finitely_many_items(cases_of, start),
+/// The items over the states `f`: constraints are `Γ₀` plus literals over the atoms of `f` or
+/// over the declared domains. The set does not depend on `cases_of`, so it bounds every search
+/// whose cases add only such literals and whose states stay within `f`.
+pub proof fn lemma_items_bound(d: NDomains, atoms_of: spec_fn(Regex<model::Test>) -> Set<model::Primitive>,
+    start: Item, f: Set<Regex<model::Test>>) -> (items: Set<Item>)
+    ensures forall|cases_of: spec_fn(Item) -> Set<Case>|
+        cases_from_atoms(d, cases_of, atoms_of) && states_within(cases_of, start, f)
+            ==> #[trigger] items_within(cases_of, start, items),
 {
     broadcast use vstd::set::lemma_to_iset_finite, vstd::set::lemma_set_new_from_iset, vstd::iset::lemma_iset_union_finite;
     lemma_item_literals_finite(d, atoms_of, f);
@@ -411,7 +415,9 @@ pub proof fn lemma_items_from_states(d: NDomains, cases_of: spec_fn(Item) -> Set
     let items_i = ISet::new(|x: Item| exists|s: Regex<model::Test>| f.contains(s) && #[trigger] mk(s).contains(x));
     let items = Set::new_from_iset(items_i).unwrap();
     assert(items.to_iset() == items_i);
-    assert(items_within(cases_of, start, items)) by {
+    assert forall|cases_of: spec_fn(Item) -> Set<Case>|
+        cases_from_atoms(d, cases_of, atoms_of) && states_within(cases_of, start, f)
+            implies #[trigger] items_within(cases_of, start, items) by {
         assert forall|n: nat, j: Item| #[trigger] reachable_item(cases_of, start, n, j) implies items.contains(j) by {
             lemma_reachable_item_shape(d, cases_of, atoms_of, start, f, n, j);
             assert(j.constraint.subset_of(lits)) by {
@@ -426,6 +432,16 @@ pub proof fn lemma_items_from_states(d: NDomains, cases_of: spec_fn(Item) -> Set
             assert(items_i.contains(j));
         }
     }
+    items
+}
+
+pub proof fn lemma_items_from_states(d: NDomains, cases_of: spec_fn(Item) -> Set<Case>,
+    atoms_of: spec_fn(Regex<model::Test>) -> Set<model::Primitive>, start: Item, f: Set<Regex<model::Test>>)
+    requires cases_from_atoms(d, cases_of, atoms_of), states_within(cases_of, start, f),
+    ensures finitely_many_items(cases_of, start),
+{
+    let items = lemma_items_bound(d, atoms_of, start, f);
+    assert(items_within(cases_of, start, items));
 }
 
 pub proof fn theorem_items_from_states()
@@ -464,6 +480,30 @@ pub proof fn lemma_cases_follow_states(m: Model<Regex<model::Test>>, cases_of: s
     }
 }
 
+/// A bound on the items of every search whose cases follow a model satisfying the contract: the
+/// items over the states reachable in the model (Lemma 4.4). It is fixed by the model, the start
+/// item and the domains alone, before any case is computed.
+pub proof fn lemma_model_items_bound(m: Model<Regex<model::Test>>, d: NDomains,
+    atoms_of: spec_fn(Regex<model::Test>) -> Set<model::Primitive>, start: Item) -> (items: Set<Item>)
+    requires m.contract(), m.st(start.state),
+    ensures forall|cases_of: spec_fn(Item) -> Set<Case>|
+        cases_follow(m, cases_of) && cases_from_atoms(d, cases_of, atoms_of)
+            ==> #[trigger] items_within(cases_of, start, items),
+{
+    let r = theorem_finite_reachable(m, start.state);
+    let items = lemma_items_bound(d, atoms_of, start, r);
+    assert forall|cases_of: spec_fn(Item) -> Set<Case>|
+        cases_follow(m, cases_of) && cases_from_atoms(d, cases_of, atoms_of)
+            implies #[trigger] items_within(cases_of, start, items) by {
+        assert(states_within(cases_of, start, r)) by {
+            assert forall|n: nat, j: Item| #[trigger] reachable_item(cases_of, start, n, j) implies r.contains(j.state) by {
+                lemma_cases_follow_states(m, cases_of, start, r, n, j);
+            }
+        }
+    }
+    items
+}
+
 /// Finitely many items for any search over a model satisfying the contract (Lemma 4.2 with
 /// `appendix.tex:680-689`): the start state is a model state, each case follows a model step
 /// (or keeps the state), and each case adds only literals over the atoms of its parent's state or
@@ -473,13 +513,8 @@ pub proof fn theorem_model_finitely_many_items(m: Model<Regex<model::Test>>, d: 
     requires m.contract(), m.st(start.state), cases_follow(m, cases_of), cases_from_atoms(d, cases_of, atoms_of),
     ensures finitely_many_items(cases_of, start),
 {
-    let r = theorem_finite_reachable(m, start.state);
-    assert(states_within(cases_of, start, r)) by {
-        assert forall|n: nat, j: Item| #[trigger] reachable_item(cases_of, start, n, j) implies r.contains(j.state) by {
-            lemma_cases_follow_states(m, cases_of, start, r, n, j);
-        }
-    }
-    lemma_items_from_states(d, cases_of, atoms_of, start, r);
+    let items = lemma_model_items_bound(m, d, atoms_of, start);
+    assert(items_within(cases_of, start, items));
 }
 
 /// Finitely many items for the implementation's model `m_impl` (`verify::finite_impl`): the
@@ -496,6 +531,19 @@ pub proof fn theorem_impl_finitely_many_items(d: NDomains, cases_of: spec_fn(Ite
 {
     crate::verify::finite_impl::theorem_impl_contract();
     theorem_model_finitely_many_items(crate::verify::finite_impl::m_impl(), d, cases_of, atoms_of, start);
+}
+
+/// `lemma_model_items_bound` for the implementation's model `m_impl`: one item set, fixed before
+/// the search starts, contains every item of every search whose cases follow implemented steps.
+pub proof fn theorem_impl_items_bound(d: NDomains,
+    atoms_of: spec_fn(Regex<model::Test>) -> Set<model::Primitive>, start: Item) -> (items: Set<Item>)
+    requires crate::verify::finite_impl::regex_nf(start.state),
+    ensures forall|cases_of: spec_fn(Item) -> Set<Case>|
+        cases_follow(crate::verify::finite_impl::m_impl(), cases_of) && cases_from_atoms(d, cases_of, atoms_of)
+            ==> #[trigger] items_within(cases_of, start, items),
+{
+    crate::verify::finite_impl::theorem_impl_contract();
+    lemma_model_items_bound(crate::verify::finite_impl::m_impl(), d, atoms_of, start)
 }
 
 // ===== the implemented step abstracts into `m_impl` =====

@@ -696,18 +696,6 @@ pub(crate) proof fn lemma_emitted_literals(g: crate::constraint::Constraint,atom
     }
 }
 
-#[verifier::opaque]
-pub(crate) open spec fn register_family(values: Set<nat>) -> Set<implementation::RegisterView> {
-    let subsets = Set::new_from_iset(ISet::new(|s: Set<nat>| s.subset_of(values))).unwrap_or(Set::empty());
-    values.map(|v: nat| implementation::RegisterView::Equals(v)).union(
-        subsets.map(|s: Set<nat>| implementation::RegisterView::Differs(s)))
-}
-
-pub(crate) open spec fn constraint_family(vocabulary: [Set<nat>;3]) -> Set<implementation::ConstraintView> {
-    crate::verify::register_product(register_family(vocabulary[0]),register_family(vocabulary[1]),
-        register_family(vocabulary[2]))
-}
-
 pub(crate) open spec fn register_in_vocabulary(g: implementation::RegisterView,values: Set<nat>) -> bool {
     match g { implementation::RegisterView::Equals(v) => values.contains(v),
         implementation::RegisterView::Differs(ds) => ds.subset_of(values) }
@@ -724,75 +712,11 @@ pub(crate) open spec fn atoms_in_vocabulary(atoms: Seq<Atom>,v: [Set<nat>;3]) ->
             v[atoms[i].component as int].contains(code as nat),_ => true }
 }
 
-/// Bounds real products, native constraint IDs, the queue, and reconstruction fresh counters.
+/// Bounds the per-state split and letter products, which size native vectors.
 pub(crate) open spec fn resource_capacity(v: [Set<nat>;3]) -> bool {
     let a = v[0].len()+2; let b = v[1].len()+2; let c = v[2].len()+2;
-    let constraints = constraint_family(v).len();
-    let nodes = constraints * (u32::MAX as nat + 1);
     &&& a <= usize::MAX && b <= usize::MAX && c <= usize::MAX
     &&& a*b <= usize::MAX && a*b*c <= usize::MAX
-    &&& constraints <= u32::MAX
-    &&& nodes <= usize::MAX
-    &&& 3*(nodes+1) <= u64::MAX
-}
-
-pub(crate) proof fn lemma_register_family(values: Set<nat>)
-    ensures forall|g: implementation::RegisterView| #[trigger] register_family(values).contains(g)
-        == register_in_vocabulary(g,values),
-{
-    reveal(register_family);
-    history_semantics::verify::finite_states::lemma_powerset_finite(values);
-    let all = ISet::new(|s: Set<nat>| s.subset_of(values));
-    broadcast use vstd::set::lemma_set_new_from_iset;
-    assert(Set::new_from_iset(all) is Some);
-    let subsets = Set::new_from_iset(all).unwrap();
-    let eq = |v: nat| implementation::RegisterView::Equals(v);
-    let diff = |ds: Set<nat>| implementation::RegisterView::Differs(ds);
-    assert(subsets.to_iset() == all);
-    assert forall|s: Set<nat>| #[trigger] subsets.contains(s) == s.subset_of(values) by {
-        assert(subsets.to_iset().contains(s) == all.contains(s));
-    }
-    assert forall|g: implementation::RegisterView| register_family(values).contains(g)
-        == register_in_vocabulary(g,values) by {
-        values.lemma_map_contains(eq,g);
-        subsets.lemma_map_contains(diff,g);
-        match g {
-            implementation::RegisterView::Equals(v) => {
-                assert(values.map(eq).contains(g) == values.contains(v));
-                assert(!subsets.map(diff).contains(g));
-            },
-            implementation::RegisterView::Differs(ds) => {
-                assert(!values.map(eq).contains(g));
-                if ds.subset_of(values) {
-                    assert(subsets.contains(ds));
-                    assert(subsets.map(diff).contains(diff(ds)));
-                }
-                if subsets.map(diff).contains(g) {
-                    let s = choose|s: Set<nat>| subsets.contains(s) && diff(s) == g;
-                    assert(s == ds);
-                }
-            },
-        }
-    }
-}
-
-pub(crate) proof fn lemma_constraint_family(v: [Set<nat>;3])
-    ensures forall|g: implementation::ConstraintView| #[trigger] constraint_family(v).contains(g)
-        == constraint_in_vocabulary(g,v),
-{
-    lemma_register_family(v[0]);lemma_register_family(v[1]);lemma_register_family(v[2]);
-    crate::verify::lemma_register_product_members(register_family(v[0]),register_family(v[1]),
-        register_family(v[2]));
-}
-pub(crate) proof fn lemma_constraint_family_positive(v: [Set<nat>;3])
-    ensures constraint_family(v).len() > 0,
-{
-    lemma_constraint_family(v);
-    let register = implementation::RegisterView::Differs(Set::empty());
-    let gamma = implementation::ConstraintView { principal:register,action:register,resource:register };
-    assert(constraint_in_vocabulary(gamma,v));
-    assert(constraint_family(v).contains(gamma));
-    if constraint_family(v).len() == 0 { constraint_family(v).lemma_len0_is_empty(); }
 }
 
 
@@ -1006,18 +930,6 @@ pub(crate) proof fn lemma_option_vocabulary(source: implementation::RegisterView
             }
         },
     }
-}
-
-pub(crate) proof fn lemma_table_family_bound(table: ConstraintTable,v: [Set<nat>;3])
-    requires table_wf(table),forall|i: int| 0 <= i < table@.len() ==> constraint_in_vocabulary(table@[i],v),
-    ensures table@.len() <= constraint_family(v).len(),
-{
-    lemma_constraint_family(v);
-    assert forall|i: int,j: int| 0 <= i < j < table@.len() implies table@[i] != table@[j] by {
-        if table@[i] == table@[j] { crate::verify::lemma_table_injective(table,i,j); }
-    }
-    assert(table@.no_duplicates());
-    finite_impl::lemma_nodup_len(table@,constraint_family(v));
 }
 
 pub(crate) open spec fn syntactic_entails(a: implementation::ConstraintView,b: implementation::ConstraintView) -> bool {
@@ -1479,48 +1391,6 @@ pub(crate) proof fn lemma_steps_capacity(g: crate::constraint::Constraint,atoms:
     }
 }
 
-pub(crate) proof fn lemma_queue_bound(s: Search<'_>,v: [Set<nat>;3])
-    requires state_wf(s),queue_order(s),vocabulary_wf(s,v),
-    ensures s.items@.len() <= constraint_family(v).len()*(u32::MAX as nat+1),
-        s.items@.len() <= usize::MAX,3*(s.items@.len()+1) <= u64::MAX,
-        3*(s.items@.len()+1) <= usize::MAX,
-{
-    reveal(vocabulary_wf);
-    lemma_table_family_bound(s.constraints,v);
-    lemma_constraint_family_positive(v);
-    let width = u32::MAX as nat+1;
-    let bound = constraint_family(v).len()*width;
-    assert(u32::MAX as nat+1 <= bound) by(nonlinear_arith)
-        requires constraint_family(v).len() > 0,bound == constraint_family(v).len()*width,
-            width == u32::MAX as nat+1;
-    let keys = s.items@.map_values(|it: Item| it.constraint as nat*width+it.residual@);
-    let range = Set::<nat>::range(0,bound);
-    vstd::set_lib::range_set_properties::<nat>(0,bound);
-    assert forall|i: int,j: int| 0 <= i < j < keys.len() implies keys[i] != keys[j] by {
-        let a = s.items@[i]; let b = s.items@[j];
-        if keys[i] == keys[j] {
-            assert(a.constraint == b.constraint && a.residual@ == b.residual@) by(nonlinear_arith)
-                requires a.residual@ < width,b.residual@ < width,
-                    a.constraint as nat*width+a.residual@ == b.constraint as nat*width+b.residual@,
-                    width > 0;
-            assert(a.residual == b.residual);
-        }
-    }
-    assert(keys.no_duplicates());
-    assert forall|i: int| 0 <= i < keys.len() implies range.contains(keys[i]) by {
-        let it = s.items@[i];
-        assert(it.constraint < constraint_family(v).len());
-        assert(keys[i] < bound) by(nonlinear_arith)
-            requires it.constraint < constraint_family(v).len(),it.residual@ < width,
-                keys[i] == it.constraint as nat*width+it.residual@,
-                bound == constraint_family(v).len()*width,width > 0;
-    }
-    finite_impl::lemma_nodup_len(keys,range);
-    assert(3*(s.items@.len()+1) <= 3*(bound+1)) by(nonlinear_arith)
-        requires s.items@.len() <= bound;
-    assert(usize::MAX as nat == u64::MAX as nat);
-}
-
 #[verifier::opaque]
 pub(crate) open spec fn search_result(d: encoding::NDomains,start: paper::Item,outcome: paper::Outcome) -> bool {
     &&& forall|r: Regex<model::Test>,s: Regex<model::Test>| paper::initial_ok(start.state,r,s)
@@ -1532,7 +1402,6 @@ pub(crate) open spec fn search_result(d: encoding::NDomains,start: paper::Item,o
             && finiteness::cases_from_atoms(d,archive_cases(archive),|q: Regex<model::Test>| symbolic::regex_primitives(q))
             && paper::finitely_many_items(archive_cases(archive),start)
             && (exists|bound: nat| paper::traces_bounded(start.constraint,start.state,archive_cases(archive),bound))
-            && t.nodes.len() <= usize::MAX && 3*(t.nodes.len()+1) <= u64::MAX
 }
 
 #[verifier::rlimit(20)]
@@ -1547,7 +1416,6 @@ pub(crate) proof fn lemma_search_result(s: Search<'_>,expanded: nat,start: paper
     reveal(search_result);
     lemma_running_evidence(s,expanded,start,v);
     lemma_running_outcome(s,expanded,start,v,outcome);
-    lemma_queue_bound(s,v);
     let archive = s.archive@; let t = trace(s,expanded);
     assert(paper::trace_wf(ndomains(*s.universes),start.constraint,start.state,archive_cases(archive),t));
 }
@@ -1919,7 +1787,6 @@ pub(crate) open spec fn refutation_ready(outcome: crate::search::SearchOutcome,u
         crate::search::SearchOutcome::Holds => true,
         crate::search::SearchOutcome::Refuted(r) => crate::verify::constraint_wf(r.constraint)
             && constraint_in_vocabulary(r.constraint@,v)
-            && 3*(r.letters@.len()+1) <= usize::MAX
             && (forall|k: int| #![trigger r.letters@[k]] 0 <= k < r.letters@.len() ==>
                 crate::verify::reconstruction::letter_coherent(r.constraint@,r.letters@[k]@,r.alphabets@[k])
                     && letter_numeric_codes(v,u,r.letters@[k]@,r.alphabets@[k])),
@@ -2016,10 +1883,35 @@ pub(crate) proof fn lemma_expansion_begin(a: Search<'_>,b: Search<'_>,index: nat
 
 pub(crate) proof fn lemma_running_limits(s: Search<'_>,n: nat,start: paper::Item,v: [Set<nat>;3])
     requires running(s,n,start,v),
-    ensures n <= s.items@.len(),s.items@.len() <= constraint_family(v).len()*(u32::MAX as nat+1),
+    ensures n <= s.items@.len(),
 {
     reveal(running);reveal(partial_trace_wf);
-    lemma_queue_bound(s,v);
+}
+
+/// `f` contains every item reachable from `start` by cases that follow implemented steps and
+/// add only literals over atoms or domains (`finiteness::theorem_impl_items_bound`).
+pub(crate) open spec fn items_bound_ok(u: Universes,start: paper::Item,f: Set<paper::Item>) -> bool {
+    forall|cases_of: spec_fn(paper::Item) -> Set<paper::Case>|
+        finiteness::cases_follow(finite_impl::m_impl(),cases_of)
+        && finiteness::cases_from_atoms(ndomains(u),cases_of,|q: Regex<model::Test>| symbolic::regex_primitives(q))
+            ==> #[trigger] paper::items_within(cases_of,start,f)
+}
+
+/// The queue of a running search is a paper trace, whose nodes are distinct reachable items, so
+/// it never exceeds the finite item bound of Lemma 4.4 for the implementation's model.
+pub(crate) proof fn lemma_running_items_bound(s: Search<'_>,n: nat,start: paper::Item,
+    v: [Set<nat>;3],f: Set<paper::Item>)
+    requires running(s,n,start,v),items_bound_ok(*s.universes,start,f),
+    ensures s.items@.len() <= f.len(),
+{
+    reveal(running);
+    let d = ndomains(*s.universes);
+    let cases = archive_cases(s.archive@);
+    let t = trace(s,n);
+    lemma_partial_trace_complete(d,start,cases,t);
+    assert(paper::items_within(cases,start,f));
+    assert(paper::Item { constraint: start.constraint, state: start.state } == start);
+    paper::lemma_trace_nodes_bounded(start.constraint,start.state,cases,f,d,t);
 }
 
 pub(crate) proof fn lemma_trace_refuted(s: Search<'_>,index: nat,outcome: crate::search::SearchOutcome)

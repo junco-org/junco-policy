@@ -84,11 +84,11 @@ All C1–C6 slices and all eleven unfiltered CI verification commands pass with 
 | `junco-core --features runtime,std,serde` | 242 verified, 0 errors |
 | `history-store --no-default-features --features runtime` | 285 verified, 0 errors |
 | `history-store --features runtime,std` | 285 verified, 0 errors |
-| `history-semantics --no-default-features --features runtime` | 1572 verified, 0 errors |
-| `history-semantics --features runtime,std,cache` | 1577 verified, 0 errors |
+| `history-semantics --no-default-features --features runtime` | 1575 verified, 0 errors |
+| `history-semantics --features runtime,std,cache` | 1580 verified, 0 errors |
 | `history-semantics --features runtime,std,cache --test public_specs` | 19 verified, 0 errors |
-| `history-analysis --no-default-features --features runtime` | 488 verified, 0 errors |
-| `history-analysis --no-default-features --features runtime,std` | 488 verified, 0 errors |
+| `history-analysis --no-default-features --features runtime` | 483 verified, 0 errors |
+| `history-analysis --no-default-features --features runtime,std` | 483 verified, 0 errors |
 
 Final native checks: analyzer 13 tests passed; enabled-runtime semantics 42 passed; default
 semantics test command and `cargo check --locked --workspace --all-targets` passed. The C2
@@ -135,13 +135,18 @@ The only new trusted bodies are the author-approved hashbrown wrappers in
 correspondence are explicit hypotheses of `analyzer_obligations`; see `SPEC.md` §11.
 The real search consumes `theorem_impl_search_bounded`; `finitely_many_items` is no longer an
 undischarged implementation hypothesis. Typed guarantees retain projection/Eq obligations and
-the explicit sufficient constant-id/search/fresh-counter capacity preconditions. Those bounds
-are conservative verification preconditions, not runtime rejection rules.
+the sufficient capacity precondition `query_capacity`: constant ids fit `u32` and per-state
+split/letter products fit `usize`, over a traversal-cost bound on the query's vocabulary.
+Constraint-id and fresh-value exhaustion are runtime `Err`s (`IdExhausted`), not preconditions;
+see `SPEC.md` §9 item 30.
 
 ## Implementation links
 
 - `history-analysis/src/analyzer.rs`: real `tail_included` ensures typed `tail_included_ok`.
 - `history-analysis/src/verify/search_exec.rs`: actual result proof consumes the implementation bound.
+- `history-analysis/src/search.rs` (`Search::run`): the loop's `decreases` is the item bound of
+  `finiteness::theorem_impl_items_bound` (Lemma 4.4 for `m_impl`), via `lemma_running_items_bound`;
+  see `SPEC.md` §9 item 31.
 - `history-semantics/src/verify/refinement/implementation.rs`: `theorem_impl_search_bounded`.
 - `history-analysis/src/verify/reconstruction.rs` and `typed_numeric.rs`: every admissible
   counterexample instantiation and globally shortest history, without a u64 bound on history values.
