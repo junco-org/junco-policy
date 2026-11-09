@@ -80,8 +80,8 @@ All C1–C6 slices and all eleven unfiltered CI verification commands pass with 
 |---|---|
 | `history-syntax --no-default-features` | cached pass; counts not emitted |
 | `history-syntax --features serde,std` | cached pass; counts not emitted |
-| `junco-core --no-default-features` | 164 verified, 0 errors |
-| `junco-core --features runtime,std,serde` | 242 verified, 0 errors |
+| `junco-core --no-default-features` | 166 verified, 0 errors |
+| `junco-core --features runtime,std,serde` | 247 verified, 0 errors |
 | `history-store --no-default-features --features runtime` | 285 verified, 0 errors |
 | `history-store --features runtime,std` | 285 verified, 0 errors |
 | `history-semantics --no-default-features --features runtime` | 1575 verified, 0 errors |
@@ -138,7 +138,9 @@ undischarged implementation hypothesis. Typed guarantees retain projection/Eq ob
 the sufficient capacity precondition `query_capacity`: constant ids fit `u32` and per-state
 split/letter products fit `usize`, over a traversal-cost bound on the query's vocabulary.
 Constraint-id and fresh-value exhaustion are runtime `Err`s (`IdExhausted`), not preconditions;
-see `SPEC.md` §9 item 30.
+see `SPEC.md` §9 item 30. The assumed std and smallvec specifications in junco-core's
+`history_assumptions.rs` are tested against the real implementations by
+`scripts/spec-check.sh` (`spec-check/`, verus-spec-check; also a CI job).
 
 ## Implementation links
 
@@ -173,6 +175,8 @@ see `SPEC.md` §9 item 30.
   ```
   Append `-- --num-threads N` to use more cores (default 1). On the author's 2-core machine each
   `history-semantics` configuration took about 4.5 minutes with 2 threads.
+- Assumed specifications against std and smallvec: `scripts/spec-check.sh` (fetches the
+  verus-spec-check release paired with the pinned Verus into `spec-check/vendor/`).
 - Focused verification of one module or function (`cargo verus verify` refuses partial runs):
   ```sh
   rm -rf target/verus-partial/debug/.fingerprint/history-semantics-*

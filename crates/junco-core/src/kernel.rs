@@ -919,6 +919,16 @@ pub mod verify {
                 pub broadcast proof fn lemma_view(id: Self)
                     ensures (#[trigger] id@) <= u32::MAX, id == Self::from_view(id@ as u32),
                 {}
+                /// Equality and order are those of the view on `nat`: vstd's total-order laws,
+                /// which `sort_unstable`, `binary_search` and `dedup` require of their elements.
+                pub proof fn lemma_obeys_cmp()
+                    ensures vstd::laws_cmp::obeys_cmp::<Self>(),
+                {
+                    reveal(vstd::laws_eq::obeys_eq_spec_properties);
+                    reveal(vstd::laws_cmp::obeys_partial_cmp_spec_properties);
+                    reveal(vstd::laws_cmp::obeys_cmp_partial_ord);
+                    reveal(vstd::laws_cmp::obeys_cmp_ord);
+                }
             }
             pub open spec fn $ids(ids: Seq<$id>) -> Seq<nat> {
                 Seq::new(ids.len(), |i: int| ids[i]@)

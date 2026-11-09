@@ -514,10 +514,17 @@ them by preconditions (§9 item 30). Product and constant-id bounds remain preco
 ## 11. Trust base of this phase
 
 No new `assume`, `admit`, or `assume_specification`. The refinement module's mathematical
-definitions remain frozen. Existing trust base (unchanged): `junco-core/src/verify/history_assumptions.rs`
+definitions remain frozen. Existing trust base: `junco-core/src/verify/history_assumptions.rs`
 (`assume_specification`s for SmallVec, slices, `Vec::dedup`, …, and the `KernelStore` external
 trait specification), `compiled_rule.rs:290` `same_owner`, `observation.rs` and `history-store`
 external bodies, and `books::native_obligations` as a hypothesis of typed guarantees.
+`sort_unstable`, `binary_search` and `Vec::dedup` require vstd's `obeys_cmp`/`obeys_eq` laws of
+their element type. With only `obeys_*_spec`, they admitted element types for which they are
+false: for `u8` with "differs by at most 1" as equality, verus-spec-check refutes the old
+`dedup` spec on `[0, 0, 253, 254, 255, 0, 0]` and the old `sort_unstable` spec on `[2, 1, 0]`.
+The `rotate_right` and `u64::checked_shl`/`checked_shr`
+specifications are removed (`junco_core::bits` has verified shifts). `scripts/spec-check.sh`
+tests every remaining contract against the std and smallvec implementations.
 The analyzer's scoped `BorrowedEncoder` satisfies the `FlatEncoder` contract over its real
 constant book. `analyzer_obligations` includes event projection laws and the native Eq/hash
 obligations for both constant interning and the internal search/pruning/simulation keys.

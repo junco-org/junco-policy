@@ -530,12 +530,19 @@ cargo verus verify --locked -p history-semantics --features runtime,std,cache
 cargo verus verify --locked -p history-semantics --features runtime,std,cache --test public_specs
 ```
 
-The [CI workflow](.github/workflows/ci.yml#L60-L121) contains the toolchain setup and
+The [CI workflow](.github/workflows/ci.yml#L86-L150) contains the toolchain setup and
 full library feature matrix. Verified helper dependencies are pinned to
 [bumpus](https://github.com/elefthei/bumpus) (`verus-bumpalo`) commit
 `888a6983370524cf1686d82e5814dd17a2dd14e5` and
 [hashconsius](https://github.com/elefthei/hashconsius) commit
 `d7c17483a46b42a9e179cbfa0fdae9b7e8043dbf`.
+
+The trusted std and smallvec specifications in
+[`history_assumptions.rs`](crates/junco-core/src/verify/history_assumptions.rs) are not
+proved. `scripts/spec-check.sh` tests each of them against the real implementation with
+[verus-spec-check](https://github.com/verus-lang/verus-spec-check) (the `spec-check` CI job).
+The ordering and equality specifications require vstd's `obeys_cmp` and `obeys_eq` laws of
+their element type.
 
 ## Regorus integration
 

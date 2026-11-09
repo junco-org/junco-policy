@@ -347,6 +347,7 @@ fn push_pieces(language: &mut SymbolicLanguage,residual: RegexId,
     ordered(final(values).view()))]
 fn normalize_pieces(values: &mut SmallVec<[RegexId;8]>) {
     proof_decl! { let ghost before = values.view(); }
+    proof! { RegexId::lemma_obeys_cmp(); }
     values.as_mut_slice().sort_unstable();
     proof_decl! { let ghost sorted = values.view(); }
     proof! {

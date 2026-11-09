@@ -110,6 +110,7 @@ impl Simulation {
                 assert(model::regex_ids(ys@)[i] == ys@[i]@);
                 assert(model::regex_ids(ys@)[j] == ys@[j]@);
             }
+            proof { RegexId::lemma_obeys_cmp(); }
             let found = ys.binary_search(&x);
             if found.is_err() {
                 let ghost before = *self;

@@ -1,6 +1,6 @@
 [workspace]
 members = [".", "crates/junco-core", "crates/history-syntax", "crates/history-store", "crates/history-semantics", "crates/history-analysis"]
-exclude = ["fuzz"]
+exclude = ["fuzz", "spec-check"]
 resolver = "3"
 
 [package]

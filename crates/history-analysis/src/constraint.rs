@@ -26,6 +26,9 @@ use history_semantics::verify::refinement::{implementation, inclusion, encoding}
 use vstd::std_specs::cmp::PartialEqSpec;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::iter::IteratorSpec;
+// `ConstId` (`u32`) is sorted and binary-searched; vstd proves its order laws.
+#[cfg(verus_keep_ghost)]
+verus! { broadcast use vstd::laws_cmp::group_laws_cmp; }
 
 /// Number of event components, and so of registers.
 #[verus_verify]
