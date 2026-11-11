@@ -319,15 +319,31 @@ the root benchmarks. The fuzz benchmark's HTML entry point is
 `benches/agentdojo` runs AgentDojo v1.2 environments and scoring through a Python JSON
 worker. Rig's native tool API drives privileged P and quarantined Q model calls through
 GitHub Copilot. P sees handles and shapes for untrusted values, not their contents.
-Q receives referenced contents for structured extraction; its results remain hidden.
-Protected sink arguments and `$if` guards are checked by `AgentPolicy`.
+Q receives referenced contents for structured extraction; its results remain hidden and
+are always tainted, including queries without references or with only trusted inputs.
+Protected sink arguments and `$if` guards are checked by `AgentPolicy` as `Sink`
+contacts. The worker also reports each result's readers (an email's correspondents,
+a transaction's two parties, a file's `shared_with`, an event's participants, nobody for
+plain text), mirroring CaMeL's AgentDojo capabilities. A value's readers are the
+intersection over everything it was derived from, including Q extractions; a
+non-public value is logged as `Private`. A sink that reveals a data argument to
+recipients outside its readers raises a `Peer` contact, which the second rule denies.
+Recipients come from the call (`send_email`, `send_direct_message`, `send_money`) or
+from environment state (`send_channel_message` members, `append_to_file` sharing,
+`reschedule_calendar_event` participants, `update_scheduled_transaction`'s current
+recipient when no non-empty replacement is supplied). For `send_email`,
+`send_direct_message`, and `create_calendar_event`, recipients the user named directly
+are not checked against readers, as in CaMeL's policies.
+Call-argument recipient arrays are flattened recursively, including nested calendar
+participants; malformed calls still receive a policy verdict before tool validation.
+Worker-reported reader and environment-audience lists remain flat.
 
 This is a native-tool adaptation of [CaMeL](https://arxiv.org/abs/2503.18813), not its
-Python code-generation interpreter. Classification is per tool, not per sender or
-individual value. Legitimate recipients, amounts, or identifiers extracted from an
-untrusted result can therefore be denied. Final answers are not sink-policy checked.
-Use the measured utility and benign denial rate; do not assume paper-equivalent
-results or a complete exfiltration defense. Trusted tool results remain visible to P.
+Python code-generation interpreter. Trust is still per tool, not per sender: a value
+from an untrusted tool is untrusted even when CaMeL would trust its sender. Final
+answers are not sink-policy checked. Use the measured utility and benign denial rate;
+do not assume paper-equivalent results or a complete exfiltration defense. Trusted tool
+results remain visible to P.
 
 Use a Python interpreter with `agentdojo==0.1.34`, selected by `AGENTDOJO_PYTHON`.
 The default is `python3` on `PATH`.
@@ -346,8 +362,8 @@ cargo +1.98.1 bench --bench agentdojo -- --report
 ```
 
 The self-test needs no credentials: it exercises the real worker and scorer, scripted
-native model responses, reference resolution, quarantine, Q retries, guarded calls,
-policy decisions, and replay. The full registry contains 97 clean tasks and 949 attacked
+native model responses, reference resolution, quarantine, readers, Q retries, guarded
+calls, policy decisions, and replay. The full registry contains 97 clean tasks and 949 attacked
 pairs. Each concurrency lane reuses one worker, resetting the environment for every task;
 the fixed limit is 30 P turns per task. By default all four suites and both clean and
 attacked tasks run. Repeat `--suite NAME` to select suites; `--clean-only` and
@@ -367,6 +383,14 @@ Matching successfully scored logs are skipped automatically; failed or unscored 
 are retried. Incompatible task/model/Q-model logs are rejected unless `--force` is
 used to replace them. Use `--force` after changing code, prompts, or classifications.
 Old noncanonical smoke directories are left untouched and excluded from reports.
+
+`--replay DIR` answers both models from per-task scripts instead of a provider, so a
+policy or classification change can be re-measured on recorded traces without model
+calls. A script mirrors the log layout and holds `{"p": [assistant messages], "q":
+[result arguments]}`; `camel-prompt-injection/benchmarks/junco_vs_camel/junco_trace_replay.py scripts`
+derives them from a previous run, reconstructing hidden Q values from the arguments the
+run later resolved. Tasks without a script are skipped. `--out NAME` writes logs under
+`benches/agentdojo/runs/NAME` so the replay does not overwrite the source run.
 
 `--report` reads canonical logs without Python, model calls, or credentials, applying
 the same suite and task filters. The report also runs after task execution. Per-suite

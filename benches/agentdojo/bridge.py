@@ -7,12 +7,69 @@ import sys
 with contextlib.redirect_stdout(sys.stderr):
     from agentdojo.agent_pipeline.base_pipeline_element import BasePipelineElement
     from agentdojo.attacks import load_attack
+    from agentdojo.default_suites.v1.tools.banking_client import Transaction
+    from agentdojo.default_suites.v1.tools.calendar_client import CalendarEvent
+    from agentdojo.default_suites.v1.tools.cloud_drive_client import CloudDriveFile
+    from agentdojo.default_suites.v1.tools.email_client import Email
+    from agentdojo.default_suites.v1.tools.slack import Message
     from agentdojo.functions_runtime import FunctionCall, FunctionsRuntime
     from agentdojo.models import MODEL_NAMES
     from agentdojo.task_suite import get_suite
     from agentdojo.types import text_content_block_from_string
     from pydantic import BaseModel
     from pydantic_core import to_jsonable_python
+
+
+# Tool outputs CaMeL marks as readable by nobody (camel/pipeline_elements/agentdojo_function.py):
+# plain text and channel/user names may carry injections and have no owner metadata.
+PRIVATE_TEXT_TOOLS = {
+    "read_file",
+    "get_channels",
+    "get_users_in_channel",
+    "get_webpage",
+    "send_money",
+    "schedule_transaction",
+    "update_scheduled_transaction",
+}
+PRIVATE_RECORD_TOOLS = {"get_user_info", "update_password", "update_user_info", "get_user_information"}
+PUBLIC_REVIEW_TOOLS = {
+    "get_rating_reviews_for_car_rental",
+    "get_rating_reviews_for_hotels",
+    "get_rating_reviews_for_restaurants",
+}
+
+
+def readers(tool, value):
+    """CaMeL's readers lattice as a tree parallel to the result: `{"readers": [...]}` at each
+    value that has an owner set, lists and nested models recursed, `None` where readers are public."""
+    if isinstance(value, (list, tuple)):
+        items = [readers(tool, item) for item in value]
+        return items if any(item is not None for item in items) else None
+    if tool in PUBLIC_REVIEW_TOOLS:
+        return None
+    if isinstance(value, str) and tool in PRIVATE_TEXT_TOOLS:
+        return {"readers": []}
+    if isinstance(value, (dict, BaseModel)) and tool in PRIVATE_RECORD_TOOLS:
+        return {"readers": []}
+    if isinstance(value, Email):
+        return {"readers": sorted({value.sender, *value.recipients, *value.cc, *value.bcc})}
+    if isinstance(value, Transaction):
+        return {"readers": sorted({value.sender, value.recipient})}
+    if isinstance(value, Message):
+        return {"readers": [value.recipient]}
+    if isinstance(value, CalendarEvent):
+        return {"readers": sorted(set(value.participants))}
+    if isinstance(value, CloudDriveFile):
+        return {"readers": sorted(value.shared_with)}
+    if isinstance(value, BaseModel):
+        fields = {name: readers(tool, getattr(value, name)) for name in type(value).model_fields}
+        fields = {name: tree for name, tree in fields.items() if tree is not None}
+        return fields or None
+    if isinstance(value, dict):
+        fields = {name: readers(tool, item) for name, item in value.items()}
+        fields = {name: tree for name, tree in fields.items() if tree is not None}
+        return fields or None
+    return None
 
 
 class _Named(BasePipelineElement):
@@ -91,7 +148,32 @@ class Worker:
 
     def call_tool(self, name, args):
         result, error = self.execute(name, args)
-        return {"result": to_jsonable_python(result), "error": error, "shape": shape(result)}
+        return {
+            "result": to_jsonable_python(result),
+            "error": error,
+            "shape": shape(result),
+            "readers": readers(name, result),
+        }
+
+    def recipients(self, name, args):
+        """Who receives data through a sink whose audience is environment state, not an argument."""
+        if name == "send_channel_message":
+            channel = args.get("channel")
+            return [user for user, channels in self.env.slack.user_channels.items() if channel in channels]
+        if name == "append_to_file":
+            return sorted(self.env.cloud_drive.files[args["file_id"]].shared_with)
+        if name == "reschedule_calendar_event":
+            return sorted(set(self.env.calendar.events[args["event_id"]].participants))
+        if name == "update_scheduled_transaction":
+            recipient = args.get("recipient")
+            if recipient:  # same truthiness test as banking_client.update_scheduled_transaction
+                return [recipient]
+            transaction_id = int(args["id"])
+            transaction = next((t for t in self.env.bank_account.scheduled_transactions if t.id == transaction_id), None)
+            if transaction is None:
+                raise ValueError(f"Scheduled transaction {transaction_id} not found")
+            return [transaction.recipient]
+        raise ValueError(f"{name} has no environment-defined recipients")
 
     def evaluate(self, model_output):
         blocks = [text_content_block_from_string(model_output)]
@@ -116,7 +198,7 @@ def main():
     worker = Worker()
     methods = {
         name: getattr(worker, name)
-        for name in ("list_tasks", "load_task", "call_tool", "evaluate", "replay_evaluate")
+        for name in ("list_tasks", "load_task", "call_tool", "recipients", "evaluate", "replay_evaluate")
     }
     for line in sys.stdin:
         request_id = None

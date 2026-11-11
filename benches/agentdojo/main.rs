@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
 use bridge::{Bridge, SCRIPT};
-use camel::{FirstDenial, Llm, Run};
+use camel::{FirstDenial, Llm, Run, Script};
 
 const SUITES: &[&str] = &["workspace", "banking", "travel", "slack"];
 const HELP: &str = "cargo bench --bench agentdojo -- [options]\n\
@@ -27,6 +27,9 @@ const HELP: &str = "cargo bench --bench agentdojo -- [options]\n\
   --clean-only | --attacked-only   (default: both)\n\
   --concurrency N            positive integer (default: 4)\n\
   --force                    rerun existing logs, including incompatible model settings\n\
+  --replay DIR               answer the P- and Q-LLM from recorded scripts under DIR (no provider);\n\
+                             tasks without a script are skipped\n\
+  --out NAME                 log directory name under benches/agentdojo/runs (default: <model>+camel)\n\
   --report                   aggregate canonical logs without Python or credentials\n\
   --self-test                model-free checks (requires AgentDojo Python)\n\
   --help\n\
@@ -44,6 +47,8 @@ struct Options {
     attacked_only: bool,
     concurrency: usize,
     force: bool,
+    replay: Option<PathBuf>,
+    out: Option<String>,
     report: bool,
     self_test: bool,
     help: bool,
@@ -70,6 +75,8 @@ impl Options {
             attacked_only: false,
             concurrency: 4,
             force: false,
+            replay: None,
+            out: None,
             report: false,
             self_test: false,
             help: false,
@@ -102,6 +109,8 @@ impl Options {
                         .map_err(|_| "--concurrency must be a positive integer")?
                 }
                 "--force" => options.force = true,
+                "--replay" => options.replay = Some(PathBuf::from(value()?)),
+                "--out" => options.out = Some(value()?),
                 "--report" => options.report = true,
                 "--self-test" => options.self_test = true,
                 "--help" => options.help = true,
@@ -119,6 +128,9 @@ impl Options {
             return Err(
                 "--model must be a safe path component (letters, digits, -, _, ., +)".to_owned(),
             );
+        }
+        if options.out.as_deref().is_some_and(|out| !safe_component(out)) {
+            return Err("--out must be a safe path component".to_owned());
         }
         if options
             .user_task
@@ -143,7 +155,7 @@ impl Options {
     fn root(&self) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("benches/agentdojo/runs")
-            .join(self.pipeline())
+            .join(self.out.clone().unwrap_or_else(|| self.pipeline()))
     }
     fn selects(&self, task: &Task) -> bool {
         self.suites.contains(&task.suite)
@@ -300,7 +312,7 @@ fn initial_log(task: &Task, options: &Options) -> Value {
     json!({
         "suite":task.suite,"user_task_id":task.user_task_id,"injection_task_id":task.injection_task_id,
         "attack_type":task.attack_type(),"pipeline_name":options.pipeline(),"model":options.model,"q_model":options.q_model,
-        "injections":null,"messages":[],"calls":[],"skipped_calls":[],"events":[],"policy_decisions":[],
+        "injections":null,"messages":[],"calls":[],"skipped_calls":[],"events":[],"policy_decisions":[],"policy_seconds":0.0,
         "first_denial":null,"final_output":"","utility":null,"injection_success":null,
         "secpol":{"utility":null,"injection_success":null},"error":null,"duration_s":0.0
     })
@@ -310,6 +322,13 @@ async fn run_task(task: &Task, options: &Options, llm: &Llm, bridge: &mut Bridge
     let started = Instant::now();
     let mut log = initial_log(task, options);
     let execution: Result<(), String> = async {
+        if let Some(scripts) = &options.replay {
+            let path = task.path(scripts);
+            let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let script: Script = serde_json::from_reader(BufReader::new(file))
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            llm.load_script(script)?;
+        }
         let mut loaded = bridge.call("load_task", json!({
             "suite":task.suite,"user_task_id":task.user_task_id,"injection_task_id":task.injection_task_id,
             "pipeline_name":options.pipeline(),"model_prose":tools::model_prose(&options.model)
@@ -325,6 +344,7 @@ async fn run_task(task: &Task, options: &Options, llm: &Llm, bridge: &mut Bridge
         log["calls"] = serde_json::to_value(run.calls).map_err(|e| e.to_string())?;
         log["skipped_calls"] = serde_json::to_value(run.skipped_calls).map_err(|e| e.to_string())?;
         log["policy_decisions"] = Value::Array(run.policy_decisions);
+        log["policy_seconds"] = json!(run.policy_seconds);
         log["first_denial"] = json!(run.first_denial);
         log["final_output"] = json!(run.final_output);
         match scores {
@@ -689,6 +709,13 @@ async fn benchmark() -> Result<(), String> {
         if path.exists() && !options.force && reusable(&read_outcome(&path)?, &task, &options)? {
             continue;
         }
+        if options
+            .replay
+            .as_ref()
+            .is_some_and(|scripts| !task.path(scripts).exists())
+        {
+            continue;
+        }
         pending.push_back(task);
     }
     let lanes = options.concurrency.min(pending.len());
@@ -696,11 +723,19 @@ async fn benchmark() -> Result<(), String> {
     let queue = Arc::new(Mutex::new(pending));
     let mut jobs = JoinSet::new();
     if lanes != 0 {
-        let llm = Arc::new(Llm::new(options.model.clone(), options.q_model.clone())?);
+        let live = match options.replay {
+            Some(_) => None,
+            None => Some(Arc::new(Llm::new(
+                options.model.clone(),
+                options.q_model.clone(),
+            )?)),
+        };
         for _ in 0..lanes {
             let options = Arc::clone(&options);
             let python = Arc::clone(&python);
-            let llm = Arc::clone(&llm);
+            let llm = live.clone().unwrap_or_else(|| {
+                Arc::new(Llm::scripted(options.model.clone(), options.q_model.clone()))
+            });
             let queue = Arc::clone(&queue);
             jobs.spawn(async move {
                 let mut bridge = Bridge::spawn(&python, Path::new(SCRIPT))

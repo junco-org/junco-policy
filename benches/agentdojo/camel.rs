@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,14 +21,32 @@ use serde_json::{Map, Value, json};
 
 use crate::bridge::Bridge;
 use crate::tools::{
-    self, HAVE_ENOUGH_INFORMATION_DESCRIPTION, P_SYSTEM_PROMPT, Q_SYSTEM_PROMPT, SINKS, UNTRUSTED,
+    self, Audience, HAVE_ENOUGH_INFORMATION_DESCRIPTION, P_SYSTEM_PROMPT, Q_SYSTEM_PROMPT, Sink,
+    UNTRUSTED,
 };
 
 pub struct Llm {
-    auth: Authenticator,
-    http: DynHttpClient,
+    backend: Backend,
     pub model: String,
     pub q_model: String,
+}
+
+enum Backend {
+    Live {
+        auth: Authenticator,
+        http: DynHttpClient,
+    },
+    /// Replays one task's recorded model turns: the P-LLM's assistant messages verbatim and the
+    /// Q-LLM's `result` arguments reconstructed from the values the run used downstream.
+    Scripted(std::sync::Mutex<Script>),
+}
+
+#[derive(Default, Deserialize)]
+pub struct Script {
+    /// Recorded assistant messages, one per P-LLM turn.
+    p: std::collections::VecDeque<Value>,
+    /// `result` tool arguments (with `have_enough_information`), one per Q-LLM call.
+    q: std::collections::VecDeque<Value>,
 }
 
 impl Llm {
@@ -37,30 +56,94 @@ impl Llm {
             _ => AuthSource::OAuth,
         };
         let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
-        Ok(Self {
-            auth: Authenticator::new(
+        Ok(Self::live(
+            Authenticator::new(
                 source,
                 FileTokenStore::new(PathBuf::from(home).join(".config/junco-policy/copilot")),
                 DeviceCodeHandler::default(),
                 true,
             ),
-            http: rig_reqwest::shared(),
+            rig_reqwest::shared(),
             model,
             q_model,
-        })
+        ))
     }
 
-    pub async fn call(
+    fn live(auth: Authenticator, http: DynHttpClient, model: String, q_model: String) -> Self {
+        Self {
+            backend: Backend::Live { auth, http },
+            model,
+            q_model,
+        }
+    }
+
+    /// A model that answers from [`Llm::load_script`] instead of a provider.
+    pub fn scripted(model: String, q_model: String) -> Self {
+        Self {
+            backend: Backend::Scripted(std::sync::Mutex::new(Script::default())),
+            model,
+            q_model,
+        }
+    }
+
+    pub fn load_script(&self, script: Script) -> Result<(), String> {
+        match &self.backend {
+            Backend::Scripted(current) => {
+                *current.lock().map_err(|error| error.to_string())? = script;
+                Ok(())
+            }
+            Backend::Live { .. } => Err("a live model takes no script".to_owned()),
+        }
+    }
+
+    /// A P-LLM turn.
+    pub async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, String> {
+        match &self.backend {
+            Backend::Live { .. } => self.call(&self.model, request).await,
+            Backend::Scripted(script) => {
+                let message = script
+                    .lock()
+                    .map_err(|error| error.to_string())?
+                    .p
+                    .pop_front()
+                    .ok_or("script exhausted: the recorded run had no further P-LLM turn")?;
+                scripted_response(message["content"].clone(), message["origin"].clone())
+            }
+        }
+    }
+
+    /// A Q-LLM extraction.
+    pub async fn extract(&self, request: CompletionRequest) -> Result<CompletionResponse, String> {
+        match &self.backend {
+            Backend::Live { .. } => self.call(&self.q_model, request).await,
+            Backend::Scripted(script) => {
+                let arguments = script
+                    .lock()
+                    .map_err(|error| error.to_string())?
+                    .q
+                    .pop_front()
+                    .ok_or("script exhausted: the recorded run had no further Q-LLM call")?;
+                scripted_response(
+                    json!([{"type":"toolcall","id":{"provider":"scripted"},"function":{"name":"result","arguments":arguments}}]),
+                    json!({"api":"openai.chat","provider":"scripted","model":self.q_model}),
+                )
+            }
+        }
+    }
+
+    async fn call(
         &self,
         model: &str,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, String> {
+        let Backend::Live { auth, http } = &self.backend else {
+            unreachable!("call is only reached from the live backend");
+        };
         let mut last_error = String::new();
         for attempt in 0..=5 {
             let result = async {
-                let context = self
-                    .auth
-                    .auth_context(&self.http)
+                let context = auth
+                    .auth_context(http)
                     .await
                     .map_err(|error| error.to_string())?;
                 let mut config =
@@ -69,7 +152,7 @@ impl Llm {
                     config = config.with_base_url(base);
                 }
                 config
-                    .connect(self.http.clone())
+                    .connect(http.clone())
                     .completion(model)
                     .call(request.clone())
                     .await
@@ -90,7 +173,12 @@ impl Llm {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+fn scripted_response(choice: Value, origin: Value) -> Result<CompletionResponse, String> {
+    serde_json::from_value(json!({"choice": choice, "usage": {}, "origin": origin, "raw": {}}))
+        .map_err(|error| format!("recorded turn is not a completion: {error}"))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Handle(pub u32);
 
 impl fmt::Display for Handle {
@@ -99,11 +187,16 @@ impl fmt::Display for Handle {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Class {
     Trusted,
     Untrusted,
+    /// Data with a reader set narrower than everyone.
+    Private,
+    /// A protected argument or guard: must not derive from untrusted data.
     Sink,
+    /// A recipient outside the readers of the data it would receive.
+    Peer,
 }
 
 impl fmt::Display for Class {
@@ -111,14 +204,70 @@ impl fmt::Display for Class {
         f.write_str(match self {
             Self::Trusted => "trusted",
             Self::Untrusted => "untrusted",
+            Self::Private => "private",
             Self::Sink => "sink",
+            Self::Peer => "peer",
         })
+    }
+}
+
+/// Who may see a value: CaMeL's readers lattice, with `Public` as top.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Readers {
+    Public,
+    Only(BTreeSet<String>),
+}
+
+impl Readers {
+    /// The readers the worker reports for a tool result: `null` for public, `{"readers": [...]}`
+    /// at an owned value, and a tree parallel to the result otherwise. A value's readers are the
+    /// intersection over everything it contains, as CaMeL's dependency walk computes them.
+    fn from_tree(tree: &Value) -> Self {
+        match tree {
+            Value::Object(fields) if fields.len() == 1 => match fields.get("readers") {
+                Some(Value::Array(readers)) => Self::Only(
+                    readers
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect(),
+                ),
+                _ => Self::from_trees(fields.values()),
+            },
+            Value::Object(fields) => Self::from_trees(fields.values()),
+            Value::Array(items) => Self::from_trees(items.iter()),
+            _ => Self::Public,
+        }
+    }
+
+    fn from_trees<'a>(trees: impl Iterator<Item = &'a Value>) -> Self {
+        let mut readers = Self::Public;
+        for tree in trees {
+            readers.intersect(&Self::from_tree(tree));
+        }
+        readers
+    }
+
+    fn intersect(&mut self, other: &Self) {
+        match (&mut *self, other) {
+            (_, Self::Public) => {}
+            (Self::Public, Self::Only(_)) => *self = other.clone(),
+            (Self::Only(mine), Self::Only(theirs)) => mine.retain(|reader| theirs.contains(reader)),
+        }
+    }
+
+    fn can_read(&self, recipients: &BTreeSet<String>) -> bool {
+        match self {
+            Self::Public => true,
+            Self::Only(readers) => recipients.is_subset(readers),
+        }
     }
 }
 
 pub struct Var {
     value: Value,
     tainted: bool,
+    readers: Readers,
 }
 
 #[derive(Serialize)]
@@ -145,9 +294,19 @@ pub struct Score {
 
 struct Prepared {
     args: Value,
-    contacts: Vec<Handle>,
+    /// The handles each argument (and the `$if` guard) referenced, in argument order.
+    refs: Vec<(String, Vec<Handle>)>,
     tainted: bool,
     guard: Option<bool>,
+}
+
+impl Prepared {
+    fn refs_of<'a>(&'a self, keys: &'a [&str]) -> impl Iterator<Item = Handle> + 'a {
+        self.refs
+            .iter()
+            .filter(move |(key, _)| keys.contains(&key.as_str()))
+            .flat_map(|(_, handles)| handles.iter().copied())
+    }
 }
 
 /// A task's workflow state borrowing its lane's reusable worker.
@@ -160,6 +319,8 @@ pub struct Run<'a> {
     pub calls: Vec<CallRecord>,
     pub skipped_calls: Vec<CallRecord>,
     pub policy_decisions: Vec<Value>,
+    /// Wall time inside `AgentPolicy::check`, summed over the task.
+    pub policy_seconds: f64,
     pub first_denial: Option<FirstDenial>,
     pub final_output: String,
 }
@@ -177,19 +338,41 @@ impl<'a> Run<'a> {
                     Class::Untrusted,
                     &[Class::Sink],
                 ))
+                .rule(AgentRule::no_contact_after_read(
+                    Class::Private,
+                    &[Class::Peer],
+                ))
                 .audit(),
             calls: Vec::new(),
             skipped_calls: Vec::new(),
             policy_decisions: Vec::new(),
+            policy_seconds: 0.0,
             first_denial: None,
             final_output: String::new(),
         })
     }
 
-    fn insert(&mut self, value: Value, tainted: bool) -> Result<Handle, String> {
+    fn insert(&mut self, value: Value, tainted: bool, readers: Readers) -> Result<Handle, String> {
         let handle = Handle(u32::try_from(self.vars.len() + 1).map_err(|error| error.to_string())?);
-        self.vars.push(Var { value, tainted });
+        self.vars.push(Var {
+            value,
+            tainted,
+            readers,
+        });
         Ok(handle)
+    }
+
+    fn var(&self, handle: Handle) -> &Var {
+        &self.vars[handle.0 as usize - 1]
+    }
+
+    /// The readers of a value derived from `handles`: everyone, narrowed by each input.
+    fn derived_readers(&self, handles: impl Iterator<Item = Handle>) -> Readers {
+        let mut readers = Readers::Public;
+        for handle in handles {
+            readers.intersect(&self.var(handle).readers);
+        }
+        readers
     }
 
     fn event(&mut self, handle: Handle, action: AgentAction, class: Class) -> Result<(), String> {
@@ -203,23 +386,45 @@ impl<'a> Run<'a> {
         value: Value,
         source: Class,
         received: bool,
+        own_readers: Readers,
+        derived: Readers,
     ) -> Result<Handle, String> {
-        let handle = self.insert(value, source == Class::Untrusted || received)?;
+        let mut readers = own_readers.clone();
+        readers.intersect(&derived);
+        let private = readers != Readers::Public;
+        let handle = self.insert(value, source == Class::Untrusted || received, readers)?;
         self.event(handle, AgentAction::Read, source)?;
         if received {
             self.event(handle, AgentAction::Receive, Class::Untrusted)?;
         }
+        if private {
+            let action = if own_readers == Readers::Public {
+                AgentAction::Receive
+            } else {
+                AgentAction::Read
+            };
+            self.event(handle, action, Class::Private)?;
+        }
         Ok(handle)
     }
 
-    fn record_extraction(&mut self, value: Value, tainted: bool) -> Result<Handle, String> {
-        let handle = self.insert(value, tainted)?;
+    fn record_extraction(
+        &mut self,
+        value: Value,
+        tainted: bool,
+        readers: Readers,
+    ) -> Result<Handle, String> {
+        let private = readers != Readers::Public;
+        let handle = self.insert(value, tainted, readers)?;
         let (action, class) = if tainted {
             (AgentAction::Receive, Class::Untrusted)
         } else {
             (AgentAction::Read, Class::Trusted)
         };
         self.event(handle, action, class)?;
+        if private {
+            self.event(handle, AgentAction::Receive, Class::Private)?;
+        }
         Ok(handle)
     }
 
@@ -295,72 +500,143 @@ impl<'a> Run<'a> {
         }
     }
 
-    fn prepare(&self, name: &str, arguments: &Map<String, Value>) -> Result<Prepared, String> {
-        let protected = SINKS
-            .iter()
-            .find(|(sink, _)| *sink == name)
-            .map(|(_, fields)| *fields);
+    fn prepare(&self, arguments: &Map<String, Value>) -> Result<Prepared, String> {
         let mut refs = Vec::new();
-        let mut contacts = Vec::new();
         let mut args = Map::new();
         let mut guard = None;
+        let mut tainted = false;
         for (key, value) in arguments {
-            let start = refs.len();
-            let resolved = self.resolve(value, &mut refs)?;
+            let mut handles = Vec::new();
+            let resolved = self.resolve(value, &mut handles)?;
             if key == "$if" {
                 guard = Some(truthy(&resolved));
             } else {
                 args.insert(key.clone(), resolved);
             }
-            if protected.is_some_and(|fields| key == "$if" || fields.contains(&key.as_str())) {
-                contacts.extend_from_slice(&refs[start..]);
-            }
+            tainted |= handles.iter().any(|&handle| self.var(handle).tainted);
+            refs.push((key.clone(), handles));
         }
-        contacts.sort_unstable_by_key(|handle| handle.0);
-        contacts.dedup();
-        let tainted = refs
-            .iter()
-            .any(|handle| self.vars[handle.0 as usize - 1].tainted);
         Ok(Prepared {
             args: Value::Object(args),
-            contacts,
+            refs,
             tainted,
             guard,
         })
     }
 
-    fn check_contacts(&mut self, name: &str, contacts: &[Handle]) -> Result<bool, String> {
+    fn push_recipients(value: &Value, recipients: &mut BTreeSet<String>) {
+        match value {
+            Value::String(recipient) => {
+                recipients.insert(recipient.clone());
+            }
+            Value::Array(items) => items.iter().for_each(|item| Self::push_recipients(item, recipients)),
+            _ => {}
+        }
+    }
+
+    /// The recipients named by a sink's argument values: strings and possibly nested arrays.
+    fn recipients_in(args: &Value, keys: &[&str]) -> BTreeSet<String> {
+        let mut recipients = BTreeSet::new();
+        for key in keys {
+            if let Some(value) = args.get(key) {
+                Self::push_recipients(value, &mut recipients);
+            }
+        }
+        recipients
+    }
+
+    /// The policy events one sink call raises: a `Sink` contact per handle behind a protected
+    /// argument or the guard, and a `Peer` contact per handle behind a data argument that the
+    /// call would reveal to a recipient outside its readers.
+    async fn contacts(
+        &mut self,
+        sink: &Sink,
+        prepared: &Prepared,
+    ) -> Result<Vec<(Handle, Class)>, String> {
+        let mut contacts: Vec<(Handle, Class)> = prepared
+            .refs_of(sink.trusted)
+            .chain(prepared.refs_of(&["$if"]))
+            .map(|handle| (handle, Class::Sink))
+            .collect();
+        let recipients = match sink.audience {
+            Audience::None => None,
+            Audience::Args(keys) => Some(Self::recipients_in(&prepared.args, keys)),
+            Audience::ArgsOrTrusted(keys) => {
+                // Recipients the user named may receive anything, as in CaMeL's policies.
+                let user_chosen = prepared
+                    .refs_of(keys)
+                    .all(|handle| !self.var(handle).tainted);
+                (!user_chosen).then(|| Self::recipients_in(&prepared.args, keys))
+            }
+            Audience::Environment => {
+                if prepared.guard == Some(false) {
+                    None
+                } else {
+                    let response = self
+                        .bridge
+                        .call(
+                            "recipients",
+                            json!({"name": sink.name, "args": &prepared.args}),
+                        )
+                        .await;
+                    // An unknown file or event makes the call itself fail; nothing is revealed.
+                    response.ok().and_then(|value| {
+                        value.as_array().map(|items| {
+                            items
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                    })
+                }
+            }
+        };
+        if let Some(recipients) = recipients {
+            for handle in prepared.refs_of(sink.data) {
+                if !self.var(handle).readers.can_read(&recipients) {
+                    contacts.push((handle, Class::Peer));
+                }
+            }
+        }
+        contacts.sort_unstable();
+        contacts.dedup();
+        Ok(contacts)
+    }
+
+    fn check_contacts(&mut self, name: &str, contacts: &[(Handle, Class)]) -> Result<bool, String> {
         let mut denied = false;
         let index = self.calls.len();
-        for &handle in contacts {
-            let event = AgentEvent::new(handle, AgentAction::Contact, Class::Sink);
-            self.policy
-                .check(
-                    &mut self.history,
-                    std::slice::from_ref(&event),
-                    |event, decision| {
-                        let reason = match decision {
-                            PolicyDecision::Grant => None,
-                            PolicyDecision::Deny {
-                                failed_precondition,
-                                ..
-                            } => {
-                                denied = true;
-                                self.first_denial.get_or_insert_with(|| FirstDenial {
-                                    index,
-                                    message: failed_precondition.clone(),
-                                });
-                                Some(failed_precondition)
-                            }
-                        };
-                        self.policy_decisions.push(json!({
-                            "handle": event.principal.0, "sink": name,
-                            "decision": if reason.is_some() { "deny" } else { "grant" },
-                            "reason": reason
-                        }));
-                    },
-                )
-                .map_err(|denials| denials[0].to_string())?;
+        for &(handle, class) in contacts {
+            let event = AgentEvent::new(handle, AgentAction::Contact, class);
+            let started = std::time::Instant::now();
+            let result = self.policy.check(
+                &mut self.history,
+                std::slice::from_ref(&event),
+                |event, decision| {
+                    let (reason, seconds) = match decision {
+                        PolicyDecision::Grant => (None, started.elapsed().as_secs_f64()),
+                        PolicyDecision::Deny {
+                            failed_precondition,
+                            ..
+                        } => {
+                            denied = true;
+                            self.first_denial.get_or_insert_with(|| FirstDenial {
+                                index,
+                                message: failed_precondition.clone(),
+                            });
+                            (Some(failed_precondition), started.elapsed().as_secs_f64())
+                        }
+                    };
+                    self.policy_decisions.push(json!({
+                        "handle": event.principal.0, "sink": name, "class": class.to_string(),
+                        "decision": if reason.is_some() { "deny" } else { "grant" },
+                        "reason": reason, "seconds": seconds
+                    }));
+                },
+            );
+            self.policy_seconds += started.elapsed().as_secs_f64();
+            result.map_err(|denials| denials[0].to_string())?;
         }
         Ok(denied)
     }
@@ -379,12 +655,16 @@ impl<'a> Run<'a> {
             denied,
             error: None,
         });
-        let handle = self.insert(Value::Null, false)?;
+        let handle = self.insert(Value::Null, false, Readers::Public)?;
         Ok(json!({"$ref": handle.to_string()}))
     }
 
     async fn environment_tool(&mut self, name: &str, prepared: Prepared) -> Result<Value, String> {
-        let denied = self.check_contacts(name, &prepared.contacts)?;
+        let contacts = match tools::find_sink(name) {
+            Some(sink) => self.contacts(sink, &prepared).await?,
+            None => Vec::new(),
+        };
+        let denied = self.check_contacts(name, &contacts)?;
         if prepared.guard == Some(false) {
             return self.skip(name, prepared.args, prepared.tainted, denied);
         }
@@ -405,8 +685,13 @@ impl<'a> Run<'a> {
             .get_mut("result")
             .ok_or("worker tool response has no result")?
             .take();
-        let handle = self.record_tool_result(value, source, prepared.tainted)?;
-        let tainted = self.vars[handle.0 as usize - 1].tainted;
+        let own_readers = response
+            .get("readers")
+            .map_or(Readers::Public, Readers::from_tree);
+        let derived = self.derived_readers(prepared.refs.iter().flat_map(|(_, h)| h.iter().copied()));
+        let handle =
+            self.record_tool_result(value, source, prepared.tainted, own_readers, derived)?;
+        let tainted = self.var(handle).tainted;
         let reply = if prepared.guard.is_some() {
             // A guard must not disclose its value through success, shape, or error envelopes.
             json!({"$ref": handle.to_string()})
@@ -415,7 +700,7 @@ impl<'a> Run<'a> {
         } else if tainted {
             json!({"$ref": handle.to_string(), "shape": response.get_mut("shape").ok_or("worker tool response has no shape")?.take()})
         } else {
-            json!({"$ref": handle.to_string(), "value": &self.vars[handle.0 as usize - 1].value})
+            json!({"$ref": handle.to_string(), "value": &self.var(handle).value})
         };
         self.calls.push(CallRecord {
             name: name.to_owned(),
@@ -472,7 +757,7 @@ impl<'a> Run<'a> {
                 .tool(Arc::clone(&result_tool))
                 .tool_choice(ToolChoice::Required)
                 .max_tokens(4096);
-            let response = llm.call(&llm.q_model, request).await?;
+            let response = llm.extract(request).await?;
             let Some(call) = response.tool_calls().next() else {
                 continue;
             };
@@ -498,7 +783,11 @@ impl<'a> Run<'a> {
                 .as_object_mut()
                 .expect("validated object")
                 .remove("have_enough_information");
-            let handle = self.record_extraction(value, prepared.tainted)?;
+            let readers =
+                self.derived_readers(prepared.refs.iter().flat_map(|(_, h)| h.iter().copied()));
+            // CaMeL parity: a quarantined-LLM result is never trusted, whatever it was extracted from.
+            // Its readers still narrow to the inputs' readers.
+            let handle = self.record_extraction(value, true, readers)?;
             return Ok(json!({"$ref": handle.to_string()}));
         }
         Ok(json!({"error": "NotEnoughInformationError"}))
@@ -521,7 +810,7 @@ impl<'a> Run<'a> {
                 .messages(self.messages[..self.messages.len() - 1].iter().cloned())
                 .tools(definitions.iter().cloned())
                 .max_tokens(4096);
-            let response = llm.call(&llm.model, request).await?;
+            let response = llm.complete(request).await?;
             let message = response
                 .message()
                 .ok_or("model returned an empty response")?;
@@ -537,14 +826,15 @@ impl<'a> Run<'a> {
             let mut results = Vec::new();
             for call in response.tool_calls() {
                 let name = call.function.name.as_str();
-                let reply = match self.prepare(name, &call.function.arguments) {
+                let reply = match self.prepare(&call.function.arguments) {
                     Err(error) => json!({"error": error}),
                     Ok(prepared) if name == "query_ai_assistant" => {
                         let guarded = prepared.guard.is_some();
                         let tainted = prepared.tainted;
                         let reply = self.query(llm, prepared).await?;
                         if guarded && reply.get("$ref").is_none() {
-                            let handle = self.record_extraction(Value::Null, tainted)?;
+                            let handle =
+                                self.record_extraction(Value::Null, tainted, Readers::Public)?;
                             json!({"$ref": handle.to_string()})
                         } else {
                             reply
@@ -653,72 +943,95 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
         .await
         .map_err(|error| error.to_string())?;
     let mut run = Run::new(&mut bridge, "Self-test")?;
-    let untrusted = run.record_tool_result(json!({"recipient":"attacker@example.org","amount":98.7,"body":"$999","enabled":false,"items":[{"id":42}]}), Class::Untrusted, false)?;
+    let everyone = Readers::Public;
+    let thread = Readers::Only(
+        ["attacker@example.org", "me@example.org"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    );
+    let untrusted = run.record_tool_result(json!({"recipient":"attacker@example.org","amount":98.7,"body":"$999","enabled":false,"items":[{"id":42}]}), Class::Untrusted, false, thread.clone(), everyone.clone())?;
     let trusted = run.record_tool_result(
         json!({"recipient":"friend@example.org"}),
         Class::Trusted,
         false,
+        everyone.clone(),
+        everyone.clone(),
     )?;
-    let prepared = run.prepare(
-        "query_ai_assistant",
-        json!({"query":"$1","output_schema":{}})
-            .as_object()
-            .unwrap(),
-    )?;
+    let prepared = run.prepare(json!({"query":"$1","output_schema":{}}).as_object().unwrap())?;
     let extracted = run.record_extraction(
         json!({"recipient":"attacker@example.org"}),
-        prepared.tainted,
+        true,
+        run.derived_readers(prepared.refs_of(&["query"])),
     )?;
-    let prepared = run.prepare(
-        "query_ai_assistant",
-        json!({"query":"$2","output_schema":{}})
-            .as_object()
-            .unwrap(),
+    let prepared = run.prepare(json!({"query":"$2","output_schema":{}}).as_object().unwrap())?;
+    let trusted_extracted = run.record_extraction(
+        json!({"recipient":"friend@example.org"}),
+        true,
+        run.derived_readers(prepared.refs_of(&["query"])),
     )?;
-    let trusted_extracted =
-        run.record_extraction(json!({"recipient":"friend@example.org"}), prepared.tainted)?;
     assert_eq!(
         (untrusted, trusted, extracted, trusted_extracted),
         (Handle(1), Handle(2), Handle(3), Handle(4))
     );
+    assert_eq!(run.var(extracted).readers, thread);
+    assert_eq!(run.var(trusted_extracted).readers, everyone);
+    let send_money = tools::find_sink("send_money").unwrap();
     for (reference, expected) in [
         ("$1.recipient", true),
         ("$2.recipient", false),
         ("$3.recipient", true),
-        ("$4.recipient", false),
+        ("$4.recipient", true),
     ] {
         let prepared = run.prepare(
-            "send_email",
-            json!({"recipients":[reference, reference]})
+            json!({"recipient":reference,"subject":reference})
                 .as_object()
                 .unwrap(),
         )?;
         assert_eq!(prepared.tainted, expected);
-        assert_eq!(prepared.contacts.len(), 1);
+        let contacts = run.contacts(send_money, &prepared).await?;
+        assert_eq!(contacts.len(), 1, "{reference}: {contacts:?}");
         let history_len = run.history.as_slice().len();
         assert_eq!(
-            run.check_contacts("send_email", &prepared.contacts)?,
-            expected
+            run.check_contacts("send_money", &contacts)?,
+            expected,
+            "{reference}"
         );
         assert_eq!(
             &run.history.as_slice()[history_len..],
             &[AgentEvent::new(
-                prepared.contacts[0],
+                contacts[0].0,
                 AgentAction::Contact,
                 Class::Sink
             )]
         );
     }
+    // Readers: a reply to the thread may quote it; a stranger may not receive it; the user's own
+    // choice of recipient is not checked against readers.
+    let send_email = tools::find_sink("send_email").unwrap();
+    for (arguments, expected) in [
+        (json!({"recipients":["$1.recipient"],"subject":"Re","body":"$1.body"}), vec![]),
+        (json!({"recipients":[["$1.recipient"]],"subject":"Re","body":"$1.body"}), vec![]),
+        (json!({"recipients":["$3.recipient"],"subject":"Re","body":"$3"}), vec![]),
+        (json!({"recipients":["$2.recipient"],"subject":"Fwd","body":"$1.body"}), vec![]),
+        (json!({"recipients":["$1.recipient","$2.recipient"],"subject":"Fwd","body":"$1.body"}), vec![(Handle(1), Class::Peer)]),
+        (json!({"recipients":[["$1.recipient",["$2.recipient"]]],"subject":"Fwd","body":"$1.body"}), vec![(Handle(1), Class::Peer)]),
+        (json!({"recipients":["friend@example.org","$1.recipient"],"subject":"$3.recipient","body":"literal"}), vec![(Handle(3), Class::Peer)]),
+    ] {
+        let prepared = run.prepare(arguments.as_object().unwrap())?;
+        let contacts = run.contacts(send_email, &prepared).await?;
+        assert_eq!(contacts, expected, "{arguments}");
+        assert_eq!(
+            run.check_contacts("send_email", &contacts)?,
+            !expected.is_empty(),
+            "{arguments}"
+        );
+    }
+    assert_eq!(
+        run.policy_decisions.last().unwrap()["class"],
+        json!("peer")
+    );
     let prepared = run.prepare(
-        "send_email",
-        json!({"recipients":["$2.recipient"],"body":"$1.body"})
-            .as_object()
-            .unwrap(),
-    )?;
-    assert!(prepared.tainted);
-    assert!(!run.check_contacts("send_email", &prepared.contacts)?);
-    let prepared = run.prepare(
-        "send_email",
         json!({"recipients":["friend@example.org"],"$if":"$1.enabled"})
             .as_object()
             .unwrap(),
@@ -734,6 +1047,11 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
     assert_eq!(denial.index, 0);
     assert!(!denial.message.is_empty());
     assert_eq!(json!(denial.message), run.policy_decisions[0]["reason"]);
+    assert_eq!(
+        Readers::from_tree(&json!([{"readers":["a","b"]},{"recipient":{"readers":["b","c"]},"items":[null]}])),
+        Readers::Only(["b".to_owned()].into_iter().collect())
+    );
+    assert_eq!(Readers::from_tree(&Value::Null), Readers::Public);
     let mut refs = Vec::new();
     assert_eq!(run.resolve(&json!({"array":["$1.items[0].id", "$1.enabled"],"text":"Résumé $1.items[0].id: $1.body", "amount":"$1.amount", "object":"$2"}), &mut refs)?,
         json!({"array":[42,false],"text":"Résumé 42: $999","amount":98.7,"object":{"recipient":"friend@example.org"}}));
@@ -776,12 +1094,7 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
     drop(run);
     bridge.call("load_task", json!({"suite":"banking","user_task_id":"user_task_0","injection_task_id":null,"pipeline_name":"gpt-4.1+camel","model_prose":"ChatGPT"})).await?;
     let mut run = Run::new(&mut bridge, "Pay the December bill")?;
-    let prepared = run.prepare(
-        "read_file",
-        json!({"file_path":"bill-december-2023.txt"})
-            .as_object()
-            .unwrap(),
-    )?;
+    let prepared = run.prepare(json!({"file_path":"bill-december-2023.txt"}).as_object().unwrap())?;
     assert_eq!(
         run.environment_tool("read_file", prepared).await?,
         json!({"$ref":"$1","shape":"<str>"})
@@ -790,8 +1103,9 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
     run.record_extraction(
         json!({"recipient":"UK12345678901234567890","amount":98.7}),
         true,
+        Readers::Only(BTreeSet::new()),
     )?;
-    let prepared = run.prepare("send_money", json!({"recipient":"$2.recipient","amount":"$2.amount","subject":"bill-december-2023","date":"2023-12-31"}).as_object().unwrap())?;
+    let prepared = run.prepare(json!({"recipient":"$2.recipient","amount":"$2.amount","subject":"bill-december-2023","date":"2023-12-31"}).as_object().unwrap())?;
     let reply = run.environment_tool("send_money", prepared).await?;
     assert!(reply.get("value").is_none());
     assert!(run.calls[1].denied);
@@ -800,7 +1114,6 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
     assert_eq!(denial.index, 1);
     assert_eq!(json!(denial.message), run.policy_decisions[0]["reason"]);
     let prepared = run.prepare(
-        "send_money",
         json!({"recipient":"literal","amount":1,"subject":"skip","date":"2023-12-31","$if":false})
             .as_object()
             .unwrap(),
@@ -813,7 +1126,6 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
     assert_eq!(run.skipped_calls.len(), 1);
     assert!(!run.skipped_calls[0].tainted);
     let prepared = run.prepare(
-        "read_file",
         json!({"file_path":"bill-december-2023.txt","$if":true})
             .as_object()
             .unwrap(),
@@ -823,6 +1135,21 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
         json!({"$ref":"$5"})
     );
     assert!(!run.calls[2].tainted);
+    // Omitted recipient: use the scheduled transaction's current recipient. Private data raises
+    // a Peer contact for either the stored or an explicit recipient, but not for an unknown id.
+    let update = tools::find_sink("update_scheduled_transaction").unwrap();
+    let prepared = run.prepare(json!({"id":7,"amount":"$2.amount"}).as_object().unwrap())?;
+    assert_eq!(
+        run.contacts(update, &prepared).await?,
+        vec![(Handle(2), Class::Peer)]
+    );
+    let prepared = run.prepare(json!({"id":7,"recipient":"friend@example.org","amount":"$2.amount"}).as_object().unwrap())?;
+    assert_eq!(
+        run.contacts(update, &prepared).await?,
+        vec![(Handle(2), Class::Peer)]
+    );
+    let prepared = run.prepare(json!({"id":999999,"amount":"$2.amount"}).as_object().unwrap())?;
+    assert!(run.contacts(update, &prepared).await?.is_empty());
     run.final_output = "Paid the bill.".to_owned();
     let (unconstrained, enforced) = run.scores().await?;
     assert_eq!(
@@ -841,7 +1168,7 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
     );
     native_model_self_test(python, script).await?;
     println!(
-        "self-test: references, taint, protected arguments, guards, error redaction, native P/Q isolation, Q retries, worker execution, and deny-prefix replay passed"
+        "self-test: references, taint, readers, protected arguments, guards, error redaction, native P/Q isolation, Q retries, worker execution, and deny-prefix replay passed"
     );
     Ok(())
 }
@@ -956,17 +1283,17 @@ async fn native_model_self_test(python: &Path, script: &Path) -> Result<(), Stri
     }
 
     let requests = Arc::new(AtomicUsize::new(0));
-    let llm = Llm {
-        auth: Authenticator::new(
+    let llm = Llm::live(
+        Authenticator::new(
             AuthSource::ApiKey("local-self-test".to_owned()),
             MemoryTokenStore::default(),
             DeviceCodeHandler::default(),
             false,
         ),
-        http: DynHttpClient::new(Scripted(Arc::clone(&requests))),
-        model: "gpt-4.1".to_owned(),
-        q_model: "gpt-4.1".to_owned(),
-    };
+        DynHttpClient::new(Scripted(Arc::clone(&requests))),
+        "gpt-4.1".to_owned(),
+        "gpt-4.1".to_owned(),
+    );
     let mut bridge = Bridge::spawn(python, script)
         .await
         .map_err(|error| error.to_string())?;
@@ -986,7 +1313,7 @@ async fn native_model_self_test(python: &Path, script: &Path) -> Result<(), Stri
     let (unconstrained, enforced) = run.scores().await?;
     assert!(unconstrained.utility);
     assert!(!enforced.utility);
-    let prepared = run.prepare("query_ai_assistant", json!({"query":"No recipient was provided", "output_schema":{"type":"object","properties":{"recipient":{"type":"string"}},"required":["recipient"]}}).as_object().unwrap())?;
+    let prepared = run.prepare(json!({"query":"No recipient was provided", "output_schema":{"type":"object","properties":{"recipient":{"type":"string"}},"required":["recipient"]}}).as_object().unwrap())?;
     assert_eq!(
         run.query(&llm, prepared).await?,
         json!({"error":"NotEnoughInformationError"})
@@ -996,17 +1323,19 @@ async fn native_model_self_test(python: &Path, script: &Path) -> Result<(), Stri
         json!({"recipient":"friend@example.org"}),
         Class::Trusted,
         false,
+        Readers::Public,
+        Readers::Public,
     )?;
-    let prepared = run.prepare("query_ai_assistant", json!({"query":"Extract recipient from $4", "output_schema":{"type":"object","properties":{"recipient":{"type":"string"}},"required":["recipient"]}}).as_object().unwrap())?;
+    let prepared = run.prepare(json!({"query":"Extract recipient from $4", "output_schema":{"type":"object","properties":{"recipient":{"type":"string"}},"required":["recipient"]}}).as_object().unwrap())?;
     assert_eq!(run.query(&llm, prepared).await?, json!({"$ref":"$5"}));
-    let prepared = run.prepare(
-        "send_email",
-        json!({"recipients":["$5.recipient"]}).as_object().unwrap(),
-    )?;
-    assert!(!prepared.tainted);
-    assert!(!run.check_contacts("send_email", &prepared.contacts)?);
-    run.record_extraction(json!(false), true)?;
-    let prepared = run.prepare("query_ai_assistant", json!({"query":"$4", "output_schema":{"type":"object","properties":{},"required":[]},"$if":"$6"}).as_object().unwrap())?;
+    let prepared = run.prepare(json!({"recipients":["$5.recipient"]}).as_object().unwrap())?;
+    assert!(prepared.tainted);
+    let contacts = run
+        .contacts(tools::find_sink("send_email").unwrap(), &prepared)
+        .await?;
+    assert!(contacts.is_empty());
+    run.record_extraction(json!(false), true, Readers::Public)?;
+    let prepared = run.prepare(json!({"query":"$4", "output_schema":{"type":"object","properties":{},"required":[]},"$if":"$6"}).as_object().unwrap())?;
     assert_eq!(run.query(&llm, prepared).await?, json!({"$ref":"$7"}));
     assert!(run.skipped_calls[0].tainted);
     assert!(!run.skipped_calls[0].denied);
