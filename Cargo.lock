@@ -746,11 +746,13 @@ name = "history-analysis"
 version = "0.1.0"
 dependencies = [
  "hashbrown",
+ "history-analysis",
  "history-semantics",
  "history-store",
  "history-syntax",
  "junco-core",
  "smallvec",
+ "vstd",
 ]
 
 [[package]]

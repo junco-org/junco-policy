@@ -186,6 +186,37 @@ fn simulation_compares_counting_tails_factor_by_factor() {
 }
 
 #[test]
+fn simulation_compares_nested_tests() {
+    // After a read, the narrow tail keeps every later event off reads and stages of `r`, the
+    // broad one off reads of `r`. The narrow keep test's disjunct `A ≠ read ∧ A ≠ stage` lies below
+    // the broad one's disjunct `A ≠ read` by a conjunct, so the initial residual is dead.
+    let since = |keep: TestExpr<Access>| {
+        RegexExpr::concat([
+            RegexExpr::all(),
+            RegexExpr::test(action_is(Comparison::Eq, Action::Read)),
+            RegexExpr::star(RegexExpr::test(keep)),
+        ])
+    };
+    let narrow = since(TestExpr::or([
+        resource_is(Comparison::Neq, None),
+        TestExpr::and([
+            action_is(Comparison::Neq, Action::Read),
+            action_is(Comparison::Neq, Action::Stage),
+        ]),
+    ]));
+    let broad = since(TestExpr::or([
+        resource_is(Comparison::Neq, None),
+        action_is(Comparison::Neq, Action::Read),
+    ]));
+    let mut analyzer = PolicyAnalyzer::new(finite_actions());
+    assert_eq!(
+        analyzer.tail_included(&head(), &narrow, &broad).unwrap(),
+        Inclusion::Holds
+    );
+    assert!(!included(&broad, &narrow));
+}
+
+#[test]
 fn register_comparisons_split_on_the_constants_they_meet() {
     // Under κ_R = x, `R ≐ κ_R` is `R ≐ x`; otherwise it is `R ≐ κ_R ∧ R ≠ x`.
     let own = ever(resource_is(Comparison::Eq, None));

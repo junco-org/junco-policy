@@ -639,7 +639,8 @@ impl<E: Event> Store<E> {
                 let ghost initial = books_maps(*books);
                 let ghost initial_registry = books.components.registry@;
                 let result = {
-                    let mut encoder = BorrowedEncoder { books: &mut books.components, numeric_store };
+                    let mut encoder = BorrowedEncoder { books: &mut books.components, numeric_store,
+                        #[cfg(verus_keep_ghost)] calls: Ghost(0nat) };
                     encoder.encode_event(event)
                 };
                 let ghost maps = books_maps(*books);
@@ -705,7 +706,8 @@ impl<E: Event> Store<E> {
                 let ghost initial_registry = books.components.registry@;
                 proof { if native_obligations::<E>() { lemma_component_maps_wf(books.components); } }
                 let result = {
-                    let mut encoder = BorrowedEncoder { books: &mut books.components, numeric_store };
+                    let mut encoder = BorrowedEncoder { books: &mut books.components, numeric_store,
+                        #[cfg(verus_keep_ghost)] calls: Ghost(0nat) };
                     lower_flat(source, &mut encoder, limits, world)
                 };
                 let ghost maps = books_maps(*books);
@@ -727,6 +729,8 @@ impl<E: Event> Store<E> {
 pub(crate) struct BorrowedEncoder<'a, E: Event> {
     pub(crate) books: &'a mut ComponentBooks<E>,
     pub(crate) numeric_store: &'a HistoryStore,
+    #[cfg(verus_keep_ghost)]
+    pub(crate) calls: Ghost<nat>,
 }
 
 impl<'a, E: Event> FlatEncoder<ComponentValue<E>> for BorrowedEncoder<'a, E> {
@@ -735,6 +739,7 @@ impl<'a, E: Event> FlatEncoder<ComponentValue<E>> for BorrowedEncoder<'a, E> {
     }
     open spec fn domain() -> junco_core::verify::encoding::Domain<ComponentValue<E>> { domain::<E>() }
     open(crate) spec fn maps(&self) -> ComponentMaps<E> { component_maps(*self.books) }
+    open(crate) spec fn encoding_calls(&self) -> nat { self.calls@ }
     open(crate) spec fn state_wf(&self) -> bool {
         component_receipts_wf(*self.books)
             && *self.numeric_store == *crate::store::verify::singleton_store()
@@ -758,6 +763,7 @@ impl<'a, E: Event> FlatEncoder<ComponentValue<E>> for BorrowedEncoder<'a, E> {
             junco_core::verify::history_specs::no_internal_error(result),
             domain::<E>()(field, *value) ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
     {
+        proof { self.calls = Ghost(self.calls@ + 1); }
         let ghost initial_wf = components_wf(*self.books);
         let ghost initial_books = *self.books;
         validate_component(field, value)?;
@@ -1078,6 +1084,24 @@ pub mod verify {
     pub open(super) spec fn native_obligations<E: Event>() -> bool {
         E::obeys_projection_spec() && map::key_obligations::<E::Principal>()
             && map::key_obligations::<E::Action>() && map::key_obligations::<E::Resource>()
+    }
+
+    /// `eq_spec` is an equivalence on `T`: the reflexivity, symmetry and transitivity clauses of
+    /// the key obligations, exported for typed guarantees outside this crate.
+    pub open spec fn eq_equivalence<T: PartialEq>() -> bool {
+        &&& forall|a: T| #[trigger] a.eq_spec(&a)
+        &&& forall|a: T, b: T| #[trigger] a.eq_spec(&b) == b.eq_spec(&a)
+        &&& forall|a: T, b: T, c: T| #[trigger] a.eq_spec(&b) && #[trigger] b.eq_spec(&c) ==> a.eq_spec(&c)
+    }
+
+    /// The native obligations make component equality an equivalence.
+    pub proof fn lemma_native_obligations_eq_equivalence<E: Event>()
+        requires native_obligations::<E>(),
+        ensures
+            eq_equivalence::<E::Principal>(),
+            eq_equivalence::<E::Action>(),
+            eq_equivalence::<E::Resource>(),
+    {
     }
 
     pub open spec fn empty_maps<E: Event>() -> ComponentMaps<E> {
@@ -1515,6 +1539,8 @@ mod tests {
             let mut encoder = BorrowedEncoder {
                 books: &mut books.components,
                 numeric_store: &store.numeric_store,
+                #[cfg(verus_keep_ghost)]
+                calls: Ghost(0nat),
             };
             let value = Key {
                 identity: 8,

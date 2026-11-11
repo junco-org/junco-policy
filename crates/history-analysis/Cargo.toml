@@ -6,13 +6,26 @@ rust-version = "1.98.1"
 license = "MIT OR Apache-2.0"
 publish = false
 
+[package.metadata.verus]
+verify = true
+
+[features]
+default = []
+runtime = ["junco-core/runtime", "history-semantics/runtime"]
+std = ["junco-core/std", "history-semantics/std", "history-syntax/std", "vstd/std"]
+
 [dependencies]
 history-syntax = { path = "../history-syntax", default-features = false }
-junco-core = { path = "../junco-core", default-features = false, features = ["runtime"] }
-history-semantics = { path = "../history-semantics", default-features = false, features = ["runtime"] }
+junco-core = { path = "../junco-core", default-features = false }
+history-semantics = { path = "../history-semantics", default-features = false }
 hashbrown = { version = "0.17", default-features = false, features = ["default-hasher"] }
 smallvec = { version = "=1.16.2", default-features = false }
+vstd = { version = "=0.0.0-2026-10-04-0306", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 history-semantics = { path = "../history-semantics", default-features = false, features = ["runtime", "std"] }
 history-store = { path = "../history-store", default-features = false, features = ["runtime", "std"] }
+history-analysis = { path = ".", default-features = false, features = ["runtime"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }
