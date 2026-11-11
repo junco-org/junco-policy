@@ -7,8 +7,8 @@
 //! exact SmallVec sequence operations; concrete successor-cache wrappers
 //! (including their opaque default hasher type); the exact native Iterator::position
 //! selector for retained cursor keys (the pinned vstd lacks its specification);
-//! sort_unstable, dedup, strictly-sorted binary_search, rotate_right.
-//! Primitive checked shifts use exact bit-vector results and reject oversized shifts.
+//! sort_unstable, dedup and strictly-sorted binary_search, each requiring vstd's
+//! `obeys_cmp`/`obeys_eq` laws (a total order, an equivalence) of the element type.
 //!
 //! Reservations preserve logical contents on success and failure. Cache contracts
 //! permit eviction, never a fabricated entry. Event coordinates and bindings are
@@ -40,6 +40,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::{alloc::Allocator, ops::Deref};
 use smallvec::SmallVec;
+use vstd::laws_cmp::obeys_cmp;
+use vstd::laws_eq::obeys_eq;
 use vstd::prelude::*;
 use vstd::std_specs::cmp::{OrdSpec, PartialEqSpec};
 
@@ -149,8 +151,9 @@ pub open spec fn strictly_sorted<T: Ord>(s: Seq<T>) -> bool {
     forall|i: int, j: int| 0 <= i < j < s.len() ==> s[i].cmp_spec(&s[j]) is Less
 }
 
+// Rust's `Ord` contract: a total order; without one, `sort_unstable` may panic.
 pub assume_specification<T: Ord>[ <[T]>::sort_unstable ](s: &mut [T])
-    requires T::obeys_cmp_spec(),
+    requires obeys_cmp::<T>(),
     ensures
         final(s)@.to_multiset() == old(s)@.to_multiset(),
         forall|i: int, j: int| 0 <= i < j < final(s)@.len()
@@ -168,21 +171,18 @@ pub open spec fn dedup_spec<T: PartialEq>(s: Seq<T>) -> Seq<T>
     }
 }
 
+// std compares each element with the last one kept; for an equivalence that is the
+// same as comparing neighbours, which `dedup_spec` does.
 pub assume_specification<T: PartialEq, A: Allocator>[ Vec::<T, A>::dedup ](v: &mut Vec<T, A>)
-    requires T::obeys_eq_spec(),
+    requires obeys_eq::<T>(),
     ensures final(v)@ == dedup_spec(old(v)@);
 
 pub assume_specification<T: Ord>[ <[T]>::binary_search ](s: &[T], value: &T)
     -> (r: Result<usize, usize>)
-    requires T::obeys_cmp_spec(), strictly_sorted(s@),
+    requires obeys_cmp::<T>(), strictly_sorted(s@),
     ensures
         r matches Ok(i) ==> i < s@.len() && s@[i as int].cmp_spec(value) is Equal,
         r is Err ==> forall|i: int| 0 <= i < s@.len() ==> !(s@[i].cmp_spec(value) is Equal);
-
-pub assume_specification<T>[ <[T]>::rotate_right ](s: &mut [T], k: usize)
-    requires k <= old(s)@.len(),
-    ensures final(s)@ == old(s)@.subrange(old(s)@.len() - k, old(s)@.len() as int)
-        + old(s)@.subrange(0, old(s)@.len() - k);
 
 // Used by kernel slice comparisons; pinned vstd specifies cloned, not copied.
 pub assume_specification<'a, T: Copy>[ Option::<&'a T>::copied ](v: Option<&'a T>)
@@ -211,13 +211,6 @@ pub trait KernelStoreSpec {
     #[verifier::prophetic]
     spec fn restoration(&self) -> (Graph, bool);
 }
-
-// The pinned vstd release does not specify this primitive integer method.
-pub assume_specification[ u64::checked_shr ](value: u64, shift: u32) -> (r: Option<u64>)
-    ensures r == if shift < 64 { Some(value >> shift) } else { None };
-
-pub assume_specification[ u64::checked_shl ](value: u64, shift: u32) -> (r: Option<u64>)
-    ensures r == if shift < 64 { Some(value << shift) } else { None };
 
 // Moving an owned key out of an indexed vector does not clone or allocate.
 pub assume_specification<T>[ core::mem::replace ](destination: &mut T, replacement: T) -> (previous: T)

@@ -17,6 +17,7 @@ use crate::verify::history_algebra as algebra;
 #[cfg(verus_keep_ghost)]
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use junco_core::bits::checked_shr;
 use junco_core::error::HistoryError;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
@@ -841,7 +842,7 @@ impl AtomTruth for AtomSet {
                 Some(v) => *v,
                 None => return Err(HistoryError::invalid_truth_assignment()),
             };
-            let high = match last.checked_shr(shift) {
+            let high = match checked_shr(last, shift) {
                 Some(v) => v,
                 None => return Err(HistoryError::invalid_truth_assignment()),
             };
@@ -902,6 +903,7 @@ impl AtomTruth for AtomSet {
                     assert(this@.contains(id));
                 }
             }
+            proof! { junco_core::kernel::TestId::lemma_obeys_cmp(); }
             return match this.ids().binary_search(&id) {
                 Ok(index) => Ok(index),
                 Err(_) => Err(HistoryError::missing_transition_atom()),
@@ -961,7 +963,7 @@ impl AtomTruth for AtomSet {
             Some(v) => *v,
             None => return Err(HistoryError::invalid_truth_assignment()),
         };
-        let shifted = match value.checked_shr(shift) {
+        let shifted = match checked_shr(value, shift) {
             Some(v) => v,
             None => return Err(HistoryError::invalid_truth_assignment()),
         };

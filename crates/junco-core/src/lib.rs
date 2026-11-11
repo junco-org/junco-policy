@@ -8,6 +8,7 @@ extern crate alloc;
 #[cfg(any(feature = "std", test, feature = "test-util"))]
 extern crate std;
 
+pub mod bits;
 pub mod compile;
 pub mod error;
 pub mod event;

@@ -1,0 +1,29 @@
+[package]
+name = "junco-spec-check"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.98.1"
+
+# A separate workspace: verus-spec-check replaces `verus_builtin_macros` and pins its own vstd,
+# neither of which may reach the verified crates. `scripts/spec-check.sh` fetches the
+# verus-spec-check release into `vendor/` and runs `cargo test` here.
+[workspace]
+# The fetched release is its own workspace; its crates must not join this one.
+exclude = ["vendor"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The verus-spec-check release paired with the pinned Verus binary 0.2026.10.04.426d8b0,
+# and the vstd it is built against.
+vstd = "=0.0.0-2026-09-20-0158"
+verus_spec_check = { path = "vendor/verus-spec-check/source/verus_spec_check" }
+verus_spec_check_vstd_ext = { path = "vendor/verus-spec-check/source/vstd_ext" }
+verus_builtin_macros = { version = "=0.0.0-2026-09-20-0158", features = ["contrib-hooks"] }
+# The version the verified crates use.
+smallvec = { version = "=1.16.2", default-features = false }
+
+[patch.crates-io]
+verus_builtin_macros = { path = "vendor/verus-spec-check/source/builtin_macros_overlay" }

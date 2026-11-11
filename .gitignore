@@ -7,5 +7,7 @@
 /fuzz/corpus/
 /fuzz/artifacts/
 /fuzz/coverage/
+/spec-check/target/
+/spec-check/vendor/
 /traces/
 /benches/agentdojo/runs/
