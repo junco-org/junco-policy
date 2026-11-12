@@ -1,7 +1,7 @@
 use std::fmt::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use history_semantics::PolicyDecision;
 use history_store::{History, Store};
@@ -160,6 +160,7 @@ pub struct Run<'a> {
     pub calls: Vec<CallRecord>,
     pub skipped_calls: Vec<CallRecord>,
     pub policy_decisions: Vec<Value>,
+    pub policy_seconds: f64,
     pub first_denial: Option<FirstDenial>,
     pub final_output: String,
 }
@@ -181,6 +182,7 @@ impl<'a> Run<'a> {
             calls: Vec::new(),
             skipped_calls: Vec::new(),
             policy_decisions: Vec::new(),
+            policy_seconds: 0.0,
             first_denial: None,
             final_output: String::new(),
         })
@@ -333,8 +335,9 @@ impl<'a> Run<'a> {
         let mut denied = false;
         let index = self.calls.len();
         for &handle in contacts {
+            let started = Instant::now();
             let event = AgentEvent::new(handle, AgentAction::Contact, Class::Sink);
-            self.policy
+            let result = self.policy
                 .check(
                     &mut self.history,
                     std::slice::from_ref(&event),
@@ -359,8 +362,9 @@ impl<'a> Run<'a> {
                             "reason": reason
                         }));
                     },
-                )
-                .map_err(|denials| denials[0].to_string())?;
+                );
+            self.policy_seconds += started.elapsed().as_secs_f64();
+            result.map_err(|denials| denials[0].to_string())?;
         }
         Ok(denied)
     }
