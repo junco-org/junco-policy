@@ -1,6 +1,6 @@
 //! Layer 6: the implementation as the abstract objects of layers 2–4.
 //!
-//! Views of `history-analysis` internals (planned; that crate is not Verus-checked) and of the
+//! Views of `history-analysis` internals (verified against them in `history-analysis/src/verify/`) and of the
 //! verified runtime (`history-semantics`): interned constants and constraints, letters, items as
 //! graph ids, and the reconstruction of counterexamples.
 use super::analyzer::*;

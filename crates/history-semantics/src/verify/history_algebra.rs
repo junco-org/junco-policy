@@ -132,7 +132,7 @@ pub proof fn lemma_symbolic_derivative_interp<L>(sem: spec_fn(L, EventView) -> b
     }
 }
 
-/// Paper, Theorem (Symbolic derivative correctness), modulo language rather than Norm.
+/// Paper, Lemma One-step correctness (`lem:sderiv`), modulo language rather than normalization.
 pub proof fn theorem_symbolic_derivative_correct<L>(sem: spec_fn(L, EventView) -> bool, e: EventView, r: Regex<L>, w: Seq<EventView>)
     ensures language::lang(sem, language::interp_transition(sem, e, symbolic_derivative(r)), w) == language::lang(sem, r, seq![e] + w),
 {
@@ -158,7 +158,8 @@ pub proof fn lemma_symbolic_run_is_derive_word<L>(sem: spec_fn(L, EventView) -> 
     }
 }
 
-/// Paper, Theorem (Matcher correctness), steps 2–3.
+/// Paper, Theorem Symbolic derivative correctness (`thm:sderiv`), modulo language rather than
+/// normalization.
 pub proof fn theorem_matcher_correct<L>(sem: spec_fn(L, EventView) -> bool, u: Seq<EventView>, r: Regex<L>)
     ensures language::nullable(symbolic_run(sem, u, r)) == language::lang(sem, r, u),
 {
@@ -166,7 +167,8 @@ pub proof fn theorem_matcher_correct<L>(sem: spec_fn(L, EventView) -> bool, u: S
     language::lemma_derive_word_nullable(sem, u, r);
 }
 
-/// A fired rule uses its unique complete head substitution.
+/// Paper, Theorem Matcher correctness (`thm:matcher`), steps 2–3: a fired rule uses its unique
+/// complete head substitution.
 pub proof fn theorem_rule_decision(head: Head, tail: Regex<SrcTest>, request: EventView, history: Seq<EventView>, theta: Subst)
     requires language::head_match(head, request, theta),
     ensures language::pair_lang(head, tail, request, history) == language::nullable(symbolic_run(src_sem(theta), history, tail)),
@@ -175,7 +177,7 @@ pub proof fn theorem_rule_decision(head: Head, tail: Regex<SrcTest>, request: Ev
     theorem_matcher_correct(src_sem(theta), history, tail);
 }
 
-/// Paper, step 1: without a complete matching substitution the rule is not fired.
+/// Paper, Theorem Matcher correctness (`thm:matcher`), step 1: without a complete matching substitution the rule is not fired.
 pub proof fn theorem_not_fired(head: Head, tail: Regex<SrcTest>, request: EventView, history: Seq<EventView>)
     requires forall|theta: Subst| !(language::head_match(head, request, theta)),
     ensures !language::pair_lang(head, tail, request, history),
@@ -1485,7 +1487,7 @@ pub proof fn lemma_similar_preserves_lang(theta: Subst, d: Sim, w: Seq<EventView
     }
 }
 
-/// Paper, Lemma (Similarity preserves language).
+/// Paper, Proposition Similarity preserves language (`lem:similarity-language`).
 pub proof fn theorem_similarity_preserves_language(r: Regex<SrcTest>, s: Regex<SrcTest>, theta: Subst, w: Seq<EventView>)
     requires similar(r, s),
     ensures language::lang(src_sem(theta), r, w) == language::lang(src_sem(theta), s, w),

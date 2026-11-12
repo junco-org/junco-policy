@@ -1,4 +1,4 @@
-//! Layer 4: pruning (`inclusion.tex:281-330`, `appendix.tex:525-665`).
+//! Layer 4: pruning (`sec:antichains`, appendix `app:antichains`).
 //!
 //! The search may discard an item at insertion when `search::may_discard` holds. This layer
 //! states that the implemented checks (dead items, domination up to a sound simulation) imply it.
@@ -24,7 +24,7 @@ pub open spec fn test_le_sem(x: model::Test, y: model::Test) -> bool {
     forall|theta: Subst, e: EventView| language::event_wf(theta) && #[trigger] model::test_holds(theta, x, e) ==> model::test_holds(theta, y, e)
 }
 
-/// `≤` is sound (`appendix.tex:544-546`).
+/// `≤` is sound (Lemma Simulation soundness and decidability, `lem:simulation`).
 pub open spec fn sim_sound(le: spec_fn(Regex<model::Test>, Regex<model::Test>) -> bool) -> bool {
     forall|x: Regex<model::Test>, y: Regex<model::Test>| #[trigger] le(x, y) ==> lang_le(x, y)
 }
@@ -42,7 +42,7 @@ pub open spec fn union_ops(q: Regex<model::Test>) -> Seq<Regex<model::Test>> {
     match q { Regex::Union(cs) => cs, _ => seq![q] }
 }
 
-/// `dec(q) = (P, N)` (Definition B.2, `appendix.tex:528-541`).
+/// `dec(q) = (P, N)` (Definition Decomposition, `def:decomposition`).
 pub open spec fn required(q: Regex<model::Test>, p: Regex<model::Test>) -> bool {
     inter_ops(q).contains(p) && !(p is Not)
 }
@@ -58,20 +58,20 @@ pub open spec fn stmt_decomposition() -> bool {
         && (forall|n: Regex<model::Test>| #[trigger] excluded(q, n) ==> !n_lang(theta, n, w)))
 }
 
-/// Dead test (Definition B.3, `appendix.tex:547-551`).
+/// Dead test (Definition Pruning checks, `def:pruning`).
 pub open spec fn dead(le: spec_fn(Regex<model::Test>, Regex<model::Test>) -> bool, q: Regex<model::Test>) -> bool {
     exists|p: Regex<model::Test>| #[trigger] required(q, p) && forall|v: Regex<model::Test>| #[trigger] union_ops(p).contains(v)
         ==> exists|n: Regex<model::Test>| #[trigger] excluded(q, n) && le(v, n)
 }
 
-/// Domination `J ⊑ I` (Definition B.3, `appendix.tex:552-557`).
+/// Domination `J ⊑ I` (Definition Pruning checks, `def:pruning`).
 pub open spec fn dominated(d: NDomains, le: spec_fn(Regex<model::Test>, Regex<model::Test>) -> bool, j: Item, i: Item) -> bool {
     &&& entails(d, j.constraint, i.constraint)
     &&& forall|p: Regex<model::Test>| #[trigger] required(i.state, p) ==> required(j.state, p)
     &&& forall|n: Regex<model::Test>| #[trigger] excluded(i.state, n) ==> exists|n2: Regex<model::Test>| #[trigger] excluded(j.state, n2) && le(n, n2)
 }
 
-/// Lemma B.4 (pruning soundness): a dead item has no witnesses, and `J ⊑ I` gives `W(J) ⊆ W(I)`.
+/// Lemma Pruning soundness (`lem:prune`): a dead item has no witnesses, and `J ⊑ I` gives `W(J) ⊆ W(I)`.
 pub open spec fn stmt_prune_sound() -> bool {
     forall|d: NDomains, le: spec_fn(Regex<model::Test>, Regex<model::Test>) -> bool, j: Item, i: Item|
         #[trigger] sim_sound(le) ==> {
@@ -123,7 +123,7 @@ pub open spec fn test_step(tle: spec_fn(model::Test, model::Test) -> bool, x: mo
     ||| (y matches model::Test::Or(cs) && exists|i: int| 0 <= i < cs.len() && #[trigger] tle(x, cs[i]))
 }
 
-/// Lemma B.6 (simulation soundness), rule by rule: each rule applied to sound premises gives a
+/// Lemma Simulation soundness (`lem:simulation`), rule by rule: each rule applied to sound premises gives a
 /// sound conclusion; by induction on derivations the least relation closed under the rules,
 /// and any relation the memoized recursion computes inside it, is sound.
 pub open spec fn stmt_sim_rules_sound() -> bool {
@@ -255,7 +255,7 @@ pub proof fn theorem_decomposition()
     }
 }
 
-/// Lemma B.4 for one pair of items.
+/// Lemma `lem:prune` for one pair of items.
 pub proof fn lemma_prune_sound(d: NDomains, le: spec_fn(Regex<model::Test>, Regex<model::Test>) -> bool, j: Item, i: Item)
     requires sim_sound(le),
     ensures

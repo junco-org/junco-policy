@@ -1,8 +1,11 @@
 //! Top layer: what the analyzer's verdicts mean (`history-analysis/src/analyzer.rs`), against
 //! the typed semantics of `semantics`.
 //!
-//! `history-analysis` is not Verus-checked. This module fixes the *view* of its state and results
-//! and the predicate each query's result must satisfy; the planned exec postconditions are
+//! `history-analysis` is Verus-checked. This module fixes the *view* of its state and results
+//! and the predicate each query's result must satisfy. `PolicyAnalyzer::tail_included` is the
+//! executable query and is verified to ensure `tail_included_ok`; the other predicates specify
+//! policy-level questions that `semantics` and `inclusion` reduce to tail inclusions, but have no
+//! executable entry point. The postconditions are
 //!
 //! ```text
 //! covered(&self, rule, by)            ensures r matches Ok(v) ==> covered_ok(self@, rule@, by@, v.inclusion@)
@@ -15,12 +18,13 @@
 //!                                         && id@ == old(self)@.rules.len() && semantics::rule_wf(rule@)
 //! ```
 //!
-//! `Exhausted` (a search limit or the graph budget) and `Err` carry no claim; they are explicit,
-//! never a silent `Holds`. Termination of every query is part of verifying the exec code (loops
-//! with `decreases`); it holds without the finiteness hypothesis because the graph budget bounds
-//! the states a search can create. That the verdict is *not* `Exhausted` for large enough limits
-//! needs finitely many reachable items (`search::stmt_search_terminates`), which is OPEN for the
-//! implementation (see `finiteness`).
+//! `Exhausted` (the graph budget) and `Err` carry no claim; they are explicit, never a silent
+//! `Holds`. Termination of every query is part of verifying the exec code (loops with
+//! `decreases`). Finitely many reachable items, the hypothesis of
+//! `search::stmt_search_terminates`, is established for the executed search
+//! (`theorem_retained_search_bounded` and `lemma_running_outcome` in
+//! `history-analysis/src/verify/search_exec.rs`), so every search trace is bounded independently
+//! of the budget.
 use super::semantics::*;
 use history_store::typed::verify::eq_equivalence;
 use history_syntax::verify::dsl::{HeadView, RegexView, RuleView};
@@ -143,7 +147,7 @@ pub open spec fn shortest<P: PartialEq, A: PartialEq, R: PartialEq>(
 }
 
 /// No failing pair has a shorter history among candidates with the profile of `c`
-/// (minimum length per inclusion query, `inclusion.tex:97-100`).
+/// (minimum length per inclusion query, Theorem Inclusion search correctness `thm:search`).
 pub open spec fn shortest_in_case<P: PartialEq, A: PartialEq, R: PartialEq>(
     a: AnalyzerView<P, A, R>, c: TEvent<P, A, R>, n: nat, fails: spec_fn(TEvent<P, A, R>, Seq<TEvent<P, A, R>>) -> bool,
 ) -> bool {

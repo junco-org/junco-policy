@@ -524,7 +524,7 @@ fn register_classes(constraint: &Constraint) -> [Class; COMPONENTS] {
     ]
 }
 
-/// `Steps(Γ, A)`, grouped by refined constraint.
+/// The successor cases `succ(Γ, A)` (`def:successors`), grouped by refined constraint.
 #[verus_verify]
 #[verus_spec(result => requires atoms_wf(atoms@), constraint_wf(*constraint),
     inclusion::satisfiable(ndomains(*universes), implementation::constraint_of(constraint@)),

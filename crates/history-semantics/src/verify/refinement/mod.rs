@@ -1,8 +1,8 @@
 //! Specification hierarchy for the correctness of policy-refinement analysis.
 //!
-//! Spec only: definitions and theorem *statements* (`stmt_*` spec functions returning the
-//! proposition). Nothing here is proved yet and nothing here is assumed; see
-//! `/tmp/verus-work/SPEC.md` for the top-down presentation and the paper mapping.
+//! Each layer holds definitions, the theorem statements (`stmt_*` spec functions returning the
+//! proposition), and their proofs (`theorem_*`, each with `ensures stmt_*(...)`). Every `stmt_*`
+//! is proved. The mapping to the paper's results is in `VERIFY.md` at the repository root.
 //!
 //! Layers, top-down:
 //! - [`analyzer`]: what each analyzer query's verdict means, against [`semantics`].

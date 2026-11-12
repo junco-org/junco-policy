@@ -16061,7 +16061,7 @@ pub mod verify {
         }
 
     verus! {
-    // ----- Structural contract of the normalizer (paper appendix, (N0)–(N5)) -----
+    // ----- Structural contract of the normalizer ((N0)–(N5) of `verify::finite_states::Model::contract`) -----
 
     /// Interning: in a well-formed graph, a regex kind determines its id. In particular a union,
     /// intersection, or list state is determined by its operands, and a complement by its body.

@@ -1,4 +1,5 @@
-//! Layer 5: finitely many states (Lemma 4.2, `regex.tex:129-137`, `appendix.tex:90-425`), and
+//! Layer 5: finitely many states (Lemma Finitely many residuals, `lem:finite-states`;
+//! appendix `app:normalization`), and
 //! finitely many items, which makes termination of the search (`search::stmt_search_terminates`)
 //! unconditional.
 //!
@@ -8,7 +9,7 @@
 //! the lift injective, and graph extension preserves it (`model::lemma_lift_stable_under_extends`),
 //! so identity of ids in the search's visited set is identity of abstract states.
 //!
-//! STATUS (after the finiteness fix `normalize.rs:2765`, `SPEC.md` §9.16): every statement of
+//! STATUS: every statement of
 //! this module is proved (`theorem_lift_injective`, `theorem_reachable_states_finite`,
 //! `theorem_items_from_states`). The implementation's model is `verify::finite_impl::m_impl`
 //! (hereditary normal forms; `nset` relational and `lit`/`prod`/`succ` the largest relations
@@ -23,7 +24,8 @@
 //! `lemma_impl_successor_abstracts` / `lemma_impl_step_same` (guard cache) turn these into
 //! `step_abstracts(m_impl(), ..)`; compiled tails are normal forms (`CompiledPair::compile`,
 //! `theorem_impl_instantiation`). The remaining link, `cases_follow(m_impl, ·)` for the
-//! analyzer's `cases_of`, belongs to the implementation-link layer.
+//! analyzer's `cases_of`, is the invariant `archive_follows` of the executed search
+//! (`history-analysis/src/verify/search_exec.rs`).
 use super::encoding::*;
 use super::inclusion::*;
 use super::search::*;
@@ -59,7 +61,7 @@ pub open spec fn step_abstracts(m: Model<Regex<model::Test>>, before: model::Gra
 /// The instantiation obligation: a model whose states include the lifted normalized
 /// tails, whose successor relation covers every implemented step, and which satisfies the
 /// contract. With it, `theorem_finite_reachable` bounds the implementation's reachable states.
-/// Its definition is the frozen plan of `SPEC.md` §5 (states: hereditary normal form of lifted
+/// Its definition fixes the instantiation (states: hereditary normal form of lifted
 /// trees; `nset` relational; `lit`/`prod`/`succ` the largest relations allowed by (S0)–(S6)).
 pub open spec fn instantiation_ok(m: Model<Regex<model::Test>>, states_of_tails: spec_fn(Regex<model::Test>) -> bool) -> bool {
     &&& m.contract()
@@ -98,7 +100,7 @@ pub open spec fn states_within(cases_of: spec_fn(Item) -> Set<Case>, start: Item
     forall|n: nat, j: Item| #[trigger] reachable_item(cases_of, start, n, j) ==> f.contains(j.state)
 }
 
-/// Finitely many states give finitely many items (`appendix.tex:680-689`).
+/// Finitely many states give finitely many items (proof of Theorem Inclusion search correctness, `thm:search`).
 pub open spec fn stmt_items_from_states() -> bool {
     forall|d: NDomains, cases_of: spec_fn(Item) -> Set<Case>, atoms_of: spec_fn(Regex<model::Test>) -> Set<model::Primitive>,
         start: Item, f: Set<Regex<model::Test>>|
@@ -483,7 +485,7 @@ pub proof fn lemma_cases_follow_states(m: Model<Regex<model::Test>>, cases_of: s
 }
 
 /// A bound on the items of every search whose cases follow a model satisfying the contract: the
-/// items over the states reachable in the model (Lemma 4.4). It is fixed by the model, the start
+/// items over the states reachable in the model (Lemma Finitely many residuals, `lem:finite-states`, lifted to items). It is fixed by the model, the start
 /// item and the domains alone, before any case is computed.
 pub proof fn lemma_model_items_bound(m: Model<Regex<model::Test>>, d: NDomains,
     atoms_of: spec_fn(Regex<model::Test>) -> Set<model::Primitive>, start: Item) -> (items: Set<Item>)
@@ -506,8 +508,8 @@ pub proof fn lemma_model_items_bound(m: Model<Regex<model::Test>>, d: NDomains,
     items
 }
 
-/// Finitely many items for any search over a model satisfying the contract (Lemma 4.2 with
-/// `appendix.tex:680-689`): the start state is a model state, each case follows a model step
+/// Finitely many items for any search over a model satisfying the contract (Lemma Finitely
+/// many residuals `lem:finite-states`, lifted to items as in the proof of `thm:search`): the start state is a model state, each case follows a model step
 /// (or keeps the state), and each case adds only literals over the atoms of its parent's state or
 /// over the declared domains.
 pub proof fn theorem_model_finitely_many_items(m: Model<Regex<model::Test>>, d: NDomains,

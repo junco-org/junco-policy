@@ -9,11 +9,11 @@
 //! intersection of *literals*. `lit(p, v)` and `prod(p, v)` hold when `v` is the value of a literal
 //! or of a product of the transition of `p` under some valuation and event.
 //!
-//! [`Model::contract`] states (N0)–(N5) and the successor equations (S0)–(S6) of the appendix;
+//! [`Model::contract`] states (N0)–(N5) and the successor equations (S0)–(S6) behind the paper's finiteness argument (appendix `app:finiteness`);
 //! under it, [`lemma_finite_states`] builds the paper's `C(q)` and [`theorem_finite_reachable`]
 //! bounds every state reachable from a state. Proofs follow the paper's case analysis and
-//! invariants (C1)–(C4); [`lemma_uset_nset`] is Lemma A.2 (union closure), [`lemma_uset_closed`]
-//! and [`lemma_dnf_closed`] are Lemma A.3 (successor closure), and [`lemma_cat_assoc`] is (N4′).
+//! invariants (C1)–(C4); [`lemma_uset_nset`] is the union-closure step, [`lemma_uset_closed`]
+//! and [`lemma_dnf_closed`] are the successor-closure step, and [`lemma_cat_assoc`] is (N4′).
 //! [`lemma_contract_satisfiable`] shows the contract is consistent.
 //!
 //! The implemented constructors establish (N1)–(N4) and the shape of (N5) in their postconditions
@@ -677,7 +677,7 @@ pub proof fn lemma_yv_base<S>(m: Model<S>, inter: bool, y: ISet<S>, p: S)
     }
 }
 
-/// Lemma A.3 (successor closure): (C2) for `U(Y)` from (C2) for `Y`.
+/// Successor closure: (C2) for `U(Y)` from (C2) for `Y`.
 pub proof fn lemma_uset_closed<S>(m: Model<S>, y: ISet<S>)
     requires m.contract(), m.y_ok(false, y), m.vals_into(y, m.uset(false, y)),
     ensures m.vals_into(m.uset(false, y), m.uset(false, y)),
@@ -795,7 +795,7 @@ pub proof fn lemma_dnf_basic<S>(m: Model<S>, y: ISet<S>)
     lemma_uset_nset_closed(m, false, ua);
 }
 
-/// Lemma A.3 for `U(U_&(Y))`: if the successors of members of `Y` lie in `U(U_&(Y))` and their
+/// Successor closure for `U(U_&(Y))`: if the successors of members of `Y` lie in `U(U_&(Y))` and their
 /// literals and products in `U_&(Y)`, then `U(U_&(Y))` satisfies (C2).
 pub proof fn lemma_dnf_closed<S>(m: Model<S>, y: ISet<S>)
     requires

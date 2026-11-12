@@ -1,5 +1,5 @@
-//! Transition-level successor equations for the implementation (paper (S0)–(S6) for normalized
-//! transitions, `appendix.tex` "Normalized transitions" / "Successor equations").
+//! Transition-level successor equations for the implementation (the
+//! successor equations (S0)–(S6) of `finite_states::Model::contract`, for normalized transitions).
 //!
 //! A transition id `t` of a graph gets
 //! - a *class* [`tcls`]: the literal and product values it may contribute (a single class
