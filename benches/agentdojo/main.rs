@@ -312,7 +312,7 @@ fn initial_log(task: &Task, options: &Options) -> Value {
     json!({
         "suite":task.suite,"user_task_id":task.user_task_id,"injection_task_id":task.injection_task_id,
         "attack_type":task.attack_type(),"pipeline_name":options.pipeline(),"model":options.model,"q_model":options.q_model,
-        "injections":null,"messages":[],"calls":[],"skipped_calls":[],"events":[],"policy_decisions":[],"policy_seconds":0.0,
+        "injections":null,"messages":[],"calls":[],"skipped_calls":[],"events":[],"policy_decisions":[],"policy_seconds":0.0,"validation_seconds":0.0,"audience_seconds":0.0,
         "first_denial":null,"final_output":"","utility":null,"injection_success":null,
         "secpol":{"utility":null,"injection_success":null},"error":null,"duration_s":0.0
     })
@@ -345,6 +345,8 @@ async fn run_task(task: &Task, options: &Options, llm: &Llm, bridge: &mut Bridge
         log["skipped_calls"] = serde_json::to_value(run.skipped_calls).map_err(|e| e.to_string())?;
         log["policy_decisions"] = Value::Array(run.policy_decisions);
         log["policy_seconds"] = json!(run.policy_seconds);
+        log["validation_seconds"] = json!(run.validation_seconds);
+        log["audience_seconds"] = json!(run.audience_seconds);
         log["first_denial"] = json!(run.first_denial);
         log["final_output"] = json!(run.final_output);
         match scores {

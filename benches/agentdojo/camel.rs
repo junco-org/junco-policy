@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fmt::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use history_semantics::PolicyDecision;
 use history_store::{History, Store};
@@ -278,6 +278,10 @@ pub struct CallRecord {
     pub tainted: bool,
     pub denied: bool,
     pub error: Option<String>,
+    /// Wall time of this call's validation (argument preparation, contact derivation, policy
+    /// check, result propagation), excluding the tool's own execution and the audience
+    /// round-trip. `None` for Q-LLM queries, which no policy validates.
+    pub seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,6 +325,11 @@ pub struct Run<'a> {
     pub policy_decisions: Vec<Value>,
     /// Wall time inside `AgentPolicy::check`, summed over the task.
     pub policy_seconds: f64,
+    /// Wall time of validation (`CallRecord::seconds`) summed over the task's environment calls;
+    /// excludes tool execution and `audience_seconds`.
+    pub validation_seconds: f64,
+    /// Wall time of the worker round-trips that resolve a sink's audience, summed over the task.
+    pub audience_seconds: f64,
     pub first_denial: Option<FirstDenial>,
     pub final_output: String,
 }
@@ -347,6 +356,8 @@ impl<'a> Run<'a> {
             skipped_calls: Vec::new(),
             policy_decisions: Vec::new(),
             policy_seconds: 0.0,
+            validation_seconds: 0.0,
+            audience_seconds: 0.0,
             first_denial: None,
             final_output: String::new(),
         })
@@ -572,6 +583,7 @@ impl<'a> Run<'a> {
                 if prepared.guard == Some(false) {
                     None
                 } else {
+                    let lookup = Instant::now();
                     let response = self
                         .bridge
                         .call(
@@ -579,6 +591,7 @@ impl<'a> Run<'a> {
                             json!({"name": sink.name, "args": &prepared.args}),
                         )
                         .await;
+                    self.audience_seconds += lookup.elapsed().as_secs_f64();
                     // An unknown file or event makes the call itself fail; nothing is revealed.
                     response.ok().and_then(|value| {
                         value.as_array().map(|items| {
@@ -609,7 +622,7 @@ impl<'a> Run<'a> {
         let index = self.calls.len();
         for &(handle, class) in contacts {
             let event = AgentEvent::new(handle, AgentAction::Contact, class);
-            let started = std::time::Instant::now();
+            let started = Instant::now();
             let result = self.policy.check(
                 &mut self.history,
                 std::slice::from_ref(&event),
@@ -647,6 +660,7 @@ impl<'a> Run<'a> {
         args: Value,
         tainted: bool,
         denied: bool,
+        seconds: Option<f64>,
     ) -> Result<Value, String> {
         self.skipped_calls.push(CallRecord {
             name: name.to_owned(),
@@ -654,24 +668,41 @@ impl<'a> Run<'a> {
             tainted,
             denied,
             error: None,
+            seconds,
         });
         let handle = self.insert(Value::Null, false, Readers::Public)?;
         Ok(json!({"$ref": handle.to_string()}))
     }
 
-    async fn environment_tool(&mut self, name: &str, prepared: Prepared) -> Result<Value, String> {
+    /// `started` marks the start of this call's validation (before argument preparation).
+    async fn environment_tool(
+        &mut self,
+        name: &str,
+        prepared: Prepared,
+        started: Instant,
+    ) -> Result<Value, String> {
+        let audience_before = self.audience_seconds;
         let contacts = match tools::find_sink(name) {
             Some(sink) => self.contacts(sink, &prepared).await?,
             None => Vec::new(),
         };
         let denied = self.check_contacts(name, &contacts)?;
         if prepared.guard == Some(false) {
-            return self.skip(name, prepared.args, prepared.tainted, denied);
+            let seconds = started
+                .elapsed()
+                .saturating_sub(Duration::from_secs_f64(
+                    self.audience_seconds - audience_before,
+                ))
+                .as_secs_f64();
+            self.validation_seconds += seconds;
+            return self.skip(name, prepared.args, prepared.tainted, denied, Some(seconds));
         }
+        let executing = Instant::now();
         let mut response = self
             .bridge
             .call("call_tool", json!({"name": name, "args": &prepared.args}))
             .await?;
+        let execution = executing.elapsed();
         let error = response
             .get("error")
             .and_then(Value::as_str)
@@ -702,19 +733,28 @@ impl<'a> Run<'a> {
         } else {
             json!({"$ref": handle.to_string(), "value": &self.var(handle).value})
         };
+        let seconds = started
+            .elapsed()
+            .saturating_sub(execution)
+            .saturating_sub(Duration::from_secs_f64(
+                self.audience_seconds - audience_before,
+            ))
+            .as_secs_f64();
+        self.validation_seconds += seconds;
         self.calls.push(CallRecord {
             name: name.to_owned(),
             args: prepared.args,
             tainted: prepared.tainted,
             denied,
             error,
+            seconds: Some(seconds),
         });
         Ok(reply)
     }
 
     async fn query(&mut self, llm: &Llm, prepared: Prepared) -> Result<Value, String> {
         if prepared.guard == Some(false) {
-            return self.skip("query_ai_assistant", prepared.args, prepared.tainted, false);
+            return self.skip("query_ai_assistant", prepared.args, prepared.tainted, false, None);
         }
         let mut args = prepared.args;
         let Some(query) = args.get("query").and_then(Value::as_str) else {
@@ -826,6 +866,7 @@ impl<'a> Run<'a> {
             let mut results = Vec::new();
             for call in response.tool_calls() {
                 let name = call.function.name.as_str();
+                let started = Instant::now();
                 let reply = match self.prepare(&call.function.arguments) {
                     Err(error) => json!({"error": error}),
                     Ok(prepared) if name == "query_ai_assistant" => {
@@ -840,7 +881,7 @@ impl<'a> Run<'a> {
                             reply
                         }
                     }
-                    Ok(prepared) => self.environment_tool(name, prepared).await?,
+                    Ok(prepared) => self.environment_tool(name, prepared, started).await?,
                 };
                 results.push(call.result(vec![ToolResultContent::Json { value: reply }]));
             }
@@ -1038,7 +1079,7 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
     )?;
     assert_eq!(prepared.guard, Some(false));
     assert_eq!(
-        run.environment_tool("send_email", prepared).await?,
+        run.environment_tool("send_email", prepared, Instant::now()).await?,
         json!({"$ref":"$5"})
     );
     assert!(run.skipped_calls[0].tainted);
@@ -1096,7 +1137,7 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
     let mut run = Run::new(&mut bridge, "Pay the December bill")?;
     let prepared = run.prepare(json!({"file_path":"bill-december-2023.txt"}).as_object().unwrap())?;
     assert_eq!(
-        run.environment_tool("read_file", prepared).await?,
+        run.environment_tool("read_file", prepared, Instant::now()).await?,
         json!({"$ref":"$1","shape":"<str>"})
     );
     assert!(!run.calls[0].tainted);
@@ -1106,7 +1147,7 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
         Readers::Only(BTreeSet::new()),
     )?;
     let prepared = run.prepare(json!({"recipient":"$2.recipient","amount":"$2.amount","subject":"bill-december-2023","date":"2023-12-31"}).as_object().unwrap())?;
-    let reply = run.environment_tool("send_money", prepared).await?;
+    let reply = run.environment_tool("send_money", prepared, Instant::now()).await?;
     assert!(reply.get("value").is_none());
     assert!(run.calls[1].denied);
     assert!(run.calls[1].tainted);
@@ -1119,7 +1160,7 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
             .unwrap(),
     )?;
     assert_eq!(
-        run.environment_tool("send_money", prepared).await?,
+        run.environment_tool("send_money", prepared, Instant::now()).await?,
         json!({"$ref":"$4"})
     );
     assert_eq!(run.calls.len(), 2);
@@ -1131,7 +1172,7 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
             .unwrap(),
     )?;
     assert_eq!(
-        run.environment_tool("read_file", prepared).await?,
+        run.environment_tool("read_file", prepared, Instant::now()).await?,
         json!({"$ref":"$5"})
     );
     assert!(!run.calls[2].tainted);
