@@ -162,10 +162,10 @@ All names are in `crates/history-semantics/src/verify/refinement/`.
 
 ## Differences between the paper and the mechanization
 
-1. **Events and valuations.** Events have three components (principal, action, resource)
-   instead of arity $n$. In the numeric layer the candidate's values are bounded by `u64`
-   (`n_theta_ok`); history values are unbounded. Declared finite domains are supported in
-   addition to the paper's infinite domains (see Hypotheses).
+1. **Events and valuations.** Each event type chooses its arity, from 1 to `MAX_ARITY` (8),
+   instead of an arbitrary $n$. In the numeric layer the candidate's values are bounded by
+   `u64` (`n_theta_ok`); history values are unbounded. Declared finite domains are supported
+   in addition to the paper's infinite domains (see Hypotheses).
 2. **Split.** The implementation emits a smaller partition than the paper's
    $\mathrm{Split}$: per compared component, one case per undecided constant plus one case
    different from all of them. The theorems are stated for every case family satisfying

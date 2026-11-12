@@ -9,13 +9,16 @@ use history_syntax::verify::dsl::{AtomView, PatternView, TestView};
 use history_syntax::{AtomPattern, Comparison, Component, ComponentPattern, Event, TestExpr};
 use vstd::prelude::*;
 
-type HeadVariable = &'static str;
+/// Name of a head variable.
+pub type HeadVariable = &'static str;
 
 verus! {
-/// Head variable bound to the acting principal.
-pub(super) const PRINCIPAL_VAR: HeadVariable = "p";
-/// Head variable bound to the candidate's resource.
-pub(super) const RESOURCE_VAR: HeadVariable = "r";
+/// Head variable bound to the acting principal (`"p"`), coordinate 0 in the three-coordinate
+/// convention.
+pub const PRINCIPAL_VAR: HeadVariable = "p";
+/// Head variable bound to the candidate's resource (`"r"`), coordinate 2 in the three-coordinate
+/// convention.
+pub const RESOURCE_VAR: HeadVariable = "r";
 }
 
 /// Compares a coordinate with its head-bound variable.

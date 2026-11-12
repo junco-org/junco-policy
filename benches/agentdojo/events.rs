@@ -10,7 +10,7 @@ use junco_policy::FlowAction;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::camel::{Agent, CamelEvent, Class, Handle, camel_policy};
+use super::camel::{CamelEvent, camel_policy};
 use super::{Options, SUITES, Task, collect_logs, safe_component, save_json};
 
 #[derive(Default)]
@@ -65,40 +65,11 @@ impl Stats {
 }
 
 fn parse_event(parts: &[String; 4]) -> Result<CamelEvent, String> {
-    let principal = match parts[0].as_str() {
-        "P" => Agent::P,
-        "Q" => Agent::Q,
-        other => return Err(format!("invalid principal: {other:?}")),
-    };
-    let digits = parts[1]
-        .strip_prefix('$')
-        .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-        .ok_or_else(|| format!("invalid handle: {:?}", parts[1]))?;
-    let handle = Handle(
-        digits
-            .parse()
-            .map_err(|_| format!("invalid u32 handle: {:?}", parts[1]))?,
-    );
-    let action = match parts[2].as_str() {
-        "read" => FlowAction::Read,
-        "receive" => FlowAction::Receive,
-        "contact" => FlowAction::Contact,
-        "declassify" => FlowAction::Declassify,
-        other => return Err(format!("invalid action: {other:?}")),
-    };
-    let label = match parts[3].as_str() {
-        "trusted" => Class::Trusted,
-        "untrusted" => Class::Untrusted,
-        "private" => Class::Private,
-        "sink" => Class::Sink,
-        "peer" => Class::Peer,
-        other => return Err(format!("invalid label: {other:?}")),
-    };
     Ok(CamelEvent {
-        principal,
-        handle,
-        action,
-        label,
+        principal: parts[0].parse()?,
+        handle: parts[1].parse()?,
+        action: parts[2].parse()?,
+        label: parts[3].parse()?,
     })
 }
 

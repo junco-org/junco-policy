@@ -6,9 +6,10 @@
 
 use std::fmt::{self, Debug, Display};
 use std::hash::Hash;
+use std::str::FromStr;
 
 use history_semantics::TraceRule;
-use history_semantics::policy::{component_equals, component_is, last_state_change};
+use history_semantics::policy::{PRINCIPAL_VAR, component_equals, component_is, last_state_change};
 use history_syntax::{
     Comparison, Component, ComponentPattern, Event, Head, N4, Rule, RuleMode, TestExpr,
 };
@@ -16,7 +17,6 @@ use history_syntax::{
 use super::agent::Label;
 use super::rules::{RuleDenial, RulePolicy, RuleSet};
 
-const PRINCIPAL_VAR: &str = "p";
 const HANDLE_VAR: &str = "v";
 
 /// How a principal used or changed the classification of a value.
@@ -40,6 +40,21 @@ impl Display for FlowAction {
             Self::Contact => "contact",
             Self::Declassify => "declassify",
         })
+    }
+}
+
+impl FromStr for FlowAction {
+    type Err = String;
+
+    /// Parses the lowercase action name written by [`Display`].
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "read" => Ok(Self::Read),
+            "receive" => Ok(Self::Receive),
+            "contact" => Ok(Self::Contact),
+            "declassify" => Ok(Self::Declassify),
+            other => Err(format!("invalid action: {other:?}")),
+        }
     }
 }
 

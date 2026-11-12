@@ -195,7 +195,7 @@ impl<E: Judged> RulePolicy<E> {
 
 fn history_failure(error: HistoryError) -> PolicyDecision {
     PolicyDecision::Deny {
-        failed_precondition: format!("agent policy failed: {error}"),
+        failed_precondition: format!("policy failed: {error}"),
         allowed_fixes: Vec::new(),
     }
 }
@@ -203,7 +203,7 @@ fn history_failure(error: HistoryError) -> PolicyDecision {
 fn uncompiled<E: Copy>(event: &E, error: &CompileError) -> RuleDenial<E> {
     RuleDenial {
         event: *event,
-        failed_precondition: format!("agent policy does not compile: {error}"),
+        failed_precondition: format!("policy does not compile: {error}"),
         allowed_fixes: Vec::new(),
     }
 }

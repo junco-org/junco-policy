@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -193,6 +194,18 @@ impl fmt::Display for Agent {
     }
 }
 
+impl FromStr for Agent {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "P" => Ok(Self::P),
+            "Q" => Ok(Self::Q),
+            other => Err(format!("invalid principal: {other:?}")),
+        }
+    }
+}
+
 pub type CamelEvent = FlowEvent<Agent, Handle, Class>;
 
 pub fn camel_policy() -> FlowPolicy<Agent, Handle, Class> {
@@ -217,6 +230,22 @@ impl fmt::Display for Handle {
     }
 }
 
+impl FromStr for Handle {
+    type Err = String;
+
+    /// Parses the `$`-prefixed decimal form written by [`fmt::Display`].
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let digits = text
+            .strip_prefix('$')
+            .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+            .ok_or_else(|| format!("invalid handle: {text:?}"))?;
+        digits
+            .parse()
+            .map(Self)
+            .map_err(|_| format!("invalid u32 handle: {text:?}"))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Class {
     Trusted,
@@ -238,6 +267,21 @@ impl fmt::Display for Class {
             Self::Sink => "sink",
             Self::Peer => "peer",
         })
+    }
+}
+
+impl FromStr for Class {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "trusted" => Ok(Self::Trusted),
+            "untrusted" => Ok(Self::Untrusted),
+            "private" => Ok(Self::Private),
+            "sink" => Ok(Self::Sink),
+            "peer" => Ok(Self::Peer),
+            other => Err(format!("invalid label: {other:?}")),
+        }
     }
 }
 

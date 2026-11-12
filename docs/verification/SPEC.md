@@ -43,17 +43,19 @@ pub fn at_least_as_strict(&self, stricter: &[RuleId], than: &[RuleId]) -> (r: Re
 // add_rule: Ok(id) ==> final(self)@.rules == old(self)@.rules.push(rule@) && rule_wf(rule@)
 ```
 
-Key definitions (`refinement/analyzer.rs`):
+Key definitions (`refinement/analyzer.rs`). `C` is the event's tagged component type
+`E::Component`; events are `Seq<C>`, and per-coordinate sequences have the event's arity
+(`1..=MAX_ARITY`):
 
 ```rust
-pub enum InclusionView<P, A, R> { Holds, Counterexample(CexView<P, A, R>), Exhausted }
-pub struct AnalyzerView<P, A, R> { domains: DomainsView<P,A,R>, rules: Seq<RuleView<P,A,R>>,
-    known_principals: Set<P>, known_actions: Set<A>, known_resources: Set<R> }
-pub open spec fn admissible(a, cex, f: FreshChoice<P,A,R>) -> bool   // fresh numbers ↦ distinct values, ≠ known constants, in domain
+pub enum InclusionView<C> { Holds, Counterexample(CexView<C>), Exhausted }
+pub struct AnalyzerView<C> { domains: DomainsView<C>, rules: Seq<RuleView<C>>,
+    known: Seq<Set<C>> }                                  // known constants, per coordinate
+pub open spec fn admissible(a, cex, f: FreshChoice<C>) -> bool   // f[i]: fresh numbers ↦ distinct values at coordinate i, ≠ known[i], in domains[i]
 pub open spec fn every_instance(a, cex, fails) -> bool                // every admissible instantiation fails
 pub open spec fn shortest(a, n, fails) / shortest_in_case(a, c, n, fails) -> bool
 pub open spec fn at_least_as_strict_ok(a, p: Seq<nat>, q: Seq<nat>, v) -> bool   // and covered_ok, …
-pub open spec fn stmt_choice_exists<P, A, R>() -> bool   // infinite types ⇒ an admissible choice exists
+pub open spec fn stmt_choice_exists<C>() -> bool   // infinite types ⇒ an admissible choice exists
 ```
 
 Design decisions in the top layer:
@@ -75,7 +77,7 @@ Design decisions in the top layer:
   so termination of the Rust loops does not depend on Lemma 4.2. *Not being `Exhausted`* for
   large enough limits needs finitely many reachable items (`search::stmt_search_terminates`),
   which is **open for the implementation** (§5).
-- **Declared finite domains** (`Domains::with_*`): `DomainsView` carries them, and every
+- **Declared finite domains** (`Domains::with_domain`): `DomainsView` carries them, and every
   predicate quantifies over the declared values. The paper's theorems cover only infinite domains
   (bg:14-18); the finite-domain variants are separate statements (`*_finite_domains`) and an
   extension the paper does not claim (Q3).
@@ -91,19 +93,19 @@ syntax views `history_syntax::verify::dsl::{RuleView, HeadView, RegexView}`.
 ```rust
 pub enum Status { NotFired, Satisfied, Violated }                         // bg:113-121
 pub open spec fn violated_by(mode: RuleMode, inside: bool) -> bool
-pub open spec fn rule_status(rule: RuleView<P,A,R>, candidate: TEvent<P,A,R>, history: Seq<TEvent<P,A,R>>) -> Status
+pub open spec fn rule_status(rule: RuleView<C>, candidate: Seq<C>, history: Seq<Seq<C>>) -> Status
 pub open spec fn rule_denies(rule, candidate, history) -> bool            // status is Violated
-pub open spec fn policy_denies(policy: Seq<RuleView<P,A,R>>, c, h) -> bool  // bg:123-126 (some rule violated)
+pub open spec fn policy_denies(policy: Seq<RuleView<C>>, c, h) -> bool      // bg:123-126 (some rule violated)
 pub open spec fn policy_permits(policy, c, h) -> bool
-pub struct DomainsView<P,A,R> { principal: Option<Set<P>>, action: Option<Set<A>>, resource: Option<Set<R>> }
+pub type DomainsView<C> = Seq<Option<Set<C>>>;   // per coordinate: None = unrestricted, Some = declared values
 pub open spec fn infinite_type<T: PartialEq>() -> bool;  infinite_domains(d) -> bool   // bg:14
 pub open spec fn rule_wf(rule) -> bool                                    // head_scoped ∧ regex_scoped (bg:111, bg:28)
 pub open spec fn refines(d, p, q) / covers(d, p, rule) / never_denies(d, rule)
     / always_denies(d, rule) / tails_included(d, head, left, right) -> bool
 // statements
-pub open spec fn stmt_refines_iff_covers<P,A,R>() -> bool                // app:450
-pub open spec fn stmt_redundant_iff_covered<P,A,R>() -> bool             // app:452-453
-pub open spec fn stmt_genericity<P,A,R>() -> bool                        // renaming invariance (new; not in the paper)
+pub open spec fn stmt_refines_iff_covers<C>() -> bool                    // app:450
+pub open spec fn stmt_redundant_iff_covered<C>() -> bool                 // app:452-453
+pub open spec fn stmt_genericity<C>() -> bool                            // renaming invariance (new; not in the paper)
 ```
 
 `theorem_rule_decision` (`verify/history_algebra.rs:169`) is over the *numeric* paper-shaped model
@@ -116,7 +118,7 @@ specified in Verus before (it is applied natively in `validator.rs:146-149`, `po
 
 The analyzer interns typed constants as numeric codes (`ConstId`, from 0) and searches numeric
 expressions over `nat` components with kernel tests (`junco_core::kernel::verify::{Test, gsem}`).
-A numeric valuation is the **whole** encoded candidate (`Subst` with all three components), not
+A numeric valuation is the **whole** encoded candidate (`Subst` = `Seq<nat>` of length arity), not
 the runtime's head bindings (0 at unbound components).
 
 **Reuse (revised).** The typed-to-numeric bridge is the existing verified front end, which the
@@ -131,10 +133,10 @@ An earlier draft of this layer redefined its own coding (`Coding`, `encode_*`, `
 
 ```rust
 pub open spec fn n_lang(theta: Subst, r: Regex<model::Test>, w: Seq<EventView>) -> bool  // lang(gsem(θ), r, w)
-pub struct NHead { principal: Option<nat>, action: Option<nat>, resource: Option<nat> }
+pub type NHead = Seq<Option<nat>>;              // per coordinate: a constant's code, None for a variable
 pub struct NRule { mode: RuleMode, head: NHead, tail: Regex<model::Test> }
 pub open spec fn n_rule_denies(rule: NRule, theta, w) -> bool;  n_policy_denies(p, theta, w) -> bool
-pub struct NDomains { principal: Option<Set<nat>>, action: …, resource: … }
+pub type NDomains = Seq<Option<Set<nat>>>;      // per coordinate: all of nat (None) or declared codes
 pub open spec fn n_theta_ok(d, theta) -> bool      // event_wf(θ) (u64) ∧ in domain; history events are unbounded nat
 // link to the verified front end
 pub open spec fn rule_view<E: Event>(rule: Rule<E>) -> RuleView<…>
@@ -276,10 +278,10 @@ saturates at 211,357 states with nesting depth ≤ 7. A proof-or-disproof agent 
 
 ```rust
 pub enum RegisterView { Equals(nat), Differs(Set<nat>) }
-pub struct ConstraintView { principal: RegisterView, action: RegisterView, resource: RegisterView }
+pub type ConstraintView = Seq<RegisterView>;    // one register constraint per coordinate
 pub open spec fn constraint_of(g: ConstraintView) -> Constraint
 pub enum ClassView { Constant(nat), Register }
-pub struct LetterView { principal/action/resource: Option<ClassView>, reg_*: ClassView }
+pub struct LetterView { classes: Seq<Option<ClassView>>, registers: Seq<ClassView> }   // per coordinate
 pub open spec fn letter_holds(l, p) -> bool;  letter_assignment(l, atoms) -> Assignment   // Letter::holds, truth
 pub open spec fn impl_cases(g, atoms, steps: Set<(ConstraintView, LetterView, nat)>) -> Set<Case>
 pub open spec fn expansion_ok(d, g, gamma, q, atoms, steps) -> bool   // per-expansion obligation (search.rs:159-184)
@@ -311,9 +313,10 @@ Already verified and reused: `derivative_correct`, `successor_entries_wf` (succe
 1. **Valuations.** Paper: θ ∈ Event is the candidate (bg:32). Typed DSL: same. Numeric runtime:
    `Subst` = head bindings with 0 at unbound components; analyzer's numeric valuation is the whole
    candidate. Spec uses the whole candidate at the numeric layer.
-2. **Domains.** Paper: arity n, all Dᵢ infinite. Code: arity 3; typed component types may be
-   finite (`u32`); numeric θ is `u64`-bounded (`event_wf`), history events unbounded `nat`;
-   declared finite domains are supported (`Domains::with_*`) — outside the paper's theorems.
+2. **Domains.** Paper: arity n, all Dᵢ infinite. Code: arity `E::Arity::value()`, 1..=8
+   (`MAX_ARITY`); typed component types may be finite (`u32`); numeric θ is `u64`-bounded
+   (`event_wf`), history events unbounded `nat`; declared finite domains are supported
+   (`Domains::with_domain`) — outside the paper's theorems.
 3. **Unscoped tail variables** resolve to `None` in the DSL, making both `=` and `≠` false
    (breaks the duality of bg:50-54). **Resolved:** every analyzed rule passes through the verified
    `flatten_rule` (`add_rule`, and `tail_included` for both tails), whose contract
@@ -336,9 +339,9 @@ Already verified and reused: `derivative_correct`, `successor_entries_wf` (succe
    `FlatEncoder` contract it implements requires nonzero codes (`encoded`: `id > 0`; `maps_wf`),
    as does `history_specs::term_wf`. So `Constants` violates the contract it implements (it is
    native, so nothing checks it), and the existing encoding lemmas cannot be instantiated for it
-   as is (Q9). Separately, the difference pair's head is `[Any;3]` with `Variable` atoms, violating
-   `structural_wf`; harmless for `compile`'s contract (no `requires`), and the spec applies the
-   front-end lemmas per rule, not to the difference pair.
+   as is (Q9). Separately, the difference pair's head is `Any` at every coordinate with `Variable`
+   atoms, violating `structural_wf`; harmless for `compile`'s contract (no `requires`), and the
+   spec applies the front-end lemmas per rule, not to the difference pair.
 10. **Successor guard cache**: `CompiledPair::successor` may return the residual unchanged
     (`guard_wf`); the finiteness instance must allow `v = q` (`step_abstracts`).
 11. **(S3) is false for the implementation** (§6). (N0) singleton clause / `set` idempotence on a
@@ -356,14 +359,14 @@ Already verified and reused: `derivative_correct`, `successor_entries_wf` (succe
     otherwise); the implementation layer discharges it from that check.
 14. **Numeric renamings avoid the rule's codes (spec change, approved).** `encoding::stmt_numeric_genericity`
     was false: `n_renaming_ok` made `f` fix the rule's codes but not avoid them. Counterexample:
-    rule `{Forbid, head.principal = Some(3), tail = All}`, `θ = (7,0,0)`, `w = []`, `f(7) = 3`,
-    `f = id` elsewhere: `f` is injective on `{7, 0}` and fixes `{3}`; the original pair is not
-    denied (`7 ≠ 3`), the renamed one is. Fix: `n_renaming_ok` gains
+    rule `{Forbid, head = [Some(3), None, None], tail = All}`, `θ = (7,0,0)`, `w = []`,
+    `f(7) = 3`, `f = id` elsewhere: `f` is injective on `{7, 0}` and fixes `{3}`; the original
+    pair is not denied (`7 ≠ 3`), the renamed one is. Fix: `n_renaming_ok` gains
     `∀x ∈ values, k ∈ fixed. f(x) = k ⟺ x = k`, mirroring the typed `renaming_preserves`.
 15. **Equivalence of `eq_spec` for fresh choices (spec change, approved).** `analyzer::stmt_choice_exists`
     was unprovable for a generic `eq_spec`: with `eq_spec = ≤` on `nat`, `infinite_type` holds,
     but two fresh numbers at one component can never be non-equal in both directions, so no
-    choice is admissible. Fix: hypothesis `eq_equivalence::<P/A/R>()` (reflexive, symmetric,
+    choice is admissible. Fix: hypothesis `eq_equivalence::<C>()` (reflexive, symmetric,
     transitive: the clauses of history-store's key obligations), defined in
     `history_store::typed::verify` next to `native_obligations`, with
     `lemma_native_obligations_eq_equivalence` (native obligations ⟹ equivalence), so the top-level

@@ -93,6 +93,8 @@ and append `Receive` events for derived values; the policy does not infer propag
 contacts after the same principal has read or received tainted data for that handle.
 Declassifying the same label for that principal and handle clears its taint until the
 next read or receive. Another principal's copy is independent.
+`FlowAction` implements `Display` and `FromStr` with the lowercase names `read`,
+`receive`, `contact` and `declassify`.
 
 `AgentPolicy` and `FlowPolicy` are aliases of `RulePolicy<E>`; their denial types use
 `RuleDenial<E>`. `RuleSet::new` accepts ordered `TraceRule<E>` values for custom
@@ -571,16 +573,16 @@ Import generic APIs from the package that owns them:
 
 | Package | Responsibility |
 |---|---|
-| `history-syntax` | Generic Rust DSL and event projections: `Rule`, `Head`, `TestExpr`, `RegexExpr` |
+| `history-syntax` | Generic Rust DSL and tagged event coordinates: `Event`, `Rule`, `Head`, `TestExpr`, `RegexExpr` |
 | `junco-core` | Shared IR, encoding, errors and contracts |
 | `history-store` | Histories, interning, graph storage and cache containers |
 | `history-semantics` | Compilation, evaluation, `TracePolicy` and `Validator` |
 | `history-analysis` | Static tail-inclusion analysis: `PolicyAnalyzer` |
-| `junco-policy` | Ownership-lock consumer: `Action`, `LockEvent`, `LockPolicy` |
+| `junco-policy` | Policy facades: `RulePolicy`, `LockPolicy`, `AgentPolicy`, `FlowPolicy` |
 
-An `Event` is a compact `Copy` value that projects to principal, action and resource.
+An `Event` is a compact `Copy` value with a policy-chosen arity; see "Policy-defined events".
 Component equality determines policy matching. Histories preserve original events and
-payloads, including distinct values with identical projections. Finite Frunk `Coprod!`
+payloads, including distinct values with identical coordinates. Finite Frunk `Coprod!`
 unions and generic approval-payload workloads are supported.
 
 `TracePolicy` compiles ordered `TraceRule`s once and checks caller-owned history
@@ -606,7 +608,7 @@ lowered numeric head for resumable evaluation; compiler helpers are private.
 Library defaults are empty. Store and Semantics `runtime` enable their concrete
 implementations, including no_std + alloc support. Store `std` selects native locks;
 Semantics `cache` enables optional precompilation. Neither feature implies `runtime`.
-Core `serde` enables portable source serialization. The root lock consumer selects
+Core `serde` enables portable source serialization. The root `junco-policy` package selects
 core/Syntax `std`, Store `runtime,std` and Semantics `runtime,std,cache`.
 Semantics `test-util` is a dev-only integration probe feature.
 Analysis has no features; it is no_std + alloc and outside the Verus job. It uses Semantics

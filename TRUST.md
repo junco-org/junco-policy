@@ -32,12 +32,12 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 | `external_fn_specification` | 0 | 0 | 0 | 0 | 0 | 0 |
 | `external_body` | 11 | 14 | 42 | 1 | 3 | 71 |
 | `external_type_specification` | 0 | 0 | 2 | 2 | 3 | 7 |
-| `external_trait_specification` | 0 | 0 | 0 | 1 | 1 | 2 |
+| `external_trait_specification` | 0 | 0 | 0 | 2 | 1 | 3 |
 | `external` | 0 | 0 | 2 | 0 | 0 | 2 |
 | `admit` | 0 | 0 | 0 | 0 | 0 | 0 |
 | `assume` | 0 | 0 | 0 | 0 | 0 | 0 |
 | `exec_allows_no_decreases_clause` | 0 | 1 | 1 | 0 | 0 | 2 |
-| **total** | **11** | **15** | **47** | **4** | **27** | **104** |
+| **total** | **11** | **15** | **47** | **5** | **27** | **105** |
 
 ## `crates/history-analysis`
 
@@ -59,7 +59,7 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 
 ### `external_body` (14)
 
-- `crates/history-semantics/src/compiled_rule.rs:416`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
+- `crates/history-semantics/src/compiled_rule.rs:424`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
 - `crates/history-semantics/src/policy/evaluate.rs:67`: `fn render_denial`
 - `crates/history-semantics/src/policy/evaluate.rs:158`: `fn unpack_policy_rule`
 - `crates/history-semantics/src/policy/rule.rs:23`: `struct PolicyRule<E: Event, C>`
@@ -86,39 +86,39 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 - `crates/history-store/src/cache.rs:79`: `impl GraphCaches :: fn successor_get`
 - `crates/history-store/src/cache.rs:93`: `impl GraphCaches :: fn successor_put`
 - `crates/history-store/src/cache.rs:129`: `impl HistoryCursor :: fn position`
-- `crates/history-store/src/store.rs:223`: `impl Domain :: fn path_lookup`
-- `crates/history-store/src/store.rs:234`: `impl Domain :: fn path_insert`
-- `crates/history-store/src/store.rs:242`: `impl Domain :: fn path_remove`
-- `crates/history-store/src/store.rs:694`: `struct NativeCoordinates`
-- `crates/history-store/src/store.rs:700`: `impl NativeCoordinates :: fn new`
-- `crates/history-store/src/store.rs:709`: `impl NativeCoordinates :: fn with_state`
-- `crates/history-store/src/store.rs:727`: `struct NativeHistoryKeys`
-- `crates/history-store/src/store.rs:733`: `impl NativeHistoryKeys :: fn new`
-- `crates/history-store/src/store.rs:742`: `impl NativeHistoryKeys :: fn with_state`
-- `crates/history-store/src/store.rs:763`: `struct NativeDomain`
-- `crates/history-store/src/store.rs:781`: `impl NativeDomain :: fn place`
-- `crates/history-store/src/store.rs:794`: `impl NativeDomain :: fn with_domain`
-- `crates/history-store/src/store.rs:874`: `struct NativeRecord`
-- `crates/history-store/src/store.rs:902`: `impl NativeRecord :: fn place_cell`
-- `crates/history-store/src/store.rs:913`: `impl NativeRecord :: fn with_record`
-- `crates/history-store/src/store.rs:934`: `impl Clone for NativeRecord :: fn clone`
-- `crates/history-store/src/store.rs:1272`: `fn singleton_invariants`
-- `crates/history-store/src/store.rs:1618`: `fn borrow_numeric_owner`
-- `crates/history-store/src/store.rs:1625`: `fn same_numeric_reference`
-- `crates/history-store/src/store.rs:1633`: `fn share_numeric_owner`
-- `crates/history-store/src/store.rs:1780`: `struct NativeRecordReadGuard<'a>`
-- `crates/history-store/src/store.rs:1787`: `impl<'a> NativeRecordReadGuard<'a> :: fn acquire`
-- `crates/history-store/src/store.rs:1796`: `impl<'a> NativeRecordReadGuard<'a> :: fn cell`
-- `crates/history-store/src/store.rs:1859`: `impl HistoryStore :: fn global`
+- `crates/history-store/src/store.rs:214`: `impl Domain :: fn path_lookup`
+- `crates/history-store/src/store.rs:225`: `impl Domain :: fn path_insert`
+- `crates/history-store/src/store.rs:233`: `impl Domain :: fn path_remove`
+- `crates/history-store/src/store.rs:680`: `struct NativeCoordinates`
+- `crates/history-store/src/store.rs:686`: `impl NativeCoordinates :: fn new`
+- `crates/history-store/src/store.rs:695`: `impl NativeCoordinates :: fn with_state`
+- `crates/history-store/src/store.rs:713`: `struct NativeHistoryKeys`
+- `crates/history-store/src/store.rs:719`: `impl NativeHistoryKeys :: fn new`
+- `crates/history-store/src/store.rs:728`: `impl NativeHistoryKeys :: fn with_state`
+- `crates/history-store/src/store.rs:749`: `struct NativeDomain`
+- `crates/history-store/src/store.rs:767`: `impl NativeDomain :: fn place`
+- `crates/history-store/src/store.rs:780`: `impl NativeDomain :: fn with_domain`
+- `crates/history-store/src/store.rs:860`: `struct NativeRecord`
+- `crates/history-store/src/store.rs:888`: `impl NativeRecord :: fn place_cell`
+- `crates/history-store/src/store.rs:899`: `impl NativeRecord :: fn with_record`
+- `crates/history-store/src/store.rs:920`: `impl Clone for NativeRecord :: fn clone`
+- `crates/history-store/src/store.rs:1285`: `fn singleton_invariants`
+- `crates/history-store/src/store.rs:1649`: `fn borrow_numeric_owner`
+- `crates/history-store/src/store.rs:1656`: `fn same_numeric_reference`
+- `crates/history-store/src/store.rs:1664`: `fn share_numeric_owner`
+- `crates/history-store/src/store.rs:1811`: `struct NativeRecordReadGuard<'a>`
+- `crates/history-store/src/store.rs:1818`: `impl<'a> NativeRecordReadGuard<'a> :: fn acquire`
+- `crates/history-store/src/store.rs:1827`: `impl<'a> NativeRecordReadGuard<'a> :: fn cell`
+- `crates/history-store/src/store.rs:1891`: `impl HistoryStore :: fn new`
 - `crates/history-store/src/typed.rs:114`: `struct NativeStoreIds`
 - `crates/history-store/src/typed.rs:120`: `impl NativeStoreIds :: fn new`
 - `crates/history-store/src/typed.rs:127`: `impl NativeStoreIds :: fn with_state`
-- `crates/history-store/src/typed.rs:398`: `struct NativeBooks<E: Event>`
-- `crates/history-store/src/typed.rs:405`: `impl<E: Event> NativeBooks<E> :: fn new`
-- `crates/history-store/src/typed.rs:417`: `impl<E: Event> NativeBooks<E> :: fn with_books`
-- `crates/history-store/src/typed.rs:459`: `fn share_store`
-- `crates/history-store/src/typed.rs:469`: `fn borrow_store`
-- `crates/history-store/src/typed.rs:477`: `fn process_store_ids_ref`
+- `crates/history-store/src/typed.rs:414`: `struct NativeBooks<E: Event>`
+- `crates/history-store/src/typed.rs:421`: `impl<E: Event> NativeBooks<E> :: fn new`
+- `crates/history-store/src/typed.rs:433`: `impl<E: Event> NativeBooks<E> :: fn with_books`
+- `crates/history-store/src/typed.rs:475`: `fn share_store`
+- `crates/history-store/src/typed.rs:485`: `fn borrow_store`
+- `crates/history-store/src/typed.rs:493`: `fn process_store_ids_ref`
 - `crates/history-store/src/typed/map.rs:12`: `struct NativeMap<K: Copy + Eq + Hash>`
 - `crates/history-store/src/typed/map.rs:33`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn new`
 - `crates/history-store/src/typed/map.rs:40`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn lookup`
@@ -143,16 +143,17 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 
 ### `external_body` (1)
 
-- `crates/history-syntax/src/event.rs:33`: `fn absurd_nil`
+- `crates/history-syntax/src/event.rs:201`: `fn absurd_nil`
 
 ### `external_type_specification` (2)
 
-- `crates/history-syntax/src/event.rs:108`: `struct ExCoproduct<H, T>(Coproduct<H, T>)`
-- `crates/history-syntax/src/event.rs:113`: `struct ExCNil(CNil) (opaque)`
+- `crates/history-syntax/src/event.rs:263`: `struct ExCoproduct<H, T>(Coproduct<H, T>)`
+- `crates/history-syntax/src/event.rs:268`: `struct ExCNil(CNil) (opaque)`
 
-### `external_trait_specification` (1)
+### `external_trait_specification` (2)
 
-- `crates/history-syntax/src/event.rs:118`: `trait ExEvent: Copy + Debug + Eq + Hash (with external_trait_extension)`
+- `crates/history-syntax/src/event.rs:253`: `trait ExArity: sealed::Sealed (with external_trait_extension)`
+- `crates/history-syntax/src/event.rs:273`: `trait ExEvent: Copy + Debug + Eq + Hash (with external_trait_extension)`
 
 ## `crates/junco-core`
 

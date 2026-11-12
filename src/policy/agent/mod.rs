@@ -30,17 +30,15 @@ use std::fmt::{self, Debug, Display};
 use std::hash::Hash;
 
 use history_semantics::TraceRule;
-use history_semantics::policy::{action_is, last_state_change, principal_is};
+use history_semantics::policy::{
+    PRINCIPAL_VAR, RESOURCE_VAR, action_is, last_state_change, principal_is,
+};
 use history_syntax::{
     AtomPattern, Comparison, Component, ComponentPattern, Event, Head, N3, RegexExpr, Rule,
     RuleMode, TestExpr,
 };
 
 use super::rules::{RuleDenial, RulePolicy, RuleSet};
-
-// These names match the bindings used by the shared policy atom helpers.
-const PRINCIPAL_VAR: &str = "p";
-const RESOURCE_VAR: &str = "r";
 
 /// A principal or class identity agent rules can name and render: compact, comparable, and
 /// shareable with the diagnostics that print it.
