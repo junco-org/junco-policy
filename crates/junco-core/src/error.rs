@@ -136,6 +136,12 @@ impl HistoryError {
 #[verus_verify(external_derive)]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CompileError {
+    /// The head must have exactly the event type's number of coordinates.
+    #[error("head has {found} slots but the event type has {expected}")]
+    HeadArity { expected: usize, found: usize },
+    /// Tagged constants may only be used in their own coordinate.
+    #[error("constant of coordinate {coordinate} used in coordinate {component}")]
+    ComponentCoordinate { component: usize, coordinate: usize },
     /// One variable name occurs in different product components in the same rule.
     #[error("variable {name:?} occurs in different product components")]
     VariableComponentConflict { name: String },

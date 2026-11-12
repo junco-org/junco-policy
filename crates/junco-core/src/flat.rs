@@ -7,7 +7,10 @@ use crate::observation::ObservationWorld;
 use crate::verify::history_specs::no_internal_error;
 use alloc::string::String;
 use alloc::vec::Vec;
-use history_syntax::syntax::{Component, RuleMode};
+use history_syntax::{
+    MAX_ARITY,
+    syntax::{Component, RuleMode},
+};
 use vstd::prelude::*;
 
 #[verus_verify]
@@ -44,7 +47,7 @@ pub enum FlatTest<C> {
     Or(Vec<u32>),
 }
 
-// Variant order and names are the version-8 portable wire format.
+// Variant order and names are the version-9 portable wire format.
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -67,7 +70,7 @@ pub enum FlatRegex {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FlatPair<C> {
-    pub head: [FlatHead<C>; 3],
+    pub head: Vec<FlatHead<C>>,
     pub tests: Vec<FlatTest<C>>,
     pub regexes: Vec<FlatRegex>,
     pub root: u32,
@@ -101,7 +104,7 @@ pub mod verify {
     broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
 
     pub open spec fn field_index(field: Component) -> int {
-        match field { Component::Principal => 0, Component::Action => 1, Component::Resource => 2 }
+        field.0 as int
     }
 
     pub open spec fn references_before(children: Seq<u32>, bound: nat) -> bool {
@@ -112,8 +115,8 @@ pub mod verify {
         match test {
             FlatTest::Bool(_) => true,
             FlatTest::Atom { field, term: FlatTerm::Variable(variable), .. } =>
-                field == variable && head[field_index(field)] is Bind,
-            FlatTest::Atom { .. } => true,
+                field_index(field) < head.len() && field == variable && head[field_index(field)] is Bind,
+            FlatTest::Atom { field, .. } => field_index(field) < head.len(),
             FlatTest::And(children) | FlatTest::Or(children) => references_before(children@, index),
         }
     }
@@ -131,7 +134,7 @@ pub mod verify {
     pub open spec fn prefix_wf<C>(
         head: Seq<FlatHead<C>>, tests: Seq<FlatTest<C>>, regexes: Seq<FlatRegex>,
     ) -> bool {
-        head.len() == 3
+        1 <= head.len() <= MAX_ARITY
             && (forall|i: int| 0 <= i < tests.len() ==> test_wf(head, #[trigger] tests[i], i as nat))
             && (forall|i: int| 0 <= i < regexes.len() ==>
                 regex_wf(#[trigger] regexes[i], i as nat, tests.len()))
@@ -141,15 +144,15 @@ pub mod verify {
         prefix_wf(pair.head@, pair.tests@, pair.regexes@) && pair.root < pair.regexes@.len()
     }
 
-    pub open spec fn event_wf<C>(event: Seq<C>) -> bool { event.len() == 3 }
+    pub open spec fn event_wf<C>(event: Seq<C>, arity: nat) -> bool { event.len() == arity }
 
     /// Equality has the same actual/expected orientation as the owned DSL.
     pub open spec fn head_matches<C>(
         head: Seq<FlatHead<C>>, candidate: Seq<C>, eq: spec_fn(Component, C, C) -> bool,
     ) -> bool {
-        head.len() == 3 && event_wf(candidate)
-            && (forall|field: Component| match #[trigger] head[field_index(field)] {
-                FlatHead::Constant(expected) => eq(field, candidate[field_index(field)], expected),
+        1 <= head.len() <= MAX_ARITY && event_wf(candidate, head.len())
+            && (forall|i: int| 0 <= i < head.len() ==> match #[trigger] head[i] {
+                FlatHead::Constant(expected) => eq(Component(i as u8), candidate[i], expected),
                 _ => true,
             })
     }
@@ -160,14 +163,16 @@ pub mod verify {
     ) -> bool
         decreases id,
     {
-        id < tests.len() && event_wf(candidate) && event_wf(event) && match tests[id as int] {
+        id < tests.len() && event_wf(event, candidate.len()) && match tests[id as int] {
             FlatTest::Bool(value) => value,
             FlatTest::Atom { field, term, positive } => {
                 let expected = match term {
                     FlatTerm::Constant(value) => value,
                     FlatTerm::Variable(variable) => candidate[field_index(variable)],
                 };
-                positive == eq(field, event[field_index(field)], expected)
+                field_index(field) < event.len()
+                    && (match term { FlatTerm::Variable(v) => field_index(v) < candidate.len(), _ => true })
+                    && positive == eq(field, event[field_index(field)], expected)
             },
             FlatTest::And(children) => references_before(children@, id)
                 && (forall|i: int| 0 <= i < children@.len() ==>
@@ -178,15 +183,15 @@ pub mod verify {
         }
     }
 
-    /// Whole-word languages over concrete three-coordinate events, not numeric graph states.
+    /// Whole-word languages over concrete event tuples, not numeric graph states.
     pub open spec fn lang<C>(
         tests: Seq<FlatTest<C>>, regexes: Seq<FlatRegex>, id: nat,
         candidate: Seq<C>, word: Seq<Seq<C>>, eq: spec_fn(Component, C, C) -> bool,
     ) -> bool
         decreases id,
     {
-        id < regexes.len() && event_wf(candidate)
-            && (forall|i: int| 0 <= i < word.len() ==> event_wf(#[trigger] word[i]))
+        id < regexes.len()
+            && (forall|i: int| 0 <= i < word.len() ==> event_wf(#[trigger] word[i], candidate.len()))
             && match regexes[id as int] {
                 FlatRegex::Empty => false,
                 FlatRegex::All => true,
@@ -313,8 +318,8 @@ pub mod verify {
 
     pub proof fn lemma_empty_operators<C>(empty: Vec<u32>, candidate: Seq<C>, word: Seq<Seq<C>>,
         eq: spec_fn(Component, C, C) -> bool)
-        requires empty@.len() == 0, event_wf(candidate),
-            forall|i: int| 0 <= i < word.len() ==> event_wf(#[trigger] word[i]),
+        requires empty@.len() == 0,
+            forall|i: int| 0 <= i < word.len() ==> event_wf(#[trigger] word[i], candidate.len()),
         ensures
             test_sem(seq![FlatTest::And(empty)], 0, candidate, candidate, eq),
             !test_sem(seq![FlatTest::Or(empty)], 0, candidate, candidate, eq),
@@ -339,8 +344,8 @@ pub mod verify {
         candidate: Seq<C>, word: Seq<Seq<C>>, eq: spec_fn(Component, C, C) -> bool,
     )
         requires id < regexes.len(), regexes[id as int] == FlatRegex::Complement(child),
-            child < id, event_wf(candidate),
-            forall|i: int| 0 <= i < word.len() ==> event_wf(#[trigger] word[i]),
+            child < id,
+            forall|i: int| 0 <= i < word.len() ==> event_wf(#[trigger] word[i], candidate.len()),
         ensures lang(tests, regexes, id, candidate, word, eq)
             <==> !lang(tests, regexes, child as nat, candidate, word, eq),
     {}
@@ -372,7 +377,7 @@ fn references_before(children: &[u32], bound: usize) -> bool {
 
 #[verus_verify]
 #[verus_spec(result => ensures result == verify::test_wf(head@, *test, index as nat))]
-fn test_valid<C>(head: &[FlatHead<C>; 3], test: &FlatTest<C>, index: usize) -> bool {
+fn test_valid<C>(head: &[FlatHead<C>], test: &FlatTest<C>, index: usize) -> bool {
     match test {
         FlatTest::Bool(_) => true,
         FlatTest::Atom {
@@ -385,7 +390,7 @@ fn test_valid<C>(head: &[FlatHead<C>; 3], test: &FlatTest<C>, index: usize) -> b
             }
             matches!(head.get(field.index()), Some(&FlatHead::Bind))
         }
-        FlatTest::Atom { .. } => true,
+        FlatTest::Atom { field, .. } => field.index() < head.len(),
         FlatTest::And(children) | FlatTest::Or(children) => references_before(children, index),
     }
 }
@@ -414,6 +419,11 @@ impl<C> FlatPair<C> {
     /// Validate even when no evaluator or runtime feature is enabled.
     #[verus_spec(result => ensures result is Ok <==> verify::structural_wf(*self))]
     pub fn validate(&self) -> Result<(), String> {
+        if self.head.is_empty() || self.head.len() > MAX_ARITY {
+            return Err(String::from(
+                "history head arity is outside the supported range",
+            ));
+        }
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant index <= self.tests@.len(),
@@ -464,7 +474,7 @@ impl<C> FlatPair<C> {
 /// Checked, topology-preserving construction shared by both source frontends.
 #[verus_verify]
 pub struct FlatBuilder<C> {
-    head: [FlatHead<C>; 3],
+    head: Vec<FlatHead<C>>,
     tests: Vec<FlatTest<C>>,
     regexes: Vec<FlatRegex>,
 }
@@ -492,9 +502,10 @@ fn invalid_source() -> HistoryError {
 
 #[verus_verify]
 impl<C> FlatBuilder<C> {
-    #[verus_spec(result => ensures result.wf(), result.head_view() == head@,
+    #[verus_spec(result => requires 1 <= head@.len() <= MAX_ARITY,
+        ensures result.wf(), result.head_view() == head@,
         result.tests_view() == Seq::<FlatTest<C>>::empty(), result.regexes_view() == Seq::<FlatRegex>::empty())]
-    pub fn new(head: [FlatHead<C>; 3]) -> Self {
+    pub fn new(head: Vec<FlatHead<C>>) -> Self {
         proof! { reveal(FlatBuilder::head_view); reveal(FlatBuilder::tests_view); reveal(FlatBuilder::regexes_view); }
         Self {
             head,
@@ -504,7 +515,7 @@ impl<C> FlatBuilder<C> {
     }
 
     #[verus_spec(result => ensures result@ == self.head_view())]
-    pub fn head(&self) -> &[FlatHead<C>; 3] {
+    pub fn head(&self) -> &[FlatHead<C>] {
         proof! { reveal(FlatBuilder::head_view); }
         &self.head
     }

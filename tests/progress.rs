@@ -5,11 +5,11 @@ use std::fmt;
 use history_semantics::{Decision, PolicyDecision, Validator};
 use history_store::{History, Store};
 use history_syntax::{
-    AtomPattern, Comparison, ComponentPattern, Coprod, Coproduct, Event, Head, RegexExpr, Rule,
-    RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Coprod, Coproduct, Event, Head,
+    RegexExpr, Rule, RuleMode, TestExpr,
 };
 use junco_core::{HistoryError, Request};
-use junco_policy::{Action, LockEvent, LockPolicy};
+use junco_policy::{Action, LockComponent, LockEvent, LockPolicy};
 use std::sync::Arc;
 
 /// Caller-assigned principal identity.
@@ -49,20 +49,26 @@ fn cold(
         .unwrap()
 }
 
-fn action_is<E: Event<Action = Action>>(action: Action) -> TestExpr<E> {
+fn action_is<E: Event<Component = LockComponent<Actor, Doc>, Arity = history_syntax::N3>>(
+    action: Action,
+) -> TestExpr<E> {
     TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Action(ComponentPattern::constant(action)),
+        AtomPattern::new(
+            Component(1),
+            ComponentPattern::constant(LockComponent::Action(action)),
+        ),
     )
 }
 
 /// Head matching every `Release` candidate, binding its principal `actor` and resource `doc`.
-fn release_head<E: Event<Action = Action>>() -> Head<E> {
-    Head::new(
+fn release_head<E: Event<Component = LockComponent<Actor, Doc>, Arity = history_syntax::N3>>()
+-> Head<E> {
+    Head::new([
         ComponentPattern::variable("actor"),
-        ComponentPattern::constant(Action::Release),
+        ComponentPattern::constant(LockComponent::Action(Action::Release)),
         ComponentPattern::variable("doc"),
-    )
+    ])
 }
 
 /// `All · T · All`.
@@ -71,16 +77,17 @@ fn contains<E: Event>(test: TestExpr<E>) -> RegexExpr<E> {
 }
 
 /// Release requires an earlier edit of the same resource by the same principal.
-fn prior_edit<E: Event<Action = Action>>() -> Rule<E> {
+fn prior_edit<E: Event<Component = LockComponent<Actor, Doc>, Arity = history_syntax::N3>>()
+-> Rule<E> {
     let same_edit = TestExpr::and([
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Principal(ComponentPattern::variable("actor")),
+            AtomPattern::new(Component(0), ComponentPattern::variable("actor")),
         ),
         action_is(Action::Edit),
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Resource(ComponentPattern::variable("doc")),
+            AtomPattern::new(Component(2), ComponentPattern::variable("doc")),
         ),
     ]);
     Rule::new(RuleMode::Require, release_head(), contains(same_edit))
@@ -144,20 +151,23 @@ macro_rules! payload {
         }
 
         impl Event for $name {
-            type Principal = Actor;
-            type Action = Action;
-            type Resource = Doc;
+            type Component = LockComponent<Actor, Doc>;
+            type Arity = history_syntax::N3;
 
-            fn principal(self) -> Actor {
-                self.actor
+            fn component(self, index: usize) -> Self::Component {
+                match index {
+                    0 => LockComponent::Principal(self.actor),
+                    1 => LockComponent::Action($action),
+                    _ => LockComponent::Resource(self.doc),
+                }
             }
 
-            fn action(self) -> Action {
-                $action
-            }
-
-            fn resource(self) -> Doc {
-                self.doc
+            fn coordinate(component: Self::Component) -> usize {
+                match component {
+                    LockComponent::Principal(_) => 0,
+                    LockComponent::Action(_) => 1,
+                    LockComponent::Resource(_) => 2,
+                }
             }
         }
     };
@@ -224,11 +234,11 @@ fn cached_residual_advances_at_every_appended_event() {
     let probe_doc = Doc(99);
     let rules = [Rule::new(
         RuleMode::Require,
-        Head::new(
-            ComponentPattern::constant(probe_actor),
-            ComponentPattern::constant(Action::Release),
-            ComponentPattern::constant(probe_doc),
-        ),
+        Head::new([
+            ComponentPattern::constant(LockComponent::Principal(probe_actor)),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
+            ComponentPattern::constant(LockComponent::Resource(probe_doc)),
+        ]),
         RegexExpr::concat([
             RegexExpr::test(action_is(Action::Read)),
             RegexExpr::all(),
@@ -425,20 +435,23 @@ struct Counted {
 }
 
 impl Event for Counted {
-    type Principal = Actor;
-    type Action = Action;
-    type Resource = Doc;
+    type Component = LockComponent<Actor, Doc>;
+    type Arity = history_syntax::N3;
 
-    fn principal(self) -> Actor {
-        self.actor
+    fn component(self, index: usize) -> Self::Component {
+        match index {
+            0 => LockComponent::Principal(self.actor),
+            1 => LockComponent::Action(self.action),
+            _ => LockComponent::Resource(self.doc),
+        }
     }
 
-    fn action(self) -> Action {
-        self.action
-    }
-
-    fn resource(self) -> Doc {
-        self.doc
+    fn coordinate(component: Self::Component) -> usize {
+        match component {
+            LockComponent::Principal(_) => 0,
+            LockComponent::Action(_) => 1,
+            LockComponent::Resource(_) => 2,
+        }
     }
 }
 
@@ -520,24 +533,24 @@ fn alternating_bindings_and_owners_change_work_never_verdicts() {
     let same_operation = TestExpr::and([
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Principal(ComponentPattern::variable("actor")),
+            AtomPattern::new(Component(0), ComponentPattern::variable("actor")),
         ),
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Action(ComponentPattern::variable("operation")),
+            AtomPattern::new(Component(1), ComponentPattern::variable("operation")),
         ),
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Resource(ComponentPattern::variable("doc")),
+            AtomPattern::new(Component(2), ComponentPattern::variable("doc")),
         ),
     ]);
     let rules = [Rule::new(
         RuleMode::Forbid,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
             ComponentPattern::variable("operation"),
             ComponentPattern::variable("doc"),
-        ),
+        ]),
         contains(same_operation),
     )];
     let store = Arc::new(Store::new().unwrap());

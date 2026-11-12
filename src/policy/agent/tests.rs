@@ -1,5 +1,6 @@
 use super::*;
-use history_store::Store;
+use history_semantics::PolicyDecision;
+use history_store::{History, Store};
 use std::sync::Arc;
 
 type Event = AgentEvent<&'static str, &'static str>;
@@ -184,14 +185,14 @@ fn audit_reports_would_be_denials_without_enforcing_them() {
 
 /// A custom rule whose tail names a variable its head does not bind.
 fn uncompilable() -> AgentRule<&'static str, &'static str> {
-    let head = Head::new(
+    let head = Head::new([
         ComponentPattern::variable(PRINCIPAL_VAR),
-        ComponentPattern::constant(AgentAction::Contact),
-        ComponentPattern::constant("external"),
-    );
+        ComponentPattern::constant(AgentComponent::Action(AgentAction::Contact)),
+        ComponentPattern::constant(AgentComponent::Class("external")),
+    ]);
     let tail = RegexExpr::test(TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Principal(ComponentPattern::variable("unbound")),
+        AtomPattern::new(Component(0), ComponentPattern::variable("unbound")),
     ));
     AgentRule::custom(TraceRule::new(
         Rule::new(RuleMode::Forbid, head, tail),
@@ -215,6 +216,36 @@ fn an_uncompilable_rule_denies_only_what_it_could_judge() {
             .check(&mut history, &batch, |_, _| {})
             .is_ok()
     );
+}
+
+#[test]
+fn malformed_heads_cannot_hide_behind_nonmatching_constants() {
+    let heads = [
+        Head::new([
+            ComponentPattern::constant(AgentComponent::Principal("other")),
+            ComponentPattern::constant(AgentComponent::Action(AgentAction::Edit)),
+        ]),
+        Head::new([
+            ComponentPattern::constant(AgentComponent::Principal("other")),
+            ComponentPattern::constant(AgentComponent::Action(AgentAction::Contact)),
+            ComponentPattern::constant(AgentComponent::Action(AgentAction::Contact)),
+        ]),
+    ];
+    let candidate = contact("a", "external");
+    for head in heads {
+        let policy = AgentPolicy::new().rule(AgentRule::custom(TraceRule::new(
+            Rule::new(RuleMode::Forbid, head, RegexExpr::epsilon()),
+            |_| (String::new(), Vec::new()),
+        )));
+        let mut history = history(&[]);
+        assert!(policy.decide(&history, &candidate).is_some());
+        let denials = policy
+            .check(&mut history, &[candidate], |_, _| {})
+            .unwrap_err();
+        assert_eq!(denials.len(), 1);
+        assert_eq!(denials[0].event, candidate);
+        assert!(history.as_slice().is_empty());
+    }
 }
 
 #[test]

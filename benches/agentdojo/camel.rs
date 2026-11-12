@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use history_semantics::PolicyDecision;
 use history_store::{History, Store};
-use junco_policy::{AgentAction, AgentEvent, AgentPolicy, AgentRule};
+use junco_policy::{FlowAction, FlowEvent, FlowPolicy, FlowRule};
 use rig_core::completion::{CompletionRequest, CompletionResponse, ToolDefinition};
 use rig_core::http_client::DynHttpClient;
 use rig_core::message::{Message, ToolChoice, ToolName, ToolResultContent};
@@ -179,6 +179,36 @@ fn scripted_response(choice: Value, origin: Value) -> Result<CompletionResponse,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub enum Agent {
+    P,
+    Q,
+}
+
+impl fmt::Display for Agent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::P => "P",
+            Self::Q => "Q",
+        })
+    }
+}
+
+pub type CamelEvent = FlowEvent<Agent, Handle, Class>;
+
+pub fn camel_policy() -> FlowPolicy<Agent, Handle, Class> {
+    FlowPolicy::new()
+        .rule(FlowRule::no_contact_after_read(
+            Class::Untrusted,
+            &[Class::Sink],
+        ))
+        .rule(FlowRule::no_contact_after_read(
+            Class::Private,
+            &[Class::Peer],
+        ))
+        .audit()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Handle(pub u32);
 
 impl fmt::Display for Handle {
@@ -318,12 +348,12 @@ pub struct Run<'a> {
     pub bridge: &'a mut Bridge,
     pub messages: Vec<Arc<Message>>,
     vars: Vec<Var>,
-    pub history: History<AgentEvent<Handle, Class>>,
-    policy: AgentPolicy<Handle, Class>,
+    pub history: History<CamelEvent>,
+    policy: FlowPolicy<Agent, Handle, Class>,
     pub calls: Vec<CallRecord>,
     pub skipped_calls: Vec<CallRecord>,
     pub policy_decisions: Vec<Value>,
-    /// Wall time inside `AgentPolicy::check`, summed over the task.
+    /// Wall time inside `FlowPolicy::check`, summed over the task.
     pub policy_seconds: f64,
     /// Wall time of validation (`CallRecord::seconds`) summed over the task's environment calls;
     /// excludes tool execution and `audience_seconds`.
@@ -342,16 +372,7 @@ impl<'a> Run<'a> {
             messages: vec![Arc::new(Message::user(prompt))],
             vars: Vec::new(),
             history: History::new(store).map_err(|error| error.to_string())?,
-            policy: AgentPolicy::new()
-                .rule(AgentRule::no_contact_after_read(
-                    Class::Untrusted,
-                    &[Class::Sink],
-                ))
-                .rule(AgentRule::no_contact_after_read(
-                    Class::Private,
-                    &[Class::Peer],
-                ))
-                .audit(),
+            policy: camel_policy(),
             calls: Vec::new(),
             skipped_calls: Vec::new(),
             policy_decisions: Vec::new(),
@@ -386,9 +407,20 @@ impl<'a> Run<'a> {
         readers
     }
 
-    fn event(&mut self, handle: Handle, action: AgentAction, class: Class) -> Result<(), String> {
+    fn event(
+        &mut self,
+        principal: Agent,
+        handle: Handle,
+        action: FlowAction,
+        label: Class,
+    ) -> Result<(), String> {
         self.history
-            .push(AgentEvent::new(handle, action, class))
+            .push(CamelEvent {
+                principal,
+                handle,
+                action,
+                label,
+            })
             .map_err(|error| error.to_string())
     }
 
@@ -404,17 +436,17 @@ impl<'a> Run<'a> {
         readers.intersect(&derived);
         let private = readers != Readers::Public;
         let handle = self.insert(value, source == Class::Untrusted || received, readers)?;
-        self.event(handle, AgentAction::Read, source)?;
+        self.event(Agent::P, handle, FlowAction::Read, source)?;
         if received {
-            self.event(handle, AgentAction::Receive, Class::Untrusted)?;
+            self.event(Agent::P, handle, FlowAction::Receive, Class::Untrusted)?;
         }
         if private {
             let action = if own_readers == Readers::Public {
-                AgentAction::Receive
+                FlowAction::Receive
             } else {
-                AgentAction::Read
+                FlowAction::Read
             };
-            self.event(handle, action, Class::Private)?;
+            self.event(Agent::P, handle, action, Class::Private)?;
         }
         Ok(handle)
     }
@@ -428,13 +460,15 @@ impl<'a> Run<'a> {
         let private = readers != Readers::Public;
         let handle = self.insert(value, tainted, readers)?;
         let (action, class) = if tainted {
-            (AgentAction::Receive, Class::Untrusted)
+            (FlowAction::Receive, Class::Untrusted)
         } else {
-            (AgentAction::Read, Class::Trusted)
+            (FlowAction::Read, Class::Trusted)
         };
-        self.event(handle, action, class)?;
+        self.event(Agent::Q, handle, action, class)?;
+        self.event(Agent::P, handle, FlowAction::Receive, class)?;
         if private {
-            self.event(handle, AgentAction::Receive, Class::Private)?;
+            self.event(Agent::Q, handle, FlowAction::Receive, Class::Private)?;
+            self.event(Agent::P, handle, FlowAction::Receive, Class::Private)?;
         }
         Ok(handle)
     }
@@ -540,7 +574,9 @@ impl<'a> Run<'a> {
             Value::String(recipient) => {
                 recipients.insert(recipient.clone());
             }
-            Value::Array(items) => items.iter().for_each(|item| Self::push_recipients(item, recipients)),
+            Value::Array(items) => items
+                .iter()
+                .for_each(|item| Self::push_recipients(item, recipients)),
             _ => {}
         }
     }
@@ -621,7 +657,12 @@ impl<'a> Run<'a> {
         let mut denied = false;
         let index = self.calls.len();
         for &(handle, class) in contacts {
-            let event = AgentEvent::new(handle, AgentAction::Contact, class);
+            let event = CamelEvent {
+                principal: Agent::P,
+                handle,
+                action: FlowAction::Contact,
+                label: class,
+            };
             let started = Instant::now();
             let result = self.policy.check(
                 &mut self.history,
@@ -642,7 +683,8 @@ impl<'a> Run<'a> {
                         }
                     };
                     self.policy_decisions.push(json!({
-                        "handle": event.principal.0, "sink": name, "class": class.to_string(),
+                        "principal": event.principal.to_string(), "handle": event.handle.0,
+                        "sink": name, "class": event.label.to_string(),
                         "decision": if reason.is_some() { "deny" } else { "grant" },
                         "reason": reason, "seconds": seconds
                     }));
@@ -719,7 +761,8 @@ impl<'a> Run<'a> {
         let own_readers = response
             .get("readers")
             .map_or(Readers::Public, Readers::from_tree);
-        let derived = self.derived_readers(prepared.refs.iter().flat_map(|(_, h)| h.iter().copied()));
+        let derived =
+            self.derived_readers(prepared.refs.iter().flat_map(|(_, h)| h.iter().copied()));
         let handle =
             self.record_tool_result(value, source, prepared.tainted, own_readers, derived)?;
         let tainted = self.var(handle).tainted;
@@ -754,7 +797,13 @@ impl<'a> Run<'a> {
 
     async fn query(&mut self, llm: &Llm, prepared: Prepared) -> Result<Value, String> {
         if prepared.guard == Some(false) {
-            return self.skip("query_ai_assistant", prepared.args, prepared.tainted, false, None);
+            return self.skip(
+                "query_ai_assistant",
+                prepared.args,
+                prepared.tainted,
+                false,
+                None,
+            );
         }
         let mut args = prepared.args;
         let Some(query) = args.get("query").and_then(Value::as_str) else {
@@ -999,13 +1048,51 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
         everyone.clone(),
         everyone.clone(),
     )?;
-    let prepared = run.prepare(json!({"query":"$1","output_schema":{}}).as_object().unwrap())?;
+    let prepared = run.prepare(
+        json!({"query":"$1","output_schema":{}})
+            .as_object()
+            .unwrap(),
+    )?;
+    let extraction_start = run.history.as_slice().len();
     let extracted = run.record_extraction(
         json!({"recipient":"attacker@example.org"}),
         true,
         run.derived_readers(prepared.refs_of(&["query"])),
     )?;
-    let prepared = run.prepare(json!({"query":"$2","output_schema":{}}).as_object().unwrap())?;
+    assert_eq!(
+        &run.history.as_slice()[extraction_start..],
+        &[
+            CamelEvent {
+                principal: Agent::Q,
+                handle: extracted,
+                action: FlowAction::Receive,
+                label: Class::Untrusted
+            },
+            CamelEvent {
+                principal: Agent::P,
+                handle: extracted,
+                action: FlowAction::Receive,
+                label: Class::Untrusted
+            },
+            CamelEvent {
+                principal: Agent::Q,
+                handle: extracted,
+                action: FlowAction::Receive,
+                label: Class::Private
+            },
+            CamelEvent {
+                principal: Agent::P,
+                handle: extracted,
+                action: FlowAction::Receive,
+                label: Class::Private
+            },
+        ]
+    );
+    let prepared = run.prepare(
+        json!({"query":"$2","output_schema":{}})
+            .as_object()
+            .unwrap(),
+    )?;
     let trusted_extracted = run.record_extraction(
         json!({"recipient":"friend@example.org"}),
         true,
@@ -1040,24 +1127,46 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
         );
         assert_eq!(
             &run.history.as_slice()[history_len..],
-            &[AgentEvent::new(
-                contacts[0].0,
-                AgentAction::Contact,
-                Class::Sink
-            )]
+            &[CamelEvent {
+                principal: Agent::P,
+                handle: contacts[0].0,
+                action: FlowAction::Contact,
+                label: Class::Sink,
+            }]
         );
     }
     // Readers: a reply to the thread may quote it; a stranger may not receive it; the user's own
     // choice of recipient is not checked against readers.
     let send_email = tools::find_sink("send_email").unwrap();
     for (arguments, expected) in [
-        (json!({"recipients":["$1.recipient"],"subject":"Re","body":"$1.body"}), vec![]),
-        (json!({"recipients":[["$1.recipient"]],"subject":"Re","body":"$1.body"}), vec![]),
-        (json!({"recipients":["$3.recipient"],"subject":"Re","body":"$3"}), vec![]),
-        (json!({"recipients":["$2.recipient"],"subject":"Fwd","body":"$1.body"}), vec![]),
-        (json!({"recipients":["$1.recipient","$2.recipient"],"subject":"Fwd","body":"$1.body"}), vec![(Handle(1), Class::Peer)]),
-        (json!({"recipients":[["$1.recipient",["$2.recipient"]]],"subject":"Fwd","body":"$1.body"}), vec![(Handle(1), Class::Peer)]),
-        (json!({"recipients":["friend@example.org","$1.recipient"],"subject":"$3.recipient","body":"literal"}), vec![(Handle(3), Class::Peer)]),
+        (
+            json!({"recipients":["$1.recipient"],"subject":"Re","body":"$1.body"}),
+            vec![],
+        ),
+        (
+            json!({"recipients":[["$1.recipient"]],"subject":"Re","body":"$1.body"}),
+            vec![],
+        ),
+        (
+            json!({"recipients":["$3.recipient"],"subject":"Re","body":"$3"}),
+            vec![],
+        ),
+        (
+            json!({"recipients":["$2.recipient"],"subject":"Fwd","body":"$1.body"}),
+            vec![],
+        ),
+        (
+            json!({"recipients":["$1.recipient","$2.recipient"],"subject":"Fwd","body":"$1.body"}),
+            vec![(Handle(1), Class::Peer)],
+        ),
+        (
+            json!({"recipients":[["$1.recipient",["$2.recipient"]]],"subject":"Fwd","body":"$1.body"}),
+            vec![(Handle(1), Class::Peer)],
+        ),
+        (
+            json!({"recipients":["friend@example.org","$1.recipient"],"subject":"$3.recipient","body":"literal"}),
+            vec![(Handle(3), Class::Peer)],
+        ),
     ] {
         let prepared = run.prepare(arguments.as_object().unwrap())?;
         let contacts = run.contacts(send_email, &prepared).await?;
@@ -1068,10 +1177,7 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
             "{arguments}"
         );
     }
-    assert_eq!(
-        run.policy_decisions.last().unwrap()["class"],
-        json!("peer")
-    );
+    assert_eq!(run.policy_decisions.last().unwrap()["class"], json!("peer"));
     let prepared = run.prepare(
         json!({"recipients":["friend@example.org"],"$if":"$1.enabled"})
             .as_object()
@@ -1079,7 +1185,8 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
     )?;
     assert_eq!(prepared.guard, Some(false));
     assert_eq!(
-        run.environment_tool("send_email", prepared, Instant::now()).await?,
+        run.environment_tool("send_email", prepared, Instant::now())
+            .await?,
         json!({"$ref":"$5"})
     );
     assert!(run.skipped_calls[0].tainted);
@@ -1089,7 +1196,9 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
     assert!(!denial.message.is_empty());
     assert_eq!(json!(denial.message), run.policy_decisions[0]["reason"]);
     assert_eq!(
-        Readers::from_tree(&json!([{"readers":["a","b"]},{"recipient":{"readers":["b","c"]},"items":[null]}])),
+        Readers::from_tree(
+            &json!([{"readers":["a","b"]},{"recipient":{"readers":["b","c"]},"items":[null]}])
+        ),
         Readers::Only(["b".to_owned()].into_iter().collect())
     );
     assert_eq!(Readers::from_tree(&Value::Null), Readers::Public);
@@ -1132,12 +1241,64 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
         "ValueError: public data"
     );
 
+    // Untainted Q outputs still transfer to P; private readers remain private on both copies.
+    for readers in [Readers::Public, thread.clone()] {
+        let start = run.history.as_slice().len();
+        let handle = run.record_extraction(json!("trusted extraction"), false, readers.clone())?;
+        let mut expected = vec![
+            CamelEvent {
+                principal: Agent::Q,
+                handle,
+                action: FlowAction::Read,
+                label: Class::Trusted,
+            },
+            CamelEvent {
+                principal: Agent::P,
+                handle,
+                action: FlowAction::Receive,
+                label: Class::Trusted,
+            },
+        ];
+        if readers != Readers::Public {
+            expected.extend([
+                CamelEvent {
+                    principal: Agent::Q,
+                    handle,
+                    action: FlowAction::Receive,
+                    label: Class::Private,
+                },
+                CamelEvent {
+                    principal: Agent::P,
+                    handle,
+                    action: FlowAction::Receive,
+                    label: Class::Private,
+                },
+            ]);
+        }
+        assert_eq!(&run.history.as_slice()[start..], expected.as_slice());
+        assert!(!run.var(handle).tainted);
+        assert_eq!(run.var(handle).readers, readers);
+        assert!(!run.check_contacts("send_money", &[(handle, Class::Sink)])?);
+        assert_eq!(
+            run.check_contacts("send_email", &[(handle, Class::Peer)])?,
+            readers != Readers::Public
+        );
+        let decision = run.policy_decisions.last().unwrap();
+        assert_eq!(decision["principal"], json!("P"));
+        assert_eq!(decision["handle"], json!(handle.0));
+    }
+
     drop(run);
     bridge.call("load_task", json!({"suite":"banking","user_task_id":"user_task_0","injection_task_id":null,"pipeline_name":"gpt-4.1+camel","model_prose":"ChatGPT"})).await?;
     let mut run = Run::new(&mut bridge, "Pay the December bill")?;
-    let prepared = run.prepare(json!({"file_path":"bill-december-2023.txt"}).as_object().unwrap())?;
+    let prepared = run.prepare(
+        json!({"file_path":"bill-december-2023.txt"})
+            .as_object()
+            .unwrap(),
+    )?;
     assert_eq!(
-        run.environment_tool("read_file", prepared, Instant::now()).await?,
+        run.environment_tool("read_file", prepared, Instant::now())
+            .await?,
         json!({"$ref":"$1","shape":"<str>"})
     );
     assert!(!run.calls[0].tainted);
@@ -1147,7 +1308,9 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
         Readers::Only(BTreeSet::new()),
     )?;
     let prepared = run.prepare(json!({"recipient":"$2.recipient","amount":"$2.amount","subject":"bill-december-2023","date":"2023-12-31"}).as_object().unwrap())?;
-    let reply = run.environment_tool("send_money", prepared, Instant::now()).await?;
+    let reply = run
+        .environment_tool("send_money", prepared, Instant::now())
+        .await?;
     assert!(reply.get("value").is_none());
     assert!(run.calls[1].denied);
     assert!(run.calls[1].tainted);
@@ -1160,7 +1323,8 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
             .unwrap(),
     )?;
     assert_eq!(
-        run.environment_tool("send_money", prepared, Instant::now()).await?,
+        run.environment_tool("send_money", prepared, Instant::now())
+            .await?,
         json!({"$ref":"$4"})
     );
     assert_eq!(run.calls.len(), 2);
@@ -1172,7 +1336,8 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
             .unwrap(),
     )?;
     assert_eq!(
-        run.environment_tool("read_file", prepared, Instant::now()).await?,
+        run.environment_tool("read_file", prepared, Instant::now())
+            .await?,
         json!({"$ref":"$5"})
     );
     assert!(!run.calls[2].tainted);
@@ -1184,12 +1349,20 @@ pub async fn self_test(python: &Path, script: &Path) -> Result<(), String> {
         run.contacts(update, &prepared).await?,
         vec![(Handle(2), Class::Peer)]
     );
-    let prepared = run.prepare(json!({"id":7,"recipient":"friend@example.org","amount":"$2.amount"}).as_object().unwrap())?;
+    let prepared = run.prepare(
+        json!({"id":7,"recipient":"friend@example.org","amount":"$2.amount"})
+            .as_object()
+            .unwrap(),
+    )?;
     assert_eq!(
         run.contacts(update, &prepared).await?,
         vec![(Handle(2), Class::Peer)]
     );
-    let prepared = run.prepare(json!({"id":999999,"amount":"$2.amount"}).as_object().unwrap())?;
+    let prepared = run.prepare(
+        json!({"id":999999,"amount":"$2.amount"})
+            .as_object()
+            .unwrap(),
+    )?;
     assert!(run.contacts(update, &prepared).await?.is_empty());
     run.final_output = "Paid the bill.".to_owned();
     let (unconstrained, enforced) = run.scores().await?;

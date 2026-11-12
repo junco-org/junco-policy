@@ -6,7 +6,7 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use history_syntax::syntax::Component;
+use history_syntax::{MAX_ARITY, syntax::Component};
 use vstd::prelude::*;
 use vstd::std_specs::iter::IteratorSpec;
 
@@ -53,25 +53,17 @@ pub proof fn lemma_iterator_into_iter_yields<I: Iterator>(input: I)
     }
 }
 
-/// Fixed-width semantic event; zero is reserved for an unbound binding coordinate.
-pub struct EventView {
-    pub principal: nat,
-    pub action: nat,
-    pub resource: nat,
-}
+/// Numeric event coordinates; zero is reserved for an unbound binding coordinate.
+pub type EventView = Seq<nat>;
 
 pub type Subst = EventView;
 
-pub open spec fn event_wf(event: EventView) -> bool {
-    event.principal <= u64::MAX && event.action <= u64::MAX && event.resource <= u64::MAX
+pub open spec fn event_wf(event: EventView, arity: nat) -> bool {
+    event.len() == arity && forall|i: int| 0 <= i < event.len() ==> event[i] <= u64::MAX
 }
 
 pub open spec fn field_value(event: EventView, field: Component) -> nat {
-    match field {
-        Component::Principal => event.principal,
-        Component::Action => event.action,
-        Component::Resource => event.resource,
-    }
+    event[field.0 as int]
 }
 
 pub enum Regex<L> {
@@ -625,18 +617,10 @@ pub enum SrcTest {
 
 pub enum HeadField { Any, Constant(nat), Bind }
 
-pub struct Head {
-    pub principal: HeadField,
-    pub action: HeadField,
-    pub resource: HeadField,
-}
+pub type Head = Seq<HeadField>;
 
 pub open spec fn head_field(head: Head, field: Component) -> HeadField {
-    match field {
-        Component::Principal => head.principal,
-        Component::Action => head.action,
-        Component::Resource => head.resource,
-    }
+    head[field.0 as int]
 }
 
 pub open spec fn head_field_match(head: HeadField, request: nat, binding: nat) -> bool {
@@ -648,17 +632,12 @@ pub open spec fn head_field_match(head: HeadField, request: nat, binding: nat) -
 }
 
 pub open spec fn head_match(head: Head, request: EventView, theta: Subst) -> bool {
-    head_field_match(head.principal, request.principal, theta.principal)
-        && head_field_match(head.action, request.action, theta.action)
-        && head_field_match(head.resource, request.resource, theta.resource)
+    head.len() == request.len() && head.len() == theta.len()
+        && forall|i: int| 0 <= i < head.len() ==> head_field_match(head[i], request[i], theta[i])
 }
 
 pub open spec fn head_bindings(head: Head, request: EventView) -> Subst {
-    EventView {
-        principal: if head.principal is Bind { request.principal } else { 0 },
-        action: if head.action is Bind { request.action } else { 0 },
-        resource: if head.resource is Bind { request.resource } else { 0 },
-    }
+    Seq::new(head.len(), |i: int| if head[i] is Bind { request[i] } else { 0 })
 }
 
 pub open spec fn term_value(theta: Subst, term: Term) -> nat {
@@ -683,23 +662,17 @@ pub open spec fn src_test_holds(theta: Subst, test: SrcTest, event: EventView) -
 }
 
 pub open spec fn term_wf(field: Component, term: Term, head: Head) -> bool {
-    match term {
+    field.0 < head.len() && match term {
         Term::Constant(value) => 0 < value <= u64::MAX,
         Term::Variable(variable) => variable == field && head_field(head, field) is Bind,
     }
 }
 
 pub open spec fn head_wf(head: Head) -> bool {
-    (match head.principal {
+    1 <= head.len() <= MAX_ARITY && forall|i: int| 0 <= i < head.len() ==> match #[trigger] head[i] {
         HeadField::Constant(value) => 0 < value <= u64::MAX,
         _ => true,
-    }) && (match head.action {
-        HeadField::Constant(value) => 0 < value <= u64::MAX,
-        _ => true,
-    }) && (match head.resource {
-        HeadField::Constant(value) => 0 < value <= u64::MAX,
-        _ => true,
-    })
+    }
 }
 
 pub open spec fn test_wf(test: SrcTest, head: Head) -> bool
@@ -734,9 +707,10 @@ pub proof fn lemma_head_match_unique_subst(head: Head, request: EventView, left:
     requires head_match(head, request, left), head_match(head, request, right),
     ensures left == right,
 {
-    match head.principal { HeadField::Any => {}, HeadField::Constant(_) => {}, HeadField::Bind => {} }
-    match head.action { HeadField::Any => {}, HeadField::Constant(_) => {}, HeadField::Bind => {} }
-    match head.resource { HeadField::Any => {}, HeadField::Constant(_) => {}, HeadField::Bind => {} }
+    assert forall|i: int| 0 <= i < head.len() implies left[i] == right[i] by {
+        match head[i] { HeadField::Any => {}, HeadField::Constant(_) => {}, HeadField::Bind => {} }
+    }
+    assert(left =~= right);
 }
 
 pub proof fn lemma_pair_lang_substitutions(head: Head, tail: Regex<SrcTest>, request: EventView,

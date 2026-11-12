@@ -1,10 +1,10 @@
 use history_semantics::Validator;
 use history_store::Store;
 use history_syntax::{
-    AtomPattern, Comparison, ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
 use junco_core::Request;
-use junco_policy::{Action, LockEvent};
+use junco_policy::{Action, LockComponent, LockEvent};
 use std::sync::Arc;
 
 /// Principal of committed history events versus the rule-probing candidate.
@@ -52,8 +52,8 @@ fn eval_test(test: &RefTest, event: &LockEvent<Actor, Path>) -> bool {
     match test {
         RefTest::True => true,
         RefTest::False => false,
-        RefTest::Action(Comparison::Eq, expected) => event.action() == *expected,
-        RefTest::Action(Comparison::Neq, expected) => event.action() != *expected,
+        RefTest::Action(Comparison::Eq, expected) => event.action == *expected,
+        RefTest::Action(Comparison::Neq, expected) => event.action != *expected,
         RefTest::And(children) => children.iter().all(|child| eval_test(child, event)),
         RefTest::Or(children) => children.iter().any(|child| eval_test(child, event)),
     }
@@ -94,7 +94,10 @@ fn source_test(source: &RefTest) -> TestExpr<LockEvent<Actor, Path>> {
         RefTest::False => TestExpr::false_test(),
         RefTest::Action(comparison, action) => TestExpr::atom(
             *comparison,
-            AtomPattern::Action(ComponentPattern::constant(*action)),
+            AtomPattern::new(
+                Component(1),
+                ComponentPattern::constant(LockComponent::Action(*action)),
+            ),
         ),
         RefTest::And(children) => TestExpr::and(children.iter().map(source_test)),
         RefTest::Or(children) => TestExpr::or(children.iter().map(source_test)),
@@ -188,11 +191,11 @@ fn assert_prefixes_match_reference(regex: &RefRegex, word: &[LockEvent<Actor, Pa
     builder
         .add_rule(Rule::new(
             RuleMode::Require,
-            Head::new(
-                ComponentPattern::constant(Actor::Probe),
-                ComponentPattern::constant(Action::Remove),
-                ComponentPattern::constant(Path::Probe),
-            ),
+            Head::new([
+                ComponentPattern::constant(LockComponent::Principal(Actor::Probe)),
+                ComponentPattern::constant(LockComponent::Action(Action::Remove)),
+                ComponentPattern::constant(LockComponent::Resource(Path::Probe)),
+            ]),
             source_regex(regex),
         ))
         .unwrap();

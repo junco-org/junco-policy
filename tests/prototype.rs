@@ -1,10 +1,10 @@
 use history_semantics::{Decision, Validator};
 use history_store::Store;
 use history_syntax::{
-    AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
 use junco_core::{CompileError, Request};
-use junco_policy::{Action, LockEvent};
+use junco_policy::{Action, LockComponent, LockEvent};
 use std::sync::Arc;
 
 /// Caller-owned principal identities.
@@ -35,25 +35,28 @@ fn request<M>(
 fn same_actor_edit_before_release() -> Rule<LockEvent<Actor, Path>> {
     let principal = TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Principal(ComponentPattern::variable("actor")),
+        AtomPattern::new(Component(0), ComponentPattern::variable("actor")),
     );
     let action = TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Action(ComponentPattern::constant(Action::Edit)),
+        AtomPattern::new(
+            Component(1),
+            ComponentPattern::constant(LockComponent::Action(Action::Edit)),
+        ),
     );
     let resource = TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Resource(ComponentPattern::variable("target")),
+        AtomPattern::new(Component(2), ComponentPattern::variable("target")),
     );
     let event = RegexExpr::test(TestExpr::and([principal, action, resource]));
     let tail = RegexExpr::concat([RegexExpr::all(), event]);
     Rule::new(
         RuleMode::Require,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Release),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
             ComponentPattern::variable("target"),
-        ),
+        ]),
         tail,
     )
 }
@@ -87,21 +90,24 @@ fn require_rule_uses_only_committed_pre_candidate_history() {
 fn forbid_rule_denies_duplicate_remove_without_mutating_history() {
     let action = TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Action(ComponentPattern::constant(Action::Remove)),
+        AtomPattern::new(
+            Component(1),
+            ComponentPattern::constant(LockComponent::Action(Action::Remove)),
+        ),
     );
     let resource = TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Resource(ComponentPattern::variable("target")),
+        AtomPattern::new(Component(2), ComponentPattern::variable("target")),
     );
     let matching_remove = RegexExpr::test(TestExpr::and([action, resource]));
     let tail = RegexExpr::concat([RegexExpr::all(), matching_remove, RegexExpr::all()]);
     let rule = Rule::new(
         RuleMode::Forbid,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Remove),
+            ComponentPattern::constant(LockComponent::Action(Action::Remove)),
             ComponentPattern::variable("target"),
-        ),
+        ]),
         tail,
     );
 
@@ -136,16 +142,19 @@ fn forbid_rule_denies_duplicate_remove_without_mutating_history() {
 fn complement_is_exact_over_complete_history() {
     let edit = RegexExpr::test(TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Action(ComponentPattern::constant(Action::Edit)),
+        AtomPattern::new(
+            Component(1),
+            ComponentPattern::constant(LockComponent::Action(Action::Edit)),
+        ),
     ));
     let contains_edit = RegexExpr::concat([RegexExpr::all(), edit, RegexExpr::all()]);
     let rule = Rule::new(
         RuleMode::Require,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Release),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
             ComponentPattern::variable("target"),
-        ),
+        ]),
         RegexExpr::complement(contains_edit),
     );
 
@@ -180,14 +189,14 @@ fn construction_rejects_unbound_and_cross_component_variables() {
     let mut builder = Validator::<LockEvent<Actor, Path>>::builder(Arc::clone(&store));
     let missing = builder.add_rule(Rule::new(
         RuleMode::Require,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Release),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
             ComponentPattern::variable("target"),
-        ),
+        ]),
         RegexExpr::test(TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Principal(ComponentPattern::variable("missing")),
+            AtomPattern::new(Component(0), ComponentPattern::variable("missing")),
         )),
     ));
     assert!(matches!(
@@ -198,11 +207,11 @@ fn construction_rejects_unbound_and_cross_component_variables() {
     let mut builder = Validator::<LockEvent<Actor, Path>>::builder(Arc::clone(&store));
     let conflict = builder.add_rule(Rule::new(
         RuleMode::Require,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("same"),
             ComponentPattern::variable("same"),
-            ComponentPattern::constant(Path::A),
-        ),
+            ComponentPattern::constant(LockComponent::Resource(Path::A)),
+        ]),
         RegexExpr::all(),
     ));
     assert!(matches!(
@@ -215,11 +224,11 @@ fn construction_rejects_unbound_and_cross_component_variables() {
         Validator::<LockEvent<Actor, Actor>>::builder(Arc::new(Store::new().unwrap()));
     let head_conflict = builder.add_rule(Rule::new(
         RuleMode::Require,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("same"),
-            ComponentPattern::constant(Action::Release),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
             ComponentPattern::variable("same"),
-        ),
+        ]),
         RegexExpr::all(),
     ));
     assert!(matches!(
@@ -231,14 +240,14 @@ fn construction_rejects_unbound_and_cross_component_variables() {
         Validator::<LockEvent<Actor, Actor>>::builder(Arc::new(Store::new().unwrap()));
     let tail_conflict = builder.add_rule(Rule::new(
         RuleMode::Require,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("same"),
-            ComponentPattern::constant(Action::Release),
-            ComponentPattern::constant(Actor::Bob),
-        ),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
+            ComponentPattern::constant(LockComponent::Resource(Actor::Bob)),
+        ]),
         RegexExpr::test(TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Resource(ComponentPattern::variable("same")),
+            AtomPattern::new(Component(2), ComponentPattern::variable("same")),
         )),
     ));
     assert!(matches!(

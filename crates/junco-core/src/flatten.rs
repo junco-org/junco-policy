@@ -6,10 +6,10 @@ use crate::limits::Limits;
 use crate::observation::ObservationWorld;
 use crate::scope::VariableScope;
 use alloc::vec::Vec;
-use history_syntax::Event;
 use history_syntax::syntax::{
     AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
+use history_syntax::{Arity, Event};
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
@@ -17,63 +17,11 @@ use crate::verify::flatten::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::history_specs::{no_internal_compile_error, no_internal_error};
 #[cfg(verus_keep_ghost)]
-use vstd::std_specs::cmp::{PartialEqSpec, PartialEqSpecImpl};
+use history_syntax::event::specs::{EventSpec, arity};
 
 #[cfg(verus_keep_ghost)]
 verus! {
     broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
-}
-
-/// A concrete component value tagged with its coordinate, even when component Rust types coincide.
-#[verus_verify]
-#[verus_verify(external_derive)]
-#[derive(Clone, Copy, Debug)]
-pub enum ComponentValue<E: Event> {
-    Principal(E::Principal),
-    Action(E::Action),
-    Resource(E::Resource),
-}
-
-#[verus_verify]
-impl<E: Event> PartialEq for ComponentValue<E> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Principal(left), Self::Principal(right)) => left == right,
-            (Self::Action(left), Self::Action(right)) => left == right,
-            (Self::Resource(left), Self::Resource(right)) => left == right,
-            _ => false,
-        }
-    }
-}
-
-impl<E: Event> Eq for ComponentValue<E> {}
-
-impl<E: Event> core::hash::Hash for ComponentValue<E> {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        core::hash::Hash::hash(&core::mem::discriminant(self), state);
-        match self {
-            Self::Principal(value) => core::hash::Hash::hash(value, state),
-            Self::Action(value) => core::hash::Hash::hash(value, state),
-            Self::Resource(value) => core::hash::Hash::hash(value, state),
-        }
-    }
-}
-
-#[cfg(verus_keep_ghost)]
-verus! {
-impl<E: Event> PartialEqSpecImpl for ComponentValue<E> {
-    open spec fn obeys_eq_spec() -> bool {
-        E::Principal::obeys_eq_spec() && E::Action::obeys_eq_spec() && E::Resource::obeys_eq_spec()
-    }
-    open spec fn eq_spec(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Principal(left), Self::Principal(right)) => left.eq_spec(right),
-            (Self::Action(left), Self::Action(right)) => left.eq_spec(right),
-            (Self::Resource(left), Self::Resource(right)) => left.eq_spec(right),
-            _ => false,
-        }
-    }
-}
 }
 
 // Only borrowed source nodes enter the work stack: every failure leaves caller-owned trees intact.
@@ -151,91 +99,157 @@ fn take_children<L: Limits>(
 
 #[verus_verify]
 #[verus_spec(result => requires
-    old(scope).name_spec(Component::Principal) is None,
-    old(scope).name_spec(Component::Action) is None,
-    old(scope).name_spec(Component::Resource) is None,
+    old(scope).wf(), old(scope).arity_spec() == arity::<E>(),
+    forall|i: int| 0 <= i < arity::<E>() ==> #[trigger] old(scope).name_spec(Component(i as u8)) is None,
     ensures result matches Ok(flat) ==>
         head_represents::<E>(flat@, head@) && crate::verify::dsl::head_scoped(head@)
-        && scope_matches::<E>(*final(scope), head@),
-    result is Ok <==> crate::verify::dsl::head_scoped(head@),
+        && scope_matches::<E>(*final(scope), head@)
+        && (E::obeys_projection_spec() ==> head_coordinates_wf::<E>(head@)),
+    crate::verify::dsl::head_scoped(head@) ==>
+        !(result matches Err(CompileError::VariableComponentConflict { .. })),
+    !(result matches Err(CompileError::UnboundVariable { .. })),
+    E::obeys_projection_spec() && head_coordinates_wf::<E>(head@)
+        && crate::verify::dsl::head_scoped(head@) ==> result is Ok || result matches Err(CompileError::Runtime(_)),
     no_internal_compile_error(result),
-    !(result matches Err(CompileError::Runtime(_))),
+    !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
 )]
-fn flatten_head<'a, E: Event>(
+fn flatten_head<'a, E: Event, L: Limits>(
     head: &'a Head<E>,
     scope: &mut VariableScope<'a>,
-) -> Result<[FlatHead<ComponentValue<E>>; 3], CompileError> {
-    let principal = match &head.principal {
-        ComponentPattern::Constant(value) => FlatHead::Constant(ComponentValue::Principal(*value)),
-        ComponentPattern::Variable(name) => {
-            scope.bind(Component::Principal, name.as_str())?;
-            FlatHead::Bind
+    limits: &mut L,
+    world: &mut ObservationWorld,
+) -> Result<Vec<FlatHead<E::Component>>, CompileError> {
+    let arity = E::Arity::value();
+    let slots = head.slots();
+    if slots.len() != arity {
+        return Err(CompileError::HeadArity {
+            expected: arity,
+            found: slots.len(),
+        });
+    }
+    let mut flat = Vec::new();
+    match world.try_reserve_vec_exact(&mut flat, arity) {
+        Ok(()) => {}
+        Err(_) => return Err(HistoryError::AllocationFailed.into()),
+    }
+    limits.enforce_memory().map_err(HistoryError::from)?;
+    let mut index = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(
+        invariant index <= arity, arity == history_syntax::event::specs::arity::<E>(),
+            1 <= arity <= history_syntax::MAX_ARITY,
+            head@.len() == arity, slots@.len() == arity,
+            forall|i: int| 0 <= i < arity ==> slots@[i]@ == head@[i],
+            flat@.len() == index, scope.wf(), scope.arity_spec() == arity,
+            forall|i: int| 0 <= i < index ==> head_slot_represents(flat@[i], head@[i]),
+            crate::verify::dsl::head_scoped(head@.take(index as int)),
+            forall|i: int| 0 <= i < arity ==> match #[trigger] scope.name_spec(Component(i as u8)) {
+                Some(name) => i < index && crate::verify::dsl::pattern_name(head@[i]) == Some(name@),
+                None => i >= index || crate::verify::dsl::pattern_name(head@[i]) is None,
+            },
+            E::obeys_projection_spec() ==> forall|i: int| 0 <= i < index ==> match #[trigger] head@[i] {
+                history_syntax::verify::dsl::PatternView::Constant(value) => E::coordinate_spec(value) == i,
+                _ => true,
+            },
+        decreases arity - index,
+    ))]
+    while index < arity {
+        limits.checkpoint().map_err(HistoryError::from)?;
+        let component = Component::new(index);
+        proof_decl! { let ghost previous_scope = *scope; }
+        let slot = match &slots[index] {
+            ComponentPattern::Constant(value) => {
+                let coordinate = E::coordinate(*value);
+                if coordinate != index {
+                    return Err(CompileError::ComponentCoordinate {
+                        component: index,
+                        coordinate,
+                    });
+                }
+                FlatHead::Constant(*value)
+            }
+            ComponentPattern::Variable(name) => {
+                proof! {
+                    if crate::verify::dsl::head_scoped(head@) {
+                        assert forall|i: int| 0 <= i < scope.arity_spec() && i != component.0 implies
+                            !(#[trigger] scope.has_name(Component(i as u8), name@)) by {
+                            if i < index {
+                                assert(crate::verify::dsl::distinct_names(head@[i], head@[index as int]));
+                            }
+                        }
+                    }
+                }
+                scope.bind(component, name.as_str())?;
+                proof! {
+                    assert forall|i: int| 0 <= i < index implies
+                        crate::verify::dsl::distinct_names(head@[i], head@[index as int]) by {
+                        assert(!previous_scope.has_name(Component(i as u8), name@));
+                    }
+                }
+                FlatHead::Bind
+            }
+        };
+        proof! {
+            assert forall|i: int, j: int| 0 <= i < j < index + 1 implies
+                crate::verify::dsl::distinct_names(head@[i], head@[j]) by {
+                if j < index {
+                    assert(head@.take(index as int)[i] == head@[i]);
+                    assert(head@.take(index as int)[j] == head@[j]);
+                } else {
+                    assert(j == index);
+                }
+            }
         }
-    };
-    let action = match &head.action {
-        ComponentPattern::Constant(value) => FlatHead::Constant(ComponentValue::Action(*value)),
-        ComponentPattern::Variable(name) => {
-            scope.bind(Component::Action, name.as_str())?;
-            FlatHead::Bind
-        }
-    };
-    let resource = match &head.resource {
-        ComponentPattern::Constant(value) => FlatHead::Constant(ComponentValue::Resource(*value)),
-        ComponentPattern::Variable(name) => {
-            scope.bind(Component::Resource, name.as_str())?;
-            FlatHead::Bind
-        }
-    };
-    Ok([principal, action, resource])
+        flat.push(slot);
+        index += 1;
+    }
+    proof! { assert(head@.take(index as int) =~= head@); }
+    Ok(flat)
 }
 
 #[verus_verify]
-#[verus_spec(result => ensures result matches Ok((field, term)) ==>
-    forall|head| scope_matches::<E>(*scope, head) ==> atom_term_represents::<E>(field, term, atom@, head),
+#[verus_spec(result => requires scope.wf(), scope.arity_spec() == arity::<E>(),
+    ensures result matches Ok((field, term)) ==>
+        (forall|head| scope_matches::<E>(*scope, head) ==> atom_term_represents::<E>(field, term, atom@, head))
+        && (E::obeys_projection_spec() ==> atom_coordinates_wf::<E>(atom@)),
     no_internal_compile_error(result),
-    !(result matches Err(CompileError::Runtime(_))),
-    forall|head| scope_matches::<E>(*scope, head)
-        && crate::verify::dsl::atom_scoped(atom@, head) ==> result is Ok,
+    atom@.component < scope.arity_spec() ==>
+        !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
+    forall|head| scope_matches::<E>(*scope, head) && crate::verify::dsl::atom_scoped(atom@, head) ==>
+        !(result matches Err(CompileError::VariableComponentConflict { .. }))
+        && !(result matches Err(CompileError::UnboundVariable { .. })),
+    E::obeys_projection_spec() && atom_coordinates_wf::<E>(atom@) ==>
+        (forall|head| scope_matches::<E>(*scope, head) && crate::verify::dsl::atom_scoped(atom@, head)
+            ==> result is Ok),
 )]
 fn flatten_atom<E: Event>(
     atom: &AtomPattern<E>,
     scope: &VariableScope<'_>,
-) -> Result<(Component, FlatTerm<ComponentValue<E>>), CompileError> {
-    match atom {
-        AtomPattern::Principal(pattern) => Ok((
-            Component::Principal,
-            match pattern {
-                ComponentPattern::Constant(value) => {
-                    FlatTerm::Constant(ComponentValue::Principal(*value))
-                }
-                ComponentPattern::Variable(name) => {
-                    FlatTerm::Variable(scope.resolve(Component::Principal, name.as_str())?)
-                }
-            },
-        )),
-        AtomPattern::Action(pattern) => Ok((
-            Component::Action,
-            match pattern {
-                ComponentPattern::Constant(value) => {
-                    FlatTerm::Constant(ComponentValue::Action(*value))
-                }
-                ComponentPattern::Variable(name) => {
-                    FlatTerm::Variable(scope.resolve(Component::Action, name.as_str())?)
-                }
-            },
-        )),
-        AtomPattern::Resource(pattern) => Ok((
-            Component::Resource,
-            match pattern {
-                ComponentPattern::Constant(value) => {
-                    FlatTerm::Constant(ComponentValue::Resource(*value))
-                }
-                ComponentPattern::Variable(name) => {
-                    FlatTerm::Variable(scope.resolve(Component::Resource, name.as_str())?)
-                }
-            },
-        )),
+) -> Result<(Component, FlatTerm<E::Component>), CompileError> {
+    let component = atom.component;
+    let index = component.index();
+    if index >= scope.arity() {
+        return Err(HistoryError::invalid_policy(
+            "atom.component",
+            "component index is outside the event arity",
+        )
+        .into());
     }
+    let term = match &atom.pattern {
+        ComponentPattern::Constant(value) => {
+            let coordinate = E::coordinate(*value);
+            if coordinate != index {
+                return Err(CompileError::ComponentCoordinate {
+                    component: index,
+                    coordinate,
+                });
+            }
+            FlatTerm::Constant(*value)
+        }
+        ComponentPattern::Variable(name) => {
+            FlatTerm::Variable(scope.resolve(component, name.as_str())?)
+        }
+    };
+    Ok((component, term))
 }
 
 #[verus_verify]
@@ -378,13 +392,14 @@ fn schedule_tests<'a, E: Event, L: Limits>(
 #[verus_verify]
 #[verus_spec(result => ensures
     no_internal_compile_error(result),
-    !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
+    crate::verify::dsl::regex_scoped(rule.tail@, rule.head@) ==>
+        !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
     crate::verify::dsl::head_scoped(rule.head@)
         && crate::verify::dsl::regex_scoped(rule.tail@, rule.head@)
         ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
             && !(result matches Err(CompileError::UnboundVariable { .. })),
     result matches Ok(flat) ==> flattened::<E>(*rule, flat)
-        && crate::verify::encoding::constants_in_domain(flat.source, component_domain::<E>()),
+        && (E::obeys_projection_spec() ==> crate::verify::encoding::constants_in_domain(flat.source, component_domain::<E>())),
     result matches Ok(flat) ==> flat.source.tests@.len() + flat.source.regexes@.len()
         <= regex_cost::<E>(rule.tail@),
 )]
@@ -392,7 +407,7 @@ pub fn flatten_rule<E: Event, L: Limits>(
     rule: &Rule<E>,
     limits: &mut L,
     world: &mut ObservationWorld,
-) -> Result<FlatRule<ComponentValue<E>>, CompileError> {
+) -> Result<FlatRule<E::Component>, CompileError> {
     flatten_rule_parts(rule.mode, &rule.head, &rule.tail, limits, world)
 }
 
@@ -404,13 +419,14 @@ pub fn flatten_rule<E: Event, L: Limits>(
 #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
 #[verus_spec(result => ensures
     no_internal_compile_error(result),
-    !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
+    crate::verify::dsl::regex_scoped(source_tail@, source_head@) ==>
+        !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
     crate::verify::dsl::head_scoped(source_head@)
         && crate::verify::dsl::regex_scoped(source_tail@, source_head@)
         ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
             && !(result matches Err(CompileError::UnboundVariable { .. })),
     result matches Ok(flat) ==> flattened::<E>(Rule { mode, head: *source_head, tail: *source_tail }, flat)
-        && crate::verify::encoding::constants_in_domain(flat.source, component_domain::<E>()),
+        && (E::obeys_projection_spec() ==> crate::verify::encoding::constants_in_domain(flat.source, component_domain::<E>())),
     result matches Ok(flat) ==> flat.source.tests@.len() + flat.source.regexes@.len()
         <= regex_cost::<E>(source_tail@),
 )]
@@ -420,11 +436,11 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
     source_tail: &RegexExpr<E>,
     limits: &mut L,
     world: &mut ObservationWorld,
-) -> Result<FlatRule<ComponentValue<E>>, CompileError> {
+) -> Result<FlatRule<E::Component>, CompileError> {
     proof_decl! { let ghost rule = Rule { mode, head: *source_head, tail: *source_tail }; }
     limits.checkpoint().map_err(HistoryError::from)?;
-    let mut scope = VariableScope::new();
-    let head = flatten_head(source_head, &mut scope)?;
+    let mut scope = VariableScope::new(E::Arity::value());
+    let head = flatten_head(source_head, &mut scope, limits, world)?;
     let mut builder = FlatBuilder::new(head);
     let mut work = Vec::new();
     let mut tests: Vec<u32> = Vec::new();
@@ -452,9 +468,10 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
             scope_matches::<E>(scope, rule.head@),
             crate::verify::dsl::regex_scoped(rule.tail@, rule.head@)
                 ==> work_scoped::<E>(work@, rule.head@),
-            forall|i: int| 0 <= i < 3 ==> crate::verify::encoding::head_in_domain(
-                builder.head_view()[i], crate::verify::encoding::field_at(i), component_domain::<E>()),
-            forall|i: int| 0 <= i < builder.tests_view().len()
+            E::obeys_projection_spec() ==> forall|i: int| 0 <= i < builder.head_view().len()
+                ==> crate::verify::encoding::head_in_domain(
+                    builder.head_view()[i], crate::verify::encoding::field_at(i), component_domain::<E>()),
+            E::obeys_projection_spec() ==> forall|i: int| 0 <= i < builder.tests_view().len()
                 ==> crate::verify::encoding::test_in_domain(builder.tests_view()[i], component_domain::<E>()),
             result_stacks::<E>(builder.tests_view(), builder.regexes_view(), tests@, regexes@,
                 test_sources, regex_sources, rule.head@),
@@ -606,7 +623,7 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                     };
                     proof! {
                         assert(crate::flat::verify::test_wf(builder.head_view(), node, builder.tests_view().len()));
-                        assert(crate::verify::encoding::test_in_domain(node, component_domain::<E>()));
+                        assert(E::obeys_projection_spec() ==> crate::verify::encoding::test_in_domain(node, component_domain::<E>()));
                     }
                     let id = builder.test(node, limits, world)?;
                     proof! {
@@ -845,9 +862,11 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                 <= old_tests.len() + old_regexes.len() + 1);
             assert(builder.tests_view().len() + builder.regexes_view().len()
                 + work_cost::<E>(work@) <= regex_cost::<E>(rule.tail@));
-            assert forall|i: int| 0 <= i < builder.tests_view().len() implies
-                crate::verify::encoding::test_in_domain(builder.tests_view()[i], component_domain::<E>()) by {
-                if i < old_tests.len() { assert(builder.tests_view()[i] == old_tests[i]); }
+            if E::obeys_projection_spec() {
+                assert forall|i: int| 0 <= i < builder.tests_view().len() implies
+                    crate::verify::encoding::test_in_domain(builder.tests_view()[i], component_domain::<E>()) by {
+                    if i < old_tests.len() { assert(builder.tests_view()[i] == old_tests[i]); }
+                }
             }
         }
     }
@@ -873,11 +892,11 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
         assert(regex_represents::<E>(builder.tests_view(), builder.regexes_view(), root as nat, rule.tail@, rule.head@));
     }
     limits.checkpoint().map_err(HistoryError::from)?;
-    let source: FlatPair<ComponentValue<E>> = builder.finish(root)?;
+    let source: FlatPair<E::Component> = builder.finish(root)?;
     proof! {
         assert(head_represents::<E>(source.head@, rule.head@));
         assert(regex_represents::<E>(source.tests@, source.regexes@, source.root as nat, rule.tail@, rule.head@));
-        assert(crate::verify::encoding::constants_in_domain(source, component_domain::<E>()));
+        assert(E::obeys_projection_spec() ==> crate::verify::encoding::constants_in_domain(source, component_domain::<E>()));
     }
     Ok(FlatRule { mode, source })
 }

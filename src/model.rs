@@ -3,7 +3,7 @@
 use core::fmt::{self, Debug};
 use core::hash::Hash;
 
-use history_syntax::Event;
+use history_syntax::{Event, N3};
 
 /// Ownership-lock capability action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -27,6 +27,17 @@ impl fmt::Display for Action {
             Self::Remove => "remove",
         })
     }
+}
+
+/// Tagged coordinate of a [`LockEvent`], ordered as principal, action, resource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LockComponent<P, R> {
+    /// Actor at coordinate zero.
+    Principal(P),
+    /// Requested operation at coordinate one.
+    Action(Action),
+    /// Protected resource at coordinate two.
+    Resource(R),
 }
 
 /// Built-in compact ownership-lock event.
@@ -58,19 +69,22 @@ where
     P: Copy + Debug + Eq + Hash,
     R: Copy + Debug + Eq + Hash,
 {
-    type Principal = P;
-    type Action = Action;
-    type Resource = R;
+    type Component = LockComponent<P, R>;
+    type Arity = N3;
 
-    fn principal(self) -> P {
-        self.principal
+    fn component(self, index: usize) -> Self::Component {
+        match index {
+            0 => LockComponent::Principal(self.principal),
+            1 => LockComponent::Action(self.action),
+            _ => LockComponent::Resource(self.resource),
+        }
     }
 
-    fn action(self) -> Action {
-        self.action
-    }
-
-    fn resource(self) -> R {
-        self.resource
+    fn coordinate(component: Self::Component) -> usize {
+        match component {
+            LockComponent::Principal(_) => 0,
+            LockComponent::Action(_) => 1,
+            LockComponent::Resource(_) => 2,
+        }
     }
 }

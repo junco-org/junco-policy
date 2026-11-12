@@ -21,10 +21,10 @@ use history_semantics::policy::{
     CompiledPolicy, PolicyRule, action_is, forbid, last_state_change, principal_is, resource_is,
 };
 use history_store::{History, Store};
-use history_syntax::{Comparison, Event, RegexExpr, TestExpr};
+use history_syntax::{Comparison, RegexExpr, TestExpr};
 use junco_core::{CompileError, HistoryError};
 
-use crate::{Action, LockEvent};
+use crate::{Action, LockComponent, LockEvent};
 
 /// Everything a lock denial renders from.
 struct LockContext {
@@ -36,35 +36,51 @@ struct LockContext {
 }
 
 /// An on-`r` `action` by a principal other than the acting one.
-fn foreign_on_r<E: Event<Action = Action>>(action: Action) -> TestExpr<E> {
+fn foreign_on_r<P, R>(action: Action) -> TestExpr<LockEvent<P, R>>
+where
+    P: Copy + Debug + Eq + Hash,
+    R: Copy + Debug + Eq + Hash,
+{
     TestExpr::and([
         resource_is(Comparison::Eq),
-        action_is(action, Comparison::Eq),
+        action_is(LockComponent::Action(action), Comparison::Eq),
         principal_is(Comparison::Neq),
     ])
 }
 
 /// Another principal's `edit` is the last owner-changing event on `r`.
-fn owned_by_other<E: Event<Action = Action>>() -> RegexExpr<E> {
+fn owned_by_other<P, R>() -> RegexExpr<LockEvent<P, R>>
+where
+    P: Copy + Debug + Eq + Hash,
+    R: Copy + Debug + Eq + Hash,
+{
     let changes = [Action::Edit, Action::Release, Action::Remove];
     last_state_change(foreign_on_r(Action::Edit), stable(&changes))
 }
 
 /// Another principal's `read` is the last reader-changing event on `r`.
-fn read_by_other<E: Event<Action = Action>>() -> RegexExpr<E> {
+fn read_by_other<P, R>() -> RegexExpr<LockEvent<P, R>>
+where
+    P: Copy + Debug + Eq + Hash,
+    R: Copy + Debug + Eq + Hash,
+{
     let changes = [Action::Read, Action::Remove];
     last_state_change(foreign_on_r(Action::Read), stable(&changes))
 }
 
 /// Another principal edited `r` after the acting principal last read or edited it.
-fn stale_view<E: Event<Action = Action>>() -> RegexExpr<E> {
+fn stale_view<P, R>() -> RegexExpr<LockEvent<P, R>>
+where
+    P: Copy + Debug + Eq + Hash,
+    R: Copy + Debug + Eq + Hash,
+{
     last_state_change(
         foreign_on_r(Action::Edit),
         TestExpr::and([
             stable(&[Action::Edit, Action::Remove]),
             TestExpr::or([
                 resource_is(Comparison::Neq),
-                action_is(Action::Read, Comparison::Neq),
+                action_is(LockComponent::Action(Action::Read), Comparison::Neq),
                 principal_is(Comparison::Neq),
             ]),
         ]),
@@ -72,13 +88,17 @@ fn stale_view<E: Event<Action = Action>>() -> RegexExpr<E> {
 }
 
 /// An event that is off `r` or is none of `changes`.
-fn stable<E: Event<Action = Action>>(changes: &[Action]) -> TestExpr<E> {
+fn stable<P, R>(changes: &[Action]) -> TestExpr<LockEvent<P, R>>
+where
+    P: Copy + Debug + Eq + Hash,
+    R: Copy + Debug + Eq + Hash,
+{
     TestExpr::or([
         resource_is(Comparison::Neq),
         TestExpr::and(
             changes
                 .iter()
-                .map(|&action| action_is(action, Comparison::Neq)),
+                .map(|&action| action_is(LockComponent::Action(action), Comparison::Neq)),
         ),
     ])
 }
@@ -127,15 +147,47 @@ fn stale_denial(context: &LockContext) -> (String, Vec<String>) {
 }
 
 /// The lock table: owner cells first, so the owner diagnostic wins.
-fn lock_rules<E: Event<Action = Action>>() -> Vec<PolicyRule<E, LockContext>> {
+fn lock_rules<P, R>() -> Vec<PolicyRule<LockEvent<P, R>, LockContext>>
+where
+    P: Copy + Debug + Eq + Hash,
+    R: Copy + Debug + Eq + Hash,
+{
     vec![
-        forbid(Action::Edit, owned_by_other(), Box::new(owner_denial)),
-        forbid(Action::Release, owned_by_other(), Box::new(owner_denial)),
-        forbid(Action::Remove, owned_by_other(), Box::new(owner_denial)),
-        forbid(Action::Edit, stale_view(), Box::new(stale_denial)),
-        forbid(Action::Remove, stale_view(), Box::new(stale_denial)),
-        forbid(Action::Edit, read_by_other(), Box::new(reader_denial)),
-        forbid(Action::Remove, read_by_other(), Box::new(reader_denial)),
+        forbid(
+            LockComponent::Action(Action::Edit),
+            owned_by_other(),
+            Box::new(owner_denial),
+        ),
+        forbid(
+            LockComponent::Action(Action::Release),
+            owned_by_other(),
+            Box::new(owner_denial),
+        ),
+        forbid(
+            LockComponent::Action(Action::Remove),
+            owned_by_other(),
+            Box::new(owner_denial),
+        ),
+        forbid(
+            LockComponent::Action(Action::Edit),
+            stale_view(),
+            Box::new(stale_denial),
+        ),
+        forbid(
+            LockComponent::Action(Action::Remove),
+            stale_view(),
+            Box::new(stale_denial),
+        ),
+        forbid(
+            LockComponent::Action(Action::Edit),
+            read_by_other(),
+            Box::new(reader_denial),
+        ),
+        forbid(
+            LockComponent::Action(Action::Remove),
+            read_by_other(),
+            Box::new(reader_denial),
+        ),
     ]
 }
 
@@ -144,33 +196,32 @@ fn lock_rules<E: Event<Action = Action>>() -> Vec<PolicyRule<E, LockContext>> {
 ///
 /// Principal and resource identities are rendered through the caller's `Display` labels here, off
 /// the grant path.
-fn lock_context<E>(history: &[E], candidate: &E) -> LockContext
+fn lock_context<P, R>(history: &[LockEvent<P, R>], candidate: &LockEvent<P, R>) -> LockContext
 where
-    E: Event<Action = Action>,
-    E::Principal: Display,
-    E::Resource: Display,
+    P: Copy + Display,
+    R: Copy + Eq + Display,
 {
-    let resource = candidate.resource();
+    let resource = candidate.resource;
     let mut owner = None;
     let mut reader = None;
-    for event in history.iter().filter(|event| event.resource() == resource) {
-        match event.action() {
-            Action::Read => reader = Some(event.principal()),
-            Action::Edit => owner = Some(event.principal()),
+    for event in history.iter().filter(|event| event.resource == resource) {
+        match event.action {
+            Action::Read => reader = Some(event.principal),
+            Action::Edit => owner = Some(event.principal),
             Action::Release => owner = None,
             Action::Remove => (owner, reader) = (None, None),
         }
     }
-    let name = |claim: Option<E::Principal>| {
+    let name = |claim: Option<P>| {
         claim.map_or_else(
             || "another principal".to_string(),
             |claim| claim.to_string(),
         )
     };
     LockContext {
-        principal: candidate.principal().to_string(),
+        principal: candidate.principal.to_string(),
         resource: resource.to_string(),
-        action: candidate.action(),
+        action: candidate.action,
         owner: name(owner),
         reader: name(reader),
     }

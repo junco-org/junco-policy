@@ -16,41 +16,36 @@ pub enum PatternView<T> {
     Variable(Seq<char>),
 }
 
-pub struct HeadView<P, A, R> {
-    pub principal: PatternView<P>,
-    pub action: PatternView<A>,
-    pub resource: PatternView<R>,
+pub type HeadView<C> = Seq<PatternView<C>>;
+
+pub struct AtomView<C> {
+    pub component: nat,
+    pub pattern: PatternView<C>,
 }
 
-pub enum AtomView<P, A, R> {
-    Principal(PatternView<P>),
-    Action(PatternView<A>),
-    Resource(PatternView<R>),
-}
-
-pub enum TestView<P, A, R> {
+pub enum TestView<C> {
     True,
     False,
-    Atom { comparison: Comparison, pattern: AtomView<P, A, R> },
-    And(Seq<TestView<P, A, R>>),
-    Or(Seq<TestView<P, A, R>>),
+    Atom { comparison: Comparison, pattern: AtomView<C> },
+    And(Seq<TestView<C>>),
+    Or(Seq<TestView<C>>),
 }
 
 /// The same algebra as the numeric history model, over concrete component values.
-pub enum RegexView<P, A, R> {
+pub enum RegexView<C> {
     Empty, All, Epsilon,
-    Test(TestView<P, A, R>),
-    Union(Seq<RegexView<P, A, R>>),
-    Concat(Seq<RegexView<P, A, R>>),
-    Star(Box<RegexView<P, A, R>>),
-    Intersect(Seq<RegexView<P, A, R>>),
-    Not(Box<RegexView<P, A, R>>),
+    Test(TestView<C>),
+    Union(Seq<RegexView<C>>),
+    Concat(Seq<RegexView<C>>),
+    Star(Box<RegexView<C>>),
+    Intersect(Seq<RegexView<C>>),
+    Not(Box<RegexView<C>>),
 }
 
-pub struct RuleView<P, A, R> {
+pub struct RuleView<C> {
     pub mode: RuleMode,
-    pub head: HeadView<P, A, R>,
-    pub tail: RegexView<P, A, R>,
+    pub head: HeadView<C>,
+    pub tail: RegexView<C>,
 }
 /// Remaining source nodes, used to prove that iterative disposal terminates.
 pub open spec fn test_nodes<E: Event>(test: TestExpr<E>) -> nat
@@ -124,24 +119,20 @@ impl<T> View for ComponentPattern<T> {
 }
 
 impl<E: Event> View for Head<E> {
-    type V = HeadView<E::Principal, E::Action, E::Resource>;
+    type V = HeadView<E::Component>;
     open spec fn view(&self) -> Self::V {
-        HeadView { principal: self.principal@, action: self.action@, resource: self.resource@ }
+        self.0@.map(|i: int, pattern: ComponentPattern<E::Component>| pattern@)
     }
 }
 
 impl<E: Event> View for AtomPattern<E> {
-    type V = AtomView<E::Principal, E::Action, E::Resource>;
+    type V = AtomView<E::Component>;
     open spec fn view(&self) -> Self::V {
-        match self {
-            AtomPattern::Principal(pattern) => AtomView::Principal(pattern@),
-            AtomPattern::Action(pattern) => AtomView::Action(pattern@),
-            AtomPattern::Resource(pattern) => AtomView::Resource(pattern@),
-        }
+        AtomView { component: self.component.0 as nat, pattern: self.pattern@ }
     }
 }
 
-pub open spec fn test_view<E: Event>(test: TestExpr<E>) -> TestView<E::Principal, E::Action, E::Resource>
+pub open spec fn test_view<E: Event>(test: TestExpr<E>) -> TestView<E::Component>
     decreases test,
 {
     match test {
@@ -156,11 +147,11 @@ pub open spec fn test_view<E: Event>(test: TestExpr<E>) -> TestView<E::Principal
 }
 
 impl<E: Event> View for TestExpr<E> {
-    type V = TestView<E::Principal, E::Action, E::Resource>;
+    type V = TestView<E::Component>;
     open spec fn view(&self) -> Self::V { test_view(*self) }
 }
 
-pub open spec fn regex_view<E: Event>(regex: RegexExpr<E>) -> RegexView<E::Principal, E::Action, E::Resource>
+pub open spec fn regex_view<E: Event>(regex: RegexExpr<E>) -> RegexView<E::Component>
     decreases regex,
 {
     match regex {
@@ -180,29 +171,28 @@ pub open spec fn regex_view<E: Event>(regex: RegexExpr<E>) -> RegexView<E::Princ
 }
 
 impl<E: Event> View for RegexExpr<E> {
-    type V = RegexView<E::Principal, E::Action, E::Resource>;
+    type V = RegexView<E::Component>;
     open spec fn view(&self) -> Self::V { regex_view(*self) }
 }
 
 impl<E: Event> View for Rule<E> {
-    type V = RuleView<E::Principal, E::Action, E::Resource>;
+    type V = RuleView<E::Component>;
     open spec fn view(&self) -> Self::V {
         RuleView { mode: self.mode, head: self.head@, tail: self.tail@ }
     }
 }
 /// A real constructor/projection proof client, without a projection-obedience assumption.
-pub fn constructor_client<E: Event>(principal: E::Principal, action: E::Action, resource: E::Resource)
+pub fn constructor_client<E: Event>(slots: alloc::vec::Vec<ComponentPattern<E::Component>>)
     -> (rule: Rule<E>)
     ensures
         rule@.mode == RuleMode::Require,
-        rule@.head.principal == PatternView::Constant(principal),
-        rule@.head.action == PatternView::Constant(action),
-        rule@.head.resource == PatternView::Constant(resource),
+        rule@.head == slots@.map(|i: int, pattern: ComponentPattern<E::Component>| pattern@),
         rule@.tail == RegexView::Not(Box::new(RegexView::Epsilon)),
 {
     proof! { reveal_with_fuel(regex_view, 2); }
-    let head = Head::new(ComponentPattern::Constant(principal), ComponentPattern::Constant(action),
-        ComponentPattern::Constant(resource));
+    let iter = slots.into_iter();
+    proof! { vstd::std_specs::iter::axiom_from_iterator_ensures(iter); }
+    let head = Head::new(iter);
     let tail = RegexExpr::complement(RegexExpr::epsilon());
     Rule::new(RuleMode::Require, head, tail)
 }

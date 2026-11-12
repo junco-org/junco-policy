@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn publication_evicts_replaces_and_retains_longer_prefix() -> Result<(), HistoryError> {
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let graph = CanonicalStore::new()?;
         let mut cache = CursorCache::new(&mut Unmetered, &mut ObservationWorld)?;
         let mut handles = Vec::new();
@@ -338,7 +338,7 @@ mod tests {
             let history = store.new_history(&mut Unmetered, &mut ObservationWorld)?;
             cache.publish(HistoryCursor {
                 history: history.index(),
-                bindings: Bindings::new([0; 3]),
+                bindings: Bindings::new(&[0; 3]),
                 revision: 0,
                 consumed: 3,
                 residual: graph.constants().all,
@@ -354,7 +354,7 @@ mod tests {
         );
         let replacement = HistoryCursor {
             history: handles[8].index(),
-            bindings: Bindings::new([0; 3]),
+            bindings: Bindings::new(&[0; 3]),
             revision: 0,
             consumed: 5,
             residual: graph.constants().epsilon,

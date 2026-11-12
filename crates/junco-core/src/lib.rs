@@ -28,4 +28,4 @@ pub mod verify;
 pub use compile::{FlatEncoder, lower_flat};
 pub use error::{CompileError, HistoryError};
 pub use event::{Grant, Request};
-pub use flatten::{ComponentValue, flatten_rule};
+pub use flatten::flatten_rule;

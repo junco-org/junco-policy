@@ -433,7 +433,8 @@ pub mod verify {
 mod tests {
     use super::*;
     use history_syntax::{
-        AtomPattern, Comparison, ComponentPattern as P, Head, RegexExpr as R, TestExpr as T,
+        AtomPattern, Comparison, Component, Component3, ComponentPattern as P, Head, N3,
+        RegexExpr as R, TestExpr as T,
     };
     use junco_core::limits::LimitError;
 
@@ -445,17 +446,23 @@ mod tests {
         payload: u16,
     }
     impl Event for Document {
-        type Principal = u8;
-        type Action = u8;
-        type Resource = u8;
-        fn principal(self) -> u8 {
-            self.principal
+        type Component = Component3<u8, u8, u8>;
+        type Arity = N3;
+
+        fn component(self, index: usize) -> Self::Component {
+            match index {
+                0 => Component3::C0(self.principal),
+                1 => Component3::C1(self.action),
+                _ => Component3::C2(self.resource),
+            }
         }
-        fn action(self) -> u8 {
-            self.action
-        }
-        fn resource(self) -> u8 {
-            self.resource
+
+        fn coordinate(component: Self::Component) -> usize {
+            match component {
+                Component3::C0(_) => 0,
+                Component3::C1(_) => 1,
+                Component3::C2(_) => 2,
+            }
         }
     }
     fn edit() -> Document {
@@ -477,28 +484,34 @@ mod tests {
         Arc::new(Store::new().unwrap())
     }
     fn any_head() -> Head<Document> {
-        Head::new(
+        Head::new([
             P::variable("principal"),
             P::variable("action"),
             P::variable("resource"),
-        )
+        ])
     }
     fn prior_edit() -> Rule<Document> {
         Rule::new(
             RuleMode::Require,
-            Head::new(
+            Head::new([
                 P::variable("actor"),
-                P::constant(2),
+                P::constant(Component3::C1(2)),
                 P::variable("resource"),
-            ),
+            ]),
             R::concat([
                 R::all(),
                 R::test(T::and([
-                    T::atom(Comparison::Eq, AtomPattern::Principal(P::variable("actor"))),
-                    T::atom(Comparison::Eq, AtomPattern::Action(P::constant(1))),
                     T::atom(
                         Comparison::Eq,
-                        AtomPattern::Resource(P::variable("resource")),
+                        AtomPattern::new(Component(0), P::variable("actor")),
+                    ),
+                    T::atom(
+                        Comparison::Eq,
+                        AtomPattern::new(Component(1), P::constant(Component3::C1(1))),
+                    ),
+                    T::atom(
+                        Comparison::Eq,
+                        AtomPattern::new(Component(2), P::variable("resource")),
                     ),
                 ])),
                 R::all(),

@@ -30,9 +30,7 @@ use vstd::std_specs::iter::IteratorSpec;
 #[cfg(verus_keep_ghost)]
 verus! { broadcast use vstd::laws_cmp::group_laws_cmp; }
 
-/// Number of event components, and so of registers.
-#[verus_verify]
-pub(crate) const COMPONENTS: usize = 3;
+// Event arity is carried by each sequence, rather than a global register count.
 
 /// Identity of an interned constant; constants of different components never share one.
 pub(crate) type ConstId = u32;
@@ -41,7 +39,7 @@ pub(crate) type ConstId = u32;
 pub(crate) type Universe = Option<Rc<Vec<ConstId>>>;
 
 /// The universe of each component.
-pub(crate) type Universes = [Universe; COMPONENTS];
+pub(crate) type Universes = Vec<Universe>;
 
 /// Operand an atom compares its component with.
 #[verus_verify]
@@ -215,65 +213,109 @@ impl RegisterConstraint {
 }
 
 /// Satisfiable conjunction of register literals, one entry per component.
-// The verified `eq` compares the three registers in order, as the derived `Hash` hashes them.
+// Equality compares the ordered register keys, exactly as the derived Hash hashes them.
 #[allow(clippy::derived_hash_with_manual_eq)]
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Clone, Debug, Eq, Hash)]
-pub(crate) struct Constraint(pub(crate) [RegisterConstraint; COMPONENTS]);
+pub(crate) struct Constraint(pub(crate) Vec<RegisterConstraint>);
 
 #[verus_verify]
 impl Constraint {
     /// The constraint fixing the registers that head constants pin, or `None` if some register
     /// can take no value of its universe.
-    #[verus_spec(result => ensures match result {
-        Some(c) => constraint_wf(c)
-            && (forall|i: int| 0 <= i < 3 ==> c.0[i]@ == match constants[i] {
+    #[verus_spec(result => requires constants@.len() == universes@.len(),
+    1 <= constants@.len() <= history_syntax::MAX_ARITY,
+    ensures match result {
+        Some(c) => constraint_wf(c) && c@.len() == constants@.len()
+            && (forall|i: int| 0 <= i < constants@.len() ==> c.0[i]@ == match constants@[i] {
                 Some(v) => implementation::RegisterView::Equals(v as nat),
                 None => implementation::RegisterView::Differs(Set::empty()),
             })
-            && implementation::constraint_of(c@) == inclusion::head_constraint(head_view(constants))
+            && implementation::constraint_of(c@) == inclusion::head_constraint(head_view(constants@))
             && inclusion::satisfiable(ndomains(*universes), implementation::constraint_of(c@)),
-        None => !inclusion::satisfiable(ndomains(*universes), inclusion::head_constraint(head_view(constants))),
+        None => !inclusion::satisfiable(ndomains(*universes), inclusion::head_constraint(head_view(constants@))),
     })]
-    pub(crate) fn head(
-        constants: [Option<ConstId>; COMPONENTS],
-        universes: &Universes,
-    ) -> Option<Self> {
-        let first = RegisterConstraint::head(constants[0]);
-        let second = RegisterConstraint::head(constants[1]);
-        let third = RegisterConstraint::head(constants[2]);
-        let constraint = Self([first, second, third]);
-        proof! {
-            lemma_head_view(constraint, constants);
-            lemma_constraint_possible(constraint, *universes);
+    pub(crate) fn head(constants: &[Option<ConstId>], universes: &Universes) -> Option<Self> {
+        let mut registers = Vec::with_capacity(constants.len());
+        let mut possible = true;
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+        index <= constants@.len(), registers@.len() == index,
+        constants@.len() == universes@.len(), 1 <= constants@.len() <= history_syntax::MAX_ARITY,
+        forall|i: int| 0 <= i < index ==> register_wf(registers@[i])
+            && registers@[i]@ == match constants@[i] {
+                Some(v) => implementation::RegisterView::Equals(v as nat),
+                None => implementation::RegisterView::Differs(Set::empty()),
+            },
+        possible == (forall|i: int| 0 <= i < index ==> register_possible(registers@[i], universes@[i])),
+        decreases constants@.len() - index))]
+        while index < constants.len() {
+            let register = RegisterConstraint::head(constants[index]);
+            possible = register.satisfiable(&universes[index]) && possible;
+            registers.push(register);
+            index += 1;
         }
-        if constraint.0[0].satisfiable(&universes[0])
-            && constraint.0[1].satisfiable(&universes[1])
-            && constraint.0[2].satisfiable(&universes[2])
-        {
-            Some(constraint)
-        } else {
-            None
-        }
+        let constraint = Self(registers);
+        proof! { lemma_head_view(constraint, constants@); lemma_constraint_possible(constraint, *universes); }
+        if possible { Some(constraint) } else { None }
     }
 
     /// Whether every valuation satisfying `self` satisfies `other`, read syntactically.
     #[verus_spec(result => requires constraint_wf(*self), constraint_wf(*other),
-        ensures result ==> forall|d: encoding::NDomains|
-            inclusion::entails(d, implementation::constraint_of(self@), implementation::constraint_of(other@)))]
+    self@.len() == other@.len(),
+    ensures result ==> forall|d: encoding::NDomains|
+        inclusion::entails(d, implementation::constraint_of(self@), implementation::constraint_of(other@)))]
     pub(crate) fn entails(&self, other: &Self) -> bool {
-        let result = self.0[0].entails(&other.0[0])
-            && self.0[1].entails(&other.0[1])
-            && self.0[2].entails(&other.0[2]);
-        proof! { if result { lemma_constraint_entails(self@, other@); } }
-        result
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+        index <= self.0@.len(), self.0@.len() == other.0@.len(),
+        constraint_wf(*self), constraint_wf(*other),
+        forall|i: int| 0 <= i < index ==> register_entails(self.0@[i]@, other.0@[i]@),
+        decreases self.0@.len() - index))]
+        while index < self.0.len() {
+            if !self.0[index].entails(&other.0[index]) {
+                return false;
+            }
+            index += 1;
+        }
+        proof! { lemma_constraint_entails(self@, other@); }
+        true
     }
 
     #[verus_spec(result => ensures result@ == self@, constraint_key(result) == constraint_key(*self),
-        constraint_wf(result) == constraint_wf(*self))]
+    constraint_wf(result) == constraint_wf(*self))]
     pub(crate) fn copy(&self) -> Self {
-        Self([self.0[0].copy(), self.0[1].copy(), self.0[2].copy()])
+        let mut registers: Vec<RegisterConstraint> = Vec::with_capacity(self.0.len());
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+        index <= self.0@.len(), registers@.len() == index,
+        forall|i: int| 0 <= i < index ==> registers@[i]@ == self.0@[i]@
+            && register_key(registers@[i]) == register_key(self.0@[i])
+            && register_wf(registers@[i]) == register_wf(self.0@[i]),
+        decreases self.0@.len() - index))]
+        while index < self.0.len() {
+            registers.push(self.0[index].copy());
+            index += 1;
+        }
+        let result = Self(registers);
+        proof! {
+            assert forall|i: int| 0 <= i < self.0@.len() implies
+                register_wf(result.0[i]) == register_wf(self.0[i]) by {
+                assert(result.0[i] == result.0@[i]);
+                assert(self.0[i] == self.0@[i]);
+            }
+            if constraint_wf(*self) {
+                assert forall|i: int| 0 <= i < result.0@.len() implies register_wf(result.0[i]) by {
+                    assert(register_wf(self.0[i]));
+                }
+            } else if constraint_wf(result) {
+                assert forall|i: int| 0 <= i < self.0@.len() implies register_wf(self.0[i]) by {
+                    assert(register_wf(result.0[i]));
+                }
+            }
+        }
+        result
     }
 }
 
@@ -345,19 +387,20 @@ pub(crate) enum Class {
 
 /// One class of events relative to a constraint and a set of atoms.
 #[verus_verify]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Letter {
     /// Class that each component equals, or `None` for any value outside the named classes.
-    pub(crate) classes: [Option<Class>; COMPONENTS],
+    pub(crate) classes: Vec<Option<Class>>,
     /// Class of each register under the letter's constraint.
-    pub(crate) registers: [Class; COMPONENTS],
+    pub(crate) registers: Vec<Class>,
 }
 
 #[verus_verify]
 impl Letter {
     /// Whether events of this letter satisfy `atom`, which must belong to the atom set the letter
     /// was built for.
-    #[verus_spec(result => requires atom.component < COMPONENTS,
+    #[verus_spec(result => requires atom.component < self.classes@.len(), atom.component <= u8::MAX,
+    self.classes@.len() == self.registers@.len(),
         ensures result == implementation::letter_holds(self@, atom@))]
     pub(crate) fn holds(&self, atom: Atom) -> bool {
         let class = match atom.operand {
@@ -375,11 +418,36 @@ impl Letter {
     }
 
     /// Class that component `component` of the letter's events equals, if any.
-    #[verus_spec(result => requires component < COMPONENTS,
-        ensures class_option(result) == implementation::letter_class(self@, component_of(component)))]
+    #[verus_spec(result => requires component < self.classes@.len(), component <= u8::MAX,
+    ensures class_option(result) == implementation::letter_class(self@, component_at(component)))]
     pub(crate) fn class(&self, component: usize) -> Option<Class> {
         self.classes[component]
     }
+    #[verus_spec(result => ensures result.classes@ == self.classes@,
+    result.registers@ == self.registers@, result@ == self@)]
+    pub(crate) fn copy(&self) -> Self {
+        let classes = copy_slice(&self.classes);
+        let registers = copy_slice(&self.registers);
+        Self { classes, registers }
+    }
+}
+
+/// Copy scalar entries without depending on the opaque `Clone` relation.
+#[verus_verify]
+#[verus_spec(result => ensures result@ == values@)]
+fn copy_slice<T: Copy>(values: &[T]) -> Vec<T> {
+    let mut result = Vec::with_capacity(values.len());
+    let mut index = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+        index <= values@.len(), result@.len() == index,
+        forall|i: int| 0 <= i < index ==> result@[i] == values@[i],
+        decreases values@.len() - index))]
+    while index < values.len() {
+        result.push(values[index]);
+        index += 1;
+    }
+    proof! { assert(result@ =~= values@); }
+    result
 }
 
 /// Operands that a set of atoms compares with each component.
@@ -387,24 +455,48 @@ impl Letter {
 #[verus_verify(external_derive)]
 #[derive(Default)]
 pub(crate) struct Operands {
-    pub(crate) register: [bool; COMPONENTS],
-    pub(crate) constants: [SmallVec<[ConstId; 4]>; COMPONENTS],
+    pub(crate) register: Vec<bool>,
+    pub(crate) constants: Vec<SmallVec<[ConstId; 4]>>,
 }
 
 #[verus_verify]
 impl Operands {
     /// Collects the operands of `atoms`.
-    #[verus_spec(result => requires atoms_wf(atoms@),
-        ensures operands_of(result, atoms@))]
-    pub(crate) fn of(atoms: &[Atom]) -> Self {
+    #[verus_spec(result => requires atoms_wf(atoms@, arity as nat),
+    1 <= arity <= history_syntax::MAX_ARITY,
+    ensures operands_of(result, atoms@), result.register@.len() == arity)]
+    pub(crate) fn of(atoms: &[Atom], arity: usize) -> Self {
         let mut operands = Self {
-            register: [false; 3],
-            constants: [SmallVec::new(), SmallVec::new(), SmallVec::new()],
+            register: Vec::with_capacity(arity),
+            constants: Vec::with_capacity(arity),
         };
+        let mut component = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+        component <= arity, operands.register@.len() == component,
+        operands.constants@.len() == component,
+forall|i: int| #![trigger operands.register@[i]] 0 <= i < component ==> !operands.register@[i],
+forall|i: int| #![trigger operands.constants@[i]] 0 <= i < component ==> operands.constants@[i].view().len() == 0,
+        decreases arity - component))]
+        while component < arity {
+            operands.register.push(false);
+            operands.constants.push(SmallVec::new());
+            component += 1;
+        }
+        proof! {
+            assert(atoms@.subrange(0, 0) =~= Seq::<Atom>::empty());
+            assert forall|i: int, v: u32| 0 <= i < arity implies !operands.constants[i].view().contains(v) by {
+        assert(operands.constants@[i].view().len() == 0);
+        assert(operands.constants[i] == operands.constants@[i]);
+        assert(operands.constants@[i].view() =~= Seq::<u32>::empty());
+            }
+            assert(operands_members(operands, atoms@.subrange(0, 0)));
+        }
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            index <= atoms@.len(), atoms_wf(atoms@),
-            operands_members(operands, atoms@.subrange(0, index as int)),
+index <= atoms@.len(), atoms_wf(atoms@, arity as nat),
+1 <= arity <= history_syntax::MAX_ARITY,
+operands.register@.len() == arity, operands.constants@.len() == arity,
+operands_members(operands, atoms@.subrange(0, index as int)),
             decreases atoms@.len() - index))]
         while index < atoms.len() {
             let atom = atoms[index];
@@ -427,119 +519,198 @@ impl Operands {
         operands
     }
 
-    #[verus_spec(result => ensures operands_wf(*final(self)),
-        final(self).register == old(self).register,
-        forall|i: int| 0 <= i < 3 ==> final(self).constants[i].view().to_set()
-            == old(self).constants[i].view().to_set())]
+    #[verus_spec(result => requires self.register@.len() == self.constants@.len(),
+    1 <= self.register@.len() <= history_syntax::MAX_ARITY,
+    ensures operands_wf(*final(self)), final(self).register == old(self).register,
+    final(self).constants@.len() == old(self).constants@.len(),
+    forall|i: int| 0 <= i < final(self).constants@.len() ==> final(self).constants[i].view().to_set()
+        == old(self).constants[i].view().to_set())]
     fn normalize(&mut self) {
-        normalize_ids(&mut self.constants[0]);
-        normalize_ids(&mut self.constants[1]);
-        normalize_ids(&mut self.constants[2]);
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+        index <= self.constants@.len(), self.register == old(self).register,
+        self.constants@.len() == old(self).constants@.len(),
+        1 <= self.register@.len() <= history_syntax::MAX_ARITY,
+        self.register@.len() == self.constants@.len(),
+        forall|i: int| 0 <= i < self.constants@.len() ==> self.constants[i].view().to_set() == old(self).constants[i].view().to_set(),
+        forall|i: int| 0 <= i < index ==> canonical(self.constants[i].view()),
+        decreases self.constants@.len() - index))]
+        while index < self.constants.len() {
+            normalize_ids(&mut self.constants[index]);
+            index += 1;
+        }
     }
 }
 
-/// `Split(Γ, A)`: refinements of `constraint` that decide every register–constant pair of the
-/// operands, one per satisfiable choice of literals. A finite register the operands mention is
-/// fixed to each of its remaining values instead, so that letters never depend on its value.
+/// `Split(Γ, A)`: all coordinate-local refinements, in lexicographic order.
 #[verus_verify]
-#[verus_spec(result => requires constraint_wf(*constraint), operands_wf(*operands),
-    split_capacity(*constraint, *operands, *universes),
-    ensures constraint_views(result@) == split_views(*constraint, *operands, *universes),
-    split_contract(*constraint, *operands, *universes, result@),
-    universes_distinct(*universes) ==> constraint_sequence(result@).no_duplicates(),
-        forall|i: int| 0 <= i < result@.len() ==> constraint_wf(result@[i]))]
+#[verus_spec(result => requires shape_wf(*constraint, *operands, *universes),
+    ensures result matches Ok(values) ==> constraint_views(values@) == split_views(*constraint, *operands, *universes)
+        && split_contract(*constraint, *operands, *universes, values@)
+        && (universes_distinct(*universes) ==> constraint_sequence(values@).no_duplicates())
+        && forall|i: int| 0 <= i < values@.len() ==> constraint_wf(values@[i]) && values@[i]@.len() == constraint@.len())]
 pub(crate) fn split(
     constraint: &Constraint,
     operands: &Operands,
     universes: &Universes,
-) -> Vec<Constraint> {
-    let first = split_register(
-        &constraint.0[0],
-        operands.register[0],
-        &operands.constants[0],
-        &universes[0],
-    );
-    let second = split_register(
-        &constraint.0[1],
-        operands.register[1],
-        &operands.constants[1],
-        &universes[1],
-    );
-    let third = split_register(
-        &constraint.0[2],
-        operands.register[2],
-        &operands.constants[2],
-        &universes[2],
-    );
-    let result = product_constraints([&first, &second, &third]);
-    proof! { lemma_split_contract(*constraint, *operands, *universes, result@); }
-    result
+) -> Result<Vec<Constraint>, HistoryError> {
+    let mut choices: Vec<RegisterChoices> = Vec::with_capacity(constraint.0.len());
+    let mut index = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+        index <= constraint.0@.len(), choices@.len() == index, shape_wf(*constraint, *operands, *universes),
+forall|i: int| #![trigger choices@[i]] 0 <= i < index
+    ==> register_views(choices@[i]@) == split_axes(*constraint, *operands, *universes)[i],
+forall|i: int| #![trigger choices@[i]] 0 <= i < index && universes_distinct(*universes)
+    ==> register_sequence(choices@[i]@).no_duplicates(),
+forall|i: int, j: int| #![trigger choices@[i]@[j]] 0 <= i < index && 0 <= j < choices@[i]@.len()
+    ==> register_wf(choices@[i]@[j]),
+        decreases constraint.0@.len() - index))]
+    while index < constraint.0.len() {
+        choices.push(split_register(
+            &constraint.0[index],
+            operands.register[index],
+            &operands.constants[index],
+            &universes[index],
+        ));
+        index += 1;
+    }
+    let mut refs: Vec<&RegisterChoices> = Vec::with_capacity(choices.len());
+    let mut index = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+index <= choices@.len(), refs@.len() == index,
+choices@.len() == constraint.0@.len(), shape_wf(*constraint, *operands, *universes),
+forall|i: int| #![trigger choices@[i]] 0 <= i < choices@.len()
+    ==> register_views(choices@[i]@) == split_axes(*constraint, *operands, *universes)[i],
+forall|i: int| #![trigger choices@[i]] 0 <= i < choices@.len() && universes_distinct(*universes)
+    ==> register_sequence(choices@[i]@).no_duplicates(),
+forall|i: int, j: int| #![trigger choices@[i]@[j]] 0 <= i < choices@.len() && 0 <= j < choices@[i]@.len()
+    ==> register_wf(choices@[i]@[j]),
+forall|i: int| 0 <= i < index ==> *refs@[i] == choices@[i],
+        decreases choices@.len() - index))]
+    while index < choices.len() {
+        refs.push(&choices[index]);
+        index += 1;
+    }
+    proof! {
+        assert forall|a: int, i: int| 0 <= a < refs@.len() && 0 <= i < refs@[a]@.len()
+            implies register_wf(refs@[a]@[i]) by {
+            assert(*refs@[a] == choices@[a]);
+            assert(register_wf(choices@[a]@[i]));
+        }
+        if universes_distinct(*universes) {
+            assert forall|a: int| 0 <= a < refs@.len() implies register_sequence(refs@[a]@).no_duplicates() by {
+                assert(*refs@[a] == choices@[a]);
+                assert(register_sequence(choices@[a]@).no_duplicates());
+            }
+        }
+    }
+    let result = product_constraints(&refs)?;
+    proof! {
+        assert(refs@.map_values(|c: &RegisterChoices| register_views(c@)) =~= split_axes(*constraint, *operands, *universes));
+        lemma_split_contract(*constraint, *operands, *universes, result@);
+    }
+    Ok(result)
 }
 
-/// `Λ(Γ, A)`: the letters for a constraint that decides the operands. For a finite component,
-/// the values outside the named classes form one class, represented by the first of them.
+/// `Λ(Γ, A)`: all coordinate-local event classes, in the same product order.
 #[verus_verify]
-#[verus_spec(result => requires constraint_wf(*constraint), operands_wf(*operands),
-    letter_capacity(*constraint, *operands, *universes),
-    ensures letter_views(result@) == letters_views(*constraint, *operands, *universes),
-        letters_contract(*constraint, *operands, *universes, result@),
-        letter_sequence(result@).no_duplicates(),
-        letter_alpha_unique(*constraint, *operands, *universes, result@))]
-fn letters(constraint: &Constraint, operands: &Operands, universes: &Universes) -> Vec<Letter> {
+#[verus_spec(result => requires shape_wf(*constraint, *operands, *universes),
+    ensures result matches Ok(values) ==> letter_views(values@) == letters_views(*constraint, *operands, *universes)
+        && letters_contract(*constraint, *operands, *universes, values@)
+        && letter_sequence(values@).no_duplicates()
+        && letter_alpha_unique(*constraint, *operands, *universes, values@)
+        && forall|i: int| 0 <= i < values@.len() ==> letter_wf(values@[i]) && values@[i]@.classes.len() == constraint@.len())]
+fn letters(
+    constraint: &Constraint,
+    operands: &Operands,
+    universes: &Universes,
+) -> Result<Vec<Letter>, HistoryError> {
     let registers = register_classes(constraint);
-    let first = class_choices(
-        &constraint.0[0],
-        operands.register[0],
-        &operands.constants[0],
-        &universes[0],
-    );
-    let second = class_choices(
-        &constraint.0[1],
-        operands.register[1],
-        &operands.constants[1],
-        &universes[1],
-    );
-    let third = class_choices(
-        &constraint.0[2],
-        operands.register[2],
-        &operands.constants[2],
-        &universes[2],
-    );
-    let result = product_letters([&first, &second, &third], registers);
+    let mut choices: Vec<ClassChoices> = Vec::with_capacity(constraint.0.len());
+    let mut index = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+index <= constraint.0@.len(), choices@.len() == index, shape_wf(*constraint, *operands, *universes),
+registers@.len() == constraint.0@.len(),
+forall|i: int| 0 <= i < registers@.len() ==> registers@[i] == raw_register_class(constraint.0[i]),
+forall|i: int| #![trigger choices@[i]] 0 <= i < index
+    ==> option_views(choices@[i]@) == letter_axes(*constraint, *operands, *universes)[i],
+forall|i: int| #![trigger choices@[i]] 0 <= i < index ==> class_sequence(choices@[i]@).no_duplicates(),
+        decreases constraint.0@.len() - index))]
+    while index < constraint.0.len() {
+        choices.push(class_choices(
+            &constraint.0[index],
+            operands.register[index],
+            &operands.constants[index],
+            &universes[index],
+        ));
+        index += 1;
+    }
+    let mut refs: Vec<&ClassChoices> = Vec::with_capacity(choices.len());
+    let mut index = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+index <= choices@.len(), refs@.len() == index,
+choices@.len() == constraint.0@.len(), shape_wf(*constraint, *operands, *universes),
+registers@.len() == constraint.0@.len(),
+forall|i: int| 0 <= i < registers@.len() ==> registers@[i] == raw_register_class(constraint.0[i]),
+forall|i: int| #![trigger choices@[i]] 0 <= i < choices@.len()
+    ==> option_views(choices@[i]@) == letter_axes(*constraint, *operands, *universes)[i],
+forall|i: int| #![trigger choices@[i]] 0 <= i < choices@.len() ==> class_sequence(choices@[i]@).no_duplicates(),
+forall|i: int| 0 <= i < index ==> *refs@[i] == choices@[i],
+        decreases choices@.len() - index))]
+    while index < choices.len() {
+        refs.push(&choices[index]);
+        index += 1;
+    }
     proof! {
+        assert forall|a: int| 0 <= a < refs@.len() implies class_sequence(refs@[a]@).no_duplicates() by {
+            assert(*refs@[a] == choices@[a]);
+            assert(class_sequence(choices@[a]@).no_duplicates());
+        }
+    }
+    let result = product_letters(&refs, &registers)?;
+    proof! {
+        assert(refs@.map_values(|c: &ClassChoices| option_views(c@)) =~= letter_axes(*constraint, *operands, *universes));
+        assert(registers@ =~= constraint.0@.map_values(|r: RegisterConstraint| raw_register_class(r)));
         lemma_letters_contract(*constraint, *operands, *universes, result@);
         lemma_letter_alpha_unique(*constraint, *operands, *universes, result@);
+    }
+    Ok(result)
+}
+
+#[verus_verify]
+#[verus_spec(result => ensures result@.len() == constraint.0@.len(),
+    forall|i: int| 0 <= i < result@.len() ==> result@[i] == raw_register_class(constraint.0[i]))]
+fn register_classes(constraint: &Constraint) -> Vec<Class> {
+    let mut result = Vec::with_capacity(constraint.0.len());
+    let mut index = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+        index <= constraint.0@.len(), result@.len() == index,
+        forall|i: int| 0 <= i < index ==> result@[i] == raw_register_class(constraint.0[i]),
+        decreases constraint.0@.len() - index))]
+    while index < constraint.0.len() {
+        result.push(class_of(&constraint.0[index]));
+        index += 1;
     }
     result
 }
 
+/// The successor cases `succ(Γ, A)` (`def:successors`), grouped by refined constraint. Product
+/// exhaustion propagates to the analyzer.
 #[verus_verify]
-#[verus_spec(result => ensures forall|i: int| 0 <= i < 3
-    ==> result[i] == raw_register_class(constraint.0[i]))]
-fn register_classes(constraint: &Constraint) -> [Class; COMPONENTS] {
-    [
-        class_of(&constraint.0[0]),
-        class_of(&constraint.0[1]),
-        class_of(&constraint.0[2]),
-    ]
-}
-
-/// The successor cases `succ(Γ, A)` (`def:successors`), grouped by refined constraint.
-#[verus_verify]
-#[verus_spec(result => requires atoms_wf(atoms@), constraint_wf(*constraint),
+#[verus_spec(result => requires atoms_wf(atoms@, universes@.len()), constraint_wf(*constraint),
+    constraint@.len() == universes@.len(),
     inclusion::satisfiable(ndomains(*universes), implementation::constraint_of(constraint@)),
-    steps_capacity(*constraint, atoms@, *universes),
-    ensures steps_result(*constraint, atoms@, *universes, result@),
-        universes_distinct(*universes) ==> constraint_sequence(group_constraints(result@)).no_duplicates(),
-        forall|i: int| 0 <= i < result@.len() ==> letter_sequence(result@[i].1@).no_duplicates(),
-        steps_alphas_unique(*constraint, atoms@, *universes, result@))]
+    ensures result matches Ok(groups) ==> steps_result(*constraint, atoms@, *universes, groups@)
+        && (universes_distinct(*universes) ==> constraint_sequence(group_constraints(groups@)).no_duplicates())
+        && (forall|i: int| 0 <= i < groups@.len() ==> letter_sequence(groups@[i].1@).no_duplicates())
+        && steps_alphas_unique(*constraint, atoms@, *universes, groups@))]
 pub(crate) fn steps(
     constraint: &Constraint,
     atoms: &[Atom],
     universes: &Universes,
-) -> Vec<(Constraint, Vec<Letter>)> {
-    let operands = Operands::of(atoms);
-    let refinements = split(constraint, &operands, universes);
+) -> Result<Vec<(Constraint, Vec<Letter>)>, HistoryError> {
+    let operands = Operands::of(atoms, universes.len());
+    let refinements = split(constraint, &operands, universes)?;
     let count = refinements.len();
     proof_decl! { let ghost source = refinements@; }
     let mut iter = refinements.into_iter();
@@ -547,45 +718,50 @@ pub(crate) fn steps(
     let mut index = 0;
     #[cfg_attr(verus_keep_ghost, verus_spec(invariant
         index <= count, count == source.len(), result@.len() == index,
-        operands_of(operands, atoms@), atoms_wf(atoms@),
-        steps_capacity(*constraint, atoms@, *universes),
+        shape_wf(*constraint, operands, *universes), operands_of(operands, atoms@),
         constraint_views(source) == split_views(*constraint, operands, *universes),
-        forall|i: int| 0 <= i < source.len() ==> constraint_wf(source[i]),
+        forall|i: int| 0 <= i < source.len() ==> constraint_wf(source[i]) && source[i]@.len() == universes@.len(),
         universes_distinct(*universes) ==> constraint_sequence(source).no_duplicates(),
         iter.obeys_prophetic_iter_laws(), iter.remaining() == source.subrange(index as int, count as int),
         forall|i: int| 0 <= i < index ==> result@[i].0 == source[i]
             && letter_views(result@[i].1@) == letters_views(source[i], operands, *universes)
             && letter_sequence(result@[i].1@).no_duplicates()
-            && letter_alpha_unique(source[i], operands, *universes, result@[i].1@),
+            && letter_alpha_unique(source[i], operands, *universes, result@[i].1@)
+            && forall|j: int| 0 <= j < result@[i].1@.len() ==> letter_wf(result@[i].1@[j]) && result@[i].1@[j]@.classes.len() == universes@.len(),
         decreases count - index))]
     while index < count {
         let refined = match iter.next() {
             Some(value) => value,
             None => unreachable!(),
         };
-        proof! {
-            assert(refined == source[index as int]);
-            lemma_constraint_view_at(source, index as int);
-        }
-        let letters = letters(&refined, &operands, universes);
-        result.push((refined, letters));
+        proof! { assert(refined == source[index as int]); }
+        let choices = letters(&refined, &operands, universes)?;
+        result.push((refined, choices));
         index += 1;
     }
     proof! {
-        assert(group_constraints(result@) =~= source);
-        assert forall|i: int| 0 <= i < result@.len() implies constraint_wf(result@[i].0)
-            && letter_views(result@[i].1@) == letters_views(result@[i].0, operands, *universes) by {
-            assert(result@[i].0 == source[i]);
-        }
-        assert forall|i: int| 0 <= i < result@.len() implies
-            letter_sequence(result@[i].1@).no_duplicates()
-                && letter_alpha_unique(result@[i].0, operands, *universes, result@[i].1@) by {
-            assert(result@[i].0 == source[i]);
-        }
-        lemma_steps_alphas_unique(*constraint, atoms@, *universes, operands, result@);
-        assert(steps_result(*constraint, atoms@, *universes, result@));
+            assert(group_constraints(result@) =~= source);
+    assert forall|i: int| 0 <= i < result@.len() implies
+        constraint_wf(result@[i].0) && result@[i].0@.len() == universes@.len()
+        && letter_views(result@[i].1@) == letters_views(result@[i].0, operands, *universes)
+        && letter_alpha_unique(result@[i].0, operands, *universes, result@[i].1@)
+        && (forall|j: int| 0 <= j < result@[i].1@.len() ==> letter_wf(result@[i].1@[j])
+            && result@[i].1@[j]@.classes.len() == universes@.len()) by {
+        assert(result@[i].0 == source[i]);
+        assert(letter_alpha_unique(source[i], operands, *universes, result@[i].1@));
     }
-    result
+    lemma_steps_alphas_unique(*constraint, atoms@, *universes, operands, result@);
+    assert(steps_result(*constraint, atoms@, *universes, result@));
+    assert forall|i: int| 0 <= i < result@.len() implies letter_sequence(result@[i].1@).no_duplicates() by {
+        assert(result@[i].0 == source[i]);
+    }
+    if universes_distinct(*universes) {
+        assert(constraint_sequence(group_constraints(result@)) =~= constraint_sequence(source));
+        assert(constraint_sequence(group_constraints(result@)).no_duplicates());
+    }
+    assert(steps_alphas_unique(*constraint, atoms@, *universes, result@));
+        }
+    Ok(result)
 }
 
 #[verus_verify]
@@ -662,25 +838,25 @@ pub(crate) mod equality {
 
     #[cfg(verus_keep_ghost)]
     verus! {
-    /// The exact ordered key used by native register equality, including noncanonical inputs.
-    pub open(crate) spec fn register_key(register: RegisterConstraint) -> (Option<u32>, Seq<u32>) {
-        match register {
-            RegisterConstraint::Equals(v) => (Some(v), Seq::empty()),
-            RegisterConstraint::Differs(vs) => (None, vs.view()),
+        /// The exact ordered key used by native register equality, including noncanonical inputs.
+        pub open(crate) spec fn register_key(register: RegisterConstraint) -> (Option<u32>, Seq<u32>) {
+            match register {
+                RegisterConstraint::Equals(v) => (Some(v), Seq::empty()),
+                RegisterConstraint::Differs(vs) => (None, vs.view()),
+            }
         }
-    }
 
-    /// The three exact ordered register keys used by native constraint equality.
+    /// The exact ordered register keys used by native constraint equality.
     pub open(crate) spec fn constraint_key(constraint: Constraint) -> Seq<(Option<u32>, Seq<u32>)> {
-        Seq::new(3, |i: int| register_key(constraint.0[i]))
-    }
-    impl vstd::std_specs::cmp::PartialEqSpecImpl for RegisterConstraint {
-        open spec fn obeys_eq_spec() -> bool { true }
-        open(crate) spec fn eq_spec(&self, other: &Self) -> bool {
-            register_key(*self) == register_key(*other)
+        constraint.0@.map_values(|r: RegisterConstraint| register_key(r))
         }
-    }
-    }
+        impl vstd::std_specs::cmp::PartialEqSpecImpl for RegisterConstraint {
+            open spec fn obeys_eq_spec() -> bool { true }
+            open(crate) spec fn eq_spec(&self, other: &Self) -> bool {
+                register_key(*self) == register_key(*other)
+            }
+        }
+        }
 
     #[verus_verify]
     impl PartialEq for RegisterConstraint {
@@ -728,33 +904,39 @@ pub(crate) mod equality {
     impl PartialEq for Constraint {
         #[verus_spec(result => ensures result == (constraint_key(*self) == constraint_key(*other)))]
         fn eq(&self, other: &Self) -> bool {
-            let equal =
-                self.0[0] == other.0[0] && self.0[1] == other.0[1] && self.0[2] == other.0[2];
             proof! {
-                assert(constraint_key(*self).len() == 3);
-                assert(constraint_key(*other).len() == 3);
-                assert(equal == (constraint_key(*self)[0] == constraint_key(*other)[0]
-                    && constraint_key(*self)[1] == constraint_key(*other)[1]
-                    && constraint_key(*self)[2] == constraint_key(*other)[2]));
-                if equal {
-                    assert forall|i: int| 0 <= i < 3 implies
-                        constraint_key(*self)[i] == constraint_key(*other)[i] by {
-                        if i == 0 {} else if i == 1 {} else { assert(i == 2); }
-                    }
-                    assert(constraint_key(*self) =~= constraint_key(*other));
-                }
+                assert(constraint_key(*self).len() == self.0@.len());
+                assert(constraint_key(*other).len() == other.0@.len());
             }
-            equal
+            if self.0.len() != other.0.len() {
+                return false;
+            }
+            let mut index = 0;
+            #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+    index <= self.0@.len(), self.0@.len() == other.0@.len(),
+    forall|i: int| 0 <= i < index ==> register_key(self.0@[i]) == register_key(other.0@[i]),
+    decreases self.0@.len() - index))]
+            while index < self.0.len() {
+                if self.0[index] != other.0[index] {
+                    proof! {
+                        assert(constraint_key(*self)[index as int] == register_key(self.0@[index as int]));
+                        assert(constraint_key(*other)[index as int] == register_key(other.0@[index as int]));
+                        assert(constraint_key(*self)[index as int] != constraint_key(*other)[index as int]);
+                    }
+                    return false;
+                }
+                index += 1;
+            }
+            proof! { assert(constraint_key(*self) =~= constraint_key(*other)); }
+            true
         }
     }
 }
 
 #[verus_verify]
 #[verus_spec(result => requires register_wf(*current), canonical(constants@),
-    register_count(current@, register, constants@, *universe) <= usize::MAX,
     ensures register_views(result@) == register_options(current@, register, codes(constants@), domain_view(*universe)),
         result@.len() == register_count(current@, register, constants@, *universe),
-        result@.len() <= usize::MAX,
         universe_distinct(*universe) ==> register_sequence(result@).no_duplicates(),
         forall|i: int| 0 <= i < result@.len() ==> register_wf(result@[i]))]
 fn split_register(
@@ -870,123 +1052,143 @@ fn split_register(
     result
 }
 
+/// Advance the least-significant-last odometer, carrying through exhausted axes.
 #[verus_verify]
-#[verus_spec(result => requires
-    choices[0]@.len() * choices[1]@.len() <= usize::MAX,
-    choices[0]@.len() * choices[1]@.len() * choices[2]@.len() <= usize::MAX,
-    forall|a: int, i: int| 0 <= a < 3 && 0 <= i < choices[a]@.len() ==> register_wf(choices[a]@[i]),
-    forall|a: int| 0 <= a < 3 ==> choices[a]@.len() <= usize::MAX,
-    ensures result@.len() == choices[0]@.len() * choices[1]@.len() * choices[2]@.len(),
-        forall|i: int| 0 <= i < result@.len() ==> constraint_wf(result@[i]),
-        (forall|a: int| 0 <= a < 3 ==> register_sequence(choices[a]@).no_duplicates())
-            ==> constraint_sequence(result@).no_duplicates(),
-        constraint_views(result@) == register_product(register_views(choices[0]@),
-            register_views(choices[1]@), register_views(choices[2]@)))]
-fn product_constraints(choices: [&RegisterChoices; COMPONENTS]) -> Vec<Constraint> {
-    let n0 = choices[0].len();
-    let n1 = choices[1].len();
-    let n2 = choices[2].len();
-    let capacity = n0 * n1 * n2;
-    let mut result = Vec::with_capacity(capacity);
-    proof_decl! {
-        let ghost axes = [choices[0]@, choices[1]@, choices[2]@];
-        let ghost full = register_product(register_views(axes[0]), register_views(axes[1]), register_views(axes[2]));
-    }
-    proof! { lemma_register_product_members(register_views(axes[0]), register_views(axes[1]), register_views(axes[2])); }
-    let mut first: usize = 0;
-    proof! { assert(0usize * n1 * n2 == 0) by(nonlinear_arith); }
+#[verus_spec(result => requires row_valid(dimensions_view(sizes@), old(counters)@),
+    row_rank(dimensions_view(sizes@), old(counters)@) + 1 < product_size(dimensions_view(sizes@)),
+    ensures row_valid(dimensions_view(sizes@), final(counters)@),
+        row_rank(dimensions_view(sizes@), final(counters)@) == row_rank(dimensions_view(sizes@), old(counters)@) + 1)]
+fn advance_row(counters: &mut [usize], sizes: &[usize]) {
+    proof_decl! { let ghost before = counters@; }
+    let mut pivot = counters.len();
     #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-        first <= n0, n0 == axes[0].len(), n1 == axes[1].len(), n2 == axes[2].len(),
-        capacity == n0 * n1 * n2,
-        result@.len() == first * n1 * n2,
-        product_done(axes, constraint_views(result@), first as int, 0, 0),
-        constraint_views(result@).subset_of(full),
-        full == register_product(register_views(axes[0]), register_views(axes[1]), register_views(axes[2])),
-        forall|i: int| 0 <= i < result@.len() ==> constraint_wf(result@[i]),
-        constraint_positions(axes, result@),
-        forall|a: int| 0 <= a < 3 ==> choices[a]@.len() <= usize::MAX,
-        forall|a: int, i: int| 0 <= a < 3 && 0 <= i < choices[a]@.len() ==> register_wf(choices[a]@[i]),
-        axes == [choices[0]@, choices[1]@, choices[2]@],
-        decreases n0 - first))]
-    while first < n0 {
-        let mut second = 0;
-        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            first < n0, second <= n1, n0 == axes[0].len(), n1 == axes[1].len(), n2 == axes[2].len(),
-            capacity == n0 * n1 * n2,
-            result@.len() == (first * n1 + second) * n2,
-            product_done(axes, constraint_views(result@), first as int, second as int, 0),
-            constraint_views(result@).subset_of(full),
-            full == register_product(register_views(axes[0]), register_views(axes[1]), register_views(axes[2])),
-            forall|i: int| 0 <= i < result@.len() ==> constraint_wf(result@[i]),
-            constraint_positions(axes, result@),
-            forall|a: int| 0 <= a < 3 ==> choices[a]@.len() <= usize::MAX,
-            forall|a: int, i: int| 0 <= a < 3 && 0 <= i < choices[a]@.len() ==> register_wf(choices[a]@[i]),
-            axes == [choices[0]@, choices[1]@, choices[2]@],
-            decreases n1 - second))]
-        while second < n1 {
-            let mut third = 0;
-            #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-                first < n0, second < n1, third <= n2,
-                n0 == axes[0].len(), n1 == axes[1].len(), n2 == axes[2].len(),
-                capacity == n0 * n1 * n2,
-                result@.len() == (first * n1 + second) * n2 + third,
-                product_done(axes, constraint_views(result@), first as int, second as int, third as int),
-                constraint_views(result@).subset_of(full),
-                full == register_product(register_views(axes[0]), register_views(axes[1]), register_views(axes[2])),
-                forall|i: int| 0 <= i < result@.len() ==> constraint_wf(result@[i]),
-                constraint_positions(axes, result@),
-                forall|a: int| 0 <= a < 3 ==> choices[a]@.len() <= usize::MAX,
-                forall|a: int, i: int| 0 <= a < 3 && 0 <= i < choices[a]@.len() ==> register_wf(choices[a]@[i]),
-                axes == [choices[0]@, choices[1]@, choices[2]@],
-                decreases n2 - third))]
-            while third < n2 {
-                let next = Constraint([
-                    choices[0].get(first),
-                    choices[1].get(second),
-                    choices[2].get(third),
-                ]);
-                proof_decl! { let ghost previous = result@; let ghost copied = next; }
-                result.push(next);
-                proof! {
-                    lemma_constraint_views_push(previous, copied);
-                    assert(copied@ == choice_view(axes, first as int, second as int, third as int));
-                    lemma_constraint_position_push(axes, previous, copied, first as int, second as int, third as int);
-                    lemma_product_step(axes, constraint_views(previous), constraint_views(result@),
-                        first as int, second as int, third as int);
-                    lemma_register_product_members(register_views(axes[0]), register_views(axes[1]), register_views(axes[2]));
-                    lemma_register_view_at(axes[0], first as int);
-                    lemma_register_view_at(axes[1], second as int);
-                    lemma_register_view_at(axes[2], third as int);
-                    assert(register_views(axes[0]).contains(axes[0][first as int]@));
-                    assert(register_views(axes[1]).contains(axes[1][second as int]@));
-                    assert(register_views(axes[2]).contains(axes[2][third as int]@));
-                    assert(full.contains(copied@));
-                }
-                third += 1;
-            }
-            proof! { assert(product_done(axes, constraint_views(result@), first as int, second as int + 1, 0)); }
-            proof! { assert((first * n1 + second) * n2 + n2 == (first * n1 + second + 1) * n2) by(nonlinear_arith); }
-            second += 1;
+pivot <= counters@.len(), counters@.len() == before.len(), before.len() == sizes@.len(),
+before == old(counters)@,
+        row_valid(dimensions_view(sizes@), before),
+        row_rank(dimensions_view(sizes@), before) + 1 < product_size(dimensions_view(sizes@)),
+        forall|i: int| 0 <= i < pivot ==> counters@[i] == before[i],
+        forall|i: int| pivot <= i < counters@.len() ==> before[i] + 1 == sizes@[i] && counters@[i] == 0,
+        decreases pivot))]
+    while pivot > 0 {
+        pivot -= 1;
+        proof! {
+            assert(counters@[pivot as int] == before[pivot as int]);
+            assert(before[pivot as int] < dimensions_view(sizes@)[pivot as int]);
+            assert(dimensions_view(sizes@)[pivot as int] == sizes@[pivot as int] as nat);
         }
-        proof! { assert(product_done(axes, constraint_views(result@), first as int + 1, 0, 0)); }
-        proof! { assert((first * n1 + n1) * n2 == (first + 1) * n1 * n2) by(nonlinear_arith); }
-        first += 1;
+        let next = counters[pivot] + 1;
+        if next < sizes[pivot] {
+            counters[pivot] = next;
+            proof! { lemma_row_successor(dimensions_view(sizes@), before, counters@, pivot as int); }
+            return;
+        }
+        counters[pivot] = 0;
+    }
+    proof! { lemma_row_max(dimensions_view(sizes@), before); }
+    unreachable!()
+}
+
+#[verus_verify]
+#[verus_spec(result => requires 1 <= choices@.len() <= history_syntax::MAX_ARITY,
+    forall|a: int, i: int| 0 <= a < choices@.len() && 0 <= i < choices@[a]@.len() ==> register_wf(choices@[a]@[i]),
+    ensures result matches Ok(values) ==> values@.len() == product_size(choices@.map_values(|c: &RegisterChoices| c@.len()))
+        && constraint_views(values@) == register_product(choices@.map_values(|c: &RegisterChoices| register_views(c@)))
+        && ((forall|a: int| 0 <= a < choices@.len() ==> register_sequence(choices@[a]@).no_duplicates())
+            ==> constraint_sequence(values@).no_duplicates())
+        && forall|i: int| 0 <= i < values@.len() ==> constraint_wf(values@[i]) && values@[i]@.len() == choices@.len())]
+fn product_constraints(choices: &[&RegisterChoices]) -> Result<Vec<Constraint>, HistoryError> {
+    proof_decl! { let ghost axes = choices@.map_values(|c: &RegisterChoices| c@); }
+    let mut sizes = Vec::with_capacity(choices.len());
+    let mut counters = Vec::with_capacity(choices.len());
+    let mut capacity: usize = 1;
+    let mut axis = 0;
+    #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+        axis <= choices@.len(), sizes@.len() == axis, counters@.len() == axis,
+        capacity == product_size(axis_sizes(axes).take(axis as int)),
+        axes == choices@.map_values(|c: &RegisterChoices| c@),
+forall|i: int| 0 <= i < axis ==> sizes@[i] == axes[i].len() && counters@[i] == 0,
+forall|i: int| 0 <= i < axis ==> axes[i].len() <= usize::MAX,
+        decreases choices@.len() - axis))]
+    while axis < choices.len() {
+        let size = choices[axis].len()?;
+        capacity = match capacity.checked_mul(size) {
+            Some(value) => value,
+            None => return Err(HistoryError::graph_index_overflow()),
+        };
+        sizes.push(size);
+        counters.push(0);
+        proof! {
+            assert(axis_sizes(axes).take(axis as int + 1).drop_last() =~= axis_sizes(axes).take(axis as int));
+        }
+        axis += 1;
     }
     proof! {
-        if forall|a: int| 0 <= a < 3 ==> register_sequence(choices[a]@).no_duplicates() {
-            lemma_constraint_product_distinct(axes, result@);
+        assert(axis == axes.len());
+        assert(axis_sizes(axes).take(axis as int) =~= axis_sizes(axes));
+        assert(capacity == product_size(axis_sizes(axes)));
+        assert forall|i: int| 0 <= i < axes.len() implies axes[i].len() <= usize::MAX by {
+            assert(axes[i].len() == sizes@[i] as nat);
         }
-        lemma_register_product_members(register_views(axes[0]), register_views(axes[1]), register_views(axes[2]));
-        assert forall|g: implementation::ConstraintView| full.contains(g)
-            implies constraint_views(result@).contains(g) by {
-            let i = choose|i: int| 0 <= i < axes[0].len() && axes[0][i]@ == g.principal;
-            let j = choose|j: int| 0 <= j < axes[1].len() && axes[1][j]@ == g.action;
-            let k = choose|k: int| 0 <= k < axes[2].len() && axes[2][k]@ == g.resource;
-            assert(g == choice_view(axes, i, j, k));
-        }
-        assert(constraint_views(result@) =~= full);
     }
-    result
+    let mut result = Vec::with_capacity(capacity);
+    proof! {
+        assert(dimensions_view(sizes@) =~= axis_sizes(axes));
+        lemma_product_positive(axis_sizes(axes)); lemma_row_zero(axis_sizes(axes), counters@);
+        lemma_register_product_members(axes.map_values(|a: Seq<RegisterConstraint>| register_views(a)));
+    }
+    #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+        result@.len() <= capacity, capacity == product_size(axis_sizes(axes)),
+        1 <= choices@.len() <= history_syntax::MAX_ARITY, forall|a: int, i: int| 0 <= a < choices@.len() && 0 <= i < choices@[a]@.len() ==> register_wf(choices@[a]@[i]),
+        axes == choices@.map_values(|c: &RegisterChoices| c@),
+sizes@.len() == axes.len(), dimensions_view(sizes@) == axis_sizes(axes), counters@.len() == axes.len(),
+forall|i: int| 0 <= i < axes.len() ==> axes[i].len() <= usize::MAX,
+        result@.len() < capacity ==> row_valid(axis_sizes(axes), counters@) && row_rank(axis_sizes(axes), counters@) == result@.len(),
+        product_done(axes, constraint_views(result@), result@.len()), constraint_positions(axes, result@),
+        constraint_views(result@).subset_of(register_product(axes.map_values(|a: Seq<RegisterConstraint>| register_views(a)))),
+        forall|i: int| 0 <= i < result@.len() ==> constraint_wf(result@[i]) && result@[i]@.len() == choices@.len(),
+        decreases capacity - result@.len()))]
+    while result.len() < capacity {
+        let mut row: Vec<RegisterConstraint> = Vec::with_capacity(choices.len());
+        let mut axis = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+            axis <= choices@.len(), row@.len() == axis,
+            axes == choices@.map_values(|c: &RegisterChoices| c@), row_valid(axis_sizes(axes), counters@),
+dimensions_view(sizes@) == axis_sizes(axes),
+forall|i: int| 0 <= i < axes.len() ==> axes[i].len() <= usize::MAX,
+            forall|a: int, i: int| 0 <= a < choices@.len() && 0 <= i < choices@[a]@.len() ==> register_wf(choices@[a]@[i]),
+            forall|i: int| 0 <= i < axis ==> row@[i]@ == axes[i][counters@[i] as int]@ && register_wf(row@[i]),
+            decreases choices@.len() - axis))]
+        while axis < choices.len() {
+            row.push(choices[axis].get(counters[axis]));
+            axis += 1;
+        }
+        let next = Constraint(row);
+        proof_decl! { let ghost previous = result@; let ghost copied = next; }
+        result.push(next);
+        proof! {
+                    lemma_constraint_views_push(previous, copied);
+                    assert(copied@ =~= choice_view(axes, counters@));
+                    lemma_constraint_position_push(axes, previous, copied, counters@);
+                    lemma_product_step(axes, constraint_views(previous), constraint_views(result@), counters@, previous.len());
+                    assert forall|i: int| 0 <= i < axes.len() implies register_views(axes[i]).contains(copied@[i]) by { lemma_register_view_at(axes[i], counters@[i] as int); }
+        lemma_register_product_members(axes.map_values(|a: Seq<RegisterConstraint>| register_views(a)));
+        assert(copied@.len() == axes.len());
+        assert((register_product(axes.map_values(|a: Seq<RegisterConstraint>| register_views(a)))).contains(copied@));
+                }
+        if result.len() < capacity {
+            advance_row(&mut counters, &sizes);
+        }
+    }
+    proof! {
+    lemma_constraint_product_complete(axes, result@);
+    assert(axis_sizes(axes) =~= choices@.map_values(|c: &RegisterChoices| c@.len()));
+    assert(axes.map_values(|a: Seq<RegisterConstraint>| register_views(a))
+        =~= choices@.map_values(|c: &RegisterChoices| register_views(c@)));
+            if forall|i: int| 0 <= i < axes.len() ==> register_sequence(axes[i]).no_duplicates() {
+                lemma_constraint_product_distinct(axes, result@);
+            }
+        }
+    Ok(result)
 }
 
 #[verus_verify]
@@ -1026,9 +1228,8 @@ fn class_of(current: &RegisterConstraint) -> Class {
 }
 
 #[verus_verify]
-#[verus_spec(result => requires class_options(current@, register, codes(constants@), *universe).len() <= usize::MAX,
-    ensures option_views(result@) == class_options(current@, register, codes(constants@), *universe),
-        class_choices_wf(result), result@.len() == option_views(result@).len(), result@.len() <= usize::MAX,
+#[verus_spec(result => ensures option_views(result@) == class_options(current@, register, codes(constants@), *universe),
+        class_choices_wf(result), result@.len() == option_views(result@).len(),
         class_sequence(result@).no_duplicates())]
 // Nested so the proof statements stay inside the `if let` scope; Verus does not take let chains.
 #[allow(clippy::collapsible_if)]
@@ -1043,7 +1244,6 @@ fn class_choices(
     proof_decl! { let ghost domain = domain_view(*universe); }
     #[cfg_attr(verus_keep_ghost, verus_spec(invariant
         index <= constants@.len(), domain == domain_view(*universe),
-        class_options(current@, register, codes(constants@), *universe).len() <= usize::MAX,
         names.view() == constants@.subrange(0, index as int).filter(|v: u32| match domain {
             None => true, Some(vs) => vs.contains(v as nat) }),
         decreases constants@.len() - index))]
@@ -1078,8 +1278,7 @@ fn class_choices(
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
             index <= values@.len(), canonical(slice@), slice@ == names.view(),
-            class_options(current@, register, codes(constants@), *universe).len() <= usize::MAX,
-            *universe is Some, (*((*universe)->Some_0))@ == values@,
+                *universe is Some, (*((*universe)->Some_0))@ == values@,
             is_register == (register && current@ is Differs),
             codes(slice@) == named_codes(current@, register, codes(constants@), domain_view(*universe)),
             forall|i: int| 0 <= i < index ==> codes(slice@).contains(values@[i] as nat),
@@ -1121,119 +1320,115 @@ fn class_choices(
 }
 
 #[verus_verify]
-#[verus_spec(result => requires
-    choices[0]@.len() * choices[1]@.len() <= usize::MAX,
-    choices[0]@.len() * choices[1]@.len() * choices[2]@.len() <= usize::MAX,
-    forall|a: int| 0 <= a < 3 ==> choices[a]@.len() <= usize::MAX,
-    ensures result@.len() == choices[0]@.len() * choices[1]@.len() * choices[2]@.len(),
-        (forall|a: int| 0 <= a < 3 ==> class_sequence(choices[a]@).no_duplicates())
-            ==> letter_sequence(result@).no_duplicates(),
-        letter_views(result@) == letter_product(option_views(choices[0]@),
-            option_views(choices[1]@), option_views(choices[2]@), registers))]
+#[verus_spec(result => requires 1 <= choices@.len() <= history_syntax::MAX_ARITY,
+    registers@.len() == choices@.len(),
+    ensures result matches Ok(values) ==> values@.len() == product_size(choices@.map_values(|c: &ClassChoices| c@.len()))
+        && letter_views(values@) == letter_product(choices@.map_values(|c: &ClassChoices| option_views(c@)), registers@)
+        && ((forall|a: int| 0 <= a < choices@.len() ==> class_sequence(choices@[a]@).no_duplicates())
+            ==> letter_sequence(values@).no_duplicates())
+        && forall|i: int| 0 <= i < values@.len() ==> letter_wf(values@[i]) && values@[i]@.classes.len() == choices@.len())]
 fn product_letters(
-    choices: [&ClassChoices; COMPONENTS],
-    registers: [Class; COMPONENTS],
-) -> Vec<Letter> {
-    let n0 = choices[0].len();
-    let n1 = choices[1].len();
-    let n2 = choices[2].len();
-    let capacity = n0 * n1 * n2;
-    let mut result = Vec::with_capacity(capacity);
-    proof_decl! {
-        let ghost axes = [choices[0]@, choices[1]@, choices[2]@];
-        let ghost full = letter_product(option_views(axes[0]), option_views(axes[1]), option_views(axes[2]), registers);
-    }
-    let mut first: usize = 0;
-    proof! { assert(0usize * n1 * n2 == 0) by(nonlinear_arith); }
+    choices: &[&ClassChoices],
+    registers: &[Class],
+) -> Result<Vec<Letter>, HistoryError> {
+    proof_decl! { let ghost axes = choices@.map_values(|c: &ClassChoices| c@); }
+    let mut sizes = Vec::with_capacity(choices.len());
+    let mut counters = Vec::with_capacity(choices.len());
+    let mut capacity: usize = 1;
+    let mut axis = 0;
     #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-        first <= n0, n0 == axes[0].len(), n1 == axes[1].len(), n2 == axes[2].len(),
-        capacity == n0 * n1 * n2,
-        result@.len() == first * n1 * n2,
-        letter_product_done(axes, registers, letter_views(result@), first as int, 0, 0),
-        letter_views(result@).subset_of(full),
-        full == letter_product(option_views(axes[0]), option_views(axes[1]), option_views(axes[2]), registers),
-        forall|a: int| 0 <= a < 3 ==> choices[a]@.len() <= usize::MAX,
-        letter_positions(axes, registers, result@),
-        axes == [choices[0]@, choices[1]@, choices[2]@],
-        decreases n0 - first))]
-    while first < n0 {
-        let mut second = 0;
-        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            first < n0, second <= n1, n0 == axes[0].len(), n1 == axes[1].len(), n2 == axes[2].len(),
-            capacity == n0 * n1 * n2,
-            result@.len() == (first * n1 + second) * n2,
-            letter_product_done(axes, registers, letter_views(result@), first as int, second as int, 0),
-            letter_views(result@).subset_of(full),
-            full == letter_product(option_views(axes[0]), option_views(axes[1]), option_views(axes[2]), registers),
-            forall|a: int| 0 <= a < 3 ==> choices[a]@.len() <= usize::MAX,
-            axes == [choices[0]@, choices[1]@, choices[2]@],
-            letter_positions(axes, registers, result@),
-            decreases n1 - second))]
-        while second < n1 {
-            let mut third = 0;
-            #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-                first < n0, second < n1, third <= n2,
-                n0 == axes[0].len(), n1 == axes[1].len(), n2 == axes[2].len(),
-                capacity == n0 * n1 * n2,
-                result@.len() == (first * n1 + second) * n2 + third,
-                letter_product_done(axes, registers, letter_views(result@), first as int, second as int, third as int),
-                letter_views(result@).subset_of(full),
-                full == letter_product(option_views(axes[0]), option_views(axes[1]), option_views(axes[2]), registers),
-                forall|a: int| 0 <= a < 3 ==> choices[a]@.len() <= usize::MAX,
-                axes == [choices[0]@, choices[1]@, choices[2]@],
-                letter_positions(axes, registers, result@),
-                decreases n2 - third))]
-            while third < n2 {
-                let next = Letter {
-                    classes: [
-                        choices[0].get(first),
-                        choices[1].get(second),
-                        choices[2].get(third),
-                    ],
-                    registers,
-                };
-                proof_decl! { let ghost previous = result@; let ghost copied = next; }
-                result.push(next);
-                proof! {
-                    lemma_letter_views_push(previous, copied);
-                    assert(copied@ == letter_choice_view(axes, registers, first as int, second as int, third as int));
-                    lemma_letter_product_step(axes, registers, letter_views(previous), letter_views(result@),
-                        first as int, second as int, third as int);
-                    lemma_letter_position_push(axes, registers, previous, copied, first as int, second as int, third as int);
-                    lemma_letter_product_members(option_views(axes[0]), option_views(axes[1]), option_views(axes[2]), registers);
-                    lemma_option_view_at(axes[0], first as int);
-                    lemma_option_view_at(axes[1], second as int);
-                    lemma_option_view_at(axes[2], third as int);
-                    assert(full.contains(copied@));
-                }
-                third += 1;
-            }
-            proof! {
-                assert(letter_product_done(axes, registers, letter_views(result@), first as int, second as int + 1, 0));
-                assert((first * n1 + second) * n2 + n2 == (first * n1 + second + 1) * n2) by(nonlinear_arith);
-            }
-            second += 1;
-        }
+        axis <= choices@.len(), sizes@.len() == axis, counters@.len() == axis,
+        capacity == product_size(axis_sizes(axes).take(axis as int)),
+        axes == choices@.map_values(|c: &ClassChoices| c@),
+forall|i: int| 0 <= i < axis ==> sizes@[i] == axes[i].len() && counters@[i] == 0,
+forall|i: int| 0 <= i < axis ==> axes[i].len() <= usize::MAX,
+        decreases choices@.len() - axis))]
+    while axis < choices.len() {
+        let size = choices[axis].len()?;
+        capacity = match capacity.checked_mul(size) {
+            Some(value) => value,
+            None => return Err(HistoryError::graph_index_overflow()),
+        };
+        sizes.push(size);
+        counters.push(0);
         proof! {
-            assert(letter_product_done(axes, registers, letter_views(result@), first as int + 1, 0, 0));
-            assert((first * n1 + n1) * n2 == (first + 1) * n1 * n2) by(nonlinear_arith);
+            assert(axis_sizes(axes).take(axis as int + 1).drop_last() =~= axis_sizes(axes).take(axis as int));
         }
-        first += 1;
+        axis += 1;
     }
     proof! {
-        if forall|a: int| 0 <= a < 3 ==> class_sequence(choices[a]@).no_duplicates() {
-            lemma_letter_product_distinct(axes, registers, result@);
+        assert(axis == axes.len());
+        assert(axis_sizes(axes).take(axis as int) =~= axis_sizes(axes));
+        assert(capacity == product_size(axis_sizes(axes)));
+        assert forall|i: int| 0 <= i < axes.len() implies axes[i].len() <= usize::MAX by {
+            assert(axes[i].len() == sizes@[i] as nat);
         }
-        lemma_letter_product_members(option_views(axes[0]), option_views(axes[1]), option_views(axes[2]), registers);
-        assert forall|l: implementation::LetterView| full.contains(l) implies letter_views(result@).contains(l) by {
-            let i = choose|i: int| 0 <= i < axes[0].len() && class_option(axes[0][i]) == l.principal;
-            let j = choose|j: int| 0 <= j < axes[1].len() && class_option(axes[1][j]) == l.action;
-            let k = choose|k: int| 0 <= k < axes[2].len() && class_option(axes[2][k]) == l.resource;
-            assert(l == letter_choice_view(axes, registers, i, j, k));
-        }
-        assert(letter_views(result@) =~= full);
     }
-    result
+    let mut result = Vec::with_capacity(capacity);
+    proof! {
+        assert(dimensions_view(sizes@) =~= axis_sizes(axes));
+        lemma_product_positive(axis_sizes(axes)); lemma_row_zero(axis_sizes(axes), counters@);
+        lemma_letter_product_members(axes.map_values(|a: Seq<Option<Class>>| option_views(a)), registers@);
+    }
+    #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+        result@.len() <= capacity, capacity == product_size(axis_sizes(axes)),
+        1 <= choices@.len() <= history_syntax::MAX_ARITY, registers@.len() == choices@.len(),
+        axes == choices@.map_values(|c: &ClassChoices| c@),
+sizes@.len() == axes.len(), dimensions_view(sizes@) == axis_sizes(axes), counters@.len() == axes.len(),
+forall|i: int| 0 <= i < axes.len() ==> axes[i].len() <= usize::MAX,
+        result@.len() < capacity ==> row_valid(axis_sizes(axes), counters@) && row_rank(axis_sizes(axes), counters@) == result@.len(),
+        letter_product_done(axes, registers@, letter_views(result@), result@.len()), letter_positions(axes, registers@, result@),
+        letter_views(result@).subset_of(letter_product(axes.map_values(|a: Seq<Option<Class>>| option_views(a)), registers@)),
+        forall|i: int| 0 <= i < result@.len() ==> letter_wf(result@[i]) && result@[i]@.classes.len() == choices@.len(),
+        decreases capacity - result@.len()))]
+    while result.len() < capacity {
+        let mut row = Vec::with_capacity(choices.len());
+        let mut axis = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+            axis <= choices@.len(), row@.len() == axis,
+            axes == choices@.map_values(|c: &ClassChoices| c@), row_valid(axis_sizes(axes), counters@),
+dimensions_view(sizes@) == axis_sizes(axes),
+forall|i: int| 0 <= i < axes.len() ==> axes[i].len() <= usize::MAX,
+            registers@.len() == choices@.len(),
+            forall|i: int| 0 <= i < axis ==> class_option(row@[i]) == class_option(axes[i][counters@[i] as int]) ,
+            decreases choices@.len() - axis))]
+        while axis < choices.len() {
+            row.push(choices[axis].get(counters[axis]));
+            axis += 1;
+        }
+        let copied_registers = copy_slice(registers);
+        let next = Letter {
+            classes: row,
+            registers: copied_registers,
+        };
+        proof_decl! { let ghost previous = result@; let ghost copied = next; }
+        result.push(next);
+        proof! {
+                    lemma_letter_views_push(previous, copied);
+        assert(copied@.classes =~= letter_choice_view(axes, registers@, counters@).classes);
+        assert(copied@.registers =~= letter_choice_view(axes, registers@, counters@).registers);
+        assert(copied@ == letter_choice_view(axes, registers@, counters@));
+                    lemma_letter_position_push(axes, registers@, previous, copied, counters@);
+                    lemma_letter_product_step(axes, registers@, letter_views(previous), letter_views(result@), counters@, previous.len());
+                    assert forall|i: int| 0 <= i < axes.len() implies option_views(axes[i]).contains(copied@.classes[i]) by { lemma_option_view_at(axes[i], counters@[i] as int); }
+        lemma_letter_product_members(axes.map_values(|a: Seq<Option<Class>>| option_views(a)), registers@);
+        assert(copied@.classes.len() == axes.len());
+        assert((letter_product(axes.map_values(|a: Seq<Option<Class>>| option_views(a)), registers@)).contains(copied@));
+                }
+        if result.len() < capacity {
+            advance_row(&mut counters, &sizes);
+        }
+    }
+    proof! {
+    lemma_letter_product_complete(axes, registers@, result@);
+    assert(axis_sizes(axes) =~= choices@.map_values(|c: &ClassChoices| c@.len()));
+    assert(axes.map_values(|a: Seq<Option<Class>>| option_views(a))
+        =~= choices@.map_values(|c: &ClassChoices| option_views(c@)));
+            if forall|i: int| 0 <= i < axes.len() ==> class_sequence(axes[i]).no_duplicates() {
+                lemma_letter_product_distinct(axes, registers@, result@);
+            }
+        }
+    Ok(result)
 }
 
 #[verus_verify]
@@ -1244,9 +1439,16 @@ pub(crate) struct RegisterChoices {
 
 #[verus_verify]
 impl RegisterChoices {
-    #[verus_spec(result => requires self@.len() <= usize::MAX, ensures result == self@.len())]
-    fn len(&self) -> usize {
-        self.equals.len() + if self.last.is_some() { 1 } else { 0 }
+    #[verus_spec(result => ensures result matches Ok(n) ==> n == self@.len())]
+    fn len(&self) -> Result<usize, HistoryError> {
+        match self
+            .equals
+            .len()
+            .checked_add(if self.last.is_some() { 1 } else { 0 })
+        {
+            Some(n) => Ok(n),
+            None => Err(HistoryError::graph_index_overflow()),
+        }
     }
 
     #[verus_spec(result => requires index < self@.len(), self@.len() <= usize::MAX,
@@ -1278,12 +1480,15 @@ pub(crate) struct ClassChoices {
 
 #[verus_verify]
 impl ClassChoices {
-    #[verus_spec(result => requires self@.len() <= usize::MAX, ensures result == self@.len())]
-    fn len(&self) -> usize {
-        self.names.len()
-            + if self.infinite { 1 } else { 0 }
-            + if self.register { 1 } else { 0 }
-            + if self.other.is_some() { 1 } else { 0 }
+    #[verus_spec(result => ensures result matches Ok(n) ==> n == self@.len())]
+    fn len(&self) -> Result<usize, HistoryError> {
+        let extras = (if self.infinite { 1usize } else { 0 })
+            + (if self.register { 1usize } else { 0 })
+            + (if self.other.is_some() { 1usize } else { 0 });
+        match self.names.len().checked_add(extras) {
+            Some(n) => Ok(n),
+            None => Err(HistoryError::graph_index_overflow()),
+        }
     }
 
     #[verus_spec(result => requires index < self@.len(), self@.len() <= usize::MAX,

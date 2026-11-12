@@ -11,7 +11,7 @@ request. Retained policies compile once and reuse their progress as histories gr
 
 ## Check a proposed action
 
-The `junco-policy` crate supplies ownership-lock and classified-agent policies on the generic engine.
+The `junco-policy` crate supplies ownership-lock, classified-agent and information-flow policies.
 Create a shared store, retain the policy, and pass it the committed history and proposed
 event. `decide` does not append. Perform the operation only on a grant, then record the
 event after the operation succeeds.
@@ -26,19 +26,20 @@ use junco_core::{limits::Unmetered, observation::ObservationWorld};
 use history_store::store::HistoryStore;
 use history_store::{History, Store};
 use history_semantics::PolicyDecision;
+use history_syntax::Component;
 use junco_policy::{Action, LockEvent, LockPolicy};
 
 fn example() -> Result<(), Box<dyn std::error::Error>> {
-    let paths = HistoryStore::global();
+    let paths = HistoryStore::new(3);
     let mut limits = Unmetered;
     let mut world = ObservationWorld;
-    let alice = paths.intern_principal("::Users::research::Alice", &mut limits, &mut world)?;
-    let library = paths.intern_resource("/usr/lib/lclang.so", &mut limits, &mut world)?;
+    let alice = paths.intern(Component(0), b"::Users::research::Alice", &mut limits, &mut world)?;
+    let library = paths.intern(Component(2), b"/usr/lib/lclang.so", &mut limits, &mut world)?;
 
     let store = Arc::new(Store::<LockEvent<u64, u64>>::new()?);
     let mut history = History::new(store.clone())?;
     let mut policy = LockPolicy::new(store)?;
-    let event = LockEvent::new(alice.get(), Action::Edit, library.get());
+    let event = LockEvent::new(alice, Action::Edit, library);
     if matches!(policy.decide(&history, &event)?, PolicyDecision::Grant) {
         history.push(event)?; // Record only after the operation succeeds.
     }
@@ -85,6 +86,34 @@ remain committed when a later candidate is denied.
 that previously read or received the untrusted class. The caller must track dataflow
 and append `Receive` events for derived values; the policy does not infer propagation.
 
+## Information-flow policies
+
+`FlowEvent<P, V, L>` records `(principal, handle, action, label)`. Use
+`FlowPolicy::new().rule(FlowRule::no_contact_after_read(untrusted, &[sink]))` to deny
+contacts after the same principal has read or received tainted data for that handle.
+Declassifying the same label for that principal and handle clears its taint until the
+next read or receive. Another principal's copy is independent.
+
+`AgentPolicy` and `FlowPolicy` are aliases of `RulePolicy<E>`; their denial types use
+`RuleDenial<E>`. `RuleSet::new` accepts ordered `TraceRule<E>` values for custom
+vocabularies. Both facades share the batch, audit and failure behavior above.
+
+## Policy-defined events
+
+Each `history_syntax::Event` chooses an `Arity` from `N1` through `N8` and a tagged
+`Component` type. `component(i)` returns coordinate `i`;
+`Event::coordinate(component)` identifies the coordinate of a tagged value.
+Two-, three- and four-element tuples implement `Event` with `Component2`,
+`Component3` and `Component4`. Frunk coproduct variants must share their component
+type and arity. `LockEvent` and `AgentEvent` use three coordinates; `FlowEvent` uses four.
+
+Build heads with `Head::new([slot_0, slot_1, ...])` and atoms with
+`AtomPattern::new(Component(index), pattern)`. Compilation rejects a wrong head length
+with `CompileError::HeadArity` and a constant tagged for another coordinate with
+`CompileError::ComponentCoordinate`. Variables bind and compare within one coordinate.
+Portable heads are vectors in the version-9 format; numeric events and bindings keep
+up to eight coordinates inline.
+
 ## What Verus proves
 
 ### The top-level `pair_language` property
@@ -104,7 +133,7 @@ $$
 
 Here $H$ is the candidate head, $R$ the tail expression, $q$ the proposed event and
 $w$ the committed history, ordered oldest to newest. The substitution $\theta$ holds
-the principal, action and resource values bound by the candidate. A head constant must
+the values bound by the candidate, one slot per coordinate. A head constant must
 equal the corresponding candidate value; a bound variable captures that value for use
 in the same coordinate of a tail test. The numeric model uses zero for coordinates
 that do not bind. Head matching determines a unique substitution, as proved by
@@ -322,7 +351,7 @@ worker. Rig's native tool API drives privileged P and quarantined Q model calls 
 GitHub Copilot. P sees handles and shapes for untrusted values, not their contents.
 Q receives referenced contents for structured extraction; its results remain hidden and
 are always tainted, including queries without references or with only trusted inputs.
-Protected sink arguments and `$if` guards are checked by `AgentPolicy` as `Sink`
+Protected sink arguments and `$if` guards are checked by `FlowPolicy` as `Sink`
 contacts. The worker also reports each result's readers (an email's correspondents,
 a transaction's two parties, a file's `shared_with`, an event's participants, nobody for
 plain text), mirroring CaMeL's AgentDojo capabilities. A value's readers are the
@@ -338,6 +367,12 @@ are not checked against readers, as in CaMeL's policies.
 Call-argument recipient arrays are flattened recursively, including nested calendar
 participants; malformed calls still receive a policy verdict before tool validation.
 Worker-reported reader and environment-audience lists remain flat.
+
+Events are four-string arrays `[principal, "$N", action, label]`, for example
+`["P", "$1", "read", "untrusted"]`. Tool results belong to P. Each Q extraction
+records Q's read or receive, then P's receive, for every propagated label. The policy
+tracks taint for each principal's copy of each handle. Decision records include
+`principal` and the numeric `handle`.
 
 This is a native-tool adaptation of [CaMeL](https://arxiv.org/abs/2503.18813), not its
 Python code-generation interpreter. Trust is still per tool, not per sender: a value
@@ -364,7 +399,7 @@ cargo +1.98.1 bench --bench agentdojo -- --report
 
 The self-test needs no credentials: it exercises the real worker and scorer, scripted
 native model responses, reference resolution, quarantine, readers, Q retries, guarded
-calls, policy decisions, and replay. The full registry contains 97 clean tasks and 949 attacked
+calls, Q-then-P event ordering, policy decisions, and offline replay. The full registry contains 97 clean tasks and 949 attacked
 pairs. Each concurrency lane reuses one worker, resetting the environment for every task;
 the fixed limit is 30 P turns per task. By default all four suites and both clean and
 attacked tasks run. Repeat `--suite NAME` to select suites; `--clean-only` and
@@ -392,6 +427,40 @@ calls. A script mirrors the log layout and holds `{"p": [assistant messages], "q
 derives them from a previous run, reconstructing hidden Q values from the arguments the
 run later resolved. Tasks without a script are skipped. `--out NAME` writes logs under
 `benches/agentdojo/runs/NAME` so the replay does not overwrite the source run.
+
+`--events DIR --out NAME` replays saved events through the four-coordinate policy,
+without Python, tool execution, model calls or credentials. Live logs can be used
+directly. Translate older logs containing strings such as `"$1 Read untrusted"` first:
+
+```sh
+python3 benches/agentdojo/translate_events.py \
+  benches/agentdojo/runs/replay-readers-timed \
+  benches/agentdojo/runs/replay-readers-timed-events
+cargo +1.98.1 bench --bench agentdojo -- \
+  --events benches/agentdojo/runs/replay-readers-timed-events --out replay-events-4ary
+```
+
+The translator matches Q results by provider call ID, emits each Q event followed by
+P's receive, and checks that contacts match recorded decisions in order. It retains
+task identifiers, scores and errors, and stops on malformed events or mismatched
+contacts with the source file named in the error.
+
+Offline replay applies `--suite`, `--user-task`, `--injection-task`, `--clean-only`
+and `--attacked-only` to canonical paths. `--out` is required; `--events` conflicts
+with `--replay`, `--report` and `--self-test`. Each output preserves the input and adds
+`replayed` and `replayed_seconds` to each decision, plus task-level `mismatches` and
+`replayed_policy_seconds`. The original `error` is retained as `source_error`;
+the output `error` reports replay failure.
+
+Per-suite and total rows report tasks, contacts, recorded and replayed denials,
+mismatches, errors, and policy time: total, median, p99 and maximum in milliseconds.
+The distribution uses per-task sums of time inside `FlowPolicy::check`, excluding
+other history appends and file I/O. Any mismatch or replay error makes the command
+exit nonzero. Utility and attack scores remain the recorded values.
+
+The recorded `replay-readers-timed` corpus translates to 13,036 events across 1,024
+tasks. Its 219 contact decisions all replayed as denials, with zero mismatches or
+replay errors.
 
 `--report` reads canonical logs without Python, model calls, or credentials, applying
 the same suite and task filters. The report also runs after task execution. Per-suite

@@ -83,7 +83,7 @@ pub mod verify {
     ) -> bool {
         runtime_wf(runtime)
             && snapshot_compatible(runtime.snapshots@, stored.id(), stored.revision(), history_store::store::verify::events_view(history_store::history::verify::stored_events(&stored)))
-            && language::event_wf(bindings@) && target_len <= history_store::history::verify::stored_events(&stored).len()
+            && language::event_wf(bindings@, bindings@.len()) && target_len <= history_store::history::verify::stored_events(&stored).len()
     }
 
     pub open(crate) spec fn resume_ensures(
@@ -182,7 +182,7 @@ pub mod verify {
     )
         requires runtime_wf(runtime),
             snapshot_compatible(runtime.spec_snapshots(), stored.id(), stored.revision(), stored@.events),
-            language::event_wf(bindings@), target_len <= stored@.events.len(),
+            language::event_wf(bindings@, bindings@.len()), target_len <= stored@.events.len(),
         ensures resume_requires(runtime, bindings, stored, target_len),
     {
         history_store::history::lemma_stored_history_view(stored);
@@ -302,7 +302,7 @@ pub mod verify {
     pub(crate) open spec fn cursor_matches_snapshot(
         pair: CompiledPair, cursor: HistoryCursor, snapshots: HistorySnapshots,
     ) -> bool {
-        language::event_wf(cursor.bindings@)
+        language::event_wf(cursor.bindings@, cursor.bindings@.len())
             && snapshots.contains_key((cursor.history, cursor.revision))
             && progress::residual_after_prefix(pair, snapshots[(cursor.history, cursor.revision)],
                 cursor.bindings@, cursor.consumed as nat, cursor.residual)
@@ -312,7 +312,7 @@ pub mod verify {
         pair: CompiledPair, cursor: BatchCursor, history: usize, revision: u64,
         bindings: Bindings, snapshots: HistorySnapshots,
     ) -> bool {
-        language::event_wf(bindings@)
+        language::event_wf(bindings@, bindings@.len())
             && ((cursor.consumed == 0 && cursor.residual == pair.root)
                 || (snapshots.contains_key((history, revision))
                     && progress::residual_after_prefix(pair, snapshots[(history, revision)],
@@ -564,7 +564,7 @@ impl RuleRuntime {
             numeric_result(*template, *request, *stored, result),
             result matches Ok(Some(answer)) ==> exists|bindings: Bindings|
                 crate::compile::verify::bindings_match(*template, *request, bindings)
-                    && language::event_wf(bindings@)
+                    && language::event_wf(bindings@, bindings@.len())
                     && answer == model::regex_lang(old(self).pair.store.graph(), bindings@,
                         old(self).pair.root@,
                         history_store::store::verify::events_view(raw::stored_events(&stored))),
@@ -625,7 +625,7 @@ impl RuleRuntime {
                 proof! {
                     assert(exists|witness: Bindings|
                         crate::compile::verify::bindings_match(*template, *request, witness)
-                            && language::event_wf(witness@)
+                            && language::event_wf(witness@, witness@.len())
                             && answer == crate::compile::verify::source_regex(*template,
                                 template.root as nat, witness@,
                                 history_store::store::verify::events_view(raw::stored_events(&stored)))) by {
@@ -633,7 +633,7 @@ impl RuleRuntime {
                     }
                     assert(exists|witness: Bindings|
                         crate::compile::verify::bindings_match(*template, *request, witness)
-                            && language::event_wf(witness@)
+                            && language::event_wf(witness@, witness@.len())
                             && answer == model::regex_lang(entry.pair.store.graph(), witness@,
                                 entry.pair.root@,
                                 history_store::store::verify::events_view(raw::stored_events(&stored)))) by {
@@ -687,7 +687,7 @@ impl RuleRuntime {
         while index < self.cursors.entries().len() {
             if let Some(cursor) = self.cursors.entries().get(index) {
                 if cursor.history == history
-                    && cursor.bindings.values() == bindings.values()
+                    && cursor.bindings == *bindings
                     && cursor.revision == stored.revision()
                     && cursor.consumed <= target_len
                 {
@@ -997,11 +997,11 @@ mod tests {
     use junco_core::limits::Unmetered;
 
     fn runtime(regex: FlatRegex) -> RuleRuntime {
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let runtime = RuleRuntime::new(
             &store,
             &FlatPair {
-                head: [FlatHead::Any, FlatHead::Any, FlatHead::Any],
+                head: vec![FlatHead::Any, FlatHead::Any, FlatHead::Any],
                 tests: Vec::new(),
                 regexes: vec![regex],
                 root: 0,
@@ -1016,17 +1016,21 @@ mod tests {
     }
 
     fn event(store: &HistoryStore) -> Event {
-        Event {
-            principal: store
-                .intern_principal("alice", &mut Unmetered, &mut ObservationWorld)
-                .unwrap(),
-            action: store
-                .intern_action("edit", &mut Unmetered, &mut ObservationWorld)
-                .unwrap(),
-            resource: store
-                .intern_resource("doc", &mut Unmetered, &mut ObservationWorld)
-                .unwrap(),
-        }
+        let principal = store
+            .intern(
+                Component(0),
+                b"alice",
+                &mut Unmetered,
+                &mut ObservationWorld,
+            )
+            .unwrap();
+        let action = store
+            .intern(Component(1), b"edit", &mut Unmetered, &mut ObservationWorld)
+            .unwrap();
+        let resource = store
+            .intern(Component(2), b"doc", &mut Unmetered, &mut ObservationWorld)
+            .unwrap();
+        store.event(&[principal, action, resource]).unwrap()
     }
 
     #[test]
@@ -1038,7 +1042,7 @@ mod tests {
 
     #[test]
     fn batch_cursor_ends_and_retained_prefix_are_exact() {
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let history = store
             .new_history(&mut Unmetered, &mut ObservationWorld)
             .unwrap();
@@ -1053,7 +1057,7 @@ mod tests {
         let record = store.history_record(&history).unwrap();
         let stored = record.read();
         let mut runtime = runtime(FlatRegex::All);
-        let bindings = Bindings::new([0; 3]);
+        let bindings = Bindings::new(&[0; 3]);
         let mut cursor = runtime.root_cursor();
         for expected in [3, 6, 7] {
             let answer = runtime
@@ -1092,7 +1096,7 @@ mod tests {
             .advance(
                 &mut empty.pair,
                 &[],
-                &Bindings::new([0; 3]),
+                &Bindings::new(&[0; 3]),
                 1,
                 3,
                 &mut Unmetered,
@@ -1104,7 +1108,7 @@ mod tests {
         assert_eq!(cursor.residual, before.residual);
         assert!(empty.cursors.entries().is_empty());
 
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let history = store
             .new_history(&mut Unmetered, &mut ObservationWorld)
             .unwrap();
@@ -1118,7 +1122,7 @@ mod tests {
             .unwrap();
         let record = store.history_record(&history).unwrap();
         let stored = record.read();
-        let bindings = Bindings::new([0; 3]);
+        let bindings = Bindings::new(&[0; 3]);
         let mut runtime = runtime(FlatRegex::All);
         let mut cursor = runtime.root_cursor();
         assert_eq!(
@@ -1186,7 +1190,7 @@ mod tests {
                 Err(junco_core::limits::LimitError::MemoryLimitExceeded { usage: 1, limit: 0 })
             }
         }
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let history = store
             .new_history(&mut Unmetered, &mut ObservationWorld)
             .unwrap();
@@ -1198,7 +1202,7 @@ mod tests {
         assert!(matches!(
             runtime.advance_cursor(
                 &mut cursor,
-                &Bindings::new([0; 3]),
+                &Bindings::new(&[0; 3]),
                 &stored,
                 0,
                 1,
@@ -1214,7 +1218,7 @@ mod tests {
 
     #[test]
     fn retained_cursor_lru_is_bounded_and_keeps_recent_histories() {
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let mut runtime = runtime(FlatRegex::All);
         let mut keys = Vec::new();
         for _ in 0..17 {
@@ -1230,7 +1234,7 @@ mod tests {
                 runtime
                     .advance_cursor(
                         &mut cursor,
-                        &Bindings::new([0; 3]),
+                        &Bindings::new(&[0; 3]),
                         &stored,
                         0,
                         3,
@@ -1249,32 +1253,43 @@ mod tests {
                 .cursors
                 .entries()
                 .iter()
-                .all(|cursor| cursor.bindings == Bindings::new([0; 3]))
+                .all(|cursor| cursor.bindings == Bindings::new(&[0; 3]))
         );
     }
 
     #[test]
     fn equal_shape_records_never_share_residuals() {
-        let store = HistoryStore::global();
-        let event = |action: &str| Event {
-            principal: store
-                .intern_principal("alice", &mut Unmetered, &mut ObservationWorld)
-                .unwrap(),
-            action: store
-                .intern_action(action, &mut Unmetered, &mut ObservationWorld)
-                .unwrap(),
-            resource: store
-                .intern_resource("doc", &mut Unmetered, &mut ObservationWorld)
-                .unwrap(),
+        let store = HistoryStore::new(3);
+        let event = |action: &str| {
+            let principal = store
+                .intern(
+                    Component(0),
+                    b"alice",
+                    &mut Unmetered,
+                    &mut ObservationWorld,
+                )
+                .unwrap();
+            let action = store
+                .intern(
+                    Component(1),
+                    action.as_bytes(),
+                    &mut Unmetered,
+                    &mut ObservationWorld,
+                )
+                .unwrap();
+            let resource = store
+                .intern(Component(2), b"doc", &mut Unmetered, &mut ObservationWorld)
+                .unwrap();
+            store.event(&[principal, action, resource]).unwrap()
         };
         let read = event("read");
         let mut runtime = RuleRuntime::new(
             &store,
             &FlatPair {
-                head: [FlatHead::Any, FlatHead::Any, FlatHead::Any],
+                head: vec![FlatHead::Any, FlatHead::Any, FlatHead::Any],
                 tests: vec![FlatTest::Atom {
-                    field: Component::Action,
-                    term: FlatTerm::Constant(read.action.get()),
+                    field: Component(1),
+                    term: FlatTerm::Constant(read.component(1)),
                     positive: true,
                 }],
                 regexes: vec![FlatRegex::Test(0), FlatRegex::Star(0)],
@@ -1296,7 +1311,7 @@ mod tests {
             histories.push((history, expected));
         }
         assert_ne!(histories[0].0.index(), histories[1].0.index());
-        let bindings = Bindings::new([0; 3]);
+        let bindings = Bindings::new(&[0; 3]);
         // Cold then warm, in both orders: same length, revision and bindings, distinct keys.
         for order in [[0, 1], [1, 0], [0, 1], [1, 0]] {
             for index in order {

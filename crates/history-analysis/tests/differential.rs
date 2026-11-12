@@ -13,7 +13,8 @@ use history_analysis::{Components, Domains, Inclusion, PolicyAnalyzer, Value};
 use history_semantics::{PolicyDecision, TracePolicy, TraceRule};
 use history_store::{History, Store};
 use history_syntax::{
-    AtomPattern, Comparison, ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Event, Head, N3, RegexExpr, Rule,
+    RuleMode, TestExpr,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -32,21 +33,31 @@ struct Access {
     resource: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum AccessComponent {
+    Principal(u32),
+    Action(Action),
+    Resource(u32),
+}
+
 impl Event for Access {
-    type Principal = u32;
-    type Action = Action;
-    type Resource = u32;
+    type Component = AccessComponent;
+    type Arity = N3;
 
-    fn principal(self) -> u32 {
-        self.principal
+    fn component(self, index: usize) -> AccessComponent {
+        match index {
+            0 => AccessComponent::Principal(self.principal),
+            1 => AccessComponent::Action(self.action),
+            _ => AccessComponent::Resource(self.resource),
+        }
     }
 
-    fn action(self) -> Action {
-        self.action
-    }
-
-    fn resource(self) -> u32 {
-        self.resource
+    fn coordinate(component: AccessComponent) -> usize {
+        match component {
+            AccessComponent::Principal(_) => 0,
+            AccessComponent::Action(_) => 1,
+            AccessComponent::Resource(_) => 2,
+        }
     }
 }
 
@@ -224,26 +235,33 @@ impl Setup {
             Some(vec![11, 12]),
         ][rng.below(4)]
         .clone();
-        let mut domains = Domains::infinite().with_actions(ACTIONS);
+        let mut domains =
+            Domains::infinite().with_domain(Component(1), ACTIONS.map(AccessComponent::Action));
         if let Some(values) = &principal_domain {
-            domains = domains.with_principals(values.iter().copied());
+            domains = domains.with_domain(
+                Component(0),
+                values.iter().copied().map(AccessComponent::Principal),
+            );
         }
         if let Some(values) = &resource_domain {
-            domains = domains.with_resources(values.iter().copied());
+            domains = domains.with_domain(
+                Component(2),
+                values.iter().copied().map(AccessComponent::Resource),
+            );
         }
-        let head = Head::new(
+        let head = Head::new([
             ComponentPattern::variable("p"),
             if action_register {
                 ComponentPattern::variable("a")
             } else {
-                ComponentPattern::constant(Action::Edit)
+                ComponentPattern::constant(AccessComponent::Action(Action::Edit))
             },
             if resource_register {
                 ComponentPattern::variable("r")
             } else {
-                ComponentPattern::constant(MENTIONED)
+                ComponentPattern::constant(AccessComponent::Resource(MENTIONED))
             },
-        );
+        ]);
         let actions = if action_register {
             ACTIONS.to_vec()
         } else {
@@ -306,13 +324,23 @@ impl Setup {
             };
         }
         let pattern = match rng.below(6) {
-            0 => AtomPattern::Principal(ComponentPattern::variable("p")),
-            1 if self.action_register => AtomPattern::Action(ComponentPattern::variable("a")),
-            1 | 2 => AtomPattern::Action(ComponentPattern::constant(
-                [Action::Read, Action::Edit][rng.below(2)],
-            )),
-            3 if self.resource_register => AtomPattern::Resource(ComponentPattern::variable("r")),
-            3 | 4 => AtomPattern::Resource(ComponentPattern::constant(MENTIONED)),
+            0 => AtomPattern::new(Component(0), ComponentPattern::variable("p")),
+            1 if self.action_register => {
+                AtomPattern::new(Component(1), ComponentPattern::variable("a"))
+            }
+            1 | 2 => AtomPattern::new(
+                Component(1),
+                ComponentPattern::constant(AccessComponent::Action(
+                    [Action::Read, Action::Edit][rng.below(2)],
+                )),
+            ),
+            3 if self.resource_register => {
+                AtomPattern::new(Component(2), ComponentPattern::variable("r"))
+            }
+            3 | 4 => AtomPattern::new(
+                Component(2),
+                ComponentPattern::constant(AccessComponent::Resource(MENTIONED)),
+            ),
             _ if rng.below(4) == 0 => return TestExpr::False,
             _ => return TestExpr::True,
         };
@@ -420,13 +448,24 @@ impl Setup {
     /// The concrete value of each component, checking it against the declared domains; fresh
     /// values are numbered above every constant.
     fn concrete(&self, components: &Components<Access>) -> Access {
-        let Value::Constant(action) = components.action else {
-            panic!("declared actions have no fresh values");
+        assert_eq!(components.values.len(), 3);
+        let principal = match components.values[0] {
+            Value::Constant(AccessComponent::Principal(value)) => Value::Constant(value),
+            Value::Fresh(number) => Value::Fresh(number),
+            _ => panic!("principal constant has the wrong coordinate"),
+        };
+        let Value::Constant(AccessComponent::Action(action)) = components.values[1] else {
+            panic!("declared actions have no fresh values or other coordinates");
+        };
+        let resource = match components.values[2] {
+            Value::Constant(AccessComponent::Resource(value)) => Value::Constant(value),
+            Value::Fresh(number) => Value::Fresh(number),
+            _ => panic!("resource constant has the wrong coordinate"),
         };
         Access {
-            principal: concrete(components.principal, self.principal_domain.as_deref()),
+            principal: concrete(principal, self.principal_domain.as_deref()),
             action,
-            resource: concrete(components.resource, self.resource_domain.as_deref()),
+            resource: concrete(resource, self.resource_domain.as_deref()),
         }
     }
 
@@ -569,15 +608,9 @@ fn holds(test: &TestExpr<Access>, event: Access, candidate: Access) -> bool {
             comparison,
             pattern,
         } => {
-            let equal = match pattern {
-                AtomPattern::Principal(pattern) => {
-                    event.principal == resolve(pattern, candidate.principal)
-                }
-                AtomPattern::Action(pattern) => event.action == resolve(pattern, candidate.action),
-                AtomPattern::Resource(pattern) => {
-                    event.resource == resolve(pattern, candidate.resource)
-                }
-            };
+            let coordinate = pattern.component.index();
+            let equal = event.component(coordinate)
+                == resolve(&pattern.pattern, candidate.component(coordinate));
             equal == matches!(comparison, Comparison::Eq)
         }
     }

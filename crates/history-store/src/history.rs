@@ -621,7 +621,7 @@ impl<E: TypedEvent> Eq for History<E> {}
 #[cfg(verus_keep_ghost)]
 pub mod verify {
     use super::*;
-    use junco_core::verify::dsl::EventView;
+    use history_syntax::{Arity, event::specs::event_view};
     use junco_core::verify::history_specs::{
         HistoryStateView, history_mutation, lemma_revision_chain_preserves_prefix,
     };
@@ -896,13 +896,13 @@ pub mod verify {
     }
 
     pub open spec fn raw_event<E: TypedEvent>(event: E)
-        -> EventView<E::Principal, E::Action, E::Resource>
+        -> Seq<E::Component>
     {
-        books::projection::<E>(event)
+        event_view(event)
     }
 
     pub open spec fn raw_word<E: TypedEvent>(history: History<E>)
-        -> Seq<EventView<E::Principal, E::Action, E::Resource>>
+        -> Seq<Seq<E::Component>>
     {
         raw_events(history).map(|i: int, event: E| raw_event(event))
     }
@@ -1158,7 +1158,7 @@ pub mod verify {
             && history_wf(typed)
             && crate::store::verify::handle_index(byte) != typed.spec_id(),
     {
-        let owner = crate::store::HistoryStore::global();
+        let owner = crate::store::HistoryStore::new(E::Arity::value());
         let byte = owner.new_history(limits, world)?;
         let typed = History::new(store)?;
         proof {
@@ -1234,25 +1234,29 @@ mod tests {
     }
 
     fn fresh_key() -> usize {
-        HistoryStore::global()
+        HistoryStore::new(3)
             .allocate_history_after(0, Ghost::assume_new(), Tracked::assume_new())
             .unwrap()
             .0
     }
 
     fn event() -> Event {
-        let store = HistoryStore::global();
-        Event {
-            principal: store
-                .intern_principal("alice", &mut Unmetered, &mut ObservationWorld)
-                .unwrap(),
-            action: store
-                .intern_action("edit", &mut Unmetered, &mut ObservationWorld)
-                .unwrap(),
-            resource: store
-                .intern_resource("doc", &mut Unmetered, &mut ObservationWorld)
-                .unwrap(),
+        let store = HistoryStore::new(3);
+        let mut slots = [0; 3];
+        for (index, bytes) in [b"alice".as_slice(), b"edit".as_slice(), b"doc".as_slice()]
+            .into_iter()
+            .enumerate()
+        {
+            slots[index] = store
+                .intern(
+                    history_syntax::Component::new(index),
+                    bytes,
+                    &mut Unmetered,
+                    &mut ObservationWorld,
+                )
+                .unwrap();
         }
+        Event::from_encoded(&slots)
     }
 
     #[test]
@@ -1323,16 +1327,15 @@ mod typed_tests {
     }
 
     impl TypedEvent for TestEvent {
-        type Principal = Actor;
-        type Action = ();
-        type Resource = Path;
+        type Component = history_syntax::Component3<Actor, (), Path>;
+        type Arity = history_syntax::N3;
 
-        fn principal(self) -> Actor {
-            self.actor
+        fn component(self, index: usize) -> Self::Component {
+            (self.actor, (), self.path).component(index)
         }
-        fn action(self) {}
-        fn resource(self) -> Path {
-            self.path
+
+        fn coordinate(component: Self::Component) -> usize {
+            <(Actor, (), Path) as TypedEvent>::coordinate(component)
         }
     }
 
@@ -1415,20 +1418,18 @@ mod typed_tests {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         struct Other(u8);
         impl TypedEvent for Other {
-            type Principal = u8;
-            type Action = u8;
-            type Resource = u8;
-            fn principal(self) -> u8 {
-                self.0
+            type Component = history_syntax::Component3<u8, u8, u8>;
+            type Arity = history_syntax::N3;
+
+            fn component(self, index: usize) -> Self::Component {
+                (self.0, self.0, self.0).component(index)
             }
-            fn action(self) -> u8 {
-                self.0
-            }
-            fn resource(self) -> u8 {
-                self.0
+
+            fn coordinate(component: Self::Component) -> usize {
+                <(u8, u8, u8) as TypedEvent>::coordinate(component)
             }
         }
-        let bytes = HistoryStore::global();
+        let bytes = HistoryStore::new(3);
         let byte_first = bytes
             .new_history(&mut Unmetered, &mut ObservationWorld)
             .unwrap();
@@ -1624,21 +1625,16 @@ mod typed_copy_tests {
     }
 
     impl TypedEvent for CopyOnly {
-        type Principal = u8;
-        type Action = u8;
-        type Resource = u8;
+        type Component = history_syntax::Component3<u8, u8, u8>;
+        type Arity = history_syntax::N3;
 
-        fn principal(self) -> u8 {
+        fn component(self, index: usize) -> Self::Component {
             PROJECTIONS.fetch_add(1, Ordering::Relaxed);
-            self.0
+            (self.0, self.0, self.0).component(index)
         }
-        fn action(self) -> u8 {
-            PROJECTIONS.fetch_add(1, Ordering::Relaxed);
-            self.0
-        }
-        fn resource(self) -> u8 {
-            PROJECTIONS.fetch_add(1, Ordering::Relaxed);
-            self.0
+
+        fn coordinate(component: Self::Component) -> usize {
+            <(u8, u8, u8) as TypedEvent>::coordinate(component)
         }
     }
 
@@ -1657,5 +1653,32 @@ mod typed_copy_tests {
         );
         assert_eq!(history.len(), 2);
         assert_eq!(history.numeric.revision, 0);
+    }
+}
+
+#[cfg(test)]
+mod arity_tests {
+    use super::*;
+    use crate::store::HistoryStore;
+    use alloc::collections::BTreeSet;
+
+    #[test]
+    fn history_keys_do_not_alias_across_event_arities() {
+        let mut keys = BTreeSet::new();
+        for arity in 1..=history_syntax::MAX_ARITY {
+            let store = HistoryStore::new(arity);
+            let history = store
+                .new_history(&mut Unmetered, &mut ObservationWorld)
+                .unwrap();
+            assert!(keys.insert(history.index()));
+        }
+        let pair = History::from_events(Arc::new(Store::new().unwrap()), [(1_u8, 2_u8)]).unwrap();
+        let quartet =
+            History::from_events(Arc::new(Store::new().unwrap()), [(1_u8, 2_u8, 3_u8, 4_u8)])
+                .unwrap();
+        assert!(keys.insert(pair.id()));
+        assert!(keys.insert(quartet.id()));
+        assert_eq!(pair.numeric.events[0].arity(), 2);
+        assert_eq!(quartet.numeric.events[0].arity(), 4);
     }
 }

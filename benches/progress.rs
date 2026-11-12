@@ -17,10 +17,10 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use history_semantics::Validator;
 use history_store::{Checkpoint, Store};
 use history_syntax::{
-    AtomPattern, Comparison, ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
 use junco_core::Request;
-use junco_policy::{Action, LockEvent};
+use junco_policy::{Action, LockComponent, LockEvent};
 use std::sync::Arc;
 
 const HISTORY_LENGTHS: [usize; 4] = [16, 4096, 8192, 16384];
@@ -41,30 +41,33 @@ const OTHER_RESOURCE: Path = Path(1);
 fn principal_is(comparison: Comparison) -> TestExpr<LockEvent<Actor, Path>> {
     TestExpr::atom(
         comparison,
-        AtomPattern::Principal(ComponentPattern::variable("actor")),
+        AtomPattern::new(Component(0), ComponentPattern::variable("actor")),
     )
 }
 
 fn resource_is(comparison: Comparison) -> TestExpr<LockEvent<Actor, Path>> {
     TestExpr::atom(
         comparison,
-        AtomPattern::Resource(ComponentPattern::variable("resource")),
+        AtomPattern::new(Component(2), ComponentPattern::variable("resource")),
     )
 }
 
 fn action_is(action: Action, comparison: Comparison) -> TestExpr<LockEvent<Actor, Path>> {
     TestExpr::atom(
         comparison,
-        AtomPattern::Action(ComponentPattern::constant(action)),
+        AtomPattern::new(
+            Component(1),
+            ComponentPattern::constant(LockComponent::Action(action)),
+        ),
     )
 }
 
 fn release_head() -> Head<LockEvent<Actor, Path>> {
-    Head::new(
+    Head::new([
         ComponentPattern::variable("actor"),
-        ComponentPattern::constant(Action::Release),
+        ComponentPattern::constant(LockComponent::Action(Action::Release)),
         ComponentPattern::variable("resource"),
-    )
+    ])
 }
 
 /// `All · Test(principal = actor ∧ action = Edit ∧ resource = resource) · All`.
@@ -297,7 +300,7 @@ fn tagged_replay(criterion: &mut Criterion) {
         for history_len in HISTORY_LENGTHS {
             let store = Arc::new(Store::new().unwrap());
             let mut scenario = workload.scenario(store, history_len);
-            assert_eq!(scenario.final_event.action(), Action::Read);
+            assert_eq!(scenario.final_event.action, Action::Read);
             let candidate = candidate();
             group.bench_function(BenchmarkId::new(workload.name(), history_len), |bencher| {
                 bencher.iter_custom(|iterations| {

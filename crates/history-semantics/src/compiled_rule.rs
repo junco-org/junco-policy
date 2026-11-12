@@ -10,8 +10,6 @@ use history_syntax::Event;
 use history_syntax::syntax::{Rule, RuleMode};
 use junco_core::error::{CompileError, HistoryError};
 use junco_core::flat::FlatPair;
-#[cfg(verus_keep_ghost)]
-use junco_core::flatten::ComponentValue;
 use junco_core::flatten::flatten_rule;
 use junco_core::limits::{Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
@@ -38,10 +36,10 @@ broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemm
 /// The result retains a structural witness, not an assumed language equivalence.
 pub(crate) open spec fn compiled_source<E: Event>(
     rule: Rule<E>, mode: RuleMode, numeric: FlatPair<u64>,
-    maps: encoding::Codebook<ComponentValue<E>>, eq: encoding::Equality<ComponentValue<E>>,
-    domain: encoding::Domain<ComponentValue<E>>,
+    maps: encoding::Codebook<E::Component>, eq: encoding::Equality<E::Component>,
+    domain: encoding::Domain<E::Component>,
 ) -> bool {
-    mode == rule.mode && exists|flat: junco_core::flat::FlatRule<ComponentValue<E>>|
+    mode == rule.mode && exists|flat: junco_core::flat::FlatRule<E::Component>|
         source::flattened::<E>(rule, flat)
             && encoding::lowering(flat.source, numeric, maps, eq)
             && encoding::constants_in_domain(flat.source, domain)
@@ -286,7 +284,7 @@ pub mod verify {
             None => crate::compile::verify::head_rejects(template, request),
             Some(accepted) => exists|bindings: junco_core::kernel::Bindings|
                 crate::compile::verify::bindings_match(template, request, bindings)
-                    && junco_core::verify::history_specs::event_wf(bindings@)
+                    && junco_core::verify::history_specs::event_wf(bindings@, bindings@.len())
                     && accepted == crate::compile::verify::source_regex(template, template.root as nat,
                         bindings@, history_store::store::verify::events_view(raw::stored_events(&stored))),
         }
@@ -301,24 +299,31 @@ pub mod verify {
         ensures dsl_result(compiled.source@, history, candidate, result),
     {
         raw::lemma_history_wf(history);
-        assert(books::projection(candidate) == junco_core::verify::dsl::event_view(candidate));
         assert(raw::raw_word(history) =~= raw::raw_events(history).map(
-            |i: int, event: E| junco_core::verify::dsl::event_view(event)));
-        let flat = choose|flat: junco_core::flat::FlatRule<ComponentValue<E>>|
+            |i: int, event: E| history_syntax::event::specs::event_view(event)));
+        let flat = choose|flat: junco_core::flat::FlatRule<E::Component>|
             source::flattened::<E>(compiled.source@, flat)
                 && encoding::lowering(flat.source, compiled.template, compiled.maps@, source::component_equality::<E>())
                 && encoding::constants_in_domain(flat.source, books::domain::<E>());
+        assert(compiled.source@.head@.len() == history_syntax::event::specs::arity::<E>());
+        assert(compiled.template.head@.len() == compiled.source@.head@.len());
+        assert(history_syntax::event::specs::event_view(candidate).len() == compiled.source@.head@.len());
         let numeric_word = raw::stored_events(history.numeric()).map(|i: int, event: history_store::store::Event| books::numeric_values(event));
         assert forall|i: int| 0 <= i < raw::raw_events(history).len() implies
             books::event_encoded::<E>(maps, raw::raw_events(history)[i], raw::stored_events(history.numeric())[i]) by {
             books::lemma_event_extension::<E>(raw::history_maps(history), maps, raw::raw_events(history)[i], raw::stored_events(history.numeric())[i]);
         }
+        assert forall|i: int| 0 <= i < numeric_word.len() implies
+            numeric_word[i].len() == books::numeric_values(request).len() by {
+            assert(books::event_encoded::<E>(maps, raw::raw_events(history)[i],
+                raw::stored_events(history.numeric())[i]));
+        }
         assert(encoding::word_encoded(maps, source::component_equality::<E>(), books::domain::<E>(),
-            source::word_values::<E>(raw::raw_word(history)), numeric_word));
+            raw::raw_word(history), numeric_word));
         assert(junco_core::verify::encoding::word_representation(numeric_word,
             history_store::store::verify::events_view(raw::stored_events(history.numeric()))));
         encoding::lemma_dsl_later_maps_preservation::<E>(compiled.source@, flat, compiled.template,
-            compiled.maps@, maps, books::domain::<E>(), books::projection(candidate), raw::raw_word(history),
+            compiled.maps@, maps, books::domain::<E>(), history_syntax::event::specs::event_view(candidate), raw::raw_word(history),
             books::numeric_values(request), numeric_word);
         crate::compile::verify::lemma_flat_head(compiled.template, books::numeric_values(request), request@);
         if let Ok(answer) = result {
@@ -327,7 +332,7 @@ pub mod verify {
                 Some(accepted) => {
                     let bindings = choose|bindings: junco_core::kernel::Bindings|
                         crate::compile::verify::bindings_match(compiled.template, request, bindings)
-                            && junco_core::verify::history_specs::event_wf(bindings@)
+                            && junco_core::verify::history_specs::event_wf(bindings@, bindings@.len())
                             && accepted == crate::compile::verify::source_regex(compiled.template,
                                 compiled.template.root as nat, bindings@,
                                 history_store::store::verify::events_view(raw::stored_events(history.numeric())));
@@ -368,8 +373,11 @@ impl<E: Event> CompiledRule<E> {
         proof_decl! { let ghost flattened = flat; }
         proof! {
             books::lemma_empty_snapshot::<E>(store);
-            if books::native_obligations::<E>() { books::lemma_empty_maps_wf::<E>(); }
-            assert(encoding::constants_in_domain(flat.source, books::domain::<E>()));
+            if books::native_obligations::<E>() {
+                books::lemma_native_obligations_projection::<E>();
+                books::lemma_empty_maps_wf::<E>();
+                assert(encoding::constants_in_domain(flat.source, books::domain::<E>()));
+            }
         }
         let (result, maps) = store.lower_with_snapshot(&flat.source, limits, world,
             verus_exec_expr! { Ghost(books::empty_maps::<E>()) });
@@ -664,34 +672,39 @@ mod tests {
 
     use super::*;
     use history_syntax::syntax::{
-        AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, TestExpr,
+        AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, TestExpr,
     };
+    use history_syntax::{Component3, N3};
     use junco_core::limits::LimitError;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     struct Probe(u8, u8, u8);
 
     impl Event for Probe {
-        type Principal = u8;
-        type Action = u8;
-        type Resource = u8;
-        fn principal(self) -> u8 {
-            self.0
+        type Component = Component3<u8, u8, u8>;
+        type Arity = N3;
+        fn component(self, index: usize) -> Self::Component {
+            match index {
+                0 => Component3::C0(self.0),
+                1 => Component3::C1(self.1),
+                _ => Component3::C2(self.2),
+            }
         }
-        fn action(self) -> u8 {
-            self.1
-        }
-        fn resource(self) -> u8 {
-            self.2
+        fn coordinate(component: Self::Component) -> usize {
+            match component {
+                Component3::C0(_) => 0,
+                Component3::C1(_) => 1,
+                Component3::C2(_) => 2,
+            }
         }
     }
 
     fn head() -> Head<Probe> {
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(2),
+            ComponentPattern::constant(Component3::C1(2)),
             ComponentPattern::variable("resource"),
-        )
+        ])
     }
 
     fn reads() -> Rule<Probe> {
@@ -700,7 +713,7 @@ mod tests {
             head(),
             RegexExpr::star(RegexExpr::test(TestExpr::atom(
                 Comparison::Eq,
-                AtomPattern::Action(ComponentPattern::constant(1)),
+                AtomPattern::new(Component(1), ComponentPattern::constant(Component3::C1(1))),
             ))),
         )
     }
@@ -711,7 +724,7 @@ mod tests {
         let mut valid = RegexExpr::epsilon();
         let mut invalid = RegexExpr::test(TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Principal(ComponentPattern::variable("missing")),
+            AtomPattern::new(Component(0), ComponentPattern::variable("missing")),
         ));
         for _ in 0..4096 {
             valid = RegexExpr::star(valid);
@@ -794,7 +807,7 @@ mod tests {
         let read = || {
             RegexExpr::test(TestExpr::atom(
                 Comparison::Eq,
-                AtomPattern::Action(ComponentPattern::constant(1)),
+                AtomPattern::new(Component(1), ComponentPattern::constant(Component3::C1(1))),
             ))
         };
         let rule = Rule::new(
@@ -888,31 +901,25 @@ mod tests {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         struct Counted(Probe);
         impl Event for Counted {
-            type Principal = u8;
-            type Action = u8;
-            type Resource = u8;
-            fn principal(self) -> u8 {
+            type Component = <Probe as Event>::Component;
+            type Arity = N3;
+            fn component(self, index: usize) -> Self::Component {
                 PROJECTIONS.fetch_add(1, Ordering::SeqCst);
-                self.0.0
+                self.0.component(index)
             }
-            fn action(self) -> u8 {
-                PROJECTIONS.fetch_add(1, Ordering::SeqCst);
-                self.0.1
-            }
-            fn resource(self) -> u8 {
-                PROJECTIONS.fetch_add(1, Ordering::SeqCst);
-                self.0.2
+            fn coordinate(component: Self::Component) -> usize {
+                Probe::coordinate(component)
             }
         }
         let store = Arc::new(Store::new().unwrap());
         let foreign = Arc::new(Store::new().unwrap());
         let rule = Rule::<Counted>::new(
             RuleMode::Require,
-            Head::new(
+            Head::new([
                 ComponentPattern::variable("actor"),
-                ComponentPattern::constant(2),
+                ComponentPattern::constant(Component3::C1(2)),
                 ComponentPattern::variable("resource"),
-            ),
+            ]),
             RegexExpr::epsilon(),
         );
         let mut compiled = CompiledRule::new(store, rule).unwrap();
@@ -923,5 +930,61 @@ mod tests {
         );
         assert_eq!(PROJECTIONS.load(Ordering::SeqCst), 0);
         assert!(compiled.cursor_positions().is_empty());
+    }
+
+    #[test]
+    fn four_coordinate_decisions_bind_and_retain_the_whole_candidate() {
+        use history_syntax::Component4;
+        type Four = (u8, u8, u8, u8);
+
+        let variable = |index, name| {
+            TestExpr::<Four>::atom(
+                Comparison::Eq,
+                AtomPattern::new(Component(index), ComponentPattern::variable(name)),
+            )
+        };
+        let rule = Rule::<Four>::new(
+            RuleMode::Require,
+            Head::new([
+                ComponentPattern::variable("principal"),
+                ComponentPattern::variable("handle"),
+                ComponentPattern::constant(Component4::C2(3)),
+                ComponentPattern::variable("label"),
+            ]),
+            RegexExpr::star(RegexExpr::test(TestExpr::and([
+                variable(0, "principal"),
+                variable(1, "handle"),
+                TestExpr::atom(
+                    Comparison::Eq,
+                    AtomPattern::new(Component(2), ComponentPattern::constant(Component4::C2(1))),
+                ),
+                variable(3, "label"),
+            ]))),
+        );
+        let store = Arc::new(Store::<Four>::new().unwrap());
+        let mut history = History::from_events(Arc::clone(&store), [(7, 11, 1, 9); 2]).unwrap();
+        let mut compiled = CompiledRule::new(store, rule).unwrap();
+        let matching = (7, 11, 3, 9);
+        assert_eq!(
+            compiled.accepts_history(&history, &matching),
+            Ok(Some(true))
+        );
+        for different in [(8, 11, 3, 9), (7, 12, 3, 9), (7, 11, 3, 8)] {
+            assert_eq!(
+                compiled.accepts_history(&history, &different),
+                Ok(Some(false))
+            );
+        }
+        assert_eq!(compiled.accepts_history(&history, &(7, 11, 4, 9)), Ok(None));
+        history.push((7, 11, 1, 8)).unwrap();
+        assert_eq!(
+            compiled.accepts_history(&history, &matching),
+            Ok(Some(false))
+        );
+        history.truncate(2).unwrap();
+        assert_eq!(
+            compiled.accepts_history(&history, &matching),
+            Ok(Some(true))
+        );
     }
 }

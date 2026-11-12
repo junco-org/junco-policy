@@ -122,14 +122,24 @@ pub const SINKS: &[Sink] = &[
         Audience::None,
         &[],
     ),
-    sink("add_user_to_channel", &["user", "channel"], Audience::None, &[]),
+    sink(
+        "add_user_to_channel",
+        &["user", "channel"],
+        Audience::None,
+        &[],
+    ),
     sink(
         "send_direct_message",
         &[],
         Audience::ArgsOrTrusted(&["recipient"]),
         &["body"],
     ),
-    sink("send_channel_message", &[], Audience::Environment, &["body"]),
+    sink(
+        "send_channel_message",
+        &[],
+        Audience::Environment,
+        &["body"],
+    ),
     sink(
         "invite_user_to_slack",
         &["user", "user_email"],

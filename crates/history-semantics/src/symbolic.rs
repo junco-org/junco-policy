@@ -1526,7 +1526,7 @@ fn interpret_not<G: KernelStore>(
             == interp_stack_result(final(store).graph(), final(tasks).view(), final(values).view().len()),
         forall|atoms: Seq<TestId>| interp_tasks_covered(old(store).graph(), old(tasks).view().push((root, finish)), atoms) && result is Ok
             ==> interp_tasks_covered(final(store).graph(), final(tasks).view(), atoms),
-        result is Ok ==> forall|theta: Subst, event: EventView| language::event_wf(theta)
+        result is Ok ==> forall|theta: Subst, event: EventView| language::event_wf(theta, theta.len())
             ==> interp_results_equiv(model::gsem(theta),
                 interp_run(old(store).graph(), old(tasks).view().push((root, finish)), lifted_values(old(store).graph(), old(values).view()), theta, event),
                 interp_run(final(store).graph(), final(tasks).view(), lifted_values(final(store).graph(), final(values).view()), theta, event)),
@@ -1554,7 +1554,7 @@ fn interpret_not<G: KernelStore>(
         proof {
             lifted_values_stable(before, store.graph(), prior);
             store.graph().transitions.lemma_prefix_index_eq(before.transitions);
-            assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
+            assert forall|theta: Subst, event: EventView| language::event_wf(theta, theta.len()) implies
                 interp_results_equiv(model::gsem(theta),
                     interp_run(store.graph(), pending.push((root, finish)), lifted_values(store.graph(), prior), theta, event),
                     interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
@@ -1604,7 +1604,7 @@ fn interpret_not<G: KernelStore>(
                 interp_coverage_push(before, pending.push((root, true)), (inner, false), atoms);
             }
         }
-        assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
+        assert forall|theta: Subst, event: EventView| language::event_wf(theta, theta.len()) implies
             interp_results_equiv(model::gsem(theta),
                 interp_run(before, pending.push((root, finish)), lifted_values(before, prior), theta, event),
                 interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
@@ -1645,7 +1645,7 @@ pub(crate) trait TransitionInterpret: Sized {
                 ==> interp_tasks_covered(final(store).graph(), final(tasks).view(), atoms),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             interp_tasks_wf(final(store).graph(), final(tasks).view()), norm::regex_ids_valid(final(store).graph(), final(values).view()),
-            result.is_ok() ==> forall|theta: Subst, event: EventView| language::event_wf(theta) ==>
+            result.is_ok() ==> forall|theta: Subst, event: EventView| language::event_wf(theta, theta.len()) ==>
                 interp_results_equiv(model::gsem(theta),
                     interp_run(old(store).graph(), old(tasks).view().push((id, finish)), lifted_values(old(store).graph(), old(values).view()), theta, event),
                     interp_run(final(store).graph(), final(tasks).view(), lifted_values(final(store).graph(), final(values).view()), theta, event)),
@@ -1674,7 +1674,7 @@ pub(crate) trait TransitionInterpret: Sized {
             proof! {
                 interp_stack_task(store.graph(), old(tasks).view(), (id, true), old(values).view().len());
                 assert(values.view().len() == old(values).view().len() - count + 1);
-                assert forall|theta: Subst| language::event_wf(theta) implies
+                assert forall|theta: Subst| language::event_wf(theta, theta.len()) implies
                     regex_stack_equiv(model::gsem(theta), lifted_values(store.graph(), values.view()),
                         lifted_values(store.graph(), old(values).view().take(old(values).view().len() - count)).push(
                             regex_fold(lifted_values(store.graph(), old(values).view().skip(old(values).view().len() - count)), intersect))) by {
@@ -1696,7 +1696,7 @@ pub(crate) trait TransitionInterpret: Sized {
                     }
                 }
                 assert(interp_set_result(store.graph(), old(values).view(), values.view(), count as nat, intersect));
-                assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
+                assert forall|theta: Subst, event: EventView| language::event_wf(theta, theta.len()) implies
                     interp_results_equiv(model::gsem(theta),
                         interp_run(before, old(tasks).view().push((id, finish)), lifted_values(before, old(values).view()), theta, event),
                         interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
@@ -1767,7 +1767,7 @@ pub(crate) trait TransitionInterpret: Sized {
                 interp_stack_task(store.graph(), old(tasks).view(), (id, false), old(values).view().len());
                 interp_stack_task(store.graph(), old(tasks).view(), (id, true), (old(values).view().len() + count) as nat);
                 assert(tasks.view() == old(tasks).view().push((id, true)) + child_interp_tasks(store.graph(), id, 0));
-                assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
+                assert forall|theta: Subst, event: EventView| language::event_wf(theta, theta.len()) implies
                     interp_results_equiv(model::gsem(theta),
                         interp_run(before, old(tasks).view().push((id, finish)), lifted_values(before, old(values).view()), theta, event),
                         interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
@@ -1856,7 +1856,7 @@ pub(crate) trait TransitionInterpret: Sized {
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             result matches Ok(id) ==> id@ < final(store).graph().regexes.len()
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>|
-                    language::event_wf(theta) && truth_words_realize(old(store).graph(), atoms@, truth_words@, theta, event) ==>
+                    language::event_wf(theta, theta.len()) && truth_words_realize(old(store).graph(), atoms@, truth_words@, theta, event) ==>
                         model::regex_lang(final(store).graph(), theta, id@, word)
                             == norm::transition_lang(final(store).graph(), theta, this, event, word),
             result matches Ok(id) ==> (ftr::nf_sum(old(store).graph(), this@)
@@ -1934,7 +1934,7 @@ impl TransitionInterpret for TransitionId {
                         interp_coverage_push(before, pending, (chosen, false), atoms@);
                     }
                     assert forall|theta: Subst, event: EventView|
-                        language::event_wf(theta) && truth_words_realize(before, atoms@, words@, theta, event) implies
+                        language::event_wf(theta, theta.len()) && truth_words_realize(before, atoms@, words@, theta, event) implies
                             interp_results_equiv(model::gsem(theta),
                                 interp_run(before, pending.push((this, finish)), lifted_values(before, prior), theta, event),
                                 interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
@@ -1999,7 +1999,7 @@ impl TransitionInterpret for TransitionId {
         }
         proof! {
             assert forall|theta: Subst, event: EventView|
-                language::event_wf(theta) && truth_words_realize(before, atoms@, words@, theta, event) implies
+                language::event_wf(theta, theta.len()) && truth_words_realize(before, atoms@, words@, theta, event) implies
                     interp_results_equiv(model::gsem(theta),
                         interp_run(before, pending.push((this, finish)), lifted_values(before, prior), theta, event),
                         interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
@@ -2072,7 +2072,7 @@ impl TransitionInterpret for TransitionId {
                 model::graph_wf(entry), model::atom_ids_wf(entry, atoms@), this@ < entry.transitions.len(),
                 model::atom_ids_wf(store.graph(), atoms@), interp_tasks_wf(store.graph(), tasks.view()), norm::regex_ids_valid(store.graph(), values.view()),
                 state.is_ok() ==> forall|theta: Subst, event: EventView|
-                    language::event_wf(theta) && truth_words_realize(entry, atoms@, truth_words@, theta, event) ==>
+                    language::event_wf(theta, theta.len()) && truth_words_realize(entry, atoms@, truth_words@, theta, event) ==>
                         interp_results_equiv(model::gsem(theta),
                             interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event),
                             Some(seq![interpreted(entry, this, theta, event)])),
@@ -2100,7 +2100,7 @@ impl TransitionInterpret for TransitionId {
                 norm::transition_lemma_extends_transitive(entry, before, store.graph());
                 truth_words_realize_extends(entry, store.graph(), atoms@, truth_words@);
                 assert forall|theta: Subst, event: EventView|
-                    state.is_ok() && language::event_wf(theta) && truth_words_realize(entry, atoms@, truth_words@, theta, event) implies
+                    state.is_ok() && language::event_wf(theta, theta.len()) && truth_words_realize(entry, atoms@, truth_words@, theta, event) implies
                         interp_results_equiv(model::gsem(theta),
                             interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event),
                             Some(seq![interpreted(entry, this, theta, event)])) by {
@@ -3216,13 +3216,13 @@ pub mod verify {
 
     pub proof fn symbolic_not_result(g: model::Graph, root: TransitionId, out: TransitionId)
         requires norm::transition_result(g, norm::ActionShape::Not(root@), out),
-        ensures forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+        ensures forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             ==> norm::transition_lang(g, theta, out, event, word) == !norm::transition_lang(g, theta, root, event, word),
     {
         let task = norm::ActionShape::Not(root@);
         let expected = norm::transition_initial_value(g, task).unwrap();
         norm::transition_lemma_result_refines(g, task, out);
-        assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+        assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             implies norm::transition_lang(g, theta, out, event, word) == !norm::transition_lang(g, theta, root, event, word) by {
             let ctx = norm::TransitionContext { bindings: theta };
             norm::transition_lemma_context_sem(ctx);
@@ -3236,14 +3236,14 @@ pub mod verify {
 
     pub proof fn symbolic_intersect_result(g: model::Graph, ids: Seq<TransitionId>, out: TransitionId)
         requires norm::transition_result(g, norm::ActionShape::Fold(model::transition_ids(ids), 0), out),
-        ensures forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+        ensures forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             ==> norm::transition_lang(g, theta, out, event, word) == norm::transition_combo(g, theta, ids, event, word, true),
     {
         let task = norm::ActionShape::Fold(model::transition_ids(ids), 0);
         let expected = norm::transition_initial_value(g, task).unwrap();
         let terms = model::transition_ids(ids).map(|i: int, id: nat| model::lift_transition(g, id));
         norm::transition_lemma_result_refines(g, task, out);
-        assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+        assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             implies norm::transition_lang(g, theta, out, event, word) == norm::transition_combo(g, theta, ids, event, word, true) by {
             let ctx = norm::TransitionContext { bindings: theta };
             norm::transition_lemma_context_sem(ctx);
@@ -3264,13 +3264,13 @@ pub mod verify {
     pub open spec fn derivative_correct(g: model::Graph, root: nat, out: TransitionId) -> bool {
         root < g.regexes.len() && out@ < g.transitions.len()
         && forall|theta: Subst, event: EventView, word: Seq<EventView>|
-            language::event_wf(theta) ==> norm::transition_lang(g, theta, out, event, word)
+            language::event_wf(theta, theta.len()) ==> norm::transition_lang(g, theta, out, event, word)
                 == model::regex_lang(g, theta, root, seq![event] + word)
     }
 
     /// The runtime derivative agrees, modulo language, with the independent δ.
     pub proof fn lemma_derivative_correct_is_symbolic_derivative(g: model::Graph, root: nat, out: TransitionId, theta: Subst, event: EventView, word: Seq<EventView>)
-        requires derivative_correct(g, root, out), language::event_wf(theta),
+        requires derivative_correct(g, root, out), language::event_wf(theta, theta.len()),
         ensures norm::transition_lang(g, theta, out, event, word)
             == language::lang(model::gsem(theta), language::interp_transition(model::gsem(theta), event, algebra::symbolic_derivative(model::lift_regex(g, root))), word),
     {
@@ -3336,7 +3336,7 @@ pub mod verify {
         requires model::graph_wf(g), root@ < g.regexes.len(), derivative_cache_wf(g, cache), out@ < g.transitions.len(),
             g.regexes[root@ as int].kind == model::RegexKindNode::Test(test@),
             then_id@ == g.constants.transition_epsilon, else_id@ == g.constants.transition_empty,
-            forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+            forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                 ==> norm::transition_lang(g, theta, out, event, word) == norm::transition_if_combo(g, theta, test,
                     then_id, else_id, event, word),
         ensures derivative_correct(g, root@, out),
@@ -3723,7 +3723,7 @@ pub mod verify {
     ) -> bool {
         norm::transition_ids_valid(g, results)
         && forall|theta: Subst, event: EventView, word: Seq<EventView>, intersect: bool|
-            language::event_wf(theta) ==> norm::transition_combo(g, theta, results, event, word, intersect)
+            language::event_wf(theta, theta.len()) ==> norm::transition_combo(g, theta, results, event, word, intersect)
                 == derivative_factor_combo(g, root, concat, count, intersect, theta, event, word)
     }
 
@@ -3759,7 +3759,7 @@ pub mod verify {
         model::lemma_graph_wf_elim(a);
         model::lemma_lift_stable_under_extends(a, b);
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>, intersect: bool|
-            language::event_wf(theta) implies norm::transition_combo(b, theta, results, event, word, intersect)
+            language::event_wf(theta, theta.len()) implies norm::transition_combo(b, theta, results, event, word, intersect)
                 == derivative_factor_combo(b, root, concat, count, intersect, theta, event, word) by {
             assert forall|i: int| 0 <= i < results.len() implies
                 norm::transition_lang(a, theta, results[i], event, word)
@@ -3779,7 +3779,7 @@ pub mod verify {
         model::lemma_graph_wf_elim(a);
         model::lemma_lift_regex_stable(a, b, root);
         model::lemma_lift_transition_stable(a, b, out@);
-        assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+        assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             implies norm::transition_lang(b, theta, out, event, word)
                 == model::regex_lang(b, theta, root, seq![event] + word) by {
             assert(norm::transition_lang(a, theta, out, event, word)
@@ -3887,7 +3887,7 @@ pub mod verify {
     )
         requires derivative_results(g, root, concat, index, prior), out@ < g.transitions.len(),
             !concat || derivative_prefix(g, root, index),
-            forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+            forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                 ==> norm::transition_lang(g, theta, out, event, word)
                     == derivative_factor_language(g, root, concat, index as int, theta, event, word),
         ensures derivative_results(g, root, concat, index + 1, prior.push(out)),
@@ -3895,7 +3895,7 @@ pub mod verify {
         hide(language::lang); hide(language::derivative); hide(language::interp_transition);
         hide(norm::transition_lang); hide(derivative_factor_language);
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>, intersect: bool|
-            language::event_wf(theta) implies norm::transition_combo(g, theta, prior.push(out), event, word, intersect)
+            language::event_wf(theta, theta.len()) implies norm::transition_combo(g, theta, prior.push(out), event, word, intersect)
                 == derivative_factor_combo(g, root, concat, index + 1, intersect, theta, event, word) by {
             if intersect {
                 assert forall|i: int| 0 <= i < prior.push(out).len() implies
@@ -3949,15 +3949,15 @@ pub mod verify {
         requires 0 <= index < derivative_children_ids(g, root).len(),
             derivative_correct(g, derivative_children_ids(g, root)[index], d),
             model::regex_ids(suffix) == derivative_children_ids(g, root).subrange(index + 1, derivative_children_ids(g, root).len() as int),
-            forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+            forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                 ==> norm::transition_lang(g, theta, out, event, word)
                     == norm::transition_append_combo(g, theta, d, suffix, event, word),
-        ensures forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+        ensures forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             ==> norm::transition_lang(g, theta, out, event, word)
                 == derivative_factor_language(g, root, true, index, theta, event, word),
     {
         hide(language::lang); hide(language::derivative); hide(language::interp_transition);
-        assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+        assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             implies norm::transition_lang(g, theta, out, event, word)
                 == derivative_factor_language(g, root, true, index, theta, event, word) by {
             let sem = model::gsem(theta);
@@ -4043,7 +4043,7 @@ pub mod verify {
                 model::RegexKindNode::Concat(_) => concat && !intersect,
                 _ => false,
             }, out@ < g.transitions.len(),
-            forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+            forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                 ==> norm::transition_lang(g, theta, out, event, word)
                     == derivative_factor_combo(g, root, concat, derivative_children_ids(g, root).len(), intersect, theta, event, word),
         ensures derivative_correct(g, root@, out),
@@ -4055,7 +4055,7 @@ pub mod verify {
         let cs = derivative_children_ids(g, root);
         let rs = model::lift_regexes(g, cs);
         assert(rs.len() == cs.len());
-        assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+        assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             implies norm::transition_lang(g, theta, out, event, word)
                 == model::regex_lang(g, theta, root@, seq![event] + word) by {
             let sem = model::gsem(theta);
@@ -4170,10 +4170,10 @@ pub mod verify {
             model::RegexKindNode::Empty | model::RegexKindNode::Epsilon => out@ == g.constants.transition_empty,
             model::RegexKindNode::All => out@ == g.constants.transition_all,
             model::RegexKindNode::Test(test) => forall|theta: Subst, event: EventView, word: Seq<EventView>|
-                language::event_wf(theta) ==> norm::transition_lang(g, theta, out, event, word)
+                language::event_wf(theta, theta.len()) ==> norm::transition_lang(g, theta, out, event, word)
                     == if model::test_holds(theta, model::lift_test(g, test), event) { word.len() == 0 } else { false },
             model::RegexKindNode::Star(inner) => exists|d: TransitionId| inner < cache.len() && cache[inner as int] == Some(d)
-                && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+                && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     ==> norm::transition_lang(g, theta, out, event, word)
                         == norm::transition_append_combo(g, theta, d, seq![root], event, word),
             model::RegexKindNode::Not(inner) => exists|d: TransitionId| inner < cache.len() && cache[inner as int] == Some(d)
@@ -4195,11 +4195,11 @@ pub mod verify {
             model::RegexKindNode::Star(inner) => {
                 assert(model::lift_regex(g, root@) == language::Regex::Star(alloc::boxed::Box::new(model::lift_regex(g, inner))));
                 let d = choose|d: TransitionId| inner < cache.len() && cache[inner as int] == Some(d)
-                    && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+                    && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                         ==> norm::transition_lang(g, theta, out, event, word)
                             == norm::transition_append_combo(g, theta, d, seq![root], event, word);
                 assert(derivative_correct(g, inner, d));
-                assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+                assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     implies norm::transition_lang(g, theta, out, event, word)
                         == model::regex_lang(g, theta, root@, seq![event] + word) by {
                     let sem = model::gsem(theta);
@@ -4226,14 +4226,14 @@ pub mod verify {
                     && norm::transition_result(g, norm::ActionShape::Not(d@), out);
                 symbolic_not_result(g, d, out);
                 assert(derivative_correct(g, inner, d));
-                assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+                assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     implies norm::transition_lang(g, theta, out, event, word)
                         == model::regex_lang(g, theta, root@, seq![event] + word) by {
                     reveal(language::lang);
                 }
             },
             model::RegexKindNode::Empty | model::RegexKindNode::All | model::RegexKindNode::Epsilon | model::RegexKindNode::Test(_) => {
-                assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+                assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     implies norm::transition_lang(g, theta, out, event, word)
                         == model::regex_lang(g, theta, root@, seq![event] + word) by {
                     reveal(language::lang); reveal(language::interp_transition);
@@ -4268,7 +4268,7 @@ pub mod verify {
         ensures forall|next: model::Graph, out: TransitionId| model::graph_extends(g, next) && model::graph_wf(next)
             && out@ < next.transitions.len()
             && (if intersect { norm::transition_result(next, norm::ActionShape::Fold(model::transition_ids(results), 0), out) }
-                else { forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+                else { forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     ==> norm::transition_lang(next, theta, out, event, word)
                         == norm::transition_combo(next, theta, results, event, word, false) })
             ==> derivative_correct(next, root@, out),
@@ -4276,7 +4276,7 @@ pub mod verify {
         assert forall|next: model::Graph, out: TransitionId| model::graph_extends(g, next) && model::graph_wf(next)
             && out@ < next.transitions.len()
             && (if intersect { norm::transition_result(next, norm::ActionShape::Fold(model::transition_ids(results), 0), out) }
-                else { forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta)
+                else { forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     ==> norm::transition_lang(next, theta, out, event, word)
                         == norm::transition_combo(next, theta, results, event, word, false) })
             implies derivative_correct(next, root@, out) by {
@@ -5031,7 +5031,7 @@ pub mod verify {
     }
 
     pub open spec fn interp_set_result(g: model::Graph, before: Seq<RegexId>, after: Seq<RegexId>, count: nat, intersect: bool) -> bool {
-        count <= before.len() && forall|theta: Subst| language::event_wf(theta) ==>
+        count <= before.len() && forall|theta: Subst| language::event_wf(theta, theta.len()) ==>
             regex_stack_equiv(model::gsem(theta), lifted_values(g, after),
                 lifted_values(g, before.take(before.len() - count)).push(regex_fold(lifted_values(g, before.skip(before.len() - count)), intersect)))
     }
@@ -5039,7 +5039,7 @@ pub mod verify {
     pub open spec fn interp_machine_relation(before: model::Graph, after: model::Graph,
         tasks0: Seq<(TransitionId, bool)>, tasks1: Seq<(TransitionId, bool)>, values0: Seq<RegexId>, values1: Seq<RegexId>, atoms: Seq<TestId>, words: Seq<u64>) -> bool {
         forall|theta: Subst, event: EventView|
-            language::event_wf(theta) && truth_words_realize(before, atoms, words, theta, event) ==>
+            language::event_wf(theta, theta.len()) && truth_words_realize(before, atoms, words, theta, event) ==>
                 interp_results_equiv(model::gsem(theta),
                     interp_run(before, tasks0, lifted_values(before, values0), theta, event),
                     interp_run(after, tasks1, lifted_values(after, values1), theta, event))
@@ -5171,12 +5171,12 @@ pub mod verify {
             prior.len() > 0, prior.last() == head, values.len() == prior.len(),
             values == prior.drop_last().push(values.last()), values.last()@ < after.regexes.len(),
             model::regex_ids(xs) == seq![head@] + transition_suffix(before, root),
-            forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
+            forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta, theta.len())
                 ==> #[trigger] model::regex_lang(after, theta, values.last()@, word) == norm::concat_combo(after, theta, xs, word),
         ensures norm::regex_ids_valid(after, values),
             interp_stack_result(before, pending.push((root, true)), prior.len())
                 == interp_stack_result(after, pending, values.len()),
-            forall|theta: Subst, event: EventView| language::event_wf(theta)
+            forall|theta: Subst, event: EventView| language::event_wf(theta, theta.len())
                 ==> interp_results_equiv(model::gsem(theta),
                     interp_run(before, pending.push((root, true)), lifted_values(before, prior), theta, event),
                     interp_run(after, pending, lifted_values(after, values), theta, event)),
@@ -5196,7 +5196,7 @@ pub mod verify {
         assert(interp_tasks_wf(before, pending.push((root, true))));
         interp_stack_stable(before, after, pending.push((root, true)), prior.len());
         interp_stack_task(after, pending, (root, true), prior.len());
-        assert forall|theta: Subst, event: EventView| language::event_wf(theta) implies
+        assert forall|theta: Subst, event: EventView| language::event_wf(theta, theta.len()) implies
             interp_results_equiv(model::gsem(theta),
                 interp_run(before, pending.push((root, true)), lifted_values(before, prior), theta, event),
                 interp_run(after, pending, lifted_values(after, values), theta, event)) by {

@@ -17,11 +17,11 @@ verus! {
 
 /// `L_θ(x) ⊆ L_θ(y)` for every admissible `θ`.
 pub open spec fn lang_le(x: Regex<model::Test>, y: Regex<model::Test>) -> bool {
-    forall|theta: Subst, w: Seq<EventView>| language::event_wf(theta) && #[trigger] n_lang(theta, x, w) ==> n_lang(theta, y, w)
+    forall|theta: Subst, w: Seq<EventView>| language::event_wf(theta, theta.len()) && #[trigger] n_lang(theta, x, w) ==> n_lang(theta, y, w)
 }
 
 pub open spec fn test_le_sem(x: model::Test, y: model::Test) -> bool {
-    forall|theta: Subst, e: EventView| language::event_wf(theta) && #[trigger] model::test_holds(theta, x, e) ==> model::test_holds(theta, y, e)
+    forall|theta: Subst, e: EventView| language::event_wf(theta, theta.len()) && #[trigger] model::test_holds(theta, x, e) ==> model::test_holds(theta, y, e)
 }
 
 /// `≤` is sound (Lemma Simulation soundness and decidability, `lem:simulation`).
@@ -315,7 +315,7 @@ pub proof fn theorem_prune_sound()
 proof fn lemma_cat_parts(le: spec_fn(Regex<model::Test>, Regex<model::Test>) -> bool, xs: Seq<Regex<model::Test>>,
     ys: Seq<Regex<model::Test>>, a: nat, b: nat, parts: Seq<Seq<EventView>>, theta: Subst, w: Seq<EventView>)
     requires
-        sim_sound(le), language::event_wf(theta),
+        sim_sound(le), language::event_wf(theta, theta.len()),
         padding_ok(ys, a, b, xs.len()),
         forall|i: int| 0 <= i < xs.len() ==> #[trigger] le(xs[i], ys[a + i]),
         parts.len() == xs.len(), parts.flatten() == w,
@@ -353,7 +353,7 @@ proof fn lemma_cat_parts(le: spec_fn(Regex<model::Test>, Regex<model::Test>) -> 
 
 proof fn lemma_cat_padded_sound(le: spec_fn(Regex<model::Test>, Regex<model::Test>) -> bool, x: Regex<model::Test>,
     ys: Seq<Regex<model::Test>>, theta: Subst, w: Seq<EventView>)
-    requires sim_sound(le), language::event_wf(theta), cat_padded(le, x, ys), n_lang(theta, x, w),
+    requires sim_sound(le), language::event_wf(theta, theta.len()), cat_padded(le, x, ys), n_lang(theta, x, w),
     ensures n_lang(theta, Regex::Concat(ys), w),
 {
     let sem = model::gsem(theta);
@@ -385,7 +385,7 @@ pub proof fn lemma_sim_step_sound(le: spec_fn(Regex<model::Test>, Regex<model::T
     requires sim_sound(le), test_sim_sound(tle), sim_step(le, tle, x, y),
     ensures lang_le(x, y),
 {
-    assert forall|theta: Subst, w: Seq<EventView>| language::event_wf(theta) && #[trigger] n_lang(theta, x, w)
+    assert forall|theta: Subst, w: Seq<EventView>| language::event_wf(theta, theta.len()) && #[trigger] n_lang(theta, x, w)
         implies n_lang(theta, y, w) by {
         let sem = model::gsem(theta);
         if x is Epsilon && language::nullable(y) {
@@ -472,7 +472,7 @@ pub proof fn lemma_test_step_sound(tle: spec_fn(model::Test, model::Test) -> boo
     requires test_sim_sound(tle), test_step(tle, x, y),
     ensures test_le_sem(x, y),
 {
-    assert forall|theta: Subst, e: EventView| language::event_wf(theta) && #[trigger] model::test_holds(theta, x, e)
+    assert forall|theta: Subst, e: EventView| language::event_wf(theta, theta.len()) && #[trigger] model::test_holds(theta, x, e)
         implies model::test_holds(theta, y, e) by {
         if x matches model::Test::Or(cs) && forall|i: int| 0 <= i < cs.len() ==> #[trigger] tle(cs[i], y) {
             let cs = x->Or_0;

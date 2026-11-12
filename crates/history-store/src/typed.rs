@@ -5,15 +5,15 @@
 use crate::store::Event as NumericEvent;
 use crate::store::HistoryStore;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::hash::Hash;
-use history_syntax::Event;
 #[cfg(verus_keep_ghost)]
-use history_syntax::event::specs::EventSpec;
+use history_syntax::event::specs::{AritySpec, EventSpec, arity, event_view, projection_laws};
 use history_syntax::syntax::Component;
+use history_syntax::{Arity, Event, MAX_ARITY};
 use junco_core::compile::{FlatEncoder, lower_flat, validate_component};
 use junco_core::error::HistoryError;
 use junco_core::flat::FlatPair;
-use junco_core::flatten::ComponentValue;
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
@@ -32,7 +32,7 @@ pub(crate) mod map;
 use map::NativeMap;
 
 // Ghost<T> signatures still name T after native erasure; this is the exact finite model.
-pub type ComponentMaps<E> = vstd::seq::Seq<vstd::seq::Seq<(ComponentValue<E>, u64)>>;
+pub type ComponentMaps<E> = vstd::seq::Seq<vstd::seq::Seq<(<E as Event>::Component, u64)>>;
 pub type HistoryRegistration =
     vstd::resource::map::GhostPersistentPointsTo<usize, vstd::resource::Loc>;
 pub(crate) type RegistryBirth = vstd::resource::map::GhostPointsTo<usize, vstd::resource::Loc>;
@@ -159,7 +159,8 @@ impl<K: Copy + Eq + Hash> Codebook<K> {
     fn intern(&mut self, value: &K, index: usize, domain: &'static str,
         numeric_store: &HistoryStore, Ghost(issuer): Ghost<crate::store::ComponentIssuer>)
         -> (result: Result<u64, HistoryError>)
-        requires *numeric_store == *crate::store::verify::singleton_store(), index < 3,
+        requires crate::store::verify::numeric_store_wf(*numeric_store),
+            index < numeric_store.arity_spec(),
             book_receipts_wf(*old(self), index as int, issuer),
         ensures book_receipts_wf(*final(self), index as int, issuer),
             result != Err(HistoryError::WrongHistoryOwner),
@@ -171,7 +172,9 @@ impl<K: Copy + Eq + Hash> Codebook<K> {
             &&& book_wf(*final(self))
             &&& book_entries(*old(self)).is_prefix_of(book_entries(*final(self)))
             &&& match result {
-                Ok(id) => book_encoded(*final(self), *value, id),
+                Ok(id) => book_encoded(*final(self), *value, id)
+                    && (book_entries(*final(self)) == book_entries(*old(self))
+                        || book_entries(*final(self)) == book_entries(*old(self)).push((*value, id))),
                 Err(_) => book_entries(*final(self)) == book_entries(*old(self))
                     && final(self).last == old(self).last,
             }
@@ -249,9 +252,7 @@ impl<K: Copy + Eq + Hash> Codebook<K> {
 }
 
 pub(crate) struct ComponentBooks<E: Event> {
-    pub(crate) principal: Codebook<E::Principal>,
-    pub(crate) action: Codebook<E::Action>,
-    pub(crate) resource: Codebook<E::Resource>,
+    pub(crate) books: Vec<Codebook<E::Component>>,
     #[cfg(verus_keep_ghost)]
     pub(crate) registry: Ghost<vstd::resource::Loc>,
 }
@@ -276,9 +277,24 @@ impl<E: Event> Codebooks<E> {
             books_maps(result) == empty_maps::<E>(), registry_wf(result),
             result.history_resources@ == authority,
     {
+        let width = E::Arity::value();
+        let mut components = Vec::with_capacity(width);
+        let mut index = 0;
+        while index < width
+            invariant index == components@.len(), index <= width,
+                width == arity::<E>(), 1 <= width <= MAX_ARITY,
+                forall|i: int| 0 <= i < index ==> book_wf(components@[i])
+                    && book_entries(components@[i]) == Seq::<(E::Component, u64)>::empty()
+                    && book_receipts_wf(components@[i], i,
+                        crate::store::ComponentIssuer::Typed(authority.id())),
+            decreases width - index,
+        {
+            components.push(Codebook::new());
+            index += 1;
+        }
         let result = Self {
             components: ComponentBooks {
-                principal: Codebook::new(), action: Codebook::new(), resource: Codebook::new(),
+                books: components,
                 #[cfg(verus_keep_ghost)]
                 registry: Ghost(authority.id()),
             },
@@ -292,7 +308,7 @@ impl<E: Event> Codebooks<E> {
         };
         proof {
             lemma_component_maps_wf(result.components);
-            assert forall|field: int| 0 <= field < 3 implies
+            assert forall|field: int| 0 <= field < arity::<E>() implies
                 books_maps(result)[field] =~= empty_maps::<E>()[field] by {}
             assert(books_maps(result) =~= empty_maps::<E>());
         }
@@ -303,7 +319,7 @@ impl<E: Event> Codebooks<E> {
     fn allocate_history_id(&mut self, numeric_store: &HistoryStore,
         Ghost(location): Ghost<vstd::resource::Loc>)
         -> (result: Result<(usize, Tracked<crate::store::HistoryKeyReceipt>), HistoryError>)
-        requires registry_wf(*old(self)), *numeric_store == *crate::store::verify::singleton_store(),
+        requires registry_wf(*old(self)), crate::store::verify::numeric_store_wf(*numeric_store),
         ensures self_same_books(*old(self), *final(self)), registry_wf(*final(self)),
             junco_core::verify::history_specs::no_internal_error(result),
             result matches Err(error) ==> error == (HistoryError::IdExhausted { domain: "history" }),
@@ -351,7 +367,7 @@ impl<E: Event> Codebooks<E> {
         Ghost(location): Ghost<vstd::resource::Loc>,
         Tracked(prior): Tracked<Option<&HistoryRegistration>>)
         -> (result: Result<(usize, Tracked<HistoryRegistration>, Tracked<crate::store::HistoryKeyReceipt>), HistoryError>)
-        requires registry_wf(*old(self)), *numeric_store == *crate::store::verify::singleton_store(),
+        requires registry_wf(*old(self)), crate::store::verify::numeric_store_wf(*numeric_store),
             match prior { Some(registration) => registration.id() == old(self).history_resources@.id(), None => true },
         ensures registry_wf(*final(self)), self_same_books(*old(self), *final(self)),
             junco_core::verify::history_specs::no_internal_error(result),
@@ -439,8 +455,8 @@ impl<E: Event> NativeBooks<E> {
     }
 }
 
-/// Three typed coordinate codebooks scoped to this view. Component and history IDs come
-/// from the process-wide numeric store, so views never issue colliding numeric identities.
+/// Policy-arity typed coordinate codebooks scoped to this view. Component and history IDs
+/// come from shared process-wide authorities, so views never issue colliding identities.
 /// Share a store with `Arc`; components and events retain their original Rust values.
 pub struct Store<E: Event> {
     pub(crate) id: u64,
@@ -511,7 +527,7 @@ impl<E: Event> Store<E> {
         let (id, _receipt) = allocate_store_id(Ghost(registry))?;
         let state = Codebooks::new(Ghost(id), Tracked(authority));
         let books = NativeBooks::new(state, Tracked(&birth));
-        Ok(Self { id, books, numeric_store: HistoryStore::global(),
+        Ok(Self { id, books, numeric_store: HistoryStore::new(E::Arity::value()),
             #[cfg(verus_keep_ghost)]
             history_registry: Ghost(registry),
             #[cfg(verus_keep_ghost)]
@@ -521,10 +537,12 @@ impl<E: Event> Store<E> {
         })
     }
 
-    /// Return the process-wide numeric store shared by every typed view and byte history.
+    /// Return the numeric store shared by every typed view and byte history of this arity.
     pub fn numeric_store(&self) -> (result: &Arc<HistoryStore>)
         ensures *result == numeric_owner(*self),
-            store_wf(*self) ==> *result == crate::store::verify::singleton_store(),
+            store_wf(*self) ==> *result == crate::store::verify::singleton_store(arity::<E>())
+                && crate::store::verify::numeric_store_wf(**result)
+                && result.arity_spec() == arity::<E>(),
     {
         &self.numeric_store
     }
@@ -574,7 +592,7 @@ impl<E: Event> Store<E> {
             &*self.numeric_store,
             |books: &mut Codebooks<E>, numeric_store: &HistoryStore| -> (result: Result<(usize, Tracked<HistoryRegistration>, Tracked<crate::store::HistoryKeyReceipt>), HistoryError>)
                 requires books_acquired(*old(books), owner, registry, empty_maps::<E>(), empty_maps::<E>()),
-                    *numeric_store == *crate::store::verify::singleton_store(),
+                    crate::store::verify::numeric_store_wf(*numeric_store),
                     match prior { Some(previous) => previous.id() == registry, None => true },
                 ensures publication_frame(*old(books), *final(books)),
                     junco_core::verify::history_specs::no_internal_error(result),
@@ -593,7 +611,8 @@ impl<E: Event> Store<E> {
 
     pub(crate) fn encode_event(&self, event: &E) -> (result: Result<NumericEvent, HistoryError>)
         requires store_wf(*self),
-        ensures native_obligations::<E>() ==> (result matches Ok(numeric) ==>
+        ensures result matches Ok(numeric) ==> numeric@.len() == arity::<E>(),
+            native_obligations::<E>() ==> (result matches Ok(numeric) ==>
             exists|maps: ComponentMaps<E>| snapshot_published::<E>(registry_id(self), maps)
                 && maps_wf::<E>(maps) && event_encoded::<E>(maps, *event, numeric)),
             junco_core::verify::history_specs::no_internal_error(result),
@@ -615,6 +634,7 @@ impl<E: Event> Store<E> {
                 && snapshot_published::<E>(registry_id(self), second),
         ensures snapshot_published::<E>(registry_id(self), result.1@),
             result.0 != Err(HistoryError::WrongHistoryOwner),
+            result.0 matches Ok(numeric) ==> numeric@.len() == arity::<E>(),
             junco_core::verify::history_specs::no_internal_error(result.0),
             !(result.0 matches Err(HistoryError::InvalidPolicy { .. })),
             native_obligations::<E>() ==> maps_wf::<E>(result.1@)
@@ -626,9 +646,11 @@ impl<E: Event> Store<E> {
         self.books.with_books(Ghost(owner), Ghost(first), Ghost(second), Ghost(registry), &*self.numeric_store,
             |books: &mut Codebooks<E>, numeric_store: &HistoryStore| -> (output: (Result<NumericEvent, HistoryError>, Ghost<ComponentMaps<E>>))
                 requires books_acquired(*old(books), owner, registry, first, second),
-                    *numeric_store == *crate::store::verify::singleton_store(),
+                    crate::store::verify::numeric_store_wf(*numeric_store),
+                    numeric_store.arity_spec() == arity::<E>(),
                 ensures publication_frame(*old(books), *final(books)),
                     output.0 != Err(HistoryError::WrongHistoryOwner),
+                    output.0 matches Ok(numeric) ==> numeric@.len() == arity::<E>(),
                     junco_core::verify::history_specs::no_internal_error(output.0),
                     !(output.0 matches Err(HistoryError::InvalidPolicy { .. })),
                     output.1@ == books_maps(*final(books)),
@@ -661,7 +683,7 @@ impl<E: Event> Store<E> {
     }
 
     /// Validate/encode constants while holding the same single lock used by requests.
-    pub fn lower_with_snapshot<L: Limits>(&self, source: &FlatPair<ComponentValue<E>>,
+    pub fn lower_with_snapshot<L: Limits>(&self, source: &FlatPair<E::Component>,
         limits: &mut L, world: &mut ObservationWorld, Ghost(prior): Ghost<ComponentMaps<E>>)
         -> (result: (Result<FlatPair<u64>, HistoryError>, Ghost<ComponentMaps<E>>))
         requires store_wf(*self),
@@ -687,7 +709,8 @@ impl<E: Event> Store<E> {
             |books: &mut Codebooks<E>, context: (&mut L, &mut ObservationWorld, &HistoryStore)|
                 -> (output: (Result<FlatPair<u64>, HistoryError>, Ghost<ComponentMaps<E>>))
                 requires books_acquired(*old(books), owner, registry, prior, prior),
-                    *context.2 == *crate::store::verify::singleton_store(),
+                    crate::store::verify::numeric_store_wf(*context.2),
+                    context.2.arity_spec() == arity::<E>(),
                 ensures publication_frame(*old(books), *final(books)),
                     output.1@ == books_maps(*final(books)),
                     output.0 matches Ok(numeric) ==> junco_core::flat::verify::structural_wf(numeric),
@@ -733,16 +756,17 @@ pub(crate) struct BorrowedEncoder<'a, E: Event> {
     pub(crate) calls: Ghost<nat>,
 }
 
-impl<'a, E: Event> FlatEncoder<ComponentValue<E>> for BorrowedEncoder<'a, E> {
-    open spec fn equality() -> junco_core::verify::encoding::Equality<ComponentValue<E>> {
+impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
+    open spec fn equality() -> junco_core::verify::encoding::Equality<E::Component> {
         junco_core::verify::flatten::component_equality::<E>()
     }
-    open spec fn domain() -> junco_core::verify::encoding::Domain<ComponentValue<E>> { domain::<E>() }
+    open spec fn domain() -> junco_core::verify::encoding::Domain<E::Component> { domain::<E>() }
     open(crate) spec fn maps(&self) -> ComponentMaps<E> { component_maps(*self.books) }
     open(crate) spec fn encoding_calls(&self) -> nat { self.calls@ }
     open(crate) spec fn state_wf(&self) -> bool {
         component_receipts_wf(*self.books)
-            && *self.numeric_store == *crate::store::verify::singleton_store()
+            && crate::store::verify::numeric_store_wf(*self.numeric_store)
+            && self.numeric_store.arity_spec() == arity::<E>()
     }
     open(crate) spec fn obeys_encoding_spec(&self) -> bool {
         native_obligations::<E>() && components_wf(*self.books)
@@ -756,46 +780,90 @@ impl<'a, E: Event> FlatEncoder<ComponentValue<E>> for BorrowedEncoder<'a, E> {
             && restored.registry@ == self.books.registry@)
     }
 
-    fn encode(&mut self, field: Component, value: &ComponentValue<E>)
+    fn encode(&mut self, field: Component, value: &E::Component)
         -> (result: Result<u64, HistoryError>)
         ensures encoder_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
             junco_core::verify::history_specs::no_internal_error(result),
-            domain::<E>()(field, *value) ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            native_obligations::<E>() && domain::<E>()(field, *value)
+                ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
     {
         proof { self.calls = Ghost(self.calls@ + 1); }
-        let ghost initial_wf = components_wf(*self.books);
-        let ghost initial_books = *self.books;
-        validate_component(field, value)?;
-        let result = match value {
-            ComponentValue::Principal(value) => self.books.principal.intern(value, 0, "principal", self.numeric_store,
-                Ghost(crate::store::ComponentIssuer::Typed(self.books.registry@))),
-            ComponentValue::Action(value) => self.books.action.intern(value, 1, "action", self.numeric_store,
-                Ghost(crate::store::ComponentIssuer::Typed(self.books.registry@))),
-            ComponentValue::Resource(value) => self.books.resource.intern(value, 2, "resource", self.numeric_store,
-                Ghost(crate::store::ComponentIssuer::Typed(self.books.registry@))),
-        };
-        proof {
-            assert(self.books.registry@ == initial_books.registry@);
-            assert(component_receipts_wf(*self.books));
+        validate_component::<E>(field, value)?;
+        let index = field.index();
+        if index >= self.books.books.len() {
+            return Err(HistoryError::invalid_policy("$", "constant belongs to another component"));
         }
+        self.intern_component(index, value)
+    }
+}
+
+impl<'a, E: Event> BorrowedEncoder<'a, E> {
+    // Requests obtain the coordinate from their position, not from untrusted native key code.
+    // Constant encoding checks that position before reaching this common receipt-preserving path.
+    fn intern_component(&mut self, index: usize, value: &E::Component)
+        -> (result: Result<u64, HistoryError>)
+        requires old(self).state_wf(), index < arity::<E>(),
+            native_obligations::<E>() && components_wf(*old(self).books)
+                ==> domain::<E>()(Component(index as u8), *value),
+        ensures final(self).state_wf(), encoder_frame(*old(self), *final(self)),
+            final(self).restoration() == old(self).restoration(),
+            final(self).calls == old(self).calls,
+            result != Err(HistoryError::WrongHistoryOwner),
+            junco_core::verify::history_specs::no_internal_error(result),
+            result matches Err(error) ==> error == HistoryError::AllocationFailed
+                || error == (HistoryError::IdExhausted { domain: "component" }),
+            native_obligations::<E>() && components_wf(*old(self).books) ==>
+                maps_wf::<E>(component_maps(*final(self).books))
+                && maps_extend::<E>(component_maps(*old(self).books), component_maps(*final(self).books))
+                && (result matches Ok(id) ==> junco_core::verify::encoding::encoded(
+                    component_maps(*final(self).books), Self::equality(), Component(index as u8), *value, id)),
+    {
+        let ghost initial = *self.books;
+        let ghost initial_wf = components_wf(initial);
+        let result = self.books.books[index].intern(value, index, "component", self.numeric_store,
+            Ghost(crate::store::ComponentIssuer::Typed(self.books.registry@)));
         proof {
+            assert forall|i: int| 0 <= i < arity::<E>() implies
+                book_receipts_wf(self.books.books@[i], i,
+                    crate::store::ComponentIssuer::Typed(self.books.registry@)) by {
+                if i != index { assert(self.books.books@[i] == initial.books@[i]); }
+            }
+            assert(component_receipts_wf(*self.books));
             if native_obligations::<E>() && initial_wf {
+                assert forall|i: int| 0 <= i < arity::<E>() implies
+                    book_wf(self.books.books@[i])
+                    && (forall|j: int| 0 <= j < book_entries(self.books.books@[i]).len() ==>
+                        E::coordinate_spec(book_entries(self.books.books@[i])[j].0) == i) by {
+                    if i == index {
+                        let before = book_entries(initial.books@[i]);
+                        let after = book_entries(self.books.books@[i]);
+                        assert forall|j: int| 0 <= j < after.len() implies
+                            E::coordinate_spec(after[j].0) == i by {
+                            if j < before.len() { assert(after[j] == before[j]); }
+                            else { assert(after[j].0 == *value); }
+                        }
+                    } else { assert(self.books.books@[i] == initial.books@[i]); }
+                }
+                assert(components_wf(*self.books));
+                assert forall|i: int| 0 <= i < arity::<E>() implies
+                    book_entries(initial.books@[i]).is_prefix_of(book_entries(self.books.books@[i])) by {
+                    if i != index { assert(self.books.books@[i] == initial.books@[i]); }
+                }
                 lemma_component_maps_wf(*self.books);
-                lemma_component_maps_extend(initial_books, *self.books);
+                lemma_component_maps_extend(initial, *self.books);
                 if let Ok(id) = result {
-                    lemma_component_book_encoded(*self.books, field, *value, id);
+                    lemma_component_book_encoded(*self.books, Component(index as u8), *value, id);
                 }
             }
         }
         result
     }
-}
 
-impl<'a, E: Event> BorrowedEncoder<'a, E> {
     fn encode_event(&mut self, event: &E) -> (result: Result<NumericEvent, HistoryError>)
         requires old(self).state_wf(), components_wf(*old(self).books),
         ensures final(self).state_wf(), components_wf(*final(self).books),
+            result matches Ok(numeric) ==> numeric@.len() == arity::<E>(),
             result != Err(HistoryError::WrongHistoryOwner),
             junco_core::verify::history_specs::no_internal_error(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
@@ -805,24 +873,54 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
             && (result matches Ok(numeric) ==> event_encoded::<E>(component_maps(*final(self).books), *event, numeric)),
             final(self).restoration() == old(self).restoration(),
     {
-        let principal = event.principal();
-        let action = event.action();
-        let resource = event.resource();
+        let width = E::Arity::value();
+        let mut slots = [0u64; MAX_ARITY];
         let ghost before = component_maps(*self.books);
-        let principal = self.encode(Component::Principal, &ComponentValue::Principal(principal))?;
-        let ghost after_principal = component_maps(*self.books);
-        let action = self.encode(Component::Action, &ComponentValue::Action(action))?;
-        let ghost after_action = component_maps(*self.books);
-        let resource = self.encode(Component::Resource, &ComponentValue::Resource(resource))?;
+        let ghost registry = self.books.registry@;
+        let ghost restored = self.restoration();
+        let mut index = 0;
+        while index < width
+            invariant index <= width, width == arity::<E>(), 1 <= width <= MAX_ARITY,
+                self.state_wf(), components_wf(*self.books), self.books.registry@ == registry,
+                registry == old(self).books.registry@,
+                self.restoration() == restored, restored == old(self).restoration(),
+                before == component_maps(*old(self).books),
+                native_obligations::<E>() ==> maps_extend::<E>(before, component_maps(*self.books)),
+                native_obligations::<E>() ==> forall|i: int| 0 <= i < index ==>
+                    junco_core::verify::encoding::encoded(component_maps(*self.books), Self::equality(),
+                        Component(i as u8), event_view(*event)[i], slots@[i]),
+            decreases width - index,
+        {
+            let value = event.component(index);
+            let ghost previous = component_maps(*self.books);
+            let result = self.intern_component(index, &value);
+            proof {
+                if native_obligations::<E>() {
+                    junco_core::verify::encoding::lemma_extends_transitive(before, previous,
+                        component_maps(*self.books), Self::equality());
+                    assert(before.len() == previous.len());
+                    assert(previous.len() == component_maps(*self.books).len());
+                    assert(maps_extend::<E>(before, component_maps(*self.books)));
+                    assert forall|i: int| 0 <= i < index implies
+                        junco_core::verify::encoding::encoded(component_maps(*self.books), Self::equality(),
+                            Component(i as u8), event_view(*event)[i], slots@[i]) by {
+                        assert(junco_core::verify::encoding::encoded(previous, Self::equality(),
+                            Component(i as u8), event_view(*event)[i], slots@[i]));
+                    }
+                }
+            }
+            slots[index] = result?;
+            index += 1;
+        }
+        let numeric = NumericEvent::from_encoded(&slots[..width]);
         proof {
+            assert forall|i: int| 0 <= i < width implies numeric_values(numeric)[i] == slots@[i] by {}
             if native_obligations::<E>() {
-                junco_core::verify::encoding::lemma_extends_transitive(before, after_principal,
-                    after_action, Self::equality());
-                junco_core::verify::encoding::lemma_extends_transitive(before, after_action,
-                    component_maps(*self.books), Self::equality());
+                assert forall|i: int| 0 <= i < width implies
+                    domain::<E>()(Component(i as u8), event_view(*event)[i]) by {}
             }
         }
-        Ok(NumericEvent::from_encoded(principal, action, resource))
+        Ok(numeric)
     }
 }
 }
@@ -977,23 +1075,22 @@ pub mod verify {
         Ok((left, right))
     }
 
-    fn typed_component_receipt_client<E: Event, K: Copy + Eq + Hash>(
-        store: &Store<E>, value: &K, index: usize, domain: &'static str)
+    fn typed_component_receipt_client<E: Event>(store: &Store<E>, value: &E::Component, index: usize)
         -> (result: Result<(u64, Tracked<crate::store::ComponentIdReceipt>), HistoryError>)
-        requires store_wf(*store), index < 3, map::key_obligations::<K>(),
+        requires store_wf(*store), index < arity::<E>(), map::key_obligations::<E::Component>(),
         ensures result matches Ok((id, receipt)) ==> receipt@.key() == id
             && receipt@.id() == crate::store::verify::coordinate_authority(index as int)
             && receipt@.value() == crate::store::ComponentIssuer::Typed(store.history_registry@),
     {
-        let mut book = Codebook::<K>::new();
-        let id = book.intern(value, index, domain, store.numeric_store(),
+        let mut book = Codebook::<E::Component>::new();
+        let id = book.intern(value, index, "component", store.numeric_store(),
             Ghost(crate::store::ComponentIssuer::Typed(store.history_registry@)))?;
         let tracked receipt;
         proof {
             let ghost entries = book_entries(book);
             let ghost i = choose|i: int| 0 <= i < entries.len()
                 && entries[i].1 == id && value.eq_spec(&entries[i].0);
-            let ghost ids = entries.map(|i: int, pair: (K, u64)| pair.1);
+            let ghost ids = entries.map(|i: int, pair: (E::Component, u64)| pair.1);
             assert(ids[i] == id);
             assert(ids.to_set().contains(id));
             assert(book.issued@ is Some);
@@ -1005,35 +1102,21 @@ pub mod verify {
         Ok((id, Tracked(receipt)))
     }
 
-    fn mixed_component_receipts_client<E: Event, F: Event,
-        K: Copy + Eq + Hash, J: Copy + Eq + Hash, L: Limits>(
-        left: &Store<E>, right: &Store<F>, left_value: &K, right_value: &J,
-        index: usize, domain: &'static str, path: &str,
-        limits: &mut L, world: &mut ObservationWorld)
+    pub(crate) fn component_receipts_client<E: Event, F: Event, L: Limits>(
+        left: &Store<E>, right: &Store<F>, first: &E::Component, second: &F::Component,
+        component: Component, bytes: &[u8], limits: &mut L, world: &mut ObservationWorld)
         -> (result: Result<(u64, u64, u64), HistoryError>)
-        requires store_wf(*left), store_wf(*right), index < 3,
-            left.history_registry@ != right.history_registry@,
-            map::key_obligations::<K>(), map::key_obligations::<J>(),
+        requires store_wf(*left), store_wf(*right), component.0 < arity::<E>(),
+            component.0 < arity::<F>(), left.history_registry@ != right.history_registry@,
+            map::key_obligations::<E::Component>(), map::key_obligations::<F::Component>(),
         ensures result matches Ok((byte, first, second)) ==>
             byte != first && byte != second && first != second,
     {
-        let (byte, Tracked(binding)) = match index {
-            0 => {
-                let (id, binding) = left.numeric_store().intern_principal_observed(path, limits, world)?;
-                (id.get(), binding)
-            }
-            1 => {
-                let (id, binding) = left.numeric_store().intern_action_observed(path, limits, world)?;
-                (id.get(), binding)
-            }
-            _ => {
-                let (id, binding) = left.numeric_store().intern_resource_observed(path, limits, world)?;
-                (id.get(), binding)
-            }
-        };
+        let index = component.index();
+        let (byte, Tracked(binding)) = left.numeric_store().intern_observed(component, bytes, limits, world)?;
         let tracked byte_receipt = binding.issuer_receipt();
-        let (first, Tracked(first_receipt)) = typed_component_receipt_client(left, left_value, index, domain)?;
-        let (second, Tracked(second_receipt)) = typed_component_receipt_client(right, right_value, index, domain)?;
+        let (first, Tracked(first_receipt)) = typed_component_receipt_client(left, first, index)?;
+        let (second, Tracked(second_receipt)) = typed_component_receipt_client(right, second, index)?;
         proof {
             let tracked mut byte_witness = byte_receipt.duplicate();
             byte_witness.intersection_agrees(&first_receipt);
@@ -1044,46 +1127,14 @@ pub mod verify {
         Ok((byte, first, second))
     }
 
-    pub(crate) fn principal_receipts_client<E: Event, F: Event, L: Limits>(
-        left: &Store<E>, right: &Store<F>, first: &E::Principal, second: &F::Principal,
-        path: &str, limits: &mut L, world: &mut ObservationWorld)
-        -> (result: Result<(u64, u64, u64), HistoryError>)
-        requires store_wf(*left), store_wf(*right), left.history_registry@ != right.history_registry@,
-            map::key_obligations::<E::Principal>(), map::key_obligations::<F::Principal>(),
-        ensures result matches Ok((byte, first, second)) ==> byte != first && byte != second && first != second,
-    {
-        mixed_component_receipts_client(left, right, first, second, 0, "principal", path, limits, world)
-    }
 
-    pub(crate) fn action_receipts_client<E: Event, F: Event, L: Limits>(
-        left: &Store<E>, right: &Store<F>, first: &E::Action, second: &F::Action,
-        path: &str, limits: &mut L, world: &mut ObservationWorld)
-        -> (result: Result<(u64, u64, u64), HistoryError>)
-        requires store_wf(*left), store_wf(*right), left.history_registry@ != right.history_registry@,
-            map::key_obligations::<E::Action>(), map::key_obligations::<F::Action>(),
-        ensures result matches Ok((byte, first, second)) ==> byte != first && byte != second && first != second,
-    {
-        mixed_component_receipts_client(left, right, first, second, 1, "action", path, limits, world)
-    }
-
-    pub(crate) fn resource_receipts_client<E: Event, F: Event, L: Limits>(
-        left: &Store<E>, right: &Store<F>, first: &E::Resource, second: &F::Resource,
-        path: &str, limits: &mut L, world: &mut ObservationWorld)
-        -> (result: Result<(u64, u64, u64), HistoryError>)
-        requires store_wf(*left), store_wf(*right), left.history_registry@ != right.history_registry@,
-            map::key_obligations::<E::Resource>(), map::key_obligations::<F::Resource>(),
-        ensures result matches Ok((byte, first, second)) ==> byte != first && byte != second && first != second,
-    {
-        mixed_component_receipts_client(left, right, first, second, 2, "resource", path, limits, world)
-    }
-
-    pub open spec fn domain<E: Event>() -> encoding::Domain<ComponentValue<E>> {
+    pub open spec fn domain<E: Event>() -> encoding::Domain<E::Component> {
         junco_core::verify::flatten::component_domain::<E>()
     }
 
     pub open(super) spec fn native_obligations<E: Event>() -> bool {
-        E::obeys_projection_spec() && map::key_obligations::<E::Principal>()
-            && map::key_obligations::<E::Action>() && map::key_obligations::<E::Resource>()
+        1 <= arity::<E>() <= MAX_ARITY && E::obeys_projection_spec()
+            && projection_laws::<E>() && map::key_obligations::<E::Component>()
     }
 
     /// `eq_spec` is an equivalence on `T`: the reflexivity, symmetry and transitivity clauses of
@@ -1097,23 +1148,27 @@ pub mod verify {
     /// The native obligations make component equality an equivalence.
     pub proof fn lemma_native_obligations_eq_equivalence<E: Event>()
         requires native_obligations::<E>(),
-        ensures
-            eq_equivalence::<E::Principal>(),
-            eq_equivalence::<E::Action>(),
-            eq_equivalence::<E::Resource>(),
+        ensures eq_equivalence::<E::Component>(),
     {
     }
 
+    /// Projection and arity facts available to typed-policy clients outside this crate.
+    pub proof fn lemma_native_obligations_projection<E: Event>()
+        requires native_obligations::<E>(),
+        ensures E::obeys_projection_spec(), projection_laws::<E>(),
+            1 <= arity::<E>() <= MAX_ARITY,
+    {}
+
     pub open spec fn empty_maps<E: Event>() -> ComponentMaps<E> {
-        seq![Seq::<(ComponentValue<E>, u64)>::empty(),
-            Seq::<(ComponentValue<E>, u64)>::empty(), Seq::<(ComponentValue<E>, u64)>::empty()]
+        Seq::new(arity::<E>(), |i: int| Seq::<(E::Component, u64)>::empty())
     }
 
     pub open spec fn maps_wf<E: Event>(maps: ComponentMaps<E>) -> bool {
-        encoding::maps_wf(maps, component_equality::<E>(), domain::<E>())
+        maps.len() == arity::<E>()
+            && encoding::maps_wf(maps, component_equality::<E>(), domain::<E>())
     }
     pub open spec fn maps_extend<E: Event>(before: ComponentMaps<E>, after: ComponentMaps<E>) -> bool {
-        encoding::extends(before, after, component_equality::<E>())
+        before.len() == after.len() && encoding::extends(before, after, component_equality::<E>())
     }
 
     /// Persistent provenance scoped to the unique, linearly owned mutex registry resource.
@@ -1124,7 +1179,9 @@ pub mod verify {
     pub open(crate) spec fn store_wf<E: Event>(store: Store<E>) -> bool {
         store.id > 0 && mutex_valid(store.books, store.id, store.history_registry@)
             && snapshot_published::<E>(store.history_registry@, empty_maps::<E>())
-            && store.numeric_store == crate::store::verify::singleton_store()
+            && store.numeric_store == crate::store::verify::singleton_store(arity::<E>())
+            && crate::store::verify::numeric_store_wf(*store.numeric_store)
+            && store.numeric_store.arity_spec() == arity::<E>()
             && store.store_id_receipt@.id() == store_id_authority()
             && store.store_id_receipt@.key() == store.id
             && store.store_id_receipt@.value() == store.history_registry@
@@ -1151,20 +1208,14 @@ pub mod verify {
         left_map.combine_points_to(right.duplicate());
     }
 
-    pub open spec fn projection<E: Event>(raw: E)
-        -> junco_core::verify::dsl::EventView<E::Principal, E::Action, E::Resource>
-    {
-        junco_core::verify::dsl::EventView { principal: raw.principal_spec(),
-            action: raw.action_spec(), resource: raw.resource_spec() }
-    }
 
     pub open spec fn numeric_values(numeric: NumericEvent) -> Seq<u64> {
-        seq![numeric.principal@ as u64, numeric.action@ as u64, numeric.resource@ as u64]
+        numeric@.map(|i: int, value: nat| value as u64)
     }
 
     pub open spec fn event_encoded<E: Event>(maps: ComponentMaps<E>, raw: E, numeric: NumericEvent) -> bool {
         encoding::event_encoded(maps, component_equality::<E>(), domain::<E>(),
-            junco_core::verify::flatten::event_values::<E>(projection(raw)), numeric_values(numeric))
+            event_view(raw), numeric_values(numeric))
             && junco_core::verify::encoding::event_representation(numeric_values(numeric), numeric@)
     }
 
@@ -1197,70 +1248,39 @@ pub mod verify {
         }
     }
     pub(crate) open(crate) spec fn component_receipts_wf<E: Event>(books: ComponentBooks<E>) -> bool {
-        book_receipts_wf(books.principal, 0, crate::store::ComponentIssuer::Typed(books.registry@))
-            && book_receipts_wf(books.action, 1, crate::store::ComponentIssuer::Typed(books.registry@))
-            && book_receipts_wf(books.resource, 2, crate::store::ComponentIssuer::Typed(books.registry@))
+        books.books@.len() == arity::<E>() && 1 <= arity::<E>() <= MAX_ARITY
+            && forall|index: int| 0 <= index < arity::<E>() ==>
+                book_receipts_wf(books.books@[index], index,
+                    crate::store::ComponentIssuer::Typed(books.registry@))
     }
     pub(crate) open(crate) spec fn components_wf<E: Event>(books: ComponentBooks<E>) -> bool {
         component_receipts_wf(books)
-            && (native_obligations::<E>() ==> book_wf(books.principal)
-                && book_wf(books.action) && book_wf(books.resource))
+            && (native_obligations::<E>() ==> forall|index: int| 0 <= index < arity::<E>() ==>
+                book_wf(books.books@[index])
+                && forall|i: int| 0 <= i < book_entries(books.books@[index]).len() ==>
+                    E::coordinate_spec(book_entries(books.books@[index])[i].0) == index)
     }
     pub open(crate) spec fn encoder_frame<'a, E: Event>(before: BorrowedEncoder<'a, E>, after: BorrowedEncoder<'a, E>) -> bool {
         before.books.registry@ == after.books.registry@
             && (components_wf(*before.books) ==> components_wf(*after.books))
     }
     pub(crate) open(crate) spec fn component_maps<E: Event>(books: ComponentBooks<E>) -> ComponentMaps<E> {
-        seq![book_entries(books.principal).map(|i: int, pair: (E::Principal, u64)|
-                (ComponentValue::Principal(pair.0), pair.1)),
-            book_entries(books.action).map(|i: int, pair: (E::Action, u64)|
-                (ComponentValue::Action(pair.0), pair.1)),
-            book_entries(books.resource).map(|i: int, pair: (E::Resource, u64)|
-                (ComponentValue::Resource(pair.0), pair.1))]
+        books.books@.map(|i: int, book: Codebook<E::Component>| book_entries(book))
     }
 
     pub(crate) proof fn lemma_component_book_encoded<E: Event>(
-        books: ComponentBooks<E>, field: Component, value: ComponentValue<E>, id: u64)
+        books: ComponentBooks<E>, field: Component, value: E::Component, id: u64)
         requires native_obligations::<E>(), components_wf(books),
-            match (field, value) {
-                (Component::Principal, ComponentValue::Principal(key)) => book_encoded(books.principal, key, id),
-                (Component::Action, ComponentValue::Action(key)) => book_encoded(books.action, key, id),
-                (Component::Resource, ComponentValue::Resource(key)) => book_encoded(books.resource, key, id),
-                _ => false,
-            },
+            field.0 < arity::<E>(), domain::<E>()(field, value),
+            book_encoded(books.books@[field.0 as int], value, id),
         ensures encoding::encoded(component_maps(books), component_equality::<E>(), field, value, id),
             domain::<E>()(field, value),
     {
-        let maps = component_maps(books);
-        let f = junco_core::flat::verify::field_index(field);
-        let i = match (field, value) {
-            (Component::Principal, ComponentValue::Principal(key)) => {
-                let entries = book_entries(books.principal);
-                let i = choose|i: int| 0 <= i < entries.len() && entries[i].1 == id
-                    && key.eq_spec(&entries[i].0);
-                assert(maps[f][i] == (ComponentValue::Principal(entries[i].0), id));
-                i
-            },
-            (Component::Action, ComponentValue::Action(key)) => {
-                let entries = book_entries(books.action);
-                let i = choose|i: int| 0 <= i < entries.len() && entries[i].1 == id
-                    && key.eq_spec(&entries[i].0);
-                assert(maps[f][i] == (ComponentValue::Action(entries[i].0), id));
-                i
-            },
-            (Component::Resource, ComponentValue::Resource(key)) => {
-                let entries = book_entries(books.resource);
-                let i = choose|i: int| 0 <= i < entries.len() && entries[i].1 == id
-                    && key.eq_spec(&entries[i].0);
-                assert(maps[f][i] == (ComponentValue::Resource(entries[i].0), id));
-                i
-            },
-            _ => { assert(false); arbitrary() },
-        };
-        assert(maps.len() == 3 && id > 0);
-        assert(0 <= i < maps[f].len());
-        assert(maps[f][i].1 == id && component_equality::<E>()(field, value, maps[f][i].0));
-        assert(encoding::encoded(maps, component_equality::<E>(), field, value, id));
+        let f = field.0 as int;
+        let entries = book_entries(books.books@[f]);
+        let i = choose|i: int| 0 <= i < entries.len() && entries[i].1 == id
+            && value.eq_spec(&entries[i].0);
+        assert(component_maps(books)[f][i] == entries[i]);
     }
     pub(crate) open(crate) spec fn books_wf<E: Event>(books: Codebooks<E>) -> bool {
         components_wf(books.components) && books.components.registry@ == books.history_resources@.id()
@@ -1311,43 +1331,33 @@ pub mod verify {
     {
         if native_obligations::<E>() {
             assert(encoding::equality_laws(component_equality::<E>(), domain::<E>()));
-            assert forall|f: int, i: int| 0 <= f < 3 && 0 <= i < component_maps(books)[f].len()
+            assert forall|f: int, i: int| 0 <= f < arity::<E>() && 0 <= i < component_maps(books)[f].len()
                 implies domain::<E>()(encoding::field_at(f), component_maps(books)[f][i].0)
                     && component_maps(books)[f][i].1 > 0 by {
-                if f == 0 {} else if f == 1 {} else {}
+                assert(component_maps(books)[f] == book_entries(books.books@[f]));
             }
-            assert forall|f: int, i: int, j: int| 0 <= f < 3
+            assert forall|f: int, i: int, j: int| 0 <= f < arity::<E>()
                 && 0 <= i < component_maps(books)[f].len() && 0 <= j < component_maps(books)[f].len()
                 implies (component_equality::<E>()(encoding::field_at(f), component_maps(books)[f][i].0,
                     component_maps(books)[f][j].0) == (component_maps(books)[f][i].1 == component_maps(books)[f][j].1)) by {
-                if f == 0 {} else if f == 1 {} else {}
+                assert(book_wf(books.books@[f]));
             }
         }
     }
 
     pub(super) proof fn lemma_component_maps_extend<E: Event>(before: ComponentBooks<E>, after: ComponentBooks<E>)
-        requires book_entries(before.principal).is_prefix_of(book_entries(after.principal)),
-            book_entries(before.action).is_prefix_of(book_entries(after.action)),
-            book_entries(before.resource).is_prefix_of(book_entries(after.resource)),
+        requires before.books@.len() == after.books@.len(),
+            forall|f: int| 0 <= f < before.books@.len() ==>
+                book_entries(before.books@[f]).is_prefix_of(book_entries(after.books@[f])),
         ensures maps_extend::<E>(component_maps(before), component_maps(after)),
     {
-        assert forall|f: int| 0 <= f < 3 implies
-            component_maps(before)[f].is_prefix_of(component_maps(after)[f]) by {
-            let a = component_maps(before)[f];
-            let b = component_maps(after)[f];
-            if f == 0 {} else if f == 1 {} else {}
-            assert(a.len() <= b.len());
-            assert forall|i: int| 0 <= i < a.len() implies a[i] == b[i] by {
-                if f == 0 {} else if f == 1 {} else {}
-            }
-            assert(a =~= b.subrange(0, a.len() as int));
-        }
-        assert forall|field: Component, value: ComponentValue<E>, id: u64|
+        assert forall|field: Component, value: E::Component, id: u64|
             encoding::encoded(component_maps(before), component_equality::<E>(), field, value, id)
             implies encoding::encoded(component_maps(after), component_equality::<E>(), field, value, id) by {
             let f = junco_core::flat::verify::field_index(field);
             let i = choose|i: int| 0 <= i < component_maps(before)[f].len() && component_maps(before)[f][i].1 == id
                 && component_equality::<E>()(field, value, component_maps(before)[f][i].0);
+            assert(book_entries(before.books@[f]).is_prefix_of(book_entries(after.books@[f])));
             assert(component_maps(after)[f][i] == component_maps(before)[f][i]);
         }
     }
@@ -1364,6 +1374,7 @@ pub mod verify {
 mod tests {
     use super::*;
     use core::hash::{Hash, Hasher};
+    use history_syntax::{Component3, Component4, N3, N4};
 
     #[derive(Copy, Clone, Debug)]
     struct Key {
@@ -1384,17 +1395,21 @@ mod tests {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
     struct TestEvent(Key);
     impl Event for TestEvent {
-        type Principal = Key;
-        type Action = Key;
-        type Resource = Key;
-        fn principal(self) -> Key {
-            self.0
+        type Component = Component3<Key, Key, Key>;
+        type Arity = N3;
+        fn component(self, index: usize) -> Self::Component {
+            match index {
+                0 => Component3::C0(self.0),
+                1 => Component3::C1(self.0),
+                _ => Component3::C2(self.0),
+            }
         }
-        fn action(self) -> Key {
-            self.0
-        }
-        fn resource(self) -> Key {
-            self.0
+        fn coordinate(component: Self::Component) -> usize {
+            match component {
+                Component3::C0(_) => 0,
+                Component3::C1(_) => 1,
+                Component3::C2(_) => 2,
+            }
         }
     }
 
@@ -1410,7 +1425,7 @@ mod tests {
 
     #[test]
     fn failed_allocation_preserves_reuse_and_collisions_are_not_identity() {
-        let numeric = HistoryStore::global();
+        let numeric = HistoryStore::new(3);
         let mut book = Codebook::new();
         let first = Key {
             identity: 7,
@@ -1426,37 +1441,37 @@ mod tests {
         };
         assert_eq!(equivalent.payload, 2);
         let id = book
-            .intern(&first, 0, "principal", &numeric, Ghost::assume_new())
+            .intern(&first, 0, "component", &numeric, Ghost::assume_new())
             .unwrap();
         assert_eq!(
-            book.intern(&equivalent, 0, "principal", &numeric, Ghost::assume_new())
+            book.intern(&equivalent, 0, "component", &numeric, Ghost::assume_new())
                 .unwrap(),
             id
         );
         // No shared-counter ID exceeds this book's newest one, so only reuse can succeed.
         book.last = u64::MAX;
         assert!(matches!(
-            book.intern(&other, 0, "principal", &numeric, Ghost::assume_new()),
+            book.intern(&other, 0, "component", &numeric, Ghost::assume_new()),
             Err(HistoryError::Invariant { .. })
         ));
         assert_eq!(book.last, u64::MAX);
         assert_eq!(
-            book.intern(&equivalent, 0, "principal", &numeric, Ghost::assume_new())
+            book.intern(&equivalent, 0, "component", &numeric, Ghost::assume_new())
                 .unwrap(),
             id
         );
         assert_eq!(book.values.lookup(&other), None);
         let mut book = Codebook::new();
         let first_action = book
-            .intern(&first, 1, "action", &numeric, Ghost::assume_new())
+            .intern(&first, 1, "component", &numeric, Ghost::assume_new())
             .unwrap();
         assert!(
-            book.intern(&other, 1, "action", &numeric, Ghost::assume_new())
+            book.intern(&other, 1, "component", &numeric, Ghost::assume_new())
                 .unwrap()
                 > first_action
         );
         assert_eq!(
-            book.intern(&equivalent, 1, "action", &numeric, Ghost::assume_new())
+            book.intern(&equivalent, 1, "component", &numeric, Ghost::assume_new())
                 .unwrap(),
             first_action
         );
@@ -1465,7 +1480,7 @@ mod tests {
     #[test]
     fn history_exhaustion_is_checked_and_does_not_change_codebooks() {
         // The shared counter's MAX boundary is covered by `store::next_history_id` on locals.
-        let numeric = HistoryStore::global();
+        let numeric = HistoryStore::new(3);
         let mut books = Codebooks::<TestEvent>::new(Ghost::assume_new(), Tracked::assume_new());
         books.next_history = usize::MAX;
         assert!(matches!(
@@ -1473,9 +1488,7 @@ mod tests {
             Err(HistoryError::IdExhausted { domain: "history" })
         ));
         assert_eq!(books.next_history, usize::MAX);
-        assert_eq!(books.components.principal.last, 0);
-        assert_eq!(books.components.action.last, 0);
-        assert_eq!(books.components.resource.last, 0);
+        assert!(books.components.books.iter().all(|book| book.last == 0));
 
         let store = alloc::sync::Arc::new(Store::<TestEvent>::new().unwrap());
         let history = crate::history::History::from_events(
@@ -1509,17 +1522,23 @@ mod tests {
         #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
         struct OtherEvent(u8);
         impl Event for OtherEvent {
-            type Principal = u8;
-            type Action = u8;
-            type Resource = u8;
-            fn principal(self) -> u8 {
-                self.0
+            type Component = Component4<u8, u8, u8, u8>;
+            type Arity = N4;
+            fn component(self, index: usize) -> Self::Component {
+                match index {
+                    0 => Component4::C0(self.0),
+                    1 => Component4::C1(self.0),
+                    2 => Component4::C2(self.0),
+                    _ => Component4::C3(self.0),
+                }
             }
-            fn action(self) -> u8 {
-                self.0
-            }
-            fn resource(self) -> u8 {
-                self.0
+            fn coordinate(component: Self::Component) -> usize {
+                match component {
+                    Component4::C0(_) => 0,
+                    Component4::C1(_) => 1,
+                    Component4::C2(_) => 2,
+                    Component4::C3(_) => 3,
+                }
             }
         }
         let other = Store::<OtherEvent>::new().unwrap();
@@ -1534,6 +1553,13 @@ mod tests {
         });
         let encoded = store.encode_event(&first).unwrap();
         assert_eq!(encoded, store.encode_event(&equivalent).unwrap());
+        let other_encoded = other.encode_event(&OtherEvent(7)).unwrap();
+        assert_eq!(encoded.arity(), 3);
+        assert_eq!(other_encoded.arity(), 4);
+        assert!(!Arc::ptr_eq(store.numeric_store(), other.numeric_store()));
+        for index in 0..encoded.arity() {
+            assert!(encoded.component(index) < other_encoded.component(index));
+        }
         {
             let mut books = store.books.inner.lock();
             let mut encoder = BorrowedEncoder {
@@ -1548,24 +1574,24 @@ mod tests {
             };
             assert!(
                 encoder
-                    .encode(Component::Principal, &ComponentValue::Principal(value))
+                    .encode(Component(0), &Component3::C0(value))
                     .unwrap()
-                    > encoded.principal.get()
+                    > encoded.component(0)
             );
             assert!(
                 encoder
-                    .encode(Component::Action, &ComponentValue::Action(value))
+                    .encode(Component(1), &Component3::C1(value))
                     .unwrap()
-                    > encoded.action.get()
+                    > encoded.component(1)
             );
             assert!(
                 encoder
-                    .encode(Component::Resource, &ComponentValue::Resource(value))
+                    .encode(Component(2), &Component3::C2(value))
                     .unwrap()
-                    > encoded.resource.get()
+                    > encoded.component(2)
             );
             assert!(matches!(
-                encoder.encode(Component::Resource, &ComponentValue::Principal(value)),
+                encoder.encode(Component(2), &Component3::C0(value)),
                 Err(HistoryError::InvalidPolicy {
                     message: "constant belongs to another component",
                     ..
@@ -1578,17 +1604,27 @@ mod tests {
     fn typed_numeric_events_never_name_byte_store_identities() {
         use junco_core::limits::Unmetered;
         use junco_core::observation::ObservationWorld;
-        let byte = HistoryStore::global();
-        let fresh = |path: &str| {
-            byte.intern_principal(path, &mut Unmetered, &mut ObservationWorld)
+        let byte = HistoryStore::new(3);
+        let fresh = |bytes: &[u8]| {
+            byte.intern(Component(0), bytes, &mut Unmetered, &mut ObservationWorld)
                 .unwrap()
         };
-        let before = fresh("typed-vs-byte/before");
+        let before = fresh(b"typed-vs-byte/before\xff");
         let action = byte
-            .intern_action("typed-vs-byte/edit", &mut Unmetered, &mut ObservationWorld)
+            .intern(
+                Component(1),
+                b"typed-vs-byte/edit\xfe",
+                &mut Unmetered,
+                &mut ObservationWorld,
+            )
             .unwrap();
         let resource = byte
-            .intern_resource("typed-vs-byte/doc", &mut Unmetered, &mut ObservationWorld)
+            .intern(
+                Component(2),
+                b"typed-vs-byte/doc\x80",
+                &mut Unmetered,
+                &mut ObservationWorld,
+            )
             .unwrap();
         let typed = alloc::sync::Arc::new(Store::<TestEvent>::new().unwrap());
         assert!(alloc::sync::Arc::ptr_eq(typed.numeric_store(), &byte));
@@ -1601,36 +1637,22 @@ mod tests {
         )
         .unwrap();
         let exported = history.numeric().as_slice()[0];
-        let after = fresh("typed-vs-byte/after");
+        let after = fresh(b"typed-vs-byte/after\xff");
         // Fresh per-test names: the shared counter orders these three issuances.
-        assert!(before.get() < exported.principal.get());
-        assert!(exported.principal.get() < after.get());
-        assert_ne!(exported.action.get(), action.get());
-        assert_ne!(exported.resource.get(), resource.get());
+        assert!(before < exported.component(0));
+        assert!(exported.component(0) < after);
+        assert_ne!(exported.component(1), action);
+        assert_ne!(exported.component(2), resource);
         let target = byte
             .new_history(&mut Unmetered, &mut ObservationWorld)
             .unwrap();
-        let valid = NumericEvent {
-            principal: before,
-            action,
-            resource,
-        };
+        let valid = NumericEvent::from_encoded(&[before, action, resource]);
         byte.append(&target, &[valid], &mut Unmetered, &mut ObservationWorld)
             .unwrap();
-        for invalid in [
-            NumericEvent {
-                principal: exported.principal,
-                ..valid
-            },
-            NumericEvent {
-                action: exported.action,
-                ..valid
-            },
-            NumericEvent {
-                resource: exported.resource,
-                ..valid
-            },
-        ] {
+        for index in 0..3 {
+            let mut slots = [before, action, resource];
+            slots[index] = exported.component(index);
+            let invalid = NumericEvent::from_encoded(&slots);
             assert!(matches!(
                 byte.append(
                     &target,
@@ -1671,17 +1693,21 @@ mod tests {
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
         struct BorrowedEvent<'a>(Borrowed<'a>);
         impl<'a> Event for BorrowedEvent<'a> {
-            type Principal = Borrowed<'a>;
-            type Action = u8;
-            type Resource = u8;
-            fn principal(self) -> Borrowed<'a> {
-                self.0
+            type Component = Component3<Borrowed<'a>, u8, u8>;
+            type Arity = N3;
+            fn component(self, index: usize) -> Self::Component {
+                match index {
+                    0 => Component3::C0(self.0),
+                    1 => Component3::C1(1),
+                    _ => Component3::C2(2),
+                }
             }
-            fn action(self) -> u8 {
-                1
-            }
-            fn resource(self) -> u8 {
-                2
+            fn coordinate(component: Self::Component) -> usize {
+                match component {
+                    Component3::C0(_) => 0,
+                    Component3::C1(_) => 1,
+                    Component3::C2(_) => 2,
+                }
             }
         }
         let cell = Cell::new(3);
@@ -1707,18 +1733,18 @@ mod tests {
             identity: 8,
             payload: 2,
         };
-        let numeric = HistoryStore::global();
+        let numeric = HistoryStore::new(3);
         let id = book
-            .intern(&first, 2, "resource", &numeric, Ghost::assume_new())
+            .intern(&first, 2, "component", &numeric, Ghost::assume_new())
             .unwrap();
         let _failure = junco_core::observation::fail_reservations_after(0);
         assert!(matches!(
-            book.intern(&other, 2, "resource", &numeric, Ghost::assume_new()),
+            book.intern(&other, 2, "component", &numeric, Ghost::assume_new()),
             Err(HistoryError::AllocationFailed)
         ));
         assert_eq!(book.last, id);
         assert_eq!(
-            book.intern(&first, 2, "resource", &numeric, Ghost::assume_new())
+            book.intern(&first, 2, "component", &numeric, Ghost::assume_new())
                 .unwrap(),
             id
         );
@@ -1739,14 +1765,22 @@ mod tests {
         #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
         struct PanicEvent(PanickingKey);
         impl Event for PanicEvent {
-            type Principal = PanickingKey;
-            type Action = ();
-            type Resource = ();
-            fn principal(self) -> PanickingKey {
-                self.0
+            type Component = Component3<PanickingKey, (), ()>;
+            type Arity = N3;
+            fn component(self, index: usize) -> Self::Component {
+                match index {
+                    0 => Component3::C0(self.0),
+                    1 => Component3::C1(()),
+                    _ => Component3::C2(()),
+                }
             }
-            fn action(self) {}
-            fn resource(self) {}
+            fn coordinate(component: Self::Component) -> usize {
+                match component {
+                    Component3::C0(_) => 0,
+                    Component3::C1(_) => 1,
+                    Component3::C2(_) => 2,
+                }
+            }
         }
         let store = Store::<PanicEvent>::new().unwrap();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1755,5 +1789,111 @@ mod tests {
         assert!(result.is_err());
         assert!(store.books.inner.try_lock().is_some());
         assert!(store.encode_event(&PanicEvent(PanickingKey(7))).is_ok());
+    }
+
+    #[test]
+    fn every_supported_arity_retains_scoped_shared_authorities() {
+        let mut previous = [0; MAX_ARITY];
+        macro_rules! check {
+            ($arity:ty) => {{
+                #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+                struct SizedEvent([u8; MAX_ARITY]);
+                impl Event for SizedEvent {
+                    type Component = (u8, u8);
+                    type Arity = $arity;
+                    fn component(self, index: usize) -> Self::Component {
+                        let index = index.min(Self::Arity::value() - 1);
+                        (index as u8, self.0[index])
+                    }
+                    fn coordinate(component: Self::Component) -> usize {
+                        component.0 as usize
+                    }
+                }
+                let width = <$arity>::value();
+                let store = Store::<SizedEvent>::new().unwrap();
+                let other = Store::<SizedEvent>::new().unwrap();
+                assert!(Arc::ptr_eq(store.numeric_store(), other.numeric_store()));
+                assert_eq!(store.numeric_store().arity(), width);
+                let event = SizedEvent([17; MAX_ARITY]);
+                let encoded = store.encode_event(&event).unwrap();
+                let distinct = other.encode_event(&event).unwrap();
+                assert_eq!(encoded.arity(), width);
+                assert_eq!(encoded, store.encode_event(&event).unwrap());
+                for (index, previous) in previous.iter_mut().enumerate().take(width) {
+                    assert!(*previous < encoded.component(index));
+                    assert!(encoded.component(index) < distinct.component(index));
+                    *previous = distinct.component(index);
+                }
+                let mut books = store.books.inner.lock();
+                assert_eq!(books.components.books.len(), width);
+                let mut encoder = BorrowedEncoder {
+                    books: &mut books.components,
+                    numeric_store: store.numeric_store(),
+                    #[cfg(verus_keep_ghost)]
+                    calls: Ghost(0nat),
+                };
+                assert_eq!(
+                    encoder
+                        .encode(Component((width - 1) as u8), &((width - 1) as u8, 17))
+                        .unwrap(),
+                    encoded.component(width - 1)
+                );
+                // Even a malformed native coordinate implementation cannot index past the books.
+                assert!(matches!(
+                    encoder.encode(Component(width as u8), &(width as u8, 17)),
+                    Err(HistoryError::InvalidPolicy { .. })
+                ));
+            }};
+        }
+        check!(history_syntax::N1);
+        check!(history_syntax::N2);
+        check!(history_syntax::N3);
+        check!(history_syntax::N4);
+        check!(history_syntax::N5);
+        check!(history_syntax::N6);
+        check!(history_syntax::N7);
+        check!(history_syntax::N8);
+    }
+
+    #[test]
+    fn partial_event_allocation_retains_committed_coordinates() {
+        let store = Store::<(u8, u8, u8, u8)>::new().unwrap();
+        let event = (11, 12, 13, 14);
+        {
+            let _failure = junco_core::observation::fail_reservations_after(2);
+            assert!(matches!(
+                store.encode_event(&event),
+                Err(HistoryError::AllocationFailed)
+            ));
+        }
+        let first = {
+            let books = store.books.inner.lock();
+            let first = books.components.books[0]
+                .values
+                .lookup(&Component4::C0(11))
+                .unwrap();
+            assert!(
+                books.components.books[1]
+                    .values
+                    .lookup(&Component4::C1(12))
+                    .is_some()
+            );
+            assert!(
+                books.components.books[2]
+                    .values
+                    .lookup(&Component4::C2(13))
+                    .is_none()
+            );
+            assert!(
+                books.components.books[3]
+                    .values
+                    .lookup(&Component4::C3(14))
+                    .is_none()
+            );
+            first
+        };
+        let encoded = store.encode_event(&event).unwrap();
+        assert_eq!(encoded.component(0), first);
+        assert_eq!(encoded, store.encode_event(&event).unwrap());
     }
 }

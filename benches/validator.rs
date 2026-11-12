@@ -10,10 +10,10 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 use history_semantics::{Decision, Validator};
 use history_store::Store;
 use history_syntax::{
-    AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
 use junco_core::Request;
-use junco_policy::{Action, LockEvent};
+use junco_policy::{Action, LockComponent, LockEvent};
 use std::sync::Arc;
 
 /// Benchmark principal identity.
@@ -48,23 +48,26 @@ fn prior_edit_rule(suffix: usize) -> Rule<LockEvent<Actor, Path>> {
     let target = format!("target-{suffix}");
     let principal = TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Principal(ComponentPattern::variable(actor.clone())),
+        AtomPattern::new(Component(0), ComponentPattern::variable(actor.clone())),
     );
     let action = TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Action(ComponentPattern::constant(Action::Edit)),
+        AtomPattern::new(
+            Component(1),
+            ComponentPattern::constant(LockComponent::Action(Action::Edit)),
+        ),
     );
     let resource = TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Resource(ComponentPattern::variable(target.clone())),
+        AtomPattern::new(Component(2), ComponentPattern::variable(target.clone())),
     );
     Rule::new(
         RuleMode::Require,
-        Head::new(
+        Head::new([
             ComponentPattern::variable(actor),
-            ComponentPattern::constant(Action::Release),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
             ComponentPattern::variable(target),
-        ),
+        ]),
         RegexExpr::concat([
             RegexExpr::all(),
             RegexExpr::test(TestExpr::and([principal, action, resource])),
@@ -76,20 +79,23 @@ fn duplicate_remove_rule() -> Rule<LockEvent<Actor, Path>> {
     let matching_remove = RegexExpr::test(TestExpr::and([
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Action(ComponentPattern::constant(Action::Remove)),
+            AtomPattern::new(
+                Component(1),
+                ComponentPattern::constant(LockComponent::Action(Action::Remove)),
+            ),
         ),
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Resource(ComponentPattern::variable("target")),
+            AtomPattern::new(Component(2), ComponentPattern::variable("target")),
         ),
     ]));
     Rule::new(
         RuleMode::Forbid,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Remove),
+            ComponentPattern::constant(LockComponent::Action(Action::Remove)),
             ComponentPattern::variable("target"),
-        ),
+        ]),
         RegexExpr::concat([RegexExpr::all(), matching_remove, RegexExpr::all()]),
     )
 }
@@ -97,7 +103,10 @@ fn duplicate_remove_rule() -> Rule<LockEvent<Actor, Path>> {
 fn every_resource_leaf(index: usize) -> RegexExpr<LockEvent<Actor, Path>> {
     RegexExpr::star(RegexExpr::test(TestExpr::atom(
         Comparison::Neq,
-        AtomPattern::Resource(ComponentPattern::constant(Path(ABSENT_IDS + index as u32))),
+        AtomPattern::new(
+            Component(2),
+            ComponentPattern::constant(LockComponent::Resource(Path(ABSENT_IDS + index as u32))),
+        ),
     )))
 }
 
@@ -114,11 +123,11 @@ fn deeply_nested_resource_allow_all_rule(depth: usize) -> Rule<LockEvent<Actor, 
     }
     Rule::new(
         RuleMode::Require,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Release),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
             ComponentPattern::variable("target"),
-        ),
+        ]),
         tail,
     )
 }
@@ -132,7 +141,10 @@ fn unique_read(index: usize) -> Request<LockEvent<Actor, Path>, ()> {
 fn every_event_leaf(index: usize) -> RegexExpr<LockEvent<Actor, Path>> {
     RegexExpr::star(RegexExpr::test(TestExpr::atom(
         Comparison::Neq,
-        AtomPattern::Principal(ComponentPattern::constant(Actor(ABSENT_IDS + index as u32))),
+        AtomPattern::new(
+            Component(0),
+            ComponentPattern::constant(LockComponent::Principal(Actor(ABSENT_IDS + index as u32))),
+        ),
     )))
 }
 
@@ -151,11 +163,11 @@ fn deeply_nested_allow_all_rule(depth: usize) -> Rule<LockEvent<Actor, Path>> {
 
     Rule::new(
         RuleMode::Require,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Release),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
             ComponentPattern::variable("target"),
-        ),
+        ]),
         tail,
     )
 }
@@ -166,17 +178,22 @@ fn advancing_optional_rule(steps: usize) -> Rule<LockEvent<Actor, Path>> {
             RegexExpr::epsilon(),
             RegexExpr::test(TestExpr::atom(
                 Comparison::Neq,
-                AtomPattern::Resource(ComponentPattern::constant(Path(ABSENT_IDS + index as u32))),
+                AtomPattern::new(
+                    Component(2),
+                    ComponentPattern::constant(LockComponent::Resource(Path(
+                        ABSENT_IDS + index as u32,
+                    ))),
+                ),
             )),
         ])
     });
     Rule::new(
         RuleMode::Require,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Release),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
             ComponentPattern::variable("target"),
-        ),
+        ]),
         RegexExpr::concat(factors),
     )
 }
@@ -192,18 +209,21 @@ fn growing_residual_rule(window: usize) -> Rule<LockEvent<Actor, Path>> {
     let any_event = RegexExpr::test(TestExpr::true_test());
     let read = RegexExpr::test(TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Action(ComponentPattern::constant(Action::Read)),
+        AtomPattern::new(
+            Component(1),
+            ComponentPattern::constant(LockComponent::Action(Action::Read)),
+        ),
     ));
     let factors = std::iter::once(RegexExpr::all())
         .chain(std::iter::once(read))
         .chain(std::iter::repeat_n(any_event, window + 1));
     Rule::new(
         RuleMode::Forbid,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Release),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
             ComponentPattern::variable("target"),
-        ),
+        ]),
         RegexExpr::concat(factors),
     )
 }
@@ -212,15 +232,18 @@ fn growing_residual_rule(window: usize) -> Rule<LockEvent<Actor, Path>> {
 fn absent_witness_rule(index: usize) -> Rule<LockEvent<Actor, Path>> {
     let absent = RegexExpr::test(TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Principal(ComponentPattern::constant(Actor(ABSENT_IDS + index as u32))),
+        AtomPattern::new(
+            Component(0),
+            ComponentPattern::constant(LockComponent::Principal(Actor(ABSENT_IDS + index as u32))),
+        ),
     ));
     Rule::new(
         RuleMode::Forbid,
-        Head::new(
+        Head::new([
             ComponentPattern::variable("actor"),
-            ComponentPattern::constant(Action::Release),
+            ComponentPattern::constant(LockComponent::Action(Action::Release)),
             ComponentPattern::variable("target"),
-        ),
+        ]),
         RegexExpr::concat([RegexExpr::all(), absent, RegexExpr::all()]),
     )
 }

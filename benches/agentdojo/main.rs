@@ -1,5 +1,6 @@
 mod bridge;
 mod camel;
+mod events;
 mod tools;
 
 use std::collections::{BTreeMap, VecDeque};
@@ -15,7 +16,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
 use bridge::{Bridge, SCRIPT};
-use camel::{FirstDenial, Llm, Run, Script};
+use camel::{CamelEvent, FirstDenial, Llm, Run, Script};
 
 const SUITES: &[&str] = &["workspace", "banking", "travel", "slack"];
 const HELP: &str = "cargo bench --bench agentdojo -- [options]\n\
@@ -29,6 +30,7 @@ const HELP: &str = "cargo bench --bench agentdojo -- [options]\n\
   --force                    rerun existing logs, including incompatible model settings\n\
   --replay DIR               answer the P- and Q-LLM from recorded scripts under DIR (no provider);\n\
                              tasks without a script are skipped\n\
+  --events DIR               replay four-coordinate events offline (no Python or provider); requires --out\n\
   --out NAME                 log directory name under benches/agentdojo/runs (default: <model>+camel)\n\
   --report                   aggregate canonical logs without Python or credentials\n\
   --self-test                model-free checks (requires AgentDojo Python)\n\
@@ -48,6 +50,7 @@ struct Options {
     concurrency: usize,
     force: bool,
     replay: Option<PathBuf>,
+    events: Option<PathBuf>,
     out: Option<String>,
     report: bool,
     self_test: bool,
@@ -76,6 +79,7 @@ impl Options {
             concurrency: 4,
             force: false,
             replay: None,
+            events: None,
             out: None,
             report: false,
             self_test: false,
@@ -110,12 +114,21 @@ impl Options {
                 }
                 "--force" => options.force = true,
                 "--replay" => options.replay = Some(PathBuf::from(value()?)),
+                "--events" => options.events = Some(PathBuf::from(value()?)),
                 "--out" => options.out = Some(value()?),
                 "--report" => options.report = true,
                 "--self-test" => options.self_test = true,
                 "--help" => options.help = true,
                 "--bench" => {}
                 _ => return Err(format!("unknown option: {flag}")),
+            }
+        }
+        if options.events.is_some() {
+            if options.out.is_none() {
+                return Err("--events requires --out".to_owned());
+            }
+            if options.replay.is_some() || options.report || options.self_test {
+                return Err("--events conflicts with --replay, --report and --self-test".to_owned());
             }
         }
         if options.concurrency == 0 {
@@ -129,7 +142,11 @@ impl Options {
                 "--model must be a safe path component (letters, digits, -, _, ., +)".to_owned(),
             );
         }
-        if options.out.as_deref().is_some_and(|out| !safe_component(out)) {
+        if options
+            .out
+            .as_deref()
+            .is_some_and(|out| !safe_component(out))
+        {
             return Err("--out must be a safe path component".to_owned());
         }
         if options
@@ -318,6 +335,22 @@ fn initial_log(task: &Task, options: &Options) -> Value {
     })
 }
 
+fn event_log(events: &[CamelEvent]) -> Value {
+    Value::Array(
+        events
+            .iter()
+            .map(|event| {
+                Value::Array(vec![
+                    Value::String(event.principal.to_string()),
+                    Value::String(event.handle.to_string()),
+                    Value::String(event.action.to_string()),
+                    Value::String(event.label.to_string()),
+                ])
+            })
+            .collect(),
+    )
+}
+
 async fn run_task(task: &Task, options: &Options, llm: &Llm, bridge: &mut Bridge) -> Value {
     let started = Instant::now();
     let mut log = initial_log(task, options);
@@ -339,7 +372,7 @@ async fn run_task(task: &Task, options: &Options, llm: &Llm, bridge: &mut Bridge
         let definitions = serde_json::from_value(loaded["tools"].take()).map_err(|e| e.to_string())?;
         let result = run.execute(llm, definitions, 30).await;
         let scores = run.scores().await;
-        log["events"] = json!(run.history.as_slice().iter().map(|event| format!("{} {:?} {}", event.principal, event.action, event.resource)).collect::<Vec<_>>());
+        log["events"] = event_log(run.history.as_slice());
         log["messages"] = serde_json::to_value(run.messages).map_err(|e| e.to_string())?;
         log["calls"] = serde_json::to_value(run.calls).map_err(|e| e.to_string())?;
         log["skipped_calls"] = serde_json::to_value(run.skipped_calls).map_err(|e| e.to_string())?;
@@ -578,6 +611,7 @@ fn report(options: &Options) -> Result<(), String> {
 
 async fn driver_self_test(python: &Path) -> Result<(), String> {
     camel::self_test(python, Path::new(SCRIPT)).await?;
+    events::self_test()?;
     let parse = |args: &[&str]| Options::parse(args.iter().map(|s| (*s).to_owned()));
     let options = parse(&[])?;
     let tasks = enumerate(&options, python).await?;
@@ -612,6 +646,12 @@ async fn driver_self_test(python: &Path) -> Result<(), String> {
         vec!["--clean-only", "--injection-task", "injection_task_0"],
         vec!["--mode", "both"],
         vec!["--resume"],
+        vec!["--events", "recorded"],
+        vec![
+            "--events", "recorded", "--out", "events", "--replay", "scripts",
+        ],
+        vec!["--events", "recorded", "--out", "events", "--report"],
+        vec!["--events", "recorded", "--out", "events", "--self-test"],
     ] {
         assert!(parse(&args).is_err());
     }
@@ -694,6 +734,9 @@ async fn benchmark() -> Result<(), String> {
         println!("{HELP}");
         return Ok(());
     }
+    if options.events.is_some() {
+        return events::replay(&options);
+    }
     if options.report {
         return report(&options);
     }
@@ -736,7 +779,10 @@ async fn benchmark() -> Result<(), String> {
             let options = Arc::clone(&options);
             let python = Arc::clone(&python);
             let llm = live.clone().unwrap_or_else(|| {
-                Arc::new(Llm::scripted(options.model.clone(), options.q_model.clone()))
+                Arc::new(Llm::scripted(
+                    options.model.clone(),
+                    options.q_model.clone(),
+                ))
             });
             let queue = Arc::clone(&queue);
             jobs.spawn(async move {

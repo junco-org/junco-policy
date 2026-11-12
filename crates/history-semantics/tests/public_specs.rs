@@ -13,8 +13,9 @@ use history_semantics::validator::{Decision, Validator, verify as validator};
 use history_store::history::{History, verify as history};
 use history_store::store::{HistoryStore, verify as records};
 use history_store::typed::{Store, share_store, verify as books};
+use history_syntax::event::specs::{EventSpec, arity, event_view, projection_laws};
 use history_syntax::verify::dsl::{HeadView, RegexView, TestView};
-use history_syntax::{Event, Head, RegexExpr, Rule, RuleMode};
+use history_syntax::{Component, Event, Head, MAX_ARITY, RegexExpr, Rule, RuleMode};
 use junco_core::event::Request;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex};
 use junco_core::limits::Limits;
@@ -26,6 +27,18 @@ use vstd::view::DeepView;
 
 verus! {
 broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
+
+fn indexed_projection<E: Event>(event: E, index: usize) -> (result: (E::Component, usize))
+    requires E::obeys_projection_spec(), projection_laws::<E>(), index < arity::<E>(),
+    ensures result.0 == event_view(event)[index as int], result.1 == index,
+{
+    let component = event.component(index);
+    let coordinate = E::coordinate(component);
+    proof {
+        assert(E::coordinate_spec(event.component_spec(index as int)) == index);
+    }
+    (component, coordinate)
+}
 
 // Native event laws are needed for semantic answers, not for construction or exact sequences.
 fn vec_history<E: Event>(events: Vec<E>) -> (result: Result<History<E>, HistoryError>)
@@ -66,11 +79,11 @@ fn compiled_truth_table<E: Event>(
         && answer != Err(HistoryError::WrongHistoryOwner)
         && history_specs::no_internal_error(answer)
         && (answer matches Ok(option) ==>
-            option == (if dsl::head_matches(head@, dsl::event_view(*candidate)) {
+            option == (if dsl::head_matches(head@, event_view(*candidate)) {
                 Some(universal)
             } else { None }))
         && (answer is Ok ==> dsl::rule_violated(compiled::source_rule(rule), *candidate, events@)
-            == (dsl::head_matches(head@, dsl::event_view(*candidate))
+            == (dsl::head_matches(head@, event_view(*candidate))
                 && match mode { RuleMode::Require => !universal, RuleMode::Forbid => universal })),
 {
     let store = Arc::new(Store::<E>::new()?);
@@ -79,7 +92,6 @@ fn compiled_truth_table<E: Event>(
     proof { history_specs::lemma_vec_into_iter_yields(events); }
     let value = History::from_events(owner, events)?;
     let tail = if universal { RegexExpr::All } else { RegexExpr::Empty };
-    let head = Head::new(head.principal, head.action, head.resource);
     let source = Rule::new(mode, head, tail);
     let ghost original = source;
     let mut rule = CompiledRule::new(store, source)?;
@@ -101,11 +113,11 @@ fn compiled_truth_table<E: Event>(
 fn five_decision_cases<E: Event>(mismatch: Head<E>, require_all: Head<E>, forbid_all: Head<E>,
     require_empty: Head<E>, forbid_empty: Head<E>, candidate: &E) -> Result<(), CompileError>
     requires books::native_obligations::<E>(),
-        !dsl::head_matches(mismatch@, dsl::event_view(*candidate)),
-        dsl::head_matches(require_all@, dsl::event_view(*candidate)),
-        dsl::head_matches(forbid_all@, dsl::event_view(*candidate)),
-        dsl::head_matches(require_empty@, dsl::event_view(*candidate)),
-        dsl::head_matches(forbid_empty@, dsl::event_view(*candidate)),
+        !dsl::head_matches(mismatch@, event_view(*candidate)),
+        dsl::head_matches(require_all@, event_view(*candidate)),
+        dsl::head_matches(forbid_all@, event_view(*candidate)),
+        dsl::head_matches(require_empty@, event_view(*candidate)),
+        dsl::head_matches(forbid_empty@, event_view(*candidate)),
 {
     let (value, rule, answer) = compiled_truth_table(mismatch, RuleMode::Require, false, Vec::new(), candidate)?;
     assert(answer is Ok ==> answer == Ok(None));
@@ -156,8 +168,8 @@ fn trace_first_diagnostic<E: Event + 'static,
     first_diagnostic: D0, second_diagnostic: D1,
 ) -> (result: Result<(History<E>, TracePolicy<E>, Result<PolicyDecision, HistoryError>), CompileError>)
     requires books::native_obligations::<E>(),
-        dsl::head_matches(first_head@, dsl::event_view(*candidate)),
-        dsl::head_matches(second_head@, dsl::event_view(*candidate)),
+        dsl::head_matches(first_head@, event_view(*candidate)),
+        dsl::head_matches(second_head@, event_view(*candidate)),
         forall|argument: &E| call_requires(first_diagnostic, (argument,)),
         forall|argument: &E| call_requires(second_diagnostic, (argument,)),
     ensures result matches Ok((value, state, answer)) ==>
@@ -194,10 +206,10 @@ fn trace_first_diagnostic<E: Event + 'static,
     proof {
         assert(first_source.tail@ == RegexView::All);
         assert(second_source.tail@ == RegexView::Empty);
-        assert(dsl::lang(first_source.tail@, first_head@, dsl::event_view(*candidate),
-            events@.map(|i: int, event: E| dsl::event_view(event))));
-        assert(!dsl::lang(second_source.tail@, second_head@, dsl::event_view(*candidate),
-            events@.map(|i: int, event: E| dsl::event_view(event))));
+        assert(dsl::lang(first_source.tail@, first_head@, event_view(*candidate),
+            events@.map(|i: int, event: E| event_view(event))));
+        assert(!dsl::lang(second_source.tail@, second_head@, event_view(*candidate),
+            events@.map(|i: int, event: E| event_view(event))));
         assert(dsl::rule_evaluation(first_source, *candidate, events@) == Some(true));
         assert(dsl::rule_evaluation(second_source, *candidate, events@) == Some(false));
         assert(dsl::rule_violated(first_source, *candidate, events@));
@@ -263,7 +275,7 @@ fn trace_first_diagnostic<E: Event + 'static,
 
 fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: Request<E, M>)
     -> (result: Result<(Validator<E>, Result<Decision<E, M>, HistoryError>), CompileError>)
-    requires books::native_obligations::<E>(), dsl::head_matches(head@, dsl::event_view(request.event)),
+    requires books::native_obligations::<E>(), dsl::head_matches(head@, event_view(request.event)),
     ensures result matches Ok((state, answer)) ==>
         match answer {
             Ok(Decision::Grant(grant)) => universal && grant.event == request.event
@@ -290,8 +302,8 @@ fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: R
         assert(validator::validator_sources(before) == seq![source]);
         assert(history::raw_events(validator::validator_history(before)) == Seq::<E>::empty());
         assert(source.tail@ == if universal { RegexView::All } else { RegexView::Empty });
-        assert(dsl::lang(source.tail@, head@, dsl::event_view(request.event),
-            Seq::<E>::empty().map(|i: int, event: E| dsl::event_view(event))) == universal);
+        assert(dsl::lang(source.tail@, head@, event_view(request.event),
+            Seq::<E>::empty().map(|i: int, event: E| event_view(event))) == universal);
         assert(dsl::rule_evaluation(source, request.event, Seq::<E>::empty()) == Some(universal));
         assert(dsl::rule_violated(source, request.event, Seq::<E>::empty()) == !universal);
     }
@@ -408,9 +420,9 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
 
 fn last_state_change_helper<E: Event>(
     setter: history_syntax::TestExpr<E>, stable: history_syntax::TestExpr<E>,
-    head: Ghost<HeadView<E::Principal, E::Action, E::Resource>>,
-    candidate: Ghost<dsl::EventView<E::Principal, E::Action, E::Resource>>,
-    word: Ghost<Seq<dsl::EventView<E::Principal, E::Action, E::Resource>>>,
+    head: Ghost<HeadView<E::Component>>,
+    candidate: Ghost<Seq<E::Component>>,
+    word: Ghost<Seq<Seq<E::Component>>>,
 ) -> (tail: RegexExpr<E>)
     ensures tail@ == RegexView::Concat(seq![RegexView::All, RegexView::Test(setter@),
         RegexView::Star(Box::new(RegexView::Test(stable@)))]),
@@ -426,10 +438,9 @@ fn last_state_change_helper<E: Event>(
 }
 
 // These are component-language facts: arbitrary native Event, Hash, and callback laws are irrelevant.
-proof fn last_state_change_cases<P: PartialEq, A: PartialEq, R: PartialEq>(
-    setter: TestView<P, A, R>, stable: TestView<P, A, R>, head: HeadView<P, A, R>,
-    candidate: dsl::EventView<P, A, R>, set: dsl::EventView<P, A, R>,
-    kept: dsl::EventView<P, A, R>, broken: dsl::EventView<P, A, R>,
+proof fn last_state_change_cases<C: PartialEq>(
+    setter: TestView<C>, stable: TestView<C>, head: HeadView<C>,
+    candidate: Seq<C>, set: Seq<C>, kept: Seq<C>, broken: Seq<C>,
 )
     requires dsl::test_sem(setter, head, candidate, set),
         dsl::test_sem(stable, head, candidate, kept),
@@ -693,34 +704,33 @@ fn revision_exhaustion(events: Vec<history_store::store::Event>)
     assert(stored@ == before@ && stored.spec_id() == 17);
 }
 
-fn byte_identity<L: Limits>(path: &str, different: &str, limits: &mut L, world: &mut ObservationWorld)
+fn byte_identity<L: Limits>(path: &[u8], different: &[u8], limits: &mut L, world: &mut ObservationWorld)
     -> (result: Result<(u64, u64, u64), HistoryError>)
     requires path@ != different@,
     ensures result matches Ok((first, again, other)) ==> first == again && first != other,
 {
-    let owner = HistoryStore::global();
+    let owner = HistoryStore::new(1);
     let store = history_store::store::borrow_numeric_owner(&owner);
-    let (first, first_receipt) = store.intern_principal_observed(path, limits, world)?;
-    let (again, again_receipt) = store.intern_principal_observed(path, limits, world)?;
-    let (other, other_receipt) = store.intern_principal_observed(different, limits, world)?;
+    let (first, first_receipt) = store.intern_observed(Component(0), path, limits, world)?;
+    let (again, again_receipt) = store.intern_observed(Component(0), path, limits, world)?;
+    let (other, other_receipt) = store.intern_observed(Component(0), different, limits, world)?;
     proof {
-        records::lemma_byte_binding_pair_facts(store, 0, path@, first@ as u64, first_receipt@,
-            path@, again@ as u64, again_receipt@);
-        records::lemma_byte_binding_pair_facts(store, 0, path@, first@ as u64, first_receipt@,
-            different@, other@ as u64, other_receipt@);
-        vstd::utf8::encode_utf8_decode_utf8(path@);
-        vstd::utf8::encode_utf8_decode_utf8(different@);
+        records::lemma_byte_binding_pair_facts(store, 0, path@, first, first_receipt@,
+            path@, again, again_receipt@);
+        records::lemma_byte_binding_pair_facts(store, 0, path@, first, first_receipt@,
+            different@, other, other_receipt@);
         history_store::store::lemma_byte_binding_reuse(first_receipt.borrow(), again_receipt.borrow());
         history_store::store::lemma_byte_binding_separation(first_receipt.borrow(), other_receipt.borrow());
     }
-    Ok((first.get(), again.get(), other.get()))
+    Ok((first, again, other))
 }
 
 // Releasing the first guard permits arbitrary intervening writers; only lifecycle facts survive.
-fn retained_raw_observations<L: Limits>(events: &[history_store::store::Event],
+fn retained_raw_observations<L: Limits>(arity: usize, events: &[history_store::store::Event],
     limits: &mut L, world: &mut ObservationWorld) -> (result: Result<(), HistoryError>)
+    requires 1 <= arity <= MAX_ARITY,
 {
-    let owner = HistoryStore::global();
+    let owner = HistoryStore::new(arity);
     let store = history_store::store::borrow_numeric_owner(&owner);
     let handle = owner.new_history(limits, world)?;
     let record = store.history_record(&handle)?;
@@ -765,9 +775,11 @@ fn retained_raw_observations<L: Limits>(events: &[history_store::store::Event],
 
 fn numeric_runtime_readiness<L: Limits>(bindings: &junco_core::kernel::Bindings,
     limits: &mut L, world: &mut ObservationWorld) -> Result<(), HistoryError>
-    requires history_specs::event_wf(bindings@),
+    requires history_specs::event_wf(bindings@, bindings@.len()),
+        1 <= bindings@.len() <= MAX_ARITY,
 {
-    let owner = HistoryStore::global();
+    let arity = bindings.arity();
+    let owner = HistoryStore::new(arity);
     let store = history_store::store::borrow_numeric_owner(&owner);
     let handle = owner.new_history(limits, world)?;
     let record = store.history_record(&handle)?;
@@ -776,8 +788,16 @@ fn numeric_runtime_readiness<L: Limits>(bindings: &junco_core::kernel::Bindings,
     let target = stored.len();
     let mut regexes = Vec::new();
     regexes.push(FlatRegex::All);
+    let mut head = Vec::new();
+    while head.len() < arity
+        invariant head@.len() <= arity,
+            forall|i: int| 0 <= i < head@.len() ==> head@[i] == FlatHead::<u64>::Bind,
+        decreases arity - head@.len(),
+    {
+        head.push(FlatHead::<u64>::Bind);
+    }
     let template = FlatPair {
-        head: [FlatHead::<u64>::Bind, FlatHead::<u64>::Bind, FlatHead::<u64>::Bind],
+        head,
         tests: Vec::new(), regexes, root: 0,
     };
     let mut state = RuleRuntime::new(&owner, &template, false, limits, world)?;

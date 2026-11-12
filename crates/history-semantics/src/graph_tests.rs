@@ -20,7 +20,7 @@ fn interned_nodes_keep_ids_bytes_and_derivative_semantics() -> KernelResult<()> 
     };
     let node = TestView::Atom {
         primitive: Primitive::Eq {
-            field: history_syntax::syntax::Component::Principal,
+            field: history_syntax::syntax::Component(0),
             term: Term::Constant(0),
         },
         positive: true,

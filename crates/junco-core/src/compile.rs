@@ -2,7 +2,6 @@
 
 use crate::error::HistoryError;
 use crate::flat::{FlatBuilder, FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
-use crate::flatten::ComponentValue;
 use crate::limits::Limits;
 use crate::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
@@ -11,6 +10,8 @@ use crate::verify::encoding::*;
 use crate::verify::history_specs::no_internal_error;
 use alloc::vec::Vec;
 use history_syntax::Event;
+#[cfg(verus_keep_ghost)]
+use history_syntax::event::specs::EventSpec;
 use history_syntax::syntax::Component;
 use vstd::prelude::*;
 
@@ -75,25 +76,22 @@ pub open spec fn encoder_wf<C, M: FlatEncoder<C>>(encoder: M) -> bool {
 }
 
 /// Validate a typed constant's coordinate before touching a component codebook.
-pub fn validate_component<E: Event>(field: Component, value: &ComponentValue<E>)
+pub fn validate_component<E: Event>(field: Component, value: &E::Component)
     -> (result: Result<(), HistoryError>)
-    ensures result.is_ok() == match (field, *value) {
-        (Component::Principal, ComponentValue::Principal(_))
-        | (Component::Action, ComponentValue::Action(_))
-        | (Component::Resource, ComponentValue::Resource(_)) => true,
-        _ => false,
-    },
+    ensures E::obeys_projection_spec() ==>
+        result.is_ok() == (E::coordinate_spec(*value) == field.0 as nat),
+    E::obeys_projection_spec() && result.is_ok() ==>
+        field.0 < history_syntax::event::specs::arity::<E>(),
     result matches Err(error) ==> match error {
         HistoryError::InvalidPolicy { path, message } => path@ == "$"@
             && message == "constant belongs to another component",
         _ => false,
     },
 {
-    match (field, value) {
-        (Component::Principal, ComponentValue::Principal(_))
-        | (Component::Action, ComponentValue::Action(_))
-        | (Component::Resource, ComponentValue::Resource(_)) => Ok(()),
-        _ => Err(HistoryError::invalid_policy("$", "constant belongs to another component")),
+    if E::coordinate(*value) == field.index() {
+        Ok(())
+    } else {
+        Err(HistoryError::invalid_policy("$", "constant belongs to another component"))
     }
 }
 
@@ -219,7 +217,7 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
         final(encoder).errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
         encoder_wf::<C, M>(*old(encoder)) ==>
             final(encoder).encoding_calls() <= old(encoder).encoding_calls()
-                + 3 + source.tests@.len(),
+                + source.head@.len() + source.tests@.len(),
         old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
             ==> no_internal_error(result)
                 && (crate::flat::verify::structural_wf(*source)
@@ -234,50 +232,51 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
     let ghost initial_maps = encoder.maps();
     let ghost verified = encoder_wf::<C, M>(*encoder);
     let ghost initial_calls = encoder.encoding_calls();
-    proof {
-        assert(verified == encoder_wf::<C, M>(*old(encoder)));
-        assert(verified ==> encoder_wf::<C, M>(*encoder));
-        assert(encoder.state_wf());
-        assert(encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant());
-        assert(constants_in_domain(*source, M::domain())
-            ==> head_in_domain(source.head@[0], Component::Principal, M::domain())) by {
-            assert(field_at(0) == Component::Principal);
-        }
+    let mut head = Vec::new();
+    if world.try_reserve_vec_exact(&mut head, source.head.len()).is_err() {
+        return Err(HistoryError::AllocationFailed);
     }
-    let principal = encode_head(&source.head[0], Component::Principal, encoder)?;
-    let ghost principal_maps = encoder.maps();
-    proof {
-        assert(encoder.state_wf());
-        assert(encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant());
-        assert(verified ==> encoder_wf::<C, M>(*encoder));
-        assert(constants_in_domain(*source, M::domain())
-            ==> head_in_domain(source.head@[1], Component::Action, M::domain())) by {
-            assert(field_at(1) == Component::Action);
-        }
-    }
-    let action = encode_head(&source.head[1], Component::Action, encoder)?;
-    let ghost action_maps = encoder.maps();
-    proof {
-        assert(encoder.state_wf());
-        assert(encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant());
-        assert(verified ==> encoder_wf::<C, M>(*encoder));
-        assert(constants_in_domain(*source, M::domain())
-            ==> head_in_domain(source.head@[2], Component::Resource, M::domain())) by {
-            assert(field_at(2) == Component::Resource);
-        }
-    }
-    let resource = encode_head(&source.head[2], Component::Resource, encoder)?;
-    proof {
-        if verified {
-            lemma_extends_transitive(initial_maps, principal_maps, action_maps, M::equality());
-            lemma_extends_transitive(principal_maps, action_maps, encoder.maps(), M::equality());
-            lemma_extends_transitive(initial_maps, action_maps, encoder.maps(), M::equality());
-            lemma_head_extends(source.head@[0], principal, Component::Principal, principal_maps, encoder.maps(), M::equality());
-            lemma_head_extends(source.head@[1], action, Component::Action, action_maps, encoder.maps(), M::equality());
-        }
-    }
-    let mut builder = FlatBuilder::new([principal, action, resource]);
+    limits.enforce_memory()?;
     let mut index = 0;
+    while index < source.head.len()
+        invariant index <= source.head@.len(), head@.len() == index,
+            encoder.state_wf(),
+            crate::flat::verify::structural_wf(*source),
+            encoder.restoration() == old(encoder).restoration(),
+            encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+            initial_maps == old(encoder).maps(), verified == encoder_wf::<C, M>(*old(encoder)),
+            initial_calls == old(encoder).encoding_calls(),
+            verified ==> encoder.encoding_calls() <= initial_calls + index,
+            (forall|i: int| 0 <= i < index ==> head_shape(source.head@[i], head@[i])),
+            verified ==> encoder_wf::<C, M>(*encoder)
+                && extends(initial_maps, encoder.maps(), M::equality())
+                && (forall|i: int| 0 <= i < index ==> head_in_domain(source.head@[i], field_at(i), M::domain()))
+                && (forall|i: int| 0 <= i < index ==> head_encoded(source.head@[i], head@[i], field_at(i), encoder.maps(), M::equality())),
+        decreases source.head@.len() - index,
+    {
+        limits.checkpoint()?;
+        let field = Component::new(index);
+        let ghost before = encoder.maps();
+        proof {
+            assert(field == field_at(index as int));
+            assert(constants_in_domain(*source, M::domain())
+                ==> head_in_domain(source.head@[index as int], field, M::domain()));
+        }
+        let slot = encode_head(&source.head[index], field, encoder)?;
+        proof {
+            if verified {
+                lemma_extends_transitive(initial_maps, before, encoder.maps(), M::equality());
+                assert forall|i: int| 0 <= i < index implies
+                    head_encoded(source.head@[i], head@[i], field_at(i), encoder.maps(), M::equality()) by {
+                    lemma_head_extends(source.head@[i], head@[i], field_at(i), before, encoder.maps(), M::equality());
+                }
+            }
+        }
+        head.push(slot);
+        index += 1;
+    }
+    let mut builder = FlatBuilder::new(head);
+    index = 0;
     while index < source.tests.len()
         invariant index <= source.tests@.len(), builder.wf(),
             encoder.state_wf(),
@@ -286,15 +285,16 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
             encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
             initial_maps == old(encoder).maps(), verified == encoder_wf::<C, M>(*old(encoder)),
             initial_calls == old(encoder).encoding_calls(),
-            verified ==> encoder.encoding_calls() <= initial_calls + 3 + index,
+            verified ==> encoder.encoding_calls() <= initial_calls + source.head@.len() + index,
             builder.tests_view().len() == index, builder.regexes_view().len() == 0,
-            (forall|i: int| 0 <= i < 3 ==> head_shape(source.head@[i], builder.head_view()[i])),
+            builder.head_view().len() == source.head@.len(),
+            (forall|i: int| 0 <= i < source.head@.len() ==> head_shape(source.head@[i], builder.head_view()[i])),
             (forall|i: int| 0 <= i < index ==> test_shape(source.tests@[i], builder.tests_view()[i])),
             verified ==> encoder_wf::<C, M>(*encoder)
                 && extends(initial_maps, encoder.maps(), M::equality())
-                && (forall|i: int| 0 <= i < 3 ==> head_in_domain(source.head@[i], field_at(i), M::domain()))
+                && (forall|i: int| 0 <= i < source.head@.len() ==> head_in_domain(source.head@[i], field_at(i), M::domain()))
                 && (forall|i: int| 0 <= i < index ==> test_in_domain(source.tests@[i], M::domain()))
-                && (forall|i: int| 0 <= i < 3 ==> head_encoded(source.head@[i], builder.head_view()[i], field_at(i), encoder.maps(), M::equality()))
+                && (forall|i: int| 0 <= i < source.head@.len() ==> head_encoded(source.head@[i], builder.head_view()[i], field_at(i), encoder.maps(), M::equality()))
                 && (forall|i: int| 0 <= i < index ==> test_encoded(source.tests@[i], builder.tests_view()[i], encoder.maps(), M::equality())),
         decreases source.tests@.len() - index,
     {
@@ -318,7 +318,7 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
             assert(crate::flat::verify::test_wf(builder.head_view(), node, builder.tests_view().len()));
             if verified {
                 lemma_extends_transitive(initial_maps, before, encoder.maps(), M::equality());
-                assert forall|i: int| 0 <= i < 3 implies head_encoded(source.head@[i], builder.head_view()[i], field_at(i), encoder.maps(), M::equality()) by {
+                assert forall|i: int| 0 <= i < source.head@.len() implies head_encoded(source.head@[i], builder.head_view()[i], field_at(i), encoder.maps(), M::equality()) by {
                     lemma_head_extends(source.head@[i], builder.head_view()[i], field_at(i), before, encoder.maps(), M::equality());
                 }
                 assert forall|i: int| 0 <= i < index implies test_encoded(source.tests@[i], builder.tests_view()[i], encoder.maps(), M::equality()) by {
@@ -338,16 +338,17 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
             encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
             initial_maps == old(encoder).maps(), verified == encoder_wf::<C, M>(*old(encoder)),
             initial_calls == old(encoder).encoding_calls(),
-            verified ==> encoder.encoding_calls() <= initial_calls + 3 + source.tests@.len(),
+            verified ==> encoder.encoding_calls() <= initial_calls + source.head@.len() + source.tests@.len(),
             regex_tables_same(source.regexes@.take(index as int), builder.regexes_view()),
             builder.tests_view().len() == source.tests@.len(),
             builder.regexes_view().len() == index,
-            (forall|i: int| 0 <= i < 3 ==> head_shape(source.head@[i], builder.head_view()[i])),
+            builder.head_view().len() == source.head@.len(),
+            (forall|i: int| 0 <= i < source.head@.len() ==> head_shape(source.head@[i], builder.head_view()[i])),
             (forall|i: int| 0 <= i < source.tests@.len() ==> test_shape(source.tests@[i], builder.tests_view()[i])),
             verified ==> encoder_wf::<C, M>(*encoder)
                 && extends(initial_maps, encoder.maps(), M::equality())
                 && constants_in_domain(*source, M::domain())
-                && (forall|i: int| 0 <= i < 3 ==> head_encoded(source.head@[i], builder.head_view()[i], field_at(i), encoder.maps(), M::equality()))
+                && (forall|i: int| 0 <= i < source.head@.len() ==> head_encoded(source.head@[i], builder.head_view()[i], field_at(i), encoder.maps(), M::equality()))
                 && (forall|i: int| 0 <= i < source.tests@.len() ==> test_encoded(source.tests@[i], builder.tests_view()[i], encoder.maps(), M::equality())),
         decreases source.regexes@.len() - index,
     {

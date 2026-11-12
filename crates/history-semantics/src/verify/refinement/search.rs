@@ -58,7 +58,7 @@ pub open spec fn atom_pairs(atoms: Set<model::Primitive>) -> Pairs {
 /// `next` is the successor of `q` for `α`: `L_θ(next) = e⁻¹ L_θ(q)` whenever `(θ, e)` realizes `α`
 /// (the implementation's `successor_entries_wf`, `progress.rs:1790`).
 pub open spec fn successor_ok(q: Regex<model::Test>, alpha: Assignment, next: Regex<model::Test>) -> bool {
-    forall|theta: Subst, e: EventView, w: Seq<EventView>| language::event_wf(theta) && #[trigger] realizes(theta, e, alpha)
+    forall|theta: Subst, e: EventView, w: Seq<EventView>| language::event_wf(theta, theta.len()) && #[trigger] realizes(theta, e, alpha)
         ==> (#[trigger] n_lang(theta, next, w) == n_lang(theta, q, seq![e] + w))
 }
 
@@ -95,14 +95,16 @@ pub open spec fn paper_steps(d: NDomains, item: Item, atoms: Set<model::Primitiv
 }
 
 pub open spec fn n_unrestricted(d: NDomains) -> bool {
-    d.principal is None && d.action is None && d.resource is None
+    forall|i: int| 0 <= i < d.len() ==> #[trigger] d[i] is None
 }
 
 /// The atoms determine `q`'s derivative: realizing the same assignment gives the same residual
-/// language (true for the atoms of `δ(q)`'s conditions by Theorem Symbolic derivative correctness, `thm:sderiv`).
+/// language for bounded-arity valuations, including empty bindings (true for the atoms of
+/// `δ(q)`'s conditions by Theorem Symbolic derivative correctness, `thm:sderiv`).
 pub open spec fn atoms_complete(q: Regex<model::Test>, atoms: Set<model::Primitive>) -> bool {
     forall|theta: Subst, e1: EventView, e2: EventView, w: Seq<EventView>|
-        (forall|p: model::Primitive| atoms.contains(p) ==> #[trigger] model::primitive_holds(theta, p, e1) == model::primitive_holds(theta, p, e2))
+        theta.len() <= history_syntax::MAX_ARITY
+            && (forall|p: model::Primitive| atoms.contains(p) ==> #[trigger] model::primitive_holds(theta, p, e1) == model::primitive_holds(theta, p, e2))
             ==> (#[trigger] n_lang(theta, q, seq![e1] + w) == #[trigger] n_lang(theta, q, seq![e2] + w))
 }
 
@@ -112,6 +114,14 @@ pub open spec fn atoms_local(atoms: Set<model::Primitive>) -> bool {
     forall|c: Component, c2: Component| #[trigger] atoms.contains(model::Primitive::Eq(c, model::GTerm::Variable(c2))) ==> c2 == c
 }
 
+/// Every field and register read by an atom belongs to the event's arity.
+pub open spec fn atoms_bounded(atoms: Set<model::Primitive>, arity: nat) -> bool {
+    forall|p: model::Primitive| #[trigger] atoms.contains(p) ==> match p {
+        model::Primitive::Eq(c, model::GTerm::Constant(_)) => c.0 < arity,
+        model::Primitive::Eq(c, model::GTerm::Variable(v)) => c.0 < arity && v.0 < arity,
+    }
+}
+
 /// Lemmas `lem:succ` and `lem:uniform` (one statement over successor cases), infinite domains:
 /// with `Γ` satisfiable, complete atoms, correct successors for every realizable assignment, and
 /// any `Split(Γ; Π_q)` family, the successor cases are finite and satisfy `steps_ok`.
@@ -119,6 +129,7 @@ pub open spec fn stmt_successor_cases() -> bool {
     forall|d: NDomains, item: Item, atoms: Set<model::Primitive>, cases_split: Set<Constraint>,
         next: spec_fn(Assignment) -> Regex<model::Test>|
         n_unrestricted(d) && satisfiable(d, item.constraint) && atoms_local(atoms) && atoms_complete(item.state, atoms)
+            && atoms_bounded(atoms, d.len())
             && split_ok(d, item.constraint, atom_pairs(atoms), cases_split)
             && (forall|alpha: Assignment| alpha.dom() == atoms ==> #[trigger] successor_ok(item.state, alpha, next(alpha)))
             ==> #[trigger] paper_steps(d, item, atoms, cases_split, next).finite()
@@ -137,6 +148,7 @@ pub open spec fn stmt_successor_cases_finite_domains() -> bool {
     forall|d: NDomains, item: Item, atoms: Set<model::Primitive>, cases_split: Set<Constraint>,
         next: spec_fn(Assignment) -> Regex<model::Test>|
         satisfiable(d, item.constraint) && atoms_local(atoms) && atoms_complete(item.state, atoms)
+            && atoms_bounded(atoms, d.len())
             && split_ok(d, item.constraint, domain_pairs(d, atoms), cases_split)
             && (forall|alpha: Assignment| alpha.dom() == atoms ==> #[trigger] successor_ok(item.state, alpha, next(alpha)))
             ==> #[trigger] paper_steps(d, item, atoms, cases_split, next).finite()
@@ -242,7 +254,7 @@ pub open spec fn outcome_ok(d: NDomains, g0: Constraint, r: Regex<model::Test>, 
 
 /// `q₀ = N(r & ¬s)` has the language of `r & ¬s`.
 pub open spec fn initial_ok(q0: Regex<model::Test>, r: Regex<model::Test>, s: Regex<model::Test>) -> bool {
-    forall|theta: Subst, w: Seq<EventView>| language::event_wf(theta)
+    forall|theta: Subst, w: Seq<EventView>| language::event_wf(theta, theta.len())
         ==> (#[trigger] n_lang(theta, q0, w) == (n_lang(theta, r, w) && !n_lang(theta, s, w)))
 }
 
@@ -460,6 +472,44 @@ pub proof fn lemma_atom_pairs_members(atoms: Set<model::Primitive>)
     lemma_set_new_bounded(f, bound);
 }
 
+/// Finite union of the per-coordinate declared-domain pairs.
+pub open spec fn domain_pair_bound(d: NDomains) -> ISet<(Component, nat)>
+    decreases d.len(),
+{
+    if d.len() == 0 { ISet::empty() } else {
+        let c = Component((d.len() - 1) as u8);
+        domain_pair_bound(d.drop_last()).union(
+            d.last().unwrap_or(Set::empty()).to_iset().map(|v: nat| (c, v)))
+    }
+}
+
+pub proof fn lemma_domain_pair_bound(d: NDomains)
+    ensures domain_pair_bound(d).finite(),
+        forall|p: (Component, nat)| (n_domain(d, p.0) matches Some(values) && values.contains(p.1))
+            ==> #[trigger] domain_pair_bound(d).contains(p),
+    decreases d.len(),
+{
+    broadcast use vstd::set::lemma_to_iset_finite, vstd::iset::lemma_iset_union_finite;
+    if d.len() > 0 {
+        let prefix = d.drop_last();
+        lemma_domain_pair_bound(prefix);
+        let c = Component((d.len() - 1) as u8);
+        let values = d.last().unwrap_or(Set::empty());
+        values.to_iset().lemma_map_finite(|v: nat| (c, v));
+        assert forall|p: (Component, nat)| (n_domain(d, p.0) matches Some(vs) && vs.contains(p.1))
+            implies #[trigger] domain_pair_bound(d).contains(p) by {
+            assert(p.0.0 < d.len());
+            if p.0.0 < prefix.len() {
+                assert(n_domain(prefix, p.0) == n_domain(d, p.0));
+            } else {
+                assert(p.0 == c);
+                assert(n_domain(d, p.0) == d.last());
+                assert(values.to_iset().map(|v: nat| (c, v)).contains(p));
+            }
+        }
+    }
+}
+
 pub proof fn lemma_domain_pairs_members(d: NDomains, atoms: Set<model::Primitive>)
     ensures forall|p: (Component, nat)| #[trigger] domain_pairs(d, atoms).contains(p)
         <==> (atom_pairs(atoms).contains(p)
@@ -468,27 +518,15 @@ pub proof fn lemma_domain_pairs_members(d: NDomains, atoms: Set<model::Primitive
                     Some(values) => values.contains(p.1), None => false,
                 })),
 {
-    let principal = d.principal.unwrap_or(Set::empty());
-    let action = d.action.unwrap_or(Set::empty());
-    let resource = d.resource.unwrap_or(Set::empty());
-    let pm = |v: nat| (Component::Principal, v);
-    let am = |v: nat| (Component::Action, v);
-    let rm = |v: nat| (Component::Resource, v);
-    principal.to_iset().lemma_map_finite(pm);
-    action.to_iset().lemma_map_finite(am);
-    resource.to_iset().lemma_map_finite(rm);
-    let bound = atom_pairs(atoms).to_iset().union(principal.to_iset().map(pm))
-        .union(action.to_iset().map(am)).union(resource.to_iset().map(rm));
+    broadcast use vstd::set::lemma_to_iset_finite, vstd::iset::lemma_iset_union_finite;
+    lemma_domain_pair_bound(d);
+    let bound = atom_pairs(atoms).to_iset().union(domain_pair_bound(d));
     let f = |p: (Component, nat)| atom_pairs(atoms).contains(p)
         || (atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Variable(p.0)))
             && match n_domain(d, p.0) { Some(values) => values.contains(p.1), None => false });
     assert forall|p: (Component, nat)| f(p) implies bound.contains(p) by {
         if !atom_pairs(atoms).contains(p) {
-            match p.0 {
-                Component::Principal => { assert(principal.to_iset().map(pm).contains(p)); },
-                Component::Action => { assert(action.to_iset().map(am).contains(p)); },
-                Component::Resource => { assert(resource.to_iset().map(rm).contains(p)); },
-            }
+            assert(domain_pair_bound(d).contains(p));
         }
     }
     lemma_set_new_bounded(f, bound);
@@ -531,22 +569,24 @@ pub proof fn lemma_finite_nat_bound(s: Set<nat>) -> (bound: nat)
     }
 }
 
+/// One coordinate of a realization transported to a different candidate valuation.
+pub open spec fn field_realizes(d: NDomains, atoms: Set<model::Primitive>, alpha: Assignment,
+    theta: Subst, e0: EventView, k: Component, v: nat) -> bool {
+    &&& (n_domain(d, k) matches Some(values) ==> values.contains(v))
+    &&& forall|p: model::Primitive| #[trigger] atoms.contains(p)
+        && (p matches model::Primitive::Eq(c, _) && c == k)
+        ==> alpha[p] == model::primitive_holds(theta, p, e0.update(k.0 as int, v))
+}
+
 pub proof fn lemma_transport_field(d: NDomains, atoms: Set<model::Primitive>, pi: Pairs,
     g: Constraint, alpha: Assignment, theta0: Subst, e0: EventView, theta: Subst,
     k: Component) -> (v: nat)
-    requires atoms_local(atoms), alpha.dom() == atoms,
+    requires atoms_local(atoms), alpha.dom() == atoms, k.0 < d.len(),
         pi == atom_pairs(atoms) && n_unrestricted(d) || pi == domain_pairs(d, atoms),
         forall|p: (Component, nat)| pi.contains(p) ==> #[trigger] decides(d, g, p.0, p.1),
         n_theta_ok(d, theta0), n_event_in(d, e0), sat_by(theta0, g), realizes(theta0, e0, alpha),
         n_theta_ok(d, theta), sat_by(theta, g),
-    ensures
-        n_domain(d, k) matches Some(values) ==> values.contains(v),
-        forall|p: model::Primitive| #[trigger] atoms.contains(p)
-            && (p matches model::Primitive::Eq(c, _) && c == k)
-            ==> alpha[p] == model::primitive_holds(theta, p,
-                EventView { principal: if k == Component::Principal { v } else { e0.principal },
-                    action: if k == Component::Action { v } else { e0.action },
-                    resource: if k == Component::Resource { v } else { e0.resource } }),
+    ensures field_realizes(d, atoms, alpha, theta, e0, k, v),
 {
     lemma_atom_pairs_members(atoms);
     lemma_domain_pairs_members(d, atoms);
@@ -589,11 +629,7 @@ pub proof fn lemma_transport_field(d: NDomains, atoms: Set<model::Primitive>, pi
             assert(codes.contains(c));
         }
     }
-    let event = EventView {
-        principal: if k == Component::Principal { v } else { e0.principal },
-        action: if k == Component::Action { v } else { e0.action },
-        resource: if k == Component::Resource { v } else { e0.resource },
-    };
+    let event = e0.update(k.0 as int, v);
     assert(language::field_value(event, k) == v);
     assert forall|p: model::Primitive| #[trigger] atoms.contains(p)
         && (p matches model::Primitive::Eq(c, _) && c == k)
@@ -618,7 +654,8 @@ pub proof fn lemma_transport_field(d: NDomains, atoms: Set<model::Primitive>, pi
 
 pub proof fn lemma_transport_realizer(d: NDomains, item: Item, atoms: Set<model::Primitive>,
     pi: Pairs, cases_split: Set<Constraint>, c: Case, theta: Subst)
-    requires atoms_local(atoms), split_ok(d, item.constraint, pi, cases_split),
+    requires atoms_local(atoms), atoms_bounded(atoms, d.len()),
+        split_ok(d, item.constraint, pi, cases_split),
         pi == atom_pairs(atoms) && n_unrestricted(d) || pi == domain_pairs(d, atoms),
         cases_split.contains(c.constraint), c.alpha.dom() == atoms,
         exists|t0: Subst, e0: EventView| n_theta_ok(d, t0) && n_event_in(d, e0)
@@ -628,27 +665,36 @@ pub proof fn lemma_transport_realizer(d: NDomains, item: Item, atoms: Set<model:
 {
     let (t0, e0) = choose|t0: Subst, e0: EventView| n_theta_ok(d, t0) && n_event_in(d, e0)
         && sat_by(t0, c.constraint) && realizes(t0, e0, c.alpha);
-    let principal = lemma_transport_field(d, atoms, pi, c.constraint, c.alpha,
-        t0, e0, theta, Component::Principal);
-    let action = lemma_transport_field(d, atoms, pi, c.constraint, c.alpha,
-        t0, e0, theta, Component::Action);
-    let resource = lemma_transport_field(d, atoms, pi, c.constraint, c.alpha,
-        t0, e0, theta, Component::Resource);
-    let e = EventView { principal, action, resource };
+    let pick = |i: int| choose|v: nat|
+        #[trigger] field_realizes(d, atoms, c.alpha, theta, e0, Component(i as u8), v);
+    let e = Seq::new(d.len(), pick);
+    assert forall|i: int| #![trigger e[i]] 0 <= i < d.len() implies
+        field_realizes(d, atoms, c.alpha, theta, e0, Component(i as u8), e[i]) by {
+        let k = Component(i as u8);
+        assert(k.0 as int == i);
+        let v = lemma_transport_field(d, atoms, pi, c.constraint, c.alpha, t0, e0, theta, k);
+        assert(field_realizes(d, atoms, c.alpha, theta, e0, k, v));
+        assert(exists|v: nat| #[trigger] field_realizes(d, atoms, c.alpha, theta, e0, k, v));
+    }
     assert(n_event_in(d, e)) by {
-        assert forall|k: Component| #[trigger] n_domain(d, k) is Some
-            implies n_domain(d, k)->Some_0.contains(language::field_value(e, k)) by {
-            match k {
-                Component::Principal => {}, Component::Action => {}, Component::Resource => {},
-            }
+        assert forall|i: int| #![trigger d[i], e[i]] 0 <= i < d.len() implies
+            (d[i] matches Some(values) ==> values.contains(e[i])) by {
+            let k = Component(i as u8);
+            assert(k.0 as int == i);
+            assert(field_realizes(d, atoms, c.alpha, theta, e0, k, e[i]));
         }
     }
     assert(realizes(theta, e, c.alpha)) by {
         assert forall|p: model::Primitive| #[trigger] c.alpha.dom().contains(p)
             implies c.alpha[p] == model::primitive_holds(theta, p, e) by {
-            match p { model::Primitive::Eq(k, _) => { match k {
-                Component::Principal => {}, Component::Action => {}, Component::Resource => {},
-            } } }
+            match p {
+                model::Primitive::Eq(k, term) => {
+                    assert(k.0 < d.len());
+                    assert(field_realizes(d, atoms, c.alpha, theta, e0, k, e[k.0 as int]));
+                    assert(c.alpha[p] == model::primitive_holds(theta, p,
+                        e0.update(k.0 as int, e[k.0 as int])));
+                },
+            }
         }
     }
 }
@@ -656,7 +702,8 @@ pub proof fn lemma_transport_realizer(d: NDomains, item: Item, atoms: Set<model:
 pub proof fn lemma_successor_cases_common(d: NDomains, item: Item,
     atoms: Set<model::Primitive>, pi: Pairs, cases_split: Set<Constraint>,
     next: spec_fn(Assignment) -> Regex<model::Test>)
-    requires atoms_local(atoms), split_ok(d, item.constraint, pi, cases_split),
+    requires atoms_local(atoms), atoms_bounded(atoms, d.len()),
+        split_ok(d, item.constraint, pi, cases_split),
         pi == atom_pairs(atoms) && n_unrestricted(d) || pi == domain_pairs(d, atoms),
         forall|alpha: Assignment| alpha.dom() == atoms
             ==> #[trigger] successor_ok(item.state, alpha, next(alpha)),
@@ -725,6 +772,7 @@ pub proof fn theorem_successor_cases()
     assert forall|d: NDomains, item: Item, atoms: Set<model::Primitive>,
         cases_split: Set<Constraint>, next: spec_fn(Assignment) -> Regex<model::Test>|
         n_unrestricted(d) && satisfiable(d, item.constraint) && atoms_local(atoms)
+        && atoms_bounded(atoms, d.len())
         && atoms_complete(item.state, atoms)
         && split_ok(d, item.constraint, atom_pairs(atoms), cases_split)
         && (forall|alpha: Assignment| alpha.dom() == atoms
@@ -747,6 +795,7 @@ pub proof fn theorem_successor_cases_finite_domains()
     assert forall|d: NDomains, item: Item, atoms: Set<model::Primitive>,
         cases_split: Set<Constraint>, next: spec_fn(Assignment) -> Regex<model::Test>|
         satisfiable(d, item.constraint) && atoms_local(atoms) && atoms_complete(item.state, atoms)
+        && atoms_bounded(atoms, d.len())
         && split_ok(d, item.constraint, domain_pairs(d, atoms), cases_split)
         && (forall|alpha: Assignment| alpha.dom() == atoms
             ==> #[trigger] successor_ok(item.state, alpha, next(alpha)))

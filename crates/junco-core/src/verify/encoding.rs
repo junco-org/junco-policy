@@ -6,6 +6,7 @@
 use crate::flat::verify::field_index;
 use crate::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
 use crate::verify::history_specs::EventView;
+use history_syntax::MAX_ARITY;
 use history_syntax::syntax::Component;
 use vstd::prelude::*;
 
@@ -13,10 +14,10 @@ verus! {
 
 broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
 
-/// Fixed coordinates are a representation, not a second source grammar.
+/// Pointwise numeric representation preserves the policy's coordinate count.
 pub open spec fn event_representation(event: Seq<u64>, numeric: EventView) -> bool {
-    event.len() == 3 && numeric.principal == event[0] as nat
-        && numeric.action == event[1] as nat && numeric.resource == event[2] as nat
+    event.len() == numeric.len()
+        && forall|i: int| 0 <= i < event.len() ==> numeric[i] == event[i] as nat
 }
 
 pub open spec fn event_relation() -> spec_fn(Seq<u64>, EventView) -> bool {
@@ -29,13 +30,11 @@ pub open spec fn word_representation(word: Seq<Seq<u64>>, numeric: Seq<EventView
 
 pub type Equality<C> = spec_fn(Component, C, C) -> bool;
 pub type Domain<C> = spec_fn(Component, C) -> bool;
-/// Three finite sequences of representatives; equal representations need not be identical.
+/// One finite sequence of representatives per policy coordinate.
 pub type Codebook<C> = Seq<Seq<(C, u64)>>;
 
 pub open spec fn field_at(index: int) -> Component {
-    if index == 0 { Component::Principal }
-    else if index == 1 { Component::Action }
-    else { Component::Resource }
+    Component(index as u8)
 }
 
 pub open spec fn equality_laws<C>(eq: Equality<C>, domain: Domain<C>) -> bool {
@@ -49,18 +48,19 @@ pub open spec fn equality_laws<C>(eq: Equality<C>, domain: Domain<C>) -> bool {
 }
 
 pub open spec fn encoded<C>(maps: Codebook<C>, eq: Equality<C>, field: Component, value: C, id: u64) -> bool {
-    maps.len() == 3 && id > 0 && exists|i: int|
-        0 <= i < maps[field_index(field)].len()
-        && maps[field_index(field)][i].1 == id
-        && eq(field, value, maps[field_index(field)][i].0)
+    1 <= maps.len() <= MAX_ARITY && 0 <= field_index(field) < maps.len()
+        && id > 0 && exists|i: int|
+            0 <= i < maps[field_index(field)].len()
+            && maps[field_index(field)][i].1 == id
+            && eq(field, value, maps[field_index(field)][i].0)
 }
 
 pub open spec fn maps_wf<C>(maps: Codebook<C>, eq: Equality<C>, domain: Domain<C>) -> bool {
-    maps.len() == 3 && equality_laws(eq, domain)
-    && (forall|f: int, i: int| 0 <= f < 3 && 0 <= i < maps[f].len()
+    1 <= maps.len() <= MAX_ARITY && equality_laws(eq, domain)
+    && (forall|f: int, i: int| 0 <= f < maps.len() && 0 <= i < maps[f].len()
         ==> domain(field_at(f), maps[f][i].0) && maps[f][i].1 > 0)
     && (forall|f: int, i: int, j: int|
-        0 <= f < 3 && 0 <= i < maps[f].len() && 0 <= j < maps[f].len()
+        0 <= f < maps.len() && 0 <= i < maps[f].len() && 0 <= j < maps[f].len()
         ==> (eq(field_at(f), maps[f][i].0, maps[f][j].0)
             == (maps[f][i].1 == maps[f][j].1)))
 }
@@ -165,7 +165,8 @@ pub open spec fn regex_tables_same(source: Seq<FlatRegex>, target: Seq<FlatRegex
 pub open spec fn topology<C>(source: FlatPair<C>, target: FlatPair<u64>) -> bool {
     source.root == target.root && regex_tables_same(source.regexes@, target.regexes@)
     && source.tests@.len() == target.tests@.len()
-    && (forall|i: int| 0 <= i < 3 ==> head_shape(source.head@[i], target.head@[i]))
+    && source.head@.len() == target.head@.len()
+    && (forall|i: int| 0 <= i < source.head@.len() ==> head_shape(source.head@[i], target.head@[i]))
     && (forall|i: int| 0 <= i < source.tests@.len() ==> test_shape(source.tests@[i], target.tests@[i]))
 }
 
@@ -188,7 +189,7 @@ pub proof fn lemma_topology_wf<C>(source: FlatPair<C>, target: FlatPair<u64>)
 
 pub open spec fn lowering<C>(source: FlatPair<C>, target: FlatPair<u64>, maps: Codebook<C>, eq: Equality<C>) -> bool {
     topology(source, target)
-    && (forall|i: int| 0 <= i < 3 ==> head_encoded(source.head@[i], target.head@[i], field_at(i), maps, eq))
+    && (forall|i: int| 0 <= i < source.head@.len() ==> head_encoded(source.head@[i], target.head@[i], field_at(i), maps, eq))
     && (forall|i: int| 0 <= i < source.tests@.len() ==> test_encoded(source.tests@[i], target.tests@[i], maps, eq))
 }
 
@@ -209,7 +210,7 @@ pub proof fn lemma_lowering_extends<C>(source: FlatPair<C>, target: FlatPair<u64
     requires lowering(source, target, before, eq), extends(before, after, eq),
     ensures lowering(source, target, after, eq),
 {
-    assert forall|i: int| 0 <= i < 3 implies head_encoded(source.head@[i], target.head@[i], field_at(i), after, eq) by {
+    assert forall|i: int| 0 <= i < source.head@.len() implies head_encoded(source.head@[i], target.head@[i], field_at(i), after, eq) by {
         lemma_head_extends(source.head@[i], target.head@[i], field_at(i), before, after, eq);
     }
     assert forall|i: int| 0 <= i < source.tests@.len() implies test_encoded(source.tests@[i], target.tests@[i], after, eq) by {
@@ -219,8 +220,8 @@ pub proof fn lemma_lowering_extends<C>(source: FlatPair<C>, target: FlatPair<u64
 
 pub open spec fn event_encoded<C>(maps: Codebook<C>, eq: Equality<C>, domain: Domain<C>,
     source: Seq<C>, target: Seq<u64>) -> bool {
-    source.len() == 3 && target.len() == 3
-    && forall|i: int| 0 <= i < 3 ==> domain(field_at(i), source[i])
+    source.len() == maps.len() && target.len() == maps.len()
+    && forall|i: int| 0 <= i < maps.len() ==> domain(field_at(i), source[i])
         && encoded(maps, eq, field_at(i), source[i], target[i])
 }
 
@@ -241,7 +242,7 @@ pub open spec fn test_in_domain<C>(test: FlatTest<C>, domain: Domain<C>) -> bool
 }
 
 pub open spec fn constants_in_domain<C>(source: FlatPair<C>, domain: Domain<C>) -> bool {
-    (forall|i: int| 0 <= i < 3 ==> head_in_domain(source.head@[i], field_at(i), domain))
+    (forall|i: int| 0 <= i < source.head@.len() ==> head_in_domain(source.head@[i], field_at(i), domain))
         && (forall|i: int| 0 <= i < source.tests@.len() ==> test_in_domain(source.tests@[i], domain))
 }
 
@@ -254,13 +255,15 @@ pub proof fn lemma_head_preservation<C>(source: FlatPair<C>, target: FlatPair<u6
     ensures crate::flat::verify::head_matches(source.head@, request, eq)
         == crate::flat::verify::head_matches(target.head@, numeric, numeric_equality()),
 {
-    assert forall|i: int| 0 <= i < 3 implies (match (#[trigger] source.head@[i], target.head@[i]) {
-        (FlatHead::Constant(value), FlatHead::Constant(id)) => eq(field_at(i), request[i], value) == (numeric[i] == id),
-        _ => true,
-    }) by {
-        if let FlatHead::Constant(value) = source.head@[i] {
-            if let FlatHead::Constant(id) = target.head@[i] {
-                lemma_encoded_equality(maps, eq, domain, field_at(i), request[i], value, numeric[i], id);
+    if source.head@.len() == request.len() {
+        assert forall|i: int| 0 <= i < source.head@.len() implies (match (#[trigger] source.head@[i], target.head@[i]) {
+            (FlatHead::Constant(value), FlatHead::Constant(id)) => eq(field_at(i), request[i], value) == (numeric[i] == id),
+            _ => true,
+        }) by {
+            if let FlatHead::Constant(value) = source.head@[i] {
+                if let FlatHead::Constant(id) = target.head@[i] {
+                    lemma_encoded_equality(maps, eq, domain, field_at(i), request[i], value, numeric[i], id);
+                }
             }
         }
     }
@@ -324,13 +327,17 @@ pub proof fn lemma_test_preservation<C>(source: FlatPair<C>, target: FlatPair<u6
          FlatTest::Atom { term: FlatTerm::Constant(value_id), .. }) => {
             let f = field_index(field);
             assert(field_at(f) == field);
-            lemma_encoded_equality(maps, eq, domain, field, event[f], value, numeric_event[f], value_id);
+            if f < event.len() {
+                lemma_encoded_equality(maps, eq, domain, field, event[f], value, numeric_event[f], value_id);
+            }
         },
         (FlatTest::Atom { field, term: FlatTerm::Variable(variable), .. }, _) => {
             assert(field == variable);
             let f = field_index(field);
             assert(field_at(f) == field);
-            lemma_encoded_equality(maps, eq, domain, field, event[f], request[f], numeric_event[f], numeric_request[f]);
+            if f < event.len() {
+                lemma_encoded_equality(maps, eq, domain, field, event[f], request[f], numeric_event[f], numeric_request[f]);
+            }
         },
         (FlatTest::And(children), _) | (FlatTest::Or(children), _) => {
             assert forall|i: int| 0 <= i < children@.len() implies
@@ -357,10 +364,10 @@ pub proof fn lemma_lang_preservation<C>(source: FlatPair<C>, target: FlatPair<u6
 {
     lemma_topology_wf(source, target);
     assert(regex_same(source.regexes@[id as int], target.regexes@[id as int]));
-    assert forall|i: int| 0 <= i < word.len() implies crate::flat::verify::event_wf(#[trigger] word[i]) by {
+    assert forall|i: int| 0 <= i < word.len() implies crate::flat::verify::event_wf(#[trigger] word[i], request.len()) by {
         assert(event_encoded(maps, eq, domain, word[i], numeric_word[i]));
     }
-    assert forall|i: int| 0 <= i < numeric_word.len() implies crate::flat::verify::event_wf(#[trigger] numeric_word[i]) by {
+    assert forall|i: int| 0 <= i < numeric_word.len() implies crate::flat::verify::event_wf(#[trigger] numeric_word[i], numeric_request.len()) by {
         assert(event_encoded(maps, eq, domain, word[i], numeric_word[i]));
     }
     match source.regexes@[id as int] {
@@ -494,35 +501,39 @@ pub proof fn lemma_later_maps_preservation<C>(source: FlatPair<C>, target: FlatP
 /// correspondence conditional; neither lowering's semantic equation is assumed.
 pub proof fn lemma_dsl_later_maps_preservation<E: history_syntax::Event>(
     rule: history_syntax::syntax::Rule<E>,
-    flattened_rule: crate::flat::FlatRule<crate::flatten::ComponentValue<E>>,
+    flattened_rule: crate::flat::FlatRule<E::Component>,
     numeric: FlatPair<u64>,
-    compiled_maps: Codebook<crate::flatten::ComponentValue<E>>,
-    later_maps: Codebook<crate::flatten::ComponentValue<E>>,
-    domain: Domain<crate::flatten::ComponentValue<E>>,
-    request: crate::verify::dsl::EventView<E::Principal, E::Action, E::Resource>,
-    history: Seq<crate::verify::dsl::EventView<E::Principal, E::Action, E::Resource>>,
+    compiled_maps: Codebook<E::Component>,
+    later_maps: Codebook<E::Component>,
+    domain: Domain<E::Component>,
+    request: Seq<E::Component>,
+    history: Seq<Seq<E::Component>>,
     numeric_request: Seq<u64>, numeric_history: Seq<Seq<u64>>,
 )
     requires crate::verify::flatten::flattened::<E>(rule, flattened_rule),
+        request.len() == rule.head@.len(),
         lowering(flattened_rule.source, numeric, compiled_maps, crate::verify::flatten::component_equality::<E>()),
         extends(compiled_maps, later_maps, crate::verify::flatten::component_equality::<E>()),
         maps_wf(later_maps, crate::verify::flatten::component_equality::<E>(), domain),
         constants_in_domain(flattened_rule.source, domain),
         event_encoded(later_maps, crate::verify::flatten::component_equality::<E>(), domain,
-            crate::verify::flatten::event_values::<E>(request), numeric_request),
+            request, numeric_request),
         word_encoded(later_maps, crate::verify::flatten::component_equality::<E>(), domain,
-            crate::verify::flatten::word_values::<E>(history), numeric_history),
+            history, numeric_history),
     ensures crate::verify::dsl::head_matches(rule.head@, request)
             == crate::flat::verify::head_matches(numeric.head@, numeric_request, numeric_equality()),
         crate::verify::dsl::lang(rule.tail@, rule.head@, request, history)
             == crate::flat::verify::lang(numeric.tests@, numeric.regexes@, numeric.root as nat,
                 numeric_request, numeric_history, numeric_equality()),
 {
+    assert forall|i: int| 0 <= i < history.len() implies history[i].len() == request.len() by {
+        assert(event_encoded(later_maps, crate::verify::flatten::component_equality::<E>(), domain,
+            history[i], numeric_history[i]));
+    }
     crate::verify::flatten::flattening_preserves_semantics::<E>(rule, flattened_rule, request, history);
     lemma_later_maps_preservation(flattened_rule.source, numeric, compiled_maps, later_maps,
         crate::verify::flatten::component_equality::<E>(), domain,
-        crate::verify::flatten::event_values::<E>(request), numeric_request,
-        crate::verify::flatten::word_values::<E>(history), numeric_history);
+        request, numeric_request, history, numeric_history);
 }
 
 }

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
 use history_analysis::{Domains, Inclusion, PolicyAnalyzer};
-use history_syntax::{ComponentPattern, Head};
+use history_syntax::{Component, Component3, ComponentPattern, Head};
 
 mod regexlib_subset;
 
@@ -17,11 +17,11 @@ use regexlib_subset::{ALPHABET, Char, INSTANCES};
 /// Times `tail_included`; the head, analyzer and regexes are built outside the timed call.
 fn benchmark_regexlib_subset(criterion: &mut Criterion) {
     // These tails have no variables, so any inhabited candidate head gives the same inclusion.
-    let head = Head::<Char>::new(
-        ComponentPattern::constant(()),
-        ComponentPattern::constant(ALPHABET[0]),
-        ComponentPattern::constant(()),
-    );
+    let head = Head::<Char>::new([
+        ComponentPattern::constant(Component3::C0(())),
+        ComponentPattern::constant(Component3::C1(ALPHABET[0])),
+        ComponentPattern::constant(Component3::C2(())),
+    ]);
     let mut group = criterion.benchmark_group("regexlib_subset");
     group
         .sampling_mode(SamplingMode::Flat)
@@ -30,7 +30,9 @@ fn benchmark_regexlib_subset(criterion: &mut Criterion) {
         .measurement_time(Duration::from_secs(2));
     for instance in &INSTANCES {
         let (left, right) = ((instance.left)(), (instance.right)());
-        let mut analyzer = PolicyAnalyzer::new(Domains::<Char>::infinite().with_actions(ALPHABET));
+        let mut analyzer = PolicyAnalyzer::new(
+            Domains::<Char>::infinite().with_domain(Component(1), ALPHABET.map(Component3::C1)),
+        );
         let verdict = analyzer
             .tail_included(&head, &left, &right)
             .expect("benchmark regexes are valid");

@@ -199,7 +199,7 @@ vstd::prelude::verus! {
     }
 
     pub(crate) open spec fn field_key(field: Component) -> u64 {
-        match field { Component::Principal => 0, Component::Action => 1, Component::Resource => 2 }
+        field.0 as u64
     }
     pub(crate) open spec fn primitive_key_hash(p: Primitive) -> u64 {
         match p {
@@ -1885,18 +1885,18 @@ mod storage_tests {
 
     #[test]
     fn atom_key_equality_preserves_full_width_and_domains() {
-        use history_syntax::syntax::Component::{Action, Principal, Resource};
+        use history_syntax::syntax::Component;
 
         let fixtures = [
-            (Principal, Term::Constant(0), true),
-            (Principal, Term::Constant(1_u64 << 32), true),
-            (Principal, Term::Constant(u64::MAX), true),
-            (Action, Term::Constant(0), true),
-            (Resource, Term::Constant(0), true),
-            (Principal, Term::Variable(Principal), true),
-            (Principal, Term::Variable(Action), true),
-            (Principal, Term::Variable(Resource), true),
-            (Principal, Term::Constant(0), false),
+            (Component(0), Term::Constant(0), true),
+            (Component(0), Term::Constant(1_u64 << 32), true),
+            (Component(0), Term::Constant(u64::MAX), true),
+            (Component(1), Term::Constant(0), true),
+            (Component(2), Term::Constant(0), true),
+            (Component(0), Term::Variable(Component(0)), true),
+            (Component(0), Term::Variable(Component(1)), true),
+            (Component(0), Term::Variable(Component(2)), true),
+            (Component(0), Term::Constant(0), false),
         ]
         .map(|(field, term, positive)| TestNode::Atom {
             primitive: Primitive::Eq { field, term },
@@ -1968,7 +1968,7 @@ mod storage_tests {
             .ok_or_else(|| HistoryError::invariant("invalid test budget"))?;
         let node = TestView::Atom {
             primitive: Primitive::Eq {
-                field: history_syntax::syntax::Component::Principal,
+                field: history_syntax::syntax::Component(0),
                 term: Term::Constant(0),
             },
             positive: true,
@@ -1979,7 +1979,7 @@ mod storage_tests {
         let rows = store.storage.lengths();
         let failed = store.intern_test(TestView::Atom {
             primitive: Primitive::Eq {
-                field: history_syntax::syntax::Component::Principal,
+                field: history_syntax::syntax::Component(0),
                 term: Term::Constant(1),
             },
             positive: true,
@@ -1999,7 +1999,7 @@ mod storage_tests {
     fn a_store_enforces_its_own_budget() -> KernelResult<()> {
         let atom = |constant| TestView::Atom {
             primitive: Primitive::Eq {
-                field: history_syntax::syntax::Component::Principal,
+                field: history_syntax::syntax::Component(0),
                 term: Term::Constant(constant),
             },
             positive: true,
@@ -2026,7 +2026,7 @@ mod storage_tests {
             let before = (store.bytes, store.storage.lengths());
             match store.intern_test(TestView::Atom {
                 primitive: Primitive::Eq {
-                    field: history_syntax::syntax::Component::Principal,
+                    field: history_syntax::syntax::Component(0),
                     term: Term::Constant(u64::from(path)),
                 },
                 positive: true,
@@ -2051,14 +2051,14 @@ mod storage_tests {
         let outcome = (|| -> KernelResult<_> {
             let a = store.intern_test(TestView::Atom {
                 primitive: Primitive::Eq {
-                    field: history_syntax::syntax::Component::Principal,
+                    field: history_syntax::syntax::Component(0),
                     term: Term::Constant(1),
                 },
                 positive: true,
             })?;
             let b = store.intern_test(TestView::Atom {
                 primitive: Primitive::Eq {
-                    field: history_syntax::syntax::Component::Principal,
+                    field: history_syntax::syntax::Component(0),
                     term: Term::Constant(2),
                 },
                 positive: true,

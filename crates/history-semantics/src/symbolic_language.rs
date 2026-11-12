@@ -82,7 +82,7 @@ impl SymbolicLanguage {
     #[verus_spec(result => ensures result matches Ok(l) ==> language_wf(l)
         && finite_impl::regex_nf(model::lift_regex(graph(l), root(l)))
         && symbolic::regex_primitives(model::lift_regex(graph(l), root(l))).subset_of(numeric::source_primitives(*template))
-        && forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
+        && forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta, theta.len())
             ==> model::regex_lang(graph(l), theta, root(l), word)
                 == numeric::source_regex(*template, template.root as nat, theta, word))]
     pub fn compile(template: &FlatPair<u64>, budget: usize) -> Result<Self, HistoryError> {
@@ -283,7 +283,7 @@ impl SymbolicLanguage {
             }
             assert(atom_ids(*self, transition).map_values(|id: TestId| match graph(*self).tests[id@ as int] {
                 model::TestNode::Atom(p, _) => p,
-                _ => model::Primitive::Eq(history_syntax::Component::Principal, model::GTerm::Constant(0)),
+                _ => model::Primitive::Eq(history_syntax::Component(0), model::GTerm::Constant(0)),
             }) =~= primitives@.map_values(|p: Primitive| p@));
             lemma_atoms_complete(*self, residual, transition);
             lemma_atoms_vocabulary(*self, residual, transition);
@@ -306,7 +306,7 @@ impl SymbolicLanguage {
                 && successors(*final(self)).contains_key(ClassKey { transition, words: truth@ })
                 && successors(*final(self))[ClassKey { transition, words: truth@ }] == v
                 && forall|theta: Subst, e: EventView, w: Seq<EventView>|
-                    language::event_wf(theta)
+                    language::event_wf(theta, theta.len())
                     && symbolic::truth_words_realize(graph(*final(self)), atom_ids(*final(self), transition), truth@, theta, e)
                     ==> model::regex_lang(graph(*final(self)), theta, v@, w)
                         == norm::transition_lang(graph(*final(self)), theta, transition, e, w))]
@@ -727,7 +727,7 @@ pub mod verify {
     pub open spec fn atom_primitives(l: SymbolicLanguage, t: TransitionId) -> Set<model::Primitive> {
         atom_ids(l, t).map_values(|id: TestId| match graph(l).tests[id@ as int] {
             model::TestNode::Atom(p, _) => p,
-            _ => model::Primitive::Eq(history_syntax::Component::Principal, model::GTerm::Constant(0)),
+            _ => model::Primitive::Eq(history_syntax::Component(0), model::GTerm::Constant(0)),
         }).to_set()
     }
 
@@ -742,7 +742,7 @@ pub mod verify {
         let ids = atom_ids(l, t);
         let ps = ids.map_values(|id: TestId| match graph(l).tests[id@ as int] {
             model::TestNode::Atom(p, _) => p,
-            _ => model::Primitive::Eq(Component::Principal, model::GTerm::Constant(0)),
+            _ => model::Primitive::Eq(Component(0), model::GTerm::Constant(0)),
         });
         ps.to_set_ensures();
         assert forall|p: model::Primitive| atom_primitives(l, t).contains(p) implies residual_primitives(l, q).contains(p) by {
@@ -768,7 +768,7 @@ pub mod verify {
         g.tests.map_values(|n: model::TestNode| node_code(n)).to_set_ensures();
         let primitives = atom_ids(l, t).map_values(|id: TestId| match g.tests[id@ as int] {
             model::TestNode::Atom(p, _) => p,
-            _ => model::Primitive::Eq(Component::Principal, model::GTerm::Constant(0)),
+            _ => model::Primitive::Eq(Component(0), model::GTerm::Constant(0)),
         });
         primitives.to_set_ensures();
         assert(primitives.to_set() == atom_primitives(l, t));
@@ -783,20 +783,23 @@ pub mod verify {
         }
         lemma_regex_codes(g, q@);
         assert forall|theta: Subst, e1: EventView, e2: EventView, w: Seq<EventView>|
-            (forall|p: model::Primitive| atom_primitives(l, t).contains(p)
+            theta.len() <= history_syntax::MAX_ARITY
+            && (forall|p: model::Primitive| atom_primitives(l, t).contains(p)
                 ==> model::primitive_holds(theta, p, e1) == model::primitive_holds(theta, p, e2))
             implies language::lang(model::gsem(theta), abs(l, q), seq![e1] + w)
                 == language::lang(model::gsem(theta), abs(l, q), seq![e2] + w) by {
-            let values = Set::empty().insert(theta.principal).insert(theta.action).insert(theta.resource);
+            theta.lemma_cardinality_of_set();
+            theta.to_set_ensures();
+            let values = theta.to_set();
             let f = lemma_bounded_renaming(fixed, values);
             let ft = enc::n_rename_event(f, theta);
             let fe1 = enc::n_rename_event(f, e1);
             let fe2 = enc::n_rename_event(f, e2);
             let fw = enc::n_rename_history(f, w);
-            assert(values.contains(theta.principal));
-            assert(values.contains(theta.action));
-            assert(values.contains(theta.resource));
-            assert(language::event_wf(ft));
+            assert forall|i: int| 0 <= i < ft.len() implies ft[i] <= u64::MAX by {
+                assert(values.contains(theta[i]));
+            }
+            assert(language::event_wf(ft, ft.len()));
             assert(enc::n_renaming_ok(f, fixed.to_iset(), ISet::full()));
             assert forall|p: model::Primitive| reach::transition_reaches_primitive(g, t@, p) implies
                 model::primitive_holds(ft, p, fe1) == model::primitive_holds(ft, p, fe2) by {

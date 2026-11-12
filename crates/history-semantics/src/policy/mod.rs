@@ -11,7 +11,7 @@ mod language;
 pub mod rule;
 pub mod trace;
 
-pub use atoms::{action_is, principal_is, resource_is};
+pub use atoms::{action_is, component_equals, component_is, principal_is, resource_is};
 pub use decision::PolicyDecision;
 pub use evaluate::CompiledPolicy;
 pub use language::last_state_change;

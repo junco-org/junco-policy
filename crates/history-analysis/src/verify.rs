@@ -14,12 +14,13 @@ use crate::constraint::{
     Atom, Class, Constraint, ConstraintTable, Letter, Operand, Operands, RegisterConstraint,
     Universe, Universes,
 };
+use crate::verify::constraint_unique::{product_size, row_rank, row_valid};
 use alloc::vec::Vec;
 use history_semantics::verify::refinement::*;
 use history_syntax::Event;
 use history_syntax::event::specs::EventSpec;
+use history_syntax::event::specs::arity;
 use history_syntax::syntax::Component;
-use junco_core::ComponentValue;
 use junco_core::kernel::verify as model;
 use junco_core::observation::SmallVecSpecFns;
 use junco_core::verify::history_specs::{self as language, EventView, Subst};
@@ -27,24 +28,12 @@ use vstd::prelude::*;
 
 verus! {
 pub(crate) open spec fn constant_book<E: Event>(c: Constants<E>)
-    -> junco_core::verify::encoding::Codebook<ComponentValue<E>>
-{
-    let entries = c.values@.map(|i: int, value: ComponentValue<E>| (value, (i + 1) as u64));
-    seq![
-        entries.filter(|entry: (ComponentValue<E>, u64)| entry.0 is Principal),
-        entries.filter(|entry: (ComponentValue<E>, u64)| entry.0 is Action),
-        entries.filter(|entry: (ComponentValue<E>, u64)| entry.0 is Resource),
-    ]
+    -> junco_core::verify::encoding::Codebook<E::Component> {
+    Seq::new(arity::<E>(), |i: int| frontend::field_entries::<E>(c.values@, Component(i as u8)))
 }
-pub(crate) open spec fn component_of(index: usize) -> Component {
-    if index == 0 { Component::Principal } else if index == 1 { Component::Action }
-    else { Component::Resource }
-}
+pub(crate) open spec fn component_at(index: usize) -> Component { Component(index as u8) }
 
-pub(crate) open spec fn component_index(component: Component) -> usize {
-    match component { Component::Principal => 0, Component::Action => 1,
-        Component::Resource => 2 }
-}
+pub(crate) open spec fn component_index(component: Component) -> usize { component.0 as usize }
 
 pub(crate) open spec fn codes(values: Seq<u32>) -> Set<nat> {
     values.to_set().map(|value: u32| value as nat)
@@ -57,7 +46,7 @@ pub(crate) open spec fn canonical(values: Seq<u32>) -> bool {
 impl View for Atom {
     type V = model::Primitive;
     open(crate) spec fn view(&self) -> model::Primitive {
-        let c = component_of(self.component);
+        let c = component_at(self.component);
         model::Primitive::Eq(c, match self.operand {
             Operand::Register => model::GTerm::Variable(c),
             Operand::Constant(v) => model::GTerm::Constant(v as nat),
@@ -76,9 +65,7 @@ impl View for RegisterConstraint {
 impl View for Constraint {
     type V = implementation::ConstraintView;
     open(crate) spec fn view(&self) -> implementation::ConstraintView {
-        implementation::ConstraintView {
-            principal: self.0[0]@, action: self.0[1]@, resource: self.0[2]@,
-        }
+        self.0@.map_values(|r: RegisterConstraint| r@)
     }
 }
 
@@ -98,9 +85,8 @@ impl View for Letter {
     type V = implementation::LetterView;
     open(crate) spec fn view(&self) -> implementation::LetterView {
         implementation::LetterView {
-            principal: class_option(self.classes[0]), action: class_option(self.classes[1]),
-            resource: class_option(self.classes[2]), reg_principal: self.registers[0]@,
-            reg_action: self.registers[1]@, reg_resource: self.registers[2]@,
+            classes: self.classes@.map_values(|c: Option<Class>| class_option(c)),
+            registers: self.registers@.map_values(|c: Class| c@),
         }
     }
 }
@@ -110,16 +96,16 @@ pub(crate) open spec fn domain_view(universe: Universe) -> Option<Set<nat>> {
 }
 
 pub(crate) open spec fn ndomains(universes: Universes) -> encoding::NDomains {
-    encoding::NDomains { principal: domain_view(universes[0]),
-        action: domain_view(universes[1]), resource: domain_view(universes[2]) }
+    universes@.map_values(|u: Universe| domain_view(u))
 }
 
 pub(crate) open spec fn atom_set(atoms: Seq<Atom>) -> Set<model::Primitive> {
     atoms.to_set().map(|a: Atom| a@)
 }
 
-pub(crate) open spec fn atoms_wf(atoms: Seq<Atom>) -> bool {
-    forall|i: int| 0 <= i < atoms.len() ==> atoms[i].component < 3
+pub(crate) open spec fn atoms_wf(atoms: Seq<Atom>, arity: nat) -> bool {
+    1 <= arity <= history_syntax::MAX_ARITY
+        && forall|i: int| 0 <= i < atoms.len() ==> atoms[i].component < arity
 }
 
 pub(crate) open spec fn register_wf(register: RegisterConstraint) -> bool {
@@ -128,7 +114,18 @@ pub(crate) open spec fn register_wf(register: RegisterConstraint) -> bool {
 }
 
 pub(crate) open spec fn constraint_wf(constraint: Constraint) -> bool {
-    forall|i: int| 0 <= i < 3 ==> register_wf(constraint.0[i])
+    1 <= constraint.0@.len() <= history_syntax::MAX_ARITY
+        && forall|i: int| 0 <= i < constraint.0@.len() ==> register_wf(constraint.0[i])
+}
+
+pub(crate) open spec fn letter_wf(letter: Letter) -> bool {
+    1 <= letter.classes@.len() <= history_syntax::MAX_ARITY
+        && letter.registers@.len() == letter.classes@.len()
+}
+
+pub(crate) open spec fn shape_wf(g: Constraint, operands: Operands, universes: Universes) -> bool {
+    constraint_wf(g) && operands_wf(operands)
+        && g@.len() == operands.register@.len() && g@.len() == universes@.len()
 }
 
 pub(crate) open spec fn register_sat(register: implementation::RegisterView, value: nat) -> bool {
@@ -150,12 +147,8 @@ pub(crate) open spec fn option_code(value: Option<u32>) -> Option<nat> {
 }
 
 
-pub(crate) open spec fn head_view(constants: [Option<u32>; 3]) -> encoding::NHead {
-    encoding::NHead {
-        principal: option_code(constants[0]),
-        action: option_code(constants[1]),
-        resource: option_code(constants[2]),
-    }
+pub(crate) open spec fn head_view(constants: Seq<Option<u32>>) -> encoding::NHead {
+    constants.map_values(|v: Option<u32>| option_code(v))
 }
 
 pub(crate) struct Scope {
@@ -166,25 +159,28 @@ pub(crate) struct Scope {
 impl View for Operands {
     type V = Seq<Scope>;
     open(crate) spec fn view(&self) -> Seq<Scope> {
-        Seq::new(3, |i: int| Scope { register: self.register[i],
+        Seq::new(self.register@.len(), |i: int| Scope { register: self.register[i],
             constants: self.constants[i].view() })
     }
 }
 
 pub(crate) open spec fn operands_wf(operands: Operands) -> bool {
-    forall|i: int| 0 <= i < 3 ==> canonical(operands.constants[i].view())
+    1 <= operands.register@.len() <= history_syntax::MAX_ARITY
+        && operands.register@.len() == operands.constants@.len()
+        && forall|i: int| 0 <= i < operands.constants@.len() ==> canonical(operands.constants[i].view())
 }
 
 pub(crate) open spec fn operands_of(operands: Operands, atoms: Seq<Atom>) -> bool {
-    operands_wf(operands) && operands_members(operands, atoms)
+    operands_wf(operands) && atoms_wf(atoms, operands.register@.len()) && operands_members(operands, atoms)
 }
 
 pub(crate) open spec fn operands_members(operands: Operands, atoms: Seq<Atom>) -> bool {
-    &&& forall|i: int| #![trigger operands.register[i]] 0 <= i < 3
+    &&& operands.constants@.len() == operands.register@.len()
+    &&& forall|i: int| #![trigger operands.register[i]] 0 <= i < operands.register@.len()
         ==> operands.register[i] == (exists|j: int| 0 <= j < atoms.len()
             && atoms[j].component == i && atoms[j].operand == Operand::Register)
     &&& forall|i: int, v: u32| #![trigger operands.constants[i].view().contains(v)]
-        0 <= i < 3 ==> operands.constants[i].view().contains(v)
+        0 <= i < operands.register@.len() ==> operands.constants[i].view().contains(v)
             == (exists|j: int| 0 <= j < atoms.len() && atoms[j].component == i
                 && atoms[j].operand == Operand::Constant(v))
 }
@@ -216,31 +212,56 @@ pub(crate) proof fn lemma_codes(values: Seq<u32>)
 }
 pub(crate) proof fn lemma_constraint_view(g: implementation::ConstraintView)
     ensures forall|l: inclusion::Literal| #[trigger] implementation::constraint_of(g).contains(l)
-        == match implementation::register_of(g, l.component) {
+        == (l.component.0 < g.len() && match implementation::register_of(g, l.component) {
             implementation::RegisterView::Equals(v) => l.equal && l.value == v,
             implementation::RegisterView::Differs(vs) => !l.equal && vs.contains(l.value),
-        },
+        }),
 {
-    let f = |l: inclusion::Literal| match implementation::register_of(g, l.component) {
+    let bound = constraint_literal_bound(g);
+    lemma_constraint_literal_bound(g);
+    let pred = |l: inclusion::Literal| l.component.0 < g.len() && match implementation::register_of(g, l.component) {
         implementation::RegisterView::Equals(v) => l.equal && l.value == v,
         implementation::RegisterView::Differs(vs) => !l.equal && vs.contains(l.value),
     };
-    let bound = register_literals(Component::Principal, g.principal)
-        .union(register_literals(Component::Action, g.action))
-        .union(register_literals(Component::Resource, g.resource));
-    assert forall|l: inclusion::Literal| f(l) implies bound.contains(l) by {
-        match l.component { Component::Principal => {}, Component::Action => {},
-            Component::Resource => {} }
-        match implementation::register_of(g, l.component) {
-            implementation::RegisterView::Equals(v) => {
-                assert(l == inclusion::eq_literal(l.component, v));
-            },
-            implementation::RegisterView::Differs(vs) => {
-                assert(l == inclusion::ne_literal(l.component, l.value));
-            },
+    inclusion::lemma_set_new_bounded(pred, bound.to_iset());
+}
+
+pub(crate) open spec fn constraint_literal_bound(g: implementation::ConstraintView) -> Set<inclusion::Literal>
+    decreases g.len(),
+{
+    if g.len() == 0 { Set::empty() } else {
+        constraint_literal_bound(g.drop_last()).union(register_literals(Component((g.len() - 1) as u8), g.last()))
+    }
+}
+
+pub(crate) proof fn lemma_constraint_literal_bound(g: implementation::ConstraintView)
+    ensures forall|l: inclusion::Literal| l.component.0 < g.len()
+        && register_literals(l.component, g[l.component.0 as int]).contains(l)
+        ==> constraint_literal_bound(g).contains(l),
+    decreases g.len(),
+{
+    if g.len() > 0 {
+        lemma_constraint_literal_bound(g.drop_last());
+        assert forall|l: inclusion::Literal| l.component.0 < g.len()
+            && register_literals(l.component, g[l.component.0 as int]).contains(l)
+            implies constraint_literal_bound(g).contains(l) by {
+let prior = g.drop_last();
+let c = l.component;
+if c.0 < g.len() - 1 {
+    assert(c.0 < prior.len());
+    assert(prior[c.0 as int] == g[c.0 as int]);
+    assert(register_literals(c, prior[c.0 as int]).contains(l));
+    assert(constraint_literal_bound(prior).contains(l));
+} else {
+    assert(c.0 as int == g.len() - 1);
+    assert(c == Component((g.len() - 1) as u8));
+    assert(g.last() == g[c.0 as int]);
+    assert(register_literals(Component((g.len() - 1) as u8), g.last()).contains(l));
+}
+assert(constraint_literal_bound(g) == constraint_literal_bound(prior)
+    .union(register_literals(Component((g.len() - 1) as u8), g.last())));
         }
     }
-    inclusion::lemma_set_new_bounded(f, bound.to_iset());
 }
 
 pub(crate) open spec fn register_literals(c: Component, r: implementation::RegisterView)
@@ -253,39 +274,29 @@ pub(crate) open spec fn register_literals(c: Component, r: implementation::Regis
 }
 
 pub(crate) proof fn lemma_constraint_sat(g: implementation::ConstraintView, theta: Subst)
-    ensures inclusion::sat_by(theta, implementation::constraint_of(g)) == (
-        register_sat(g.principal, theta.principal) && register_sat(g.action, theta.action)
-            && register_sat(g.resource, theta.resource)),
+    requires g.len() == theta.len(), g.len() <= history_syntax::MAX_ARITY,
+    ensures inclusion::sat_by(theta, implementation::constraint_of(g))
+        == (forall|i: int| 0 <= i < g.len() ==> register_sat(g[i], theta[i])),
 {
     lemma_constraint_view(g);
     if inclusion::sat_by(theta, implementation::constraint_of(g)) {
-        assert forall|c: Component| register_sat(implementation::register_of(g, c),
-            language::field_value(theta, c)) by {
-            match implementation::register_of(g, c) {
+        assert forall|i: int| 0 <= i < g.len() implies register_sat(g[i], theta[i]) by {
+            let c = Component(i as u8);
+            match g[i] {
                 implementation::RegisterView::Equals(v) => {
-                    let l = inclusion::eq_literal(c, v);
-                    assert(implementation::constraint_of(g).contains(l));
+                    assert(implementation::constraint_of(g).contains(inclusion::eq_literal(c, v)));
                 },
                 implementation::RegisterView::Differs(vs) => {
-                    if vs.contains(language::field_value(theta, c)) {
-                        let l = inclusion::ne_literal(c, language::field_value(theta, c));
-                        assert(implementation::constraint_of(g).contains(l));
+                    if vs.contains(theta[i]) {
+                        assert(implementation::constraint_of(g).contains(inclusion::ne_literal(c, theta[i])));
                     }
                 },
             }
         }
-        assert(register_sat(implementation::register_of(g, Component::Principal),
-            language::field_value(theta, Component::Principal)));
-        assert(register_sat(implementation::register_of(g, Component::Action),
-            language::field_value(theta, Component::Action)));
-        assert(register_sat(implementation::register_of(g, Component::Resource),
-            language::field_value(theta, Component::Resource)));
-    } else if register_sat(g.principal, theta.principal) && register_sat(g.action, theta.action)
-        && register_sat(g.resource, theta.resource) {
+    } else if forall|i: int| 0 <= i < g.len() ==> register_sat(g[i], theta[i]) {
         assert forall|l: inclusion::Literal| #[trigger] implementation::constraint_of(g).contains(l)
             implies inclusion::literal_holds(theta, l) by {
-            match l.component { Component::Principal => {}, Component::Action => {},
-                Component::Resource => {} }
+            assert(register_sat(g[l.component.0 as int], theta[l.component.0 as int]));
         }
     }
 }
@@ -318,79 +329,84 @@ pub(crate) proof fn lemma_register_witness(r: RegisterConstraint, u: Universe) -
 }
 
 pub(crate) proof fn lemma_constraint_possible(g: Constraint, universes: Universes)
+    requires constraint_wf(g), g@.len() == universes@.len(),
     ensures inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@))
-        == (register_possible(g.0[0], universes[0])
-            && register_possible(g.0[1], universes[1]) && register_possible(g.0[2], universes[2])),
+        == (forall|i: int| 0 <= i < g@.len() ==> register_possible(g.0[i], universes[i])),
 {
     let d = ndomains(universes);
-    if register_possible(g.0[0], universes[0]) && register_possible(g.0[1], universes[1])
-        && register_possible(g.0[2], universes[2]) {
-        let p = lemma_register_witness(g.0[0], universes[0]);
-        let a = lemma_register_witness(g.0[1], universes[1]);
-        let r = lemma_register_witness(g.0[2], universes[2]);
-        let theta = EventView { principal: p, action: a, resource: r };
-        lemma_constraint_sat(g@, theta);
-        assert(encoding::n_event_in(d, theta)) by {
-            assert forall|c: Component| encoding::n_domain(d, c) is Some
-                implies encoding::n_domain(d, c)->Some_0.contains(language::field_value(theta, c)) by { match c {
-                    Component::Principal => {}, Component::Action => {}, Component::Resource => {} } }
+    if forall|i: int| 0 <= i < g@.len() ==> register_possible(g.0[i], universes[i]) {
+assert forall|i: int| #![trigger g.0[i]] 0 <= i < g@.len() implies exists|v: nat|
+            register_allowed(domain_view(universes[i]), v) && register_sat(g.0[i]@, v) by {
+let v = lemma_register_witness(g.0[i], universes[i]);
+assert(v <= u64::MAX);
+assert(register_sat(g.0[i]@, v));
+match domain_view(universes[i]) {
+    None => {}, Some(vs) => { assert(vs.contains(v)); },
+}
+assert(register_allowed(domain_view(universes[i]), v));
         }
+        let theta = Seq::new(g@.len(), |i: int| choose|v: nat|
+            register_allowed(domain_view(universes[i]), v) && register_sat(g.0[i]@, v));
+        lemma_constraint_sat(g@, theta);
         assert(encoding::n_theta_ok(d, theta));
-        assert(inclusion::sat_by(theta, implementation::constraint_of(g@)));
     } else if inclusion::satisfiable(d, implementation::constraint_of(g@)) {
         let theta = choose|theta: Subst| encoding::n_theta_ok(d, theta)
             && inclusion::sat_by(theta, implementation::constraint_of(g@));
-        lemma_constraint_sat(g@, theta);
-        assert forall|i: int| 0 <= i < 3 implies register_possible(g.0[i], universes[i]) by {
-            let c = component_of(i as usize);
-            let v = language::field_value(theta, c);
-            assert(encoding::n_domain(d, c) == domain_view(universes[i]));
-            assert(register_sat(g.0[i]@, v));
+lemma_constraint_sat(g@, theta);
+lemma_theta_allowed(universes, theta);
+assert forall|i: int| 0 <= i < g@.len() implies register_possible(g.0[i], universes[i]) by {
+    assert(g@[i] == g.0@[i]@);
+    assert(g.0[i] == g.0@[i]);
+    assert(register_sat(g@[i], theta[i]));
+    assert(register_sat(g.0[i]@, theta[i]));
+    assert(register_allowed(domain_view(universes[i]), theta[i]));
+    match domain_view(universes[i]) {
+        None => {},
+        Some(vs) => {
+            assert(vs.contains(theta[i]));
+            assert(exists|v: nat| vs.contains(v) && register_sat(g.0[i]@, v));
+        },
+    }
         }
     }
 }
-pub(crate) proof fn lemma_head_view(g: Constraint, constants: [Option<u32>; 3])
-    requires forall|i: int| 0 <= i < 3 ==> g.0[i]@ == match constants[i] {
-        Some(v) => implementation::RegisterView::Equals(v as nat),
-        None => implementation::RegisterView::Differs(Set::empty()),
-    },
+pub(crate) proof fn lemma_head_view(g: Constraint, constants: Seq<Option<u32>>)
+    requires g@.len() == constants.len(), 1 <= constants.len() <= history_syntax::MAX_ARITY,
+        forall|i: int| 0 <= i < constants.len() ==> g.0[i]@ == match constants[i] {
+            Some(v) => implementation::RegisterView::Equals(v as nat),
+            None => implementation::RegisterView::Differs(Set::empty()),
+        },
     ensures implementation::constraint_of(g@) == inclusion::head_constraint(head_view(constants)),
 {
     lemma_constraint_view(g@);
     inclusion::lemma_head_constraint(head_view(constants));
-    assert forall|l: inclusion::Literal|
-        implementation::constraint_of(g@).contains(l)
-            == inclusion::head_constraint(head_view(constants)).contains(l) by {
-        let i = component_index(l.component) as int;
-        assert(implementation::register_of(g@, l.component) == g.0[i]@);
-        match l.component { Component::Principal => {}, Component::Action => {},
-            Component::Resource => {} }
+    assert forall|l: inclusion::Literal| implementation::constraint_of(g@).contains(l)
+        == inclusion::head_constraint(head_view(constants)).contains(l) by {
+        if l.component.0 < constants.len() {
+            assert(implementation::register_of(g@, l.component) == g.0[l.component.0 as int]@);
+        }
     }
     assert(implementation::constraint_of(g@) =~= inclusion::head_constraint(head_view(constants)));
 }
 
-pub(crate) proof fn lemma_constraint_entails(a: implementation::ConstraintView,
-    b: implementation::ConstraintView)
-    requires register_entails(a.principal, b.principal), register_entails(a.action, b.action),
-        register_entails(a.resource, b.resource),
+pub(crate) proof fn lemma_constraint_entails(a: implementation::ConstraintView, b: implementation::ConstraintView)
+    requires a.len() == b.len(), forall|i: int| 0 <= i < a.len() ==> register_entails(a[i], b[i]),
     ensures forall|d: encoding::NDomains|
         inclusion::entails(d, implementation::constraint_of(a), implementation::constraint_of(b)),
 {
+    lemma_constraint_view(a); lemma_constraint_view(b);
     assert forall|d: encoding::NDomains, theta: Subst| encoding::n_theta_ok(d, theta)
         && inclusion::sat_by(theta, implementation::constraint_of(a))
         implies inclusion::sat_by(theta, implementation::constraint_of(b)) by {
-        lemma_constraint_sat(a, theta);
-        lemma_constraint_sat(b, theta);
-        assert forall|c: Component| register_sat(implementation::register_of(b, c),
-            language::field_value(theta, c)) by {
-            match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
-            match implementation::register_of(b, c) {
-                implementation::RegisterView::Equals(v) => {},
+        assert forall|l: inclusion::Literal| implementation::constraint_of(b).contains(l)
+            implies inclusion::literal_holds(theta, l) by {
+            let i = l.component.0 as int;
+            match a[i] {
+                implementation::RegisterView::Equals(v) => {
+                    assert(implementation::constraint_of(a).contains(inclusion::eq_literal(l.component, v)));
+                },
                 implementation::RegisterView::Differs(vs) => {
-                    if vs.contains(language::field_value(theta, c)) {
-                        assert(!register_sat(implementation::register_of(a, c),
-                            language::field_value(theta, c)));
-                    }
+                    assert(implementation::constraint_of(a).contains(l));
                 },
             }
         }
@@ -420,11 +436,12 @@ pub(crate) proof fn lemma_register_entails_point(a: implementation::RegisterView
 verus! {
 pub(crate) proof fn lemma_operands_push(before: Operands, after: Operands,
     atoms: Seq<Atom>, atom: Atom)
-    requires atom.component < 3, operands_members(before, atoms),
-        forall|i: int| #![trigger after.register[i]] 0 <= i < 3
+    requires after.register@.len() == before.register@.len(),
+        after.constants@.len() == before.constants@.len(), atom.component < before.register@.len(), operands_members(before, atoms),
+        forall|i: int| #![trigger after.register[i]] 0 <= i < before.register@.len()
             ==> after.register[i] == (before.register[i]
                 || i == atom.component && atom.operand == Operand::Register),
-        forall|i: int| #![trigger after.constants[i].view()] 0 <= i < 3
+        forall|i: int| #![trigger after.constants[i].view()] 0 <= i < before.register@.len()
             ==> after.constants[i].view() == match atom.operand {
                 Operand::Constant(v) => if i == atom.component { before.constants[i].view().push(v) }
                     else { before.constants[i].view() },
@@ -432,13 +449,13 @@ pub(crate) proof fn lemma_operands_push(before: Operands, after: Operands,
             },
     ensures operands_members(after, atoms.push(atom)),
 {
-    assert forall|i: int| 0 <= i < 3 implies after.register[i]
+    assert forall|i: int| 0 <= i < before.register@.len() implies after.register[i]
         == (exists|j: int| 0 <= j < atoms.push(atom).len()
             && atoms.push(atom)[j].component == i
             && atoms.push(atom)[j].operand == Operand::Register) by {
         lemma_exists_push(atoms, atom, |a: Atom| a.component == i && a.operand == Operand::Register);
     }
-    assert forall|i: int, v: u32| 0 <= i < 3 implies after.constants[i].view().contains(v)
+    assert forall|i: int, v: u32| 0 <= i < before.register@.len() implies after.constants[i].view().contains(v)
         == (exists|j: int| 0 <= j < atoms.push(atom).len()
             && atoms.push(atom)[j].component == i
             && atoms.push(atom)[j].operand == Operand::Constant(v)) by {
@@ -457,12 +474,12 @@ pub(crate) proof fn lemma_operands_push(before: Operands, after: Operands,
 }
 
 pub(crate) proof fn lemma_operands_preserved(before: Operands, after: Operands, atoms: Seq<Atom>)
-    requires operands_members(before, atoms), after.register == before.register,
-        forall|i: int| 0 <= i < 3 ==> after.constants[i].view().to_set()
+    requires after.constants@.len() == before.constants@.len(), operands_members(before, atoms), after.register == before.register,
+        forall|i: int| 0 <= i < before.register@.len() ==> after.constants[i].view().to_set()
             == before.constants[i].view().to_set(),
     ensures operands_members(after, atoms),
 {
-    assert forall|i: int, v: u32| 0 <= i < 3 implies
+    assert forall|i: int, v: u32| 0 <= i < before.register@.len() implies
         after.constants[i].view().contains(v) == before.constants[i].view().contains(v) by {
         assert(after.constants[i].view().to_set().contains(v)
             == before.constants[i].view().to_set().contains(v));
@@ -523,11 +540,12 @@ pub(crate) open spec fn register_options(current: implementation::RegisterView, 
 }
 
 pub(crate) open spec fn split_views(g: Constraint, operands: Operands, universes: Universes)
-    -> Set<implementation::ConstraintView> {
-    let p = register_options(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), domain_view(universes[0]));
-    let a = register_options(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), domain_view(universes[1]));
-    let r = register_options(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), domain_view(universes[2]));
-    register_product(p, a, r)
+    -> Set<implementation::ConstraintView> { register_product(split_axes(g, operands, universes)) }
+
+pub(crate) open spec fn split_axes(g: Constraint, operands: Operands, universes: Universes)
+    -> Seq<Set<implementation::RegisterView>> {
+    Seq::new(g@.len(), |i: int| register_options(g.0[i]@, operands.register[i],
+        codes(operands.constants[i].view()), domain_view(universes[i])))
 }
 
 pub(crate) open spec fn constraint_views(values: Seq<Constraint>) -> Set<implementation::ConstraintView> {
@@ -612,34 +630,66 @@ pub(crate) open spec fn register_count(current: implementation::RegisterView, re
 }
 
 pub(crate) open spec fn split_capacity(g: Constraint, operands: Operands, universes: Universes) -> bool {
-    let n0 = register_count(g.0[0]@, operands.register[0], operands.constants[0].view(), universes[0]);
-    let n1 = register_count(g.0[1]@, operands.register[1], operands.constants[1].view(), universes[1]);
-    let n2 = register_count(g.0[2]@, operands.register[2], operands.constants[2].view(), universes[2]);
-    n0 <= usize::MAX && n1 <= usize::MAX && n2 <= usize::MAX
-        && n0 * n1 <= usize::MAX && n0 * n1 * n2 <= usize::MAX
+    let sizes = Seq::new(g@.len(), |i: int| register_count(g.0[i]@, operands.register[i], operands.constants[i].view(), universes[i]));
+    forall|i: int| 0 <= i <= sizes.len() ==> product_size(sizes.take(i)) <= usize::MAX
 }
 }
 
 verus! {
-pub(crate) open spec fn register_product(a: Set<implementation::RegisterView>,
-    b: Set<implementation::RegisterView>, c: Set<implementation::RegisterView>)
-    -> Set<implementation::ConstraintView> {
-    a.map(|p: implementation::RegisterView| b.map(|q: implementation::RegisterView|
-        c.map(|r: implementation::RegisterView| implementation::ConstraintView {
-            principal: p, action: q, resource: r })).flatten()).flatten()
+pub(crate) open spec fn finite_product<T>(axes: Seq<Set<T>>) -> Set<Seq<T>>
+    decreases axes.len(),
+{
+    if axes.len() == 0 { Set::empty().insert(Seq::empty()) } else {
+        finite_product(axes.drop_last()).map(|prefix: Seq<T>|
+            axes.last().map(|value: T| prefix.push(value))).flatten()
+    }
 }
 
-pub(crate) open spec fn choice_view(axes: [Seq<RegisterConstraint>; 3], i: int, j: int, k: int)
-    -> implementation::ConstraintView {
-    implementation::ConstraintView { principal: axes[0][i]@, action: axes[1][j]@, resource: axes[2][k]@ }
+pub(crate) proof fn lemma_finite_product_members<T>(axes: Seq<Set<T>>)
+    ensures forall|row: Seq<T>| #[trigger] finite_product(axes).contains(row)
+        == (row.len() == axes.len() && forall|i: int| 0 <= i < axes.len() ==> axes[i].contains(row[i])),
+    decreases axes.len(),
+{
+    broadcast use vstd::set::Set::lemma_flatten_contains;
+    if axes.len() > 0 {
+        let prior = axes.drop_last();
+        lemma_finite_product_members(prior);
+        let f = |prefix: Seq<T>| axes.last().map(|value: T| prefix.push(value));
+        assert forall|row: Seq<T>| finite_product(axes).contains(row)
+            implies row.len() == axes.len() && forall|i: int| 0 <= i < axes.len() ==> axes[i].contains(row[i]) by {
+            let s = choose|s: Set<Seq<T>>| finite_product(prior).map(f).contains(s) && s.contains(row);
+            let prefix = choose|prefix: Seq<T>| finite_product(prior).contains(prefix) && f(prefix) == s;
+            let value = choose|value: T| axes.last().contains(value) && prefix.push(value) == row;
+        }
+        assert forall|row: Seq<T>| row.len() == axes.len()
+            && (forall|i: int| 0 <= i < axes.len() ==> axes[i].contains(row[i]))
+            implies finite_product(axes).contains(row) by {
+            let prefix = row.drop_last();
+            assert(prefix.push(row.last()) =~= row);
+            assert(finite_product(prior).contains(prefix));
+            assert(f(prefix).contains(row));
+            assert(finite_product(prior).map(f).contains(f(prefix)));
+        }
+    } else {
+        assert forall|row: Seq<T>| row.len() == 0 implies row == Seq::<T>::empty() by { assert(row =~= Seq::<T>::empty()); }
+    }
 }
 
-pub(crate) open spec fn product_done(axes: [Seq<RegisterConstraint>; 3],
-    result: Set<implementation::ConstraintView>, first: int, second: int, third: int) -> bool {
-    forall|i: int, j: int, k: int| #![trigger choice_view(axes, i, j, k)]
-        0 <= i < axes[0].len() && 0 <= j < axes[1].len() && 0 <= k < axes[2].len()
-        && (i < first || i == first && j < second || i == first && j == second && k < third)
-            ==> result.contains(choice_view(axes, i, j, k))
+pub(crate) open spec fn register_product(axes: Seq<Set<implementation::RegisterView>>) -> Set<implementation::ConstraintView> {
+    finite_product(axes)
+}
+
+pub(crate) open spec fn choice_view(axes: Seq<Seq<RegisterConstraint>>, position: Seq<usize>) -> implementation::ConstraintView {
+    Seq::new(axes.len(), |i: int| axes[i][position[i] as int]@)
+}
+
+pub(crate) open spec fn product_done(axes: Seq<Seq<RegisterConstraint>>, result: Set<implementation::ConstraintView>, count: nat) -> bool {
+    forall|p: Seq<usize>| row_valid(axis_sizes(axes), p) && row_rank(axis_sizes(axes), p) < count
+        ==> result.contains(choice_view(axes, p))
+}
+
+pub(crate) open spec fn axis_sizes<T>(axes: Seq<Seq<T>>) -> Seq<nat> {
+    axes.map_values(|axis: Seq<T>| axis.len())
 }
 
 pub(crate) proof fn lemma_constraint_views_push(values: Seq<Constraint>, value: Constraint)
@@ -649,51 +699,21 @@ pub(crate) proof fn lemma_constraint_views_push(values: Seq<Constraint>, value: 
     values.to_set().lemma_set_map_insert_commute(value, |g: Constraint| g@);
 }
 
-pub(crate) proof fn lemma_register_product_members(a: Set<implementation::RegisterView>,
-    b: Set<implementation::RegisterView>, c: Set<implementation::RegisterView>)
-    ensures forall|g: implementation::ConstraintView| #[trigger] register_product(a, b, c).contains(g)
-        == (a.contains(g.principal) && b.contains(g.action) && c.contains(g.resource)),
-{
-    broadcast use vstd::set::Set::lemma_flatten_contains;
-    let f = |p: implementation::RegisterView| b.map(|q: implementation::RegisterView|
-        c.map(|r: implementation::RegisterView| implementation::ConstraintView {
-            principal: p, action: q, resource: r })).flatten();
-    assert forall|g: implementation::ConstraintView| register_product(a, b, c).contains(g)
-        implies a.contains(g.principal) && b.contains(g.action) && c.contains(g.resource) by {
-        let s = choose|s: Set<implementation::ConstraintView>| a.map(f).contains(s) && s.contains(g);
-        let p = choose|p: implementation::RegisterView| a.contains(p) && f(p) == s;
-        let h = |q: implementation::RegisterView| c.map(|r: implementation::RegisterView|
-            implementation::ConstraintView { principal: p, action: q, resource: r });
-        let t = choose|t: Set<implementation::ConstraintView>| b.map(h).contains(t) && t.contains(g);
-        let q = choose|q: implementation::RegisterView| b.contains(q) && h(q) == t;
-        let r = choose|r: implementation::RegisterView| c.contains(r)
-            && implementation::ConstraintView { principal: p, action: q, resource: r } == g;
-    }
-    assert forall|g: implementation::ConstraintView| a.contains(g.principal) && b.contains(g.action)
-        && c.contains(g.resource) implies register_product(a, b, c).contains(g) by {
-        let h = |q: implementation::RegisterView| c.map(|r: implementation::RegisterView|
-            implementation::ConstraintView { principal: g.principal, action: q, resource: r });
-        assert(h(g.action).contains(g));
-        assert(b.map(h).contains(h(g.action)));
-        assert(f(g.principal).contains(g));
-        assert(a.map(f).contains(f(g.principal)));
-    }
-}
+pub(crate) proof fn lemma_register_product_members(axes: Seq<Set<implementation::RegisterView>>)
+    ensures forall|g: implementation::ConstraintView| #[trigger] register_product(axes).contains(g)
+        == (g.len() == axes.len() && forall|i: int| 0 <= i < axes.len() ==> axes[i].contains(g[i])),
+{ lemma_finite_product_members(axes); }
 
-pub(crate) proof fn lemma_product_step(axes: [Seq<RegisterConstraint>; 3],
-    before: Set<implementation::ConstraintView>, after: Set<implementation::ConstraintView>,
-    first: int, second: int, third: int)
-    requires 0 <= first < axes[0].len(), 0 <= second < axes[1].len(), 0 <= third < axes[2].len(),
-        product_done(axes, before, first, second, third),
-        after == before.insert(choice_view(axes, first, second, third)),
-    ensures product_done(axes, after, first, second, third + 1),
+pub(crate) proof fn lemma_product_step(axes: Seq<Seq<RegisterConstraint>>, before: Set<implementation::ConstraintView>,
+    after: Set<implementation::ConstraintView>, position: Seq<usize>, count: nat)
+    requires row_valid(axis_sizes(axes), position), row_rank(axis_sizes(axes), position) == count,
+        product_done(axes, before, count), after == before.insert(choice_view(axes, position)),
+    ensures product_done(axes, after, count + 1),
 {
-    assert forall|i: int, j: int, k: int| 0 <= i < axes[0].len() && 0 <= j < axes[1].len()
-        && 0 <= k < axes[2].len()
-        && (i < first || i == first && j < second || i == first && j == second && k < third + 1)
-        implies after.contains(choice_view(axes, i, j, k)) by {
-        if i == first && j == second && k == third {} else {
-            assert(before.contains(choice_view(axes, i, j, k)));
+    assert forall|p: Seq<usize>| row_valid(axis_sizes(axes), p) && row_rank(axis_sizes(axes), p) < count + 1
+        implies after.contains(choice_view(axes, p)) by {
+        if row_rank(axis_sizes(axes), p) == count {
+            constraint_unique::lemma_row_rank_injective(axis_sizes(axes), p, position);
         }
     }
 }
@@ -860,12 +880,12 @@ pub(crate) proof fn lemma_register_options_sound(current: implementation::Regist
 
 verus! {
 pub(crate) proof fn lemma_operand_atoms(operands: Operands, atoms: Seq<Atom>)
-    requires atoms_wf(atoms), operands_of(operands, atoms),
-    ensures search::atoms_local(atom_set(atoms)),
+    requires operands_of(operands, atoms),
+    ensures search::atoms_local(atom_set(atoms)), search::atoms_bounded(atom_set(atoms), operands.register@.len()),
         forall|c: Component| atom_set(atoms).contains(model::Primitive::Eq(c, model::GTerm::Variable(c)))
-            == operands.register[component_index(c) as int],
+            == (c.0 < operands.register@.len() && operands.register[c.0 as int]),
         forall|c: Component, v: nat| atom_set(atoms).contains(model::Primitive::Eq(c, model::GTerm::Constant(v)))
-            == codes(operands.constants[component_index(c) as int].view()).contains(v),
+            == (c.0 < operands.register@.len() && codes(operands.constants[c.0 as int].view()).contains(v)),
 {
     assert forall|p: model::Primitive| #[trigger] atom_set(atoms).contains(p)
         == (exists|i: int| 0 <= i < atoms.len() && atoms[i]@ == p) by {
@@ -877,64 +897,57 @@ pub(crate) proof fn lemma_operand_atoms(operands: Operands, atoms: Seq<Atom>)
             assert(atoms.to_set().contains(atoms[i]));
         }
     }
-    assert forall|c: Component, c2: Component| atom_set(atoms).contains(model::Primitive::Eq(c, model::GTerm::Variable(c2)))
-        implies c == c2 by {
-        let i = choose|i: int| 0 <= i < atoms.len()
-            && atoms[i]@ == model::Primitive::Eq(c, model::GTerm::Variable(c2));
+    assert forall|p: model::Primitive| atom_set(atoms).contains(p) implies
+        match p { model::Primitive::Eq(c, t) => c.0 < operands.register@.len()
+            && match t { model::GTerm::Variable(v) => v == c, _ => true } } by {
+        let i = choose|i: int| 0 <= i < atoms.len() && atoms[i]@ == p;
+        assert(atoms[i].component < operands.register@.len());
         match atoms[i].operand { Operand::Register => {}, Operand::Constant(_) => {} }
     }
     assert forall|c: Component| atom_set(atoms).contains(model::Primitive::Eq(c, model::GTerm::Variable(c)))
-        == operands.register[component_index(c) as int] by {
-        let k = component_index(c) as int;
-        assert(component_of(k as usize) == c);
-        if atom_set(atoms).contains(model::Primitive::Eq(c, model::GTerm::Variable(c))) {
-            let i = choose|i: int| 0 <= i < atoms.len()
-                && atoms[i]@ == model::Primitive::Eq(c, model::GTerm::Variable(c));
-            assert(atoms[i].component == k && atoms[i].operand == Operand::Register);
-        } else if operands.register[k] {
-            let i = choose|i: int| 0 <= i < atoms.len() && atoms[i].component == k && atoms[i].operand == Operand::Register;
-            assert(atoms[i]@ == model::Primitive::Eq(c, model::GTerm::Variable(c)));
+        == (c.0 < operands.register@.len() && operands.register[c.0 as int]) by {
+        if c.0 < operands.register@.len() {
+            if operands.register[c.0 as int] {
+                let i = choose|i: int| 0 <= i < atoms.len() && atoms[i].component == c.0
+                    && atoms[i].operand == Operand::Register;
+                assert(atoms[i]@ == model::Primitive::Eq(c, model::GTerm::Variable(c)));
+            } else if atom_set(atoms).contains(model::Primitive::Eq(c, model::GTerm::Variable(c))) {
+                let i = choose|i: int| 0 <= i < atoms.len() && atoms[i]@ == model::Primitive::Eq(c, model::GTerm::Variable(c));
+                assert(atoms[i].component == c.0 && atoms[i].operand == Operand::Register);
+            }
         }
     }
     assert forall|c: Component, v: nat| atom_set(atoms).contains(model::Primitive::Eq(c, model::GTerm::Constant(v)))
-        == codes(operands.constants[component_index(c) as int].view()).contains(v) by {
-        let k = component_index(c) as int;
-        lemma_codes(operands.constants[k].view());
-        if atom_set(atoms).contains(model::Primitive::Eq(c, model::GTerm::Constant(v))) {
-            let i = choose|i: int| 0 <= i < atoms.len()
-                && atoms[i]@ == model::Primitive::Eq(c, model::GTerm::Constant(v));
-            match atoms[i].operand {
-                Operand::Constant(w) => {
-                    assert(atoms[i].component == k && w as nat == v);
-                    assert(operands.constants[k].view().contains(w));
-                },
-                Operand::Register => {},
+        == (c.0 < operands.register@.len() && codes(operands.constants[c.0 as int].view()).contains(v)) by {
+        if c.0 < operands.register@.len() {
+            let k = c.0 as int;
+            lemma_codes(operands.constants[k].view());
+            if atom_set(atoms).contains(model::Primitive::Eq(c, model::GTerm::Constant(v))) {
+                let i = choose|i: int| 0 <= i < atoms.len() && atoms[i]@ == model::Primitive::Eq(c, model::GTerm::Constant(v));
+                match atoms[i].operand {
+                    Operand::Constant(w) => { assert(operands.constants[k].view().contains(w)); },
+                    Operand::Register => {},
+                }
+            } else if codes(operands.constants[k].view()).contains(v) {
+                let j = choose|j: int| 0 <= j < operands.constants[k].view().len() && operands.constants[k].view()[j] as nat == v;
+                let w = operands.constants[k].view()[j];
+                let i = choose|i: int| 0 <= i < atoms.len() && atoms[i].component == k && atoms[i].operand == Operand::Constant(w);
+                assert(atoms[i]@ == model::Primitive::Eq(c, model::GTerm::Constant(v)));
             }
-        } else if codes(operands.constants[k].view()).contains(v) {
-            let j = choose|j: int| 0 <= j < operands.constants[k].view().len()
-                && operands.constants[k].view()[j] as nat == v;
-            let w = operands.constants[k].view()[j];
-            let i = choose|i: int| 0 <= i < atoms.len() && atoms[i].component == k
-                && atoms[i].operand == Operand::Constant(w);
-            assert(atoms[i]@ == model::Primitive::Eq(c, model::GTerm::Constant(v)));
         }
     }
 }
 
 pub(crate) proof fn lemma_operand_pairs(operands: Operands, atoms: Seq<Atom>, universes: Universes)
-    requires atoms_wf(atoms), operands_of(operands, atoms),
+    requires operands_of(operands, atoms), operands.register@.len() == universes@.len(),
     ensures forall|p: (Component, nat)| #[trigger] search::domain_pairs(ndomains(universes), atom_set(atoms)).contains(p)
-        == (operands.register[component_index(p.0) as int]
-            && (codes(operands.constants[component_index(p.0) as int].view()).contains(p.1)
-                || match domain_view(universes[component_index(p.0) as int]) {
-                    None => false, Some(vs) => vs.contains(p.1) })),
+        == (p.0.0 < universes@.len() && operands.register[p.0.0 as int]
+            && (codes(operands.constants[p.0.0 as int].view()).contains(p.1)
+                || match domain_view(universes[p.0.0 as int]) { None => false, Some(vs) => vs.contains(p.1) })),
 {
     lemma_operand_atoms(operands, atoms);
     search::lemma_atom_pairs_members(atom_set(atoms));
     search::lemma_domain_pairs_members(ndomains(universes), atom_set(atoms));
-    assert forall|c: Component| encoding::n_domain(ndomains(universes), c)
-        == domain_view(universes[component_index(c) as int]) by { match c {
-            Component::Principal => {}, Component::Action => {}, Component::Resource => {} } }
 }
 
 pub(crate) proof fn lemma_register_bounded(register: RegisterConstraint)
@@ -954,28 +967,17 @@ pub(crate) proof fn lemma_domain_bounded(universe: Universe)
 }
 
 verus! {
-pub(crate) proof fn lemma_constraint_decides(d: encoding::NDomains, g: implementation::ConstraintView,
-    c: Component, value: nat)
-    requires implementation::register_of(g, c) is Equals
-        || !register_sat(implementation::register_of(g, c), value),
+pub(crate) proof fn lemma_constraint_decides(d: encoding::NDomains, g: implementation::ConstraintView, c: Component, value: nat)
+    requires g.len() == d.len(), g.len() <= history_syntax::MAX_ARITY, c.0 < g.len(),
+        implementation::register_of(g, c) is Equals || !register_sat(implementation::register_of(g, c), value),
     ensures inclusion::decides(d, implementation::constraint_of(g), c, value),
 {
-    let equal = match implementation::register_of(g, c) {
-        implementation::RegisterView::Equals(v) => v == value,
-        implementation::RegisterView::Differs(_) => false,
-    };
+    let equal = match implementation::register_of(g, c) { implementation::RegisterView::Equals(v) => v == value, _ => false };
     let l = inclusion::Literal { component: c, value, equal };
-    assert forall|theta: Subst| encoding::n_theta_ok(d, theta)
-        && inclusion::sat_by(theta, implementation::constraint_of(g))
+    assert forall|theta: Subst| encoding::n_theta_ok(d, theta) && inclusion::sat_by(theta, implementation::constraint_of(g))
         implies inclusion::sat_by(theta, Set::empty().insert(l)) by {
         lemma_constraint_sat(g, theta);
-        assert(register_sat(implementation::register_of(g, c), language::field_value(theta, c))) by {
-            match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
-        }
-        match implementation::register_of(g, c) {
-            implementation::RegisterView::Equals(v) => {},
-            implementation::RegisterView::Differs(vs) => {},
-        }
+        assert(register_sat(g[c.0 as int], theta[c.0 as int]));
     }
 }
 
@@ -1014,48 +1016,39 @@ pub(crate) proof fn lemma_register_option_decision(current: implementation::Regi
     }
 }
 
-pub(crate) proof fn lemma_split_options_sound(g: Constraint, operands: Operands, universes: Universes,
-    target: implementation::ConstraintView)
-    requires inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@)),
-        split_views(g, operands, universes).contains(target),
-    ensures inclusion::satisfiable(ndomains(universes), implementation::constraint_of(target)),
+pub(crate) proof fn lemma_split_options_sound(g: Constraint, operands: Operands, universes: Universes, target: implementation::ConstraintView)
+    requires shape_wf(g, operands, universes),
+        inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@)), split_views(g, operands, universes).contains(target),
+    ensures target.len() == g@.len(), inclusion::satisfiable(ndomains(universes), implementation::constraint_of(target)),
         inclusion::entails(ndomains(universes), implementation::constraint_of(target), implementation::constraint_of(g@)),
 {
     let d = ndomains(universes);
-    let theta0 = choose|theta: Subst| encoding::n_theta_ok(d, theta)
-        && inclusion::sat_by(theta, implementation::constraint_of(g@));
-    lemma_theta_allowed(universes, theta0);
-    lemma_constraint_sat(g@, theta0);
-    lemma_register_product_members(
-        register_options(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), domain_view(universes[0])),
-        register_options(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), domain_view(universes[1])),
-        register_options(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), domain_view(universes[2])));
-    lemma_register_bounded(g.0[0]); lemma_register_bounded(g.0[1]); lemma_register_bounded(g.0[2]);
-    lemma_domain_bounded(universes[0]); lemma_domain_bounded(universes[1]); lemma_domain_bounded(universes[2]);
-    lemma_codes(operands.constants[0].view()); lemma_codes(operands.constants[1].view()); lemma_codes(operands.constants[2].view());
-    lemma_register_options_sound(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), domain_view(universes[0]), target.principal);
-    lemma_register_options_sound(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), domain_view(universes[1]), target.action);
-    lemma_register_options_sound(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), domain_view(universes[2]), target.resource);
-    let p = choose|v: nat| register_allowed(domain_view(universes[0]), v) && register_sat(target.principal, v);
-    let a = choose|v: nat| register_allowed(domain_view(universes[1]), v) && register_sat(target.action, v);
-    let r = choose|v: nat| register_allowed(domain_view(universes[2]), v) && register_sat(target.resource, v);
-    let theta = EventView { principal: p, action: a, resource: r };
-    lemma_constraint_sat(target, theta);
-    assert(encoding::n_theta_ok(d, theta)) by {
-        assert forall|c: Component| encoding::n_domain(d, c) is Some
-            implies encoding::n_domain(d, c)->Some_0.contains(language::field_value(theta, c)) by {
-            match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
-        }
+    let theta0 = choose|theta: Subst| encoding::n_theta_ok(d, theta) && inclusion::sat_by(theta, implementation::constraint_of(g@));
+    lemma_theta_allowed(universes, theta0); lemma_constraint_sat(g@, theta0);
+    lemma_register_product_members(split_axes(g, operands, universes));
+assert forall|i: int| #![trigger target[i]] 0 <= i < g@.len() implies
+        (exists|v: nat| register_allowed(domain_view(universes[i]), v) && register_sat(target[i], v))
+        && (forall|v: nat| register_sat(target[i], v) ==> register_sat(g.0[i]@, v)) by {
+        lemma_register_bounded(g.0[i]); lemma_domain_bounded(universes[i]); lemma_codes(operands.constants[i].view());
+assert(g@[i] == g.0@[i]@);
+assert(g.0[i] == g.0@[i]);
+assert(register_sat(g@[i], theta0[i]));
+assert(register_sat(g.0[i]@, theta0[i]));
+assert(register_allowed(domain_view(universes[i]), theta0[i]));
+assert(exists|v: nat| register_allowed(domain_view(universes[i]), v) && register_sat(g.0[i]@, v));
+lemma_register_options_sound(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), domain_view(universes[i]), target[i]);
     }
-    assert forall|theta: Subst| encoding::n_theta_ok(d, theta)
-        && inclusion::sat_by(theta, implementation::constraint_of(target))
+    let theta = Seq::new(g@.len(), |i: int| choose|v: nat| register_allowed(domain_view(universes[i]), v) && register_sat(target[i], v));
+    lemma_constraint_sat(target, theta);
+    assert(encoding::n_theta_ok(d, theta));
+    assert forall|theta: Subst| encoding::n_theta_ok(d, theta) && inclusion::sat_by(theta, implementation::constraint_of(target))
         implies inclusion::sat_by(theta, implementation::constraint_of(g@)) by {
         lemma_constraint_sat(target, theta); lemma_constraint_sat(g@, theta);
     }
 }
 
 pub(crate) proof fn lemma_split_views_ok(g: Constraint, operands: Operands, universes: Universes, atoms: Seq<Atom>)
-    requires atoms_wf(atoms), operands_of(operands, atoms),
+    requires shape_wf(g, operands, universes), operands_of(operands, atoms),
         inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@)),
     ensures inclusion::split_ok(ndomains(universes), implementation::constraint_of(g@),
         search::domain_pairs(ndomains(universes), atom_set(atoms)),
@@ -1067,34 +1060,28 @@ pub(crate) proof fn lemma_split_views_ok(g: Constraint, operands: Operands, univ
     let cases = options.map(|v: implementation::ConstraintView| implementation::constraint_of(v));
     let pi = search::domain_pairs(d, atom_set(atoms));
     lemma_operand_pairs(operands, atoms, universes);
-    lemma_register_product_members(
-        register_options(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), domain_view(universes[0])),
-        register_options(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), domain_view(universes[1])),
-        register_options(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), domain_view(universes[2])));
+    lemma_register_product_members(split_axes(g, operands, universes));
     assert forall|gamma: inclusion::Constraint| #[trigger] cases.contains(gamma) implies
         inclusion::satisfiable(d, gamma) && inclusion::entails(d, gamma, implementation::constraint_of(g@))
-        && forall|pair: (Component, nat)| pi.contains(pair) ==> #[trigger] inclusion::decides(d, gamma, pair.0, pair.1) by {
+        && forall|p: (Component, nat)| pi.contains(p) ==> #[trigger] inclusion::decides(d, gamma, p.0, p.1) by {
         let target = choose|v: implementation::ConstraintView| options.contains(v) && implementation::constraint_of(v) == gamma;
         lemma_split_options_sound(g, operands, universes, target);
-        assert forall|pair: (Component, nat)| pi.contains(pair) implies inclusion::decides(d, gamma, pair.0, pair.1) by {
-            let k = component_index(pair.0) as int;
-            let t = implementation::register_of(target, pair.0);
-            match pair.0 { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
-            lemma_register_option_decision(g.0[k]@, codes(operands.constants[k].view()), domain_view(universes[k]), t, pair.1);
-            lemma_constraint_decides(d, target, pair.0, pair.1);
+        assert forall|p: (Component, nat)| pi.contains(p) implies inclusion::decides(d, gamma, p.0, p.1) by {
+            let i = p.0.0 as int;
+            lemma_register_option_decision(g.0[i]@, codes(operands.constants[i].view()), domain_view(universes[i]), target[i], p.1);
+            lemma_constraint_decides(d, target, p.0, p.1);
         }
     }
-    assert forall|theta: Subst| encoding::n_theta_ok(d, theta)
-        && #[trigger] inclusion::sat_by(theta, implementation::constraint_of(g@))
+    assert forall|theta: Subst| encoding::n_theta_ok(d, theta) && #[trigger] inclusion::sat_by(theta, implementation::constraint_of(g@))
         implies exists|gamma: inclusion::Constraint| #[trigger] cases.contains(gamma) && inclusion::sat_by(theta, gamma) by {
-        lemma_constraint_sat(g@, theta);
-        lemma_theta_allowed(universes, theta);
-        let p = lemma_register_options_cover(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), domain_view(universes[0]), theta.principal);
-        let a = lemma_register_options_cover(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), domain_view(universes[1]), theta.action);
-        let r = lemma_register_options_cover(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), domain_view(universes[2]), theta.resource);
-        let target = implementation::ConstraintView { principal: p, action: a, resource: r };
-        assert(options.contains(target));
-        lemma_constraint_sat(target, theta);
+        lemma_constraint_sat(g@, theta); lemma_theta_allowed(universes, theta);
+        assert forall|i: int| #![trigger split_axes(g, operands, universes)[i]] 0 <= i < g@.len() implies exists|r: implementation::RegisterView|
+            split_axes(g, operands, universes)[i].contains(r) && register_sat(r, theta[i]) by {
+            lemma_register_options_cover(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), domain_view(universes[i]), theta[i]);
+        }
+        let target = Seq::new(g@.len(), |i: int| choose|r: implementation::RegisterView|
+            split_axes(g, operands, universes)[i].contains(r) && register_sat(r, theta[i]));
+        assert(options.contains(target)); lemma_constraint_sat(target, theta);
         assert(cases.contains(implementation::constraint_of(target)));
     }
     assert forall|theta: Subst, gamma1: inclusion::Constraint, gamma2: inclusion::Constraint|
@@ -1103,28 +1090,32 @@ pub(crate) proof fn lemma_split_views_ok(g: Constraint, operands: Operands, univ
         let a = choose|v: implementation::ConstraintView| options.contains(v) && implementation::constraint_of(v) == gamma1;
         let b = choose|v: implementation::ConstraintView| options.contains(v) && implementation::constraint_of(v) == gamma2;
         lemma_constraint_sat(a, theta); lemma_constraint_sat(b, theta);
-        lemma_register_options_unique(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), domain_view(universes[0]), a.principal, b.principal, theta.principal);
-        lemma_register_options_unique(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), domain_view(universes[1]), a.action, b.action, theta.action);
-        lemma_register_options_unique(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), domain_view(universes[2]), a.resource, b.resource, theta.resource);
-        assert(a == b);
+        assert forall|i: int| 0 <= i < g@.len() implies a[i] == b[i] by {
+            lemma_register_options_unique(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), domain_view(universes[i]), a[i], b[i], theta[i]);
+        }
+        assert(a =~= b);
     }
-    assert(inclusion::split_ok(d, implementation::constraint_of(g@), pi, cases));
-    assert(cases == split_views(g, operands, universes)
-        .map(|v: implementation::ConstraintView| implementation::constraint_of(v)));
 }
 }
 
 verus! {
 pub(crate) proof fn lemma_theta_allowed(universes: Universes, theta: Subst)
     requires encoding::n_theta_ok(ndomains(universes), theta),
-    ensures register_allowed(domain_view(universes[0]), theta.principal),
-        register_allowed(domain_view(universes[1]), theta.action),
-        register_allowed(domain_view(universes[2]), theta.resource),
+    ensures theta.len() == universes@.len(),
+        forall|i: int| 0 <= i < universes@.len() ==> register_allowed(domain_view(universes[i]), theta[i]),
 {
     let d = ndomains(universes);
-    assert(encoding::n_domain(d, Component::Principal) == domain_view(universes[0]));
-    assert(encoding::n_domain(d, Component::Action) == domain_view(universes[1]));
-    assert(encoding::n_domain(d, Component::Resource) == domain_view(universes[2]));
+    assert(d.len() == universes@.len());
+    assert(language::event_wf(theta, d.len()));
+    assert(encoding::n_event_in(d, theta));
+    assert forall|i: int| 0 <= i < universes@.len() implies register_allowed(domain_view(universes[i]), theta[i]) by {
+        assert(d[i] == domain_view(universes@[i]));
+        assert(universes[i] == universes@[i]);
+        assert(theta[i] <= u64::MAX);
+        match d[i] {
+            None => {}, Some(vs) => { assert(vs.contains(theta[i])); },
+        }
+    }
 }
 }
 
@@ -1202,11 +1193,8 @@ pub(crate) proof fn lemma_option_views_push(values: Seq<Option<Class>>, value: O
 }
 
 pub(crate) open spec fn letter_capacity(g: Constraint, operands: Operands, universes: Universes) -> bool {
-    let n0 = class_options(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), universes[0]).len();
-    let n1 = class_options(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), universes[1]).len();
-    let n2 = class_options(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), universes[2]).len();
-    n0 <= usize::MAX && n1 <= usize::MAX && n2 <= usize::MAX
-        && n0 * n1 <= usize::MAX && n0 * n1 * n2 <= usize::MAX
+    let sizes = letter_axes(g, operands, universes).map_values(|axis: Set<Option<implementation::ClassView>>| axis.len());
+    forall|i: int| 0 <= i <= sizes.len() ==> product_size(sizes.take(i)) <= usize::MAX
 }
 }
 
@@ -1278,40 +1266,32 @@ pub(crate) open spec fn raw_register_class(r: RegisterConstraint) -> Class {
     match r { RegisterConstraint::Equals(v) => Class::Constant(v), RegisterConstraint::Differs(_) => Class::Register }
 }
 
-pub(crate) open spec fn letter_product(a: Set<Option<implementation::ClassView>>,
-    b: Set<Option<implementation::ClassView>>, c: Set<Option<implementation::ClassView>>, registers: [Class; 3])
-    -> Set<implementation::LetterView> {
-    a.map(|p: Option<implementation::ClassView>| b.map(|q: Option<implementation::ClassView>|
-        c.map(|r: Option<implementation::ClassView>| implementation::LetterView {
-            principal: p, action: q, resource: r, reg_principal: registers[0]@,
-            reg_action: registers[1]@, reg_resource: registers[2]@ })).flatten()).flatten()
+pub(crate) open spec fn letter_product(axes: Seq<Set<Option<implementation::ClassView>>>, registers: Seq<Class>) -> Set<implementation::LetterView> {
+    finite_product(axes).map(|classes: Seq<Option<implementation::ClassView>>| implementation::LetterView {
+        classes, registers: registers.map_values(|c: Class| c@),
+    })
 }
 
-pub(crate) open spec fn letters_views(g: Constraint, operands: Operands, universes: Universes)
-    -> Set<implementation::LetterView> {
-    letter_product(
-        class_options(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), universes[0]),
-        class_options(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), universes[1]),
-        class_options(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), universes[2]),
-        [raw_register_class(g.0[0]), raw_register_class(g.0[1]), raw_register_class(g.0[2])])
+pub(crate) open spec fn letters_views(g: Constraint, operands: Operands, universes: Universes) -> Set<implementation::LetterView> {
+    letter_product(letter_axes(g, operands, universes), g.0@.map_values(|r: RegisterConstraint| raw_register_class(r)))
+}
+
+pub(crate) open spec fn letter_axes(g: Constraint, operands: Operands, universes: Universes) -> Seq<Set<Option<implementation::ClassView>>> {
+    Seq::new(g@.len(), |i: int| class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]))
 }
 
 pub(crate) open spec fn letter_views(values: Seq<Letter>) -> Set<implementation::LetterView> {
     values.to_set().map(|l: Letter| l@)
 }
 
-pub(crate) open spec fn letter_choice_view(axes: [Seq<Option<Class>>; 3], registers: [Class; 3],
-    i: int, j: int, k: int) -> implementation::LetterView {
-    implementation::LetterView { principal: class_option(axes[0][i]), action: class_option(axes[1][j]),
-        resource: class_option(axes[2][k]), reg_principal: registers[0]@, reg_action: registers[1]@, reg_resource: registers[2]@ }
+pub(crate) open spec fn letter_choice_view(axes: Seq<Seq<Option<Class>>>, registers: Seq<Class>, position: Seq<usize>) -> implementation::LetterView {
+    implementation::LetterView { classes: Seq::new(axes.len(), |i: int| class_option(axes[i][position[i] as int])),
+        registers: registers.map_values(|c: Class| c@) }
 }
 
-pub(crate) open spec fn letter_product_done(axes: [Seq<Option<Class>>; 3], registers: [Class; 3],
-    result: Set<implementation::LetterView>, first: int, second: int, third: int) -> bool {
-    forall|i: int, j: int, k: int| #![trigger letter_choice_view(axes, registers, i, j, k)]
-        0 <= i < axes[0].len() && 0 <= j < axes[1].len() && 0 <= k < axes[2].len()
-        && (i < first || i == first && j < second || i == first && j == second && k < third)
-            ==> result.contains(letter_choice_view(axes, registers, i, j, k))
+pub(crate) open spec fn letter_product_done(axes: Seq<Seq<Option<Class>>>, registers: Seq<Class>, result: Set<implementation::LetterView>, count: nat) -> bool {
+    forall|p: Seq<usize>| row_valid(axis_sizes(axes), p) && row_rank(axis_sizes(axes), p) < count
+        ==> result.contains(letter_choice_view(axes, registers, p))
 }
 
 pub(crate) proof fn lemma_letter_views_push(values: Seq<Letter>, value: Letter)
@@ -1335,57 +1315,37 @@ pub(crate) proof fn lemma_option_view_at(values: Seq<Option<Class>>, index: int)
     } else { assert(values[index] == values.last()); }
 }
 
-pub(crate) proof fn lemma_letter_product_members(a: Set<Option<implementation::ClassView>>,
-    b: Set<Option<implementation::ClassView>>, c: Set<Option<implementation::ClassView>>, registers: [Class; 3])
-    ensures forall|l: implementation::LetterView| #[trigger] letter_product(a, b, c, registers).contains(l)
-        == (a.contains(l.principal) && b.contains(l.action) && c.contains(l.resource)
-            && l.reg_principal == registers[0]@ && l.reg_action == registers[1]@ && l.reg_resource == registers[2]@),
+pub(crate) proof fn lemma_letter_product_members(axes: Seq<Set<Option<implementation::ClassView>>>, registers: Seq<Class>)
+    ensures forall|l: implementation::LetterView| #[trigger] letter_product(axes, registers).contains(l)
+        == (l.classes.len() == axes.len() && l.registers == registers.map_values(|c: Class| c@)
+            && forall|i: int| 0 <= i < axes.len() ==> #[trigger] axes[i].contains(l.classes[i])),
 {
-    broadcast use vstd::set::Set::lemma_flatten_contains;
-    let f = |p: Option<implementation::ClassView>| b.map(|q: Option<implementation::ClassView>|
-        c.map(|r: Option<implementation::ClassView>| implementation::LetterView { principal: p, action: q, resource: r,
-            reg_principal: registers[0]@, reg_action: registers[1]@, reg_resource: registers[2]@ })).flatten();
-    assert forall|l: implementation::LetterView| letter_product(a, b, c, registers).contains(l)
-        implies a.contains(l.principal) && b.contains(l.action) && c.contains(l.resource)
-            && l.reg_principal == registers[0]@ && l.reg_action == registers[1]@ && l.reg_resource == registers[2]@ by {
-        let s = choose|s: Set<implementation::LetterView>| a.map(f).contains(s) && s.contains(l);
-        let p = choose|p: Option<implementation::ClassView>| a.contains(p) && f(p) == s;
-        let h = |q: Option<implementation::ClassView>| c.map(|r: Option<implementation::ClassView>|
-            implementation::LetterView { principal: p, action: q, resource: r,
-                reg_principal: registers[0]@, reg_action: registers[1]@, reg_resource: registers[2]@ });
-        let t = choose|t: Set<implementation::LetterView>| b.map(h).contains(t) && t.contains(l);
-        let q = choose|q: Option<implementation::ClassView>| b.contains(q) && h(q) == t;
-        let r = choose|r: Option<implementation::ClassView>| c.contains(r)
-            && implementation::LetterView { principal: p, action: q, resource: r,
-                reg_principal: registers[0]@, reg_action: registers[1]@, reg_resource: registers[2]@ } == l;
+    lemma_finite_product_members(axes);
+    assert forall|l: implementation::LetterView| letter_product(axes, registers).contains(l)
+        implies l.classes.len() == axes.len() && l.registers == registers.map_values(|c: Class| c@)
+            && forall|i: int| 0 <= i < axes.len() ==> axes[i].contains(l.classes[i]) by {
+        let cs = choose|cs: Seq<Option<implementation::ClassView>>| finite_product(axes).contains(cs)
+            && implementation::LetterView { classes: cs, registers: registers.map_values(|c: Class| c@) } == l;
     }
-    assert forall|l: implementation::LetterView| a.contains(l.principal) && b.contains(l.action) && c.contains(l.resource)
-        && l.reg_principal == registers[0]@ && l.reg_action == registers[1]@ && l.reg_resource == registers[2]@
-        implies letter_product(a, b, c, registers).contains(l) by {
-        let h = |q: Option<implementation::ClassView>| c.map(|r: Option<implementation::ClassView>|
-            implementation::LetterView { principal: l.principal, action: q, resource: r,
-                reg_principal: registers[0]@, reg_action: registers[1]@, reg_resource: registers[2]@ });
-        assert(h(l.action).contains(l));
-        assert(b.map(h).contains(h(l.action)));
-        assert(f(l.principal).contains(l));
-        assert(a.map(f).contains(f(l.principal)));
+    assert forall|l: implementation::LetterView| l.classes.len() == axes.len()
+        && l.registers == registers.map_values(|c: Class| c@)
+        && (forall|i: int| 0 <= i < axes.len() ==> axes[i].contains(l.classes[i]))
+        implies letter_product(axes, registers).contains(l) by {
+        assert(finite_product(axes).contains(l.classes));
+        assert(implementation::LetterView { classes: l.classes, registers: registers.map_values(|c: Class| c@) } == l);
     }
 }
 
-pub(crate) proof fn lemma_letter_product_step(axes: [Seq<Option<Class>>; 3], registers: [Class; 3],
-    before: Set<implementation::LetterView>, after: Set<implementation::LetterView>,
-    first: int, second: int, third: int)
-    requires 0 <= first < axes[0].len(), 0 <= second < axes[1].len(), 0 <= third < axes[2].len(),
-        letter_product_done(axes, registers, before, first, second, third),
-        after == before.insert(letter_choice_view(axes, registers, first, second, third)),
-    ensures letter_product_done(axes, registers, after, first, second, third + 1),
+pub(crate) proof fn lemma_letter_product_step(axes: Seq<Seq<Option<Class>>>, registers: Seq<Class>,
+    before: Set<implementation::LetterView>, after: Set<implementation::LetterView>, position: Seq<usize>, count: nat)
+    requires row_valid(axis_sizes(axes), position), row_rank(axis_sizes(axes), position) == count,
+        letter_product_done(axes, registers, before, count), after == before.insert(letter_choice_view(axes, registers, position)),
+    ensures letter_product_done(axes, registers, after, count + 1),
 {
-    assert forall|i: int, j: int, k: int| 0 <= i < axes[0].len() && 0 <= j < axes[1].len()
-        && 0 <= k < axes[2].len()
-        && (i < first || i == first && j < second || i == first && j == second && k < third + 1)
-        implies after.contains(letter_choice_view(axes, registers, i, j, k)) by {
-        if i == first && j == second && k == third {} else {
-            assert(before.contains(letter_choice_view(axes, registers, i, j, k)));
+    assert forall|p: Seq<usize>| row_valid(axis_sizes(axes), p) && row_rank(axis_sizes(axes), p) < count + 1
+        implies after.contains(letter_choice_view(axes, registers, p)) by {
+        if row_rank(axis_sizes(axes), p) == count {
+            constraint_unique::lemma_row_rank_injective(axis_sizes(axes), p, position);
         }
     }
 }
@@ -1520,28 +1480,17 @@ pub(crate) proof fn lemma_field_letter_complete(r: implementation::RegisterView,
     class
 }
 
-pub(crate) proof fn lemma_refined_ready(g: Constraint, operands: Operands, universes: Universes,
-    refined: implementation::ConstraintView)
-    requires split_views(g, operands, universes).contains(refined),
-    ensures forall|c: Component| field_ready(implementation::register_of(refined, c),
-        operands.register[component_index(c) as int], codes(operands.constants[component_index(c) as int].view()),
-        domain_view(universes[component_index(c) as int])),
+pub(crate) proof fn lemma_refined_ready(g: Constraint, operands: Operands, universes: Universes, refined: implementation::ConstraintView)
+    requires shape_wf(g, operands, universes), split_views(g, operands, universes).contains(refined),
+    ensures refined.len() == g@.len(), forall|i: int| 0 <= i < refined.len() ==> field_ready(refined[i], operands.register[i], codes(operands.constants[i].view()), domain_view(universes[i])),
 {
-    lemma_register_product_members(
-        register_options(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), domain_view(universes[0])),
-        register_options(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), domain_view(universes[1])),
-        register_options(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), domain_view(universes[2])));
-    assert forall|c: Component| field_ready(implementation::register_of(refined, c),
-        operands.register[component_index(c) as int], codes(operands.constants[component_index(c) as int].view()),
-        domain_view(universes[component_index(c) as int])) by {
-        let k = component_index(c) as int;
-        let r = implementation::register_of(refined, c);
-        match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
-        lemma_register_options_members(g.0[k]@, operands.register[k], codes(operands.constants[k].view()), domain_view(universes[k]), r);
-        if operands.register[k] {
-            assert forall|v: nat| codes(operands.constants[k].view()).contains(v)
-                implies r is Equals || !register_sat(r, v) by {
-                lemma_register_option_decision(g.0[k]@, codes(operands.constants[k].view()), domain_view(universes[k]), r, v);
+    lemma_register_product_members(split_axes(g, operands, universes));
+    assert forall|i: int| 0 <= i < refined.len() implies field_ready(refined[i], operands.register[i], codes(operands.constants[i].view()), domain_view(universes[i])) by {
+        let r = refined[i];
+        lemma_register_options_members(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), domain_view(universes[i]), r);
+        if operands.register[i] {
+            assert forall|v: nat| codes(operands.constants[i].view()).contains(v) implies r is Equals || !register_sat(r, v) by {
+                lemma_register_option_decision(g.0[i]@, codes(operands.constants[i].view()), domain_view(universes[i]), r, v);
             }
         }
     }
@@ -1550,136 +1499,128 @@ pub(crate) proof fn lemma_refined_ready(g: Constraint, operands: Operands, unive
 
 verus! {
 pub(crate) proof fn lemma_letters_members(g: Constraint, operands: Operands, universes: Universes)
+    requires shape_wf(g, operands, universes),
     ensures forall|l: implementation::LetterView| #[trigger] letters_views(g, operands, universes).contains(l)
-        == (forall|c: Component| class_options(implementation::register_of(g@, c),
-                operands.register[component_index(c) as int], codes(operands.constants[component_index(c) as int].view()),
-                universes[component_index(c) as int]).contains(implementation::letter_class(l, c))
-            && implementation::letter_register(l, c) == register_class(implementation::register_of(g@, c))),
+        == (l.classes.len() == g@.len() && l.registers.len() == g@.len()
+            && forall|i: int| 0 <= i < g@.len() ==> #[trigger] class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]).contains(l.classes[i])
+                && l.registers[i] == register_class(g.0[i]@)),
 {
-    lemma_letter_product_members(
-        class_options(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), universes[0]),
-        class_options(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), universes[1]),
-        class_options(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), universes[2]),
-        [raw_register_class(g.0[0]), raw_register_class(g.0[1]), raw_register_class(g.0[2])]);
-    assert forall|r: RegisterConstraint| raw_register_class(r)@ == register_class(r@) by {
-        match r { RegisterConstraint::Equals(_) => {}, RegisterConstraint::Differs(_) => {} }
-    }
-    assert forall|l: implementation::LetterView| letters_views(g, operands, universes).contains(l)
-        implies forall|c: Component| class_options(implementation::register_of(g@, c),
-            operands.register[component_index(c) as int], codes(operands.constants[component_index(c) as int].view()),
-            universes[component_index(c) as int]).contains(implementation::letter_class(l, c))
-            && implementation::letter_register(l, c) == register_class(implementation::register_of(g@, c)) by {
-        assert forall|c: Component| class_options(implementation::register_of(g@, c),
-            operands.register[component_index(c) as int], codes(operands.constants[component_index(c) as int].view()),
-            universes[component_index(c) as int]).contains(implementation::letter_class(l, c))
-            && implementation::letter_register(l, c) == register_class(implementation::register_of(g@, c)) by {
-            match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
-        }
-    }
-    assert forall|l: implementation::LetterView| (forall|c: Component| class_options(implementation::register_of(g@, c),
-        operands.register[component_index(c) as int], codes(operands.constants[component_index(c) as int].view()),
-        universes[component_index(c) as int]).contains(implementation::letter_class(l, c))
-        && implementation::letter_register(l, c) == register_class(implementation::register_of(g@, c)))
-        implies letters_views(g, operands, universes).contains(l) by {
-        assert(class_options(implementation::register_of(g@, Component::Principal), operands.register[0], codes(operands.constants[0].view()), universes[0])
-            .contains(implementation::letter_class(l, Component::Principal)));
-        assert(class_options(implementation::register_of(g@, Component::Action), operands.register[1], codes(operands.constants[1].view()), universes[1])
-            .contains(implementation::letter_class(l, Component::Action)));
-        assert(class_options(implementation::register_of(g@, Component::Resource), operands.register[2], codes(operands.constants[2].view()), universes[2])
-            .contains(implementation::letter_class(l, Component::Resource)));
-        assert(implementation::letter_register(l, Component::Principal) == register_class(implementation::register_of(g@, Component::Principal)));
-        assert(implementation::letter_register(l, Component::Action) == register_class(implementation::register_of(g@, Component::Action)));
-        assert(implementation::letter_register(l, Component::Resource) == register_class(implementation::register_of(g@, Component::Resource)));
+let axes = letter_axes(g, operands, universes);
+let registers = g.0@.map_values(|r: RegisterConstraint| raw_register_class(r));
+let views = registers.map_values(|c: Class| c@);
+lemma_letter_product_members(axes, registers);
+assert(axes.len() == g@.len());
+assert(views.len() == g@.len());
+assert forall|i: int| 0 <= i < g@.len() implies views[i] == register_class(g.0[i]@) by {
+    assert(g.0[i] == g.0@[i]);
+    assert(registers[i] == raw_register_class(g.0@[i]));
+    assert(views[i] == registers[i]@);
+    match g.0[i] {
+        RegisterConstraint::Equals(_) => {}, RegisterConstraint::Differs(_) => {},
     }
 }
+assert forall|l: implementation::LetterView| letters_views(g, operands, universes).contains(l)
+    implies l.classes.len() == g@.len() && l.registers.len() == g@.len()
+        && (forall|i: int| 0 <= i < g@.len() ==> class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]).contains(l.classes[i])
+            && l.registers[i] == register_class(g.0[i]@)) by {
+    assert(letter_product(axes, registers).contains(l));
+    assert(l.registers == views);
+    assert forall|i: int| 0 <= i < g@.len() implies class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]).contains(l.classes[i])
+        && l.registers[i] == register_class(g.0[i]@) by {
+        assert(axes[i].contains(l.classes[i]));
+        assert(axes[i] == class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]));
+        assert(l.registers[i] == views[i]);
+    }
+}
+assert forall|l: implementation::LetterView| l.classes.len() == g@.len() && l.registers.len() == g@.len()
+    && (forall|i: int| 0 <= i < g@.len() ==> class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]).contains(l.classes[i])
+        && l.registers[i] == register_class(g.0[i]@))
+    implies letters_views(g, operands, universes).contains(l) by {
+    assert forall|i: int| 0 <= i < g@.len() implies l.registers[i] == views[i] && axes[i].contains(l.classes[i]) by {
+        assert(class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]).contains(l.classes[i]));
+        assert(l.registers[i] == register_class(g.0[i]@));
+        assert(views[i] == register_class(g.0[i]@));
+    }
+    assert(l.registers =~= views);
+    assert forall|i: int| 0 <= i < axes.len() implies #[trigger] axes[i].contains(l.classes[i]) by {
+        assert(0 <= i < g@.len());
+        assert(l.registers[i] == register_class(g.0[i]@));
+        assert(class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]).contains(l.classes[i]));
+        assert(axes[i] == class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]));
+    }
+    lemma_finite_product_members(axes);
+    assert(finite_product(axes).contains(l.classes));
+    assert(implementation::LetterView { classes: l.classes, registers: registers.map_values(|c: Class| c@) } == l);
+    assert(letter_product(axes, registers).contains(l));
+}
+}
 
-pub(crate) proof fn lemma_field_realizes(g: Constraint, operands: Operands, atoms: Seq<Atom>,
-    letter: implementation::LetterView, theta: Subst, event: EventView)
-    requires atoms_wf(atoms), operands_of(operands, atoms),
-        forall|c: Component| implementation::letter_register(letter, c) == register_class(implementation::register_of(g@, c)),
-        forall|c: Component| field_letter(implementation::register_of(g@, c),
-            operands.register[component_index(c) as int], codes(operands.constants[component_index(c) as int].view()),
-            implementation::letter_class(letter, c), language::field_value(theta, c), language::field_value(event, c)),
+pub(crate) proof fn lemma_field_realizes(g: Constraint, operands: Operands, atoms: Seq<Atom>, letter: implementation::LetterView, theta: Subst, event: EventView)
+    requires operands_of(operands, atoms), g@.len() == operands.register@.len(),
+        letter.classes.len() == g@.len(), letter.registers.len() == g@.len(), theta.len() == g@.len(), event.len() == g@.len(),
+        forall|i: int| 0 <= i < g@.len() ==> letter.registers[i] == register_class(g.0[i]@),
+        forall|i: int| 0 <= i < g@.len() ==> field_letter(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), letter.classes[i], theta[i], event[i]),
     ensures search::realizes(theta, event, implementation::letter_assignment(letter, atom_set(atoms))),
 {
     lemma_operand_atoms(operands, atoms);
     let alpha = implementation::letter_assignment(letter, atom_set(atoms));
-    assert(alpha.dom() == atom_set(atoms));
-    assert forall|p: model::Primitive| alpha.dom().contains(p)
-        implies alpha[p] == model::primitive_holds(theta, p, event) by {
+    assert forall|p: model::Primitive| alpha.dom().contains(p) implies alpha[p] == model::primitive_holds(theta, p, event) by {
         match p {
             model::Primitive::Eq(c, model::GTerm::Constant(v)) => {
-                assert(codes(operands.constants[component_index(c) as int].view()).contains(v));
+                assert(c.0 < g@.len()); assert(codes(operands.constants[c.0 as int].view()).contains(v));
             },
             model::Primitive::Eq(c, model::GTerm::Variable(c2)) => {
-                assert(c == c2);
-                assert(operands.register[component_index(c) as int]);
+                assert(c == c2); assert(c.0 < g@.len()); assert(operands.register[c.0 as int]);
             },
         }
     }
 }
 
-pub(crate) proof fn lemma_letters_realize(g: Constraint, operands: Operands, atoms: Seq<Atom>, universes: Universes,
-    letter: implementation::LetterView, theta: Subst)
-    requires atoms_wf(atoms), operands_of(operands, atoms), encoding::n_theta_ok(ndomains(universes), theta),
-        inclusion::sat_by(theta, implementation::constraint_of(g@)), letters_views(g, operands, universes).contains(letter),
-        letters_ready(g@, operands, universes),
-    ensures exists|e: EventView| encoding::n_event_in(ndomains(universes), e)
-        && search::realizes(theta, e, implementation::letter_assignment(letter, atom_set(atoms))),
+pub(crate) proof fn lemma_letters_realize(g: Constraint, operands: Operands, atoms: Seq<Atom>, universes: Universes, letter: implementation::LetterView, theta: Subst)
+    requires shape_wf(g, operands, universes), operands_of(operands, atoms), encoding::n_theta_ok(ndomains(universes), theta),
+        inclusion::sat_by(theta, implementation::constraint_of(g@)), letters_views(g, operands, universes).contains(letter), letters_ready(g@, operands, universes),
+    ensures exists|e: EventView| encoding::n_event_in(ndomains(universes), e) && search::realizes(theta, e, implementation::letter_assignment(letter, atom_set(atoms))),
 {
-    lemma_letters_members(g, operands, universes);
-    lemma_constraint_sat(g@, theta); lemma_theta_allowed(universes, theta);
-    let p = lemma_field_letter_sound(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), universes[0], letter.principal, theta.principal);
-    let a = lemma_field_letter_sound(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), universes[1], letter.action, theta.action);
-    let r = lemma_field_letter_sound(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), universes[2], letter.resource, theta.resource);
-    let event = EventView { principal: p, action: a, resource: r };
-    assert forall|c: Component| field_letter(implementation::register_of(g@, c),
-        operands.register[component_index(c) as int], codes(operands.constants[component_index(c) as int].view()),
-        implementation::letter_class(letter, c), language::field_value(theta, c), language::field_value(event, c)) by {
-        match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
+    lemma_letters_members(g, operands, universes); lemma_constraint_sat(g@, theta); lemma_theta_allowed(universes, theta);
+    assert(forall|i: int| 0 <= i < g@.len() ==>
+        #[trigger] class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]).contains(letter.classes[i]));
+    assert forall|i: int| #![trigger g.0[i]@] 0 <= i < g@.len() implies exists|v: nat|
+        (domain_view(universes[i]) matches Some(vs) ==> vs.contains(v))
+        && #[trigger] field_letter(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), letter.classes[i], theta[i], v) by {
+assert(class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]).contains(letter.classes[i]));
+let v = lemma_field_letter_sound(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i], letter.classes[i], theta[i]);
+assert(field_letter(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), letter.classes[i], theta[i], v));
     }
+    let event = Seq::new(g@.len(), |i: int| choose|v: nat|
+        (domain_view(universes[i]) matches Some(vs) ==> vs.contains(v))
+        && #[trigger] field_letter(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), letter.classes[i], theta[i], v));
     lemma_field_realizes(g, operands, atoms, letter, theta, event);
-    assert(encoding::n_event_in(ndomains(universes), event)) by {
-        assert forall|c: Component| encoding::n_domain(ndomains(universes), c) is Some
-            implies encoding::n_domain(ndomains(universes), c)->Some_0.contains(language::field_value(event, c)) by {
-            match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
-        }
-    }
+    assert(encoding::n_event_in(ndomains(universes), event));
 }
 
-pub(crate) proof fn lemma_letters_complete(g: Constraint, operands: Operands, atoms: Seq<Atom>, universes: Universes,
-    theta: Subst, event: EventView) -> (letter: implementation::LetterView)
-    requires atoms_wf(atoms), operands_of(operands, atoms), encoding::n_theta_ok(ndomains(universes), theta),
-        inclusion::sat_by(theta, implementation::constraint_of(g@)), encoding::n_event_in(ndomains(universes), event),
-        letters_ready(g@, operands, universes),
-    ensures letters_views(g, operands, universes).contains(letter),
-        search::realizes(theta, event, implementation::letter_assignment(letter, atom_set(atoms))),
+pub(crate) proof fn lemma_letters_complete(g: Constraint, operands: Operands, atoms: Seq<Atom>, universes: Universes, theta: Subst, event: EventView) -> (letter: implementation::LetterView)
+    requires shape_wf(g, operands, universes), operands_of(operands, atoms), encoding::n_theta_ok(ndomains(universes), theta),
+        inclusion::sat_by(theta, implementation::constraint_of(g@)), encoding::n_event_in(ndomains(universes), event), letters_ready(g@, operands, universes),
+    ensures letters_views(g, operands, universes).contains(letter), search::realizes(theta, event, implementation::letter_assignment(letter, atom_set(atoms))),
 {
-    lemma_constraint_sat(g@, theta); lemma_theta_allowed(universes, theta);
-    lemma_event_domains(universes, event);
-    let p = lemma_field_letter_complete(g.0[0]@, operands.register[0], codes(operands.constants[0].view()), universes[0], theta.principal, event.principal);
-    let a = lemma_field_letter_complete(g.0[1]@, operands.register[1], codes(operands.constants[1].view()), universes[1], theta.action, event.action);
-    let r = lemma_field_letter_complete(g.0[2]@, operands.register[2], codes(operands.constants[2].view()), universes[2], theta.resource, event.resource);
-    let letter = implementation::LetterView { principal: p, action: a, resource: r,
-        reg_principal: register_class(g.0[0]@), reg_action: register_class(g.0[1]@), reg_resource: register_class(g.0[2]@) };
-    lemma_letters_members(g, operands, universes);
-    assert forall|c: Component| class_options(implementation::register_of(g@, c),
-        operands.register[component_index(c) as int], codes(operands.constants[component_index(c) as int].view()),
-        universes[component_index(c) as int]).contains(implementation::letter_class(letter, c))
-        && implementation::letter_register(letter, c) == register_class(implementation::register_of(g@, c)) by {
-        match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
+    lemma_constraint_sat(g@, theta); lemma_theta_allowed(universes, theta); lemma_event_domains(universes, event);
+    assert forall|i: int| #![trigger g.0[i]@] 0 <= i < g@.len() implies exists|c: Option<implementation::ClassView>|
+        #[trigger] class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]).contains(c)
+        && field_letter(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), c, theta[i], event[i]) by {
+        lemma_field_letter_complete(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i], theta[i], event[i]);
     }
-    assert forall|c: Component| field_letter(implementation::register_of(g@, c),
-        operands.register[component_index(c) as int], codes(operands.constants[component_index(c) as int].view()),
-        implementation::letter_class(letter, c), language::field_value(theta, c), language::field_value(event, c)) by {
-        match c { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
-    }
-    lemma_field_realizes(g, operands, atoms, letter, theta, event);
+    let letter = implementation::LetterView {
+        classes: Seq::new(g@.len(), |i: int| choose|c: Option<implementation::ClassView>|
+            #[trigger] class_options(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), universes[i]).contains(c)
+            && field_letter(g.0[i]@, operands.register[i], codes(operands.constants[i].view()), c, theta[i], event[i])),
+        registers: g@.map_values(|r: implementation::RegisterView| register_class(r)),
+    };
+    lemma_letters_members(g, operands, universes); lemma_field_realizes(g, operands, atoms, letter, theta, event);
     letter
 }
 
 pub(crate) proof fn lemma_letters_are_realizable(g: Constraint, operands: Operands, atoms: Seq<Atom>, universes: Universes)
-    requires atoms_wf(atoms), operands_of(operands, atoms),
+    requires shape_wf(g, operands, universes), operands_of(operands, atoms),
         inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@)),
         letters_ready(g@, operands, universes),
     ensures forall|alpha: search::Assignment|
@@ -1719,21 +1660,25 @@ pub(crate) proof fn lemma_letters_are_realizable(g: Constraint, operands: Operan
 
 verus! {
 pub(crate) open spec fn letters_ready(g: implementation::ConstraintView, operands: Operands, universes: Universes) -> bool {
-    field_ready(g.principal, operands.register[0], codes(operands.constants[0].view()), domain_view(universes[0]))
-        && field_ready(g.action, operands.register[1], codes(operands.constants[1].view()), domain_view(universes[1]))
-        && field_ready(g.resource, operands.register[2], codes(operands.constants[2].view()), domain_view(universes[2]))
+    g.len() == operands.register@.len() && g.len() == universes@.len()
+        && forall|i: int| 0 <= i < g.len() ==> field_ready(g[i], operands.register[i], codes(operands.constants[i].view()), domain_view(universes[i]))
 }
 
 pub(crate) proof fn lemma_event_domains(universes: Universes, event: EventView)
     requires encoding::n_event_in(ndomains(universes), event),
-    ensures domain_view(universes[0]) matches Some(vs) ==> vs.contains(event.principal),
-        domain_view(universes[1]) matches Some(vs) ==> vs.contains(event.action),
-        domain_view(universes[2]) matches Some(vs) ==> vs.contains(event.resource),
+    ensures event.len() == universes@.len(), forall|i: int| #![trigger domain_view(universes[i])] 0 <= i < universes@.len()
+        ==> (domain_view(universes[i]) matches Some(vs) ==> vs.contains(event[i])),
 {
     let d = ndomains(universes);
-    assert(encoding::n_domain(d, Component::Principal) == domain_view(universes[0]));
-    assert(encoding::n_domain(d, Component::Action) == domain_view(universes[1]));
-    assert(encoding::n_domain(d, Component::Resource) == domain_view(universes[2]));
+    assert(d.len() == universes@.len());
+    assert forall|i: int| #![trigger domain_view(universes[i])] 0 <= i < universes@.len()
+        implies (domain_view(universes[i]) matches Some(vs) ==> vs.contains(event[i])) by {
+        assert(d[i] == domain_view(universes@[i]));
+        assert(universes[i] == universes@[i]);
+        match d[i] {
+            None => {}, Some(vs) => { assert(vs.contains(event[i])); },
+        }
+    }
 }
 }
 
@@ -1742,12 +1687,17 @@ pub(crate) open spec fn group_constraints(groups: Seq<(Constraint, Vec<Letter>)>
     groups.map(|i: int, group: (Constraint, Vec<Letter>)| group.0)
 }
 
-pub(crate) open spec fn steps_result(g: Constraint, atoms: Seq<Atom>, universes: Universes,
-    groups: Seq<(Constraint, Vec<Letter>)>) -> bool {
-    exists|operands: Operands| operands_of(operands, atoms)
+pub(crate) open spec fn steps_result(g: Constraint, atoms: Seq<Atom>, universes: Universes, groups: Seq<(Constraint, Vec<Letter>)>) -> bool {
+    &&& constraint_wf(g)
+    &&& g@.len() == universes@.len()
+    &&& atoms_wf(atoms, universes@.len())
+    &&& exists|operands: Operands| operands_of(operands, atoms) && operands.register@.len() == universes@.len()
         && constraint_views(group_constraints(groups)) == split_views(g, operands, universes)
         && forall|i: int| 0 <= i < groups.len() ==> constraint_wf(groups[i].0)
+            && groups[i].0@.len() == universes@.len()
             && letter_views(groups[i].1@) == letters_views(groups[i].0, operands, universes)
+            && forall|j: int| 0 <= j < groups[i].1@.len() ==> letter_wf(groups[i].1@[j])
+                && groups[i].1@[j]@.classes.len() == universes@.len()
 }
 
 pub(crate) open spec fn steps_capacity(g: Constraint, atoms: Seq<Atom>, universes: Universes) -> bool {
@@ -1789,14 +1739,9 @@ pub(crate) proof fn lemma_constraint_view_at(values: Seq<Constraint>, index: int
 }
 
 pub(crate) proof fn lemma_refined_letters_ready(g: Constraint, operands: Operands, universes: Universes, refined: Constraint)
-    requires split_views(g, operands, universes).contains(refined@),
+    requires shape_wf(g, operands, universes), split_views(g, operands, universes).contains(refined@),
     ensures letters_ready(refined@, operands, universes),
-{
-    lemma_refined_ready(g, operands, universes, refined@);
-    assert(field_ready(implementation::register_of(refined@, Component::Principal), operands.register[0], codes(operands.constants[0].view()), domain_view(universes[0])));
-    assert(field_ready(implementation::register_of(refined@, Component::Action), operands.register[1], codes(operands.constants[1].view()), domain_view(universes[1])));
-    assert(field_ready(implementation::register_of(refined@, Component::Resource), operands.register[2], codes(operands.constants[2].view()), domain_view(universes[2])));
-}
+{ lemma_refined_ready(g, operands, universes, refined@); }
 
 pub(crate) open spec fn group_cases(group: (Constraint, Vec<Letter>), atoms: Set<model::Primitive>,
     next: spec_fn(search::Assignment) -> language::Regex<model::Test>) -> Set<search::Case> {
@@ -1850,16 +1795,19 @@ pub(crate) proof fn lemma_implemented_cases_members(groups: Seq<(Constraint, Vec
 pub(crate) proof fn lemma_steps_are_paper_steps(g: Constraint, atoms: Seq<Atom>, universes: Universes,
     groups: Seq<(Constraint, Vec<Letter>)>, state: language::Regex<model::Test>,
     next: spec_fn(search::Assignment) -> language::Regex<model::Test>)
-    requires atoms_wf(atoms), steps_result(g, atoms, universes, groups),
+    requires atoms_wf(atoms, universes@.len()), steps_result(g, atoms, universes, groups),
         inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@)),
     ensures implemented_cases(groups, atom_set(atoms), next).to_iset() == search::paper_steps(ndomains(universes),
         search::Item { constraint: implementation::constraint_of(g@), state }, atom_set(atoms),
         constraint_views(group_constraints(groups)).map(|v: implementation::ConstraintView| implementation::constraint_of(v)), next),
 {
-    let operands = choose|operands: Operands| operands_of(operands, atoms)
+    let operands = choose|operands: Operands| operands_of(operands, atoms) && operands.register@.len() == universes@.len()
         && constraint_views(group_constraints(groups)) == split_views(g, operands, universes)
         && forall|i: int| 0 <= i < groups.len() ==> constraint_wf(groups[i].0)
-            && letter_views(groups[i].1@) == letters_views(groups[i].0, operands, universes);
+            && groups[i].0@.len() == universes@.len()
+            && letter_views(groups[i].1@) == letters_views(groups[i].0, operands, universes)
+            && forall|j: int| 0 <= j < groups[i].1@.len() ==> letter_wf(groups[i].1@[j])
+                && groups[i].1@[j]@.classes.len() == universes@.len();
     let cases = implemented_cases(groups, atom_set(atoms), next);
     let splits = constraint_views(group_constraints(groups)).map(|v: implementation::ConstraintView| implementation::constraint_of(v));
     let paper = search::paper_steps(ndomains(universes), search::Item { constraint: implementation::constraint_of(g@), state }, atom_set(atoms), splits, next);
@@ -1898,7 +1846,7 @@ pub(crate) proof fn lemma_steps_are_paper_steps(g: Constraint, atoms: Seq<Atom>,
 pub(crate) proof fn implemented_steps_ok(g: Constraint, atoms: Seq<Atom>, universes: Universes,
     groups: Seq<(Constraint, Vec<Letter>)>, state: language::Regex<model::Test>,
     next: spec_fn(search::Assignment) -> language::Regex<model::Test>)
-    requires atoms_wf(atoms), steps_result(g, atoms, universes, groups),
+    requires atoms_wf(atoms, universes@.len()), steps_result(g, atoms, universes, groups),
         inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@)),
         search::atoms_complete(state, atom_set(atoms)),
         forall|alpha: search::Assignment| alpha.dom() == atom_set(atoms) ==> search::successor_ok(state, alpha, next(alpha)),
@@ -1913,10 +1861,13 @@ pub(crate) proof fn implemented_steps_ok(g: Constraint, atoms: Seq<Atom>, univer
     hide(language::lang);
     hide(class_options);
     hide(register_options);
-    let operands = choose|operands: Operands| operands_of(operands, atoms)
+    let operands = choose|operands: Operands| operands_of(operands, atoms) && operands.register@.len() == universes@.len()
         && constraint_views(group_constraints(groups)) == split_views(g, operands, universes)
         && forall|i: int| 0 <= i < groups.len() ==> constraint_wf(groups[i].0)
-            && letter_views(groups[i].1@) == letters_views(groups[i].0, operands, universes);
+            && groups[i].0@.len() == universes@.len()
+            && letter_views(groups[i].1@) == letters_views(groups[i].0, operands, universes)
+            && forall|j: int| 0 <= j < groups[i].1@.len() ==> letter_wf(groups[i].1@[j])
+                && groups[i].1@[j]@.classes.len() == universes@.len();
     lemma_operand_atoms(operands, atoms); lemma_split_views_ok(g, operands, universes, atoms);
     lemma_steps_are_paper_steps(g, atoms, universes, groups, state, next);
     search::theorem_successor_cases_finite_domains();
@@ -1967,11 +1918,15 @@ pub(crate) proof fn lemma_constraint_view_injective(a: Constraint, b: Constraint
     requires constraint_wf(a), constraint_wf(b), a@ == b@,
     ensures constraint_key(a) == constraint_key(b),
 {
-    lemma_register_view_injective(a.0[0], b.0[0]);
-    lemma_register_view_injective(a.0[1], b.0[1]);
-    lemma_register_view_injective(a.0[2], b.0[2]);
-    assert forall|i: int| 0 <= i < 3 implies constraint_key(a)[i] == constraint_key(b)[i] by {
-        if i == 0 {} else if i == 1 {} else { assert(i == 2); }
+assert(a@.len() == a.0@.len());
+assert(b@.len() == b.0@.len());
+assert forall|i: int| 0 <= i < a@.len() implies constraint_key(a)[i] == constraint_key(b)[i] by {
+    assert(a.0[i] == a.0@[i]); assert(b.0[i] == b.0@[i]);
+    assert(a@[i] == a.0@[i]@); assert(b@[i] == b.0@[i]@);
+    assert(a.0[i]@ == b.0[i]@);
+    lemma_register_view_injective(a.0[i], b.0[i]);
+    assert(constraint_key(a)[i] == register_key(a.0@[i]));
+    assert(constraint_key(b)[i] == register_key(b.0@[i]));
     }
     assert(constraint_key(a) =~= constraint_key(b));
 }
@@ -1988,23 +1943,29 @@ pub(crate) proof fn lemma_register_key_view(a: RegisterConstraint, b: RegisterCo
 }
 
 pub(crate) proof fn lemma_constraint_key_view(a: Constraint, b: Constraint)
-    requires constraint_key(a) == constraint_key(b),
-    ensures a@ == b@,
+    requires constraint_key(a) == constraint_key(b), ensures a@ == b@,
 {
-    assert(constraint_key(a)[0] == constraint_key(b)[0]);
-    assert(constraint_key(a)[1] == constraint_key(b)[1]);
-    assert(constraint_key(a)[2] == constraint_key(b)[2]);
-    lemma_register_key_view(a.0[0], b.0[0]);
-    lemma_register_key_view(a.0[1], b.0[1]);
-    lemma_register_key_view(a.0[2], b.0[2]);
+assert(constraint_key(a).len() == a.0@.len());
+assert(constraint_key(b).len() == b.0@.len());
+assert(a@.len() == b@.len());
+assert forall|i: int| 0 <= i < a@.len() implies a@[i] == b@[i] by {
+    assert(a.0[i] == a.0@[i]); assert(b.0[i] == b.0@[i]);
+    assert(constraint_key(a)[i] == register_key(a.0@[i]));
+    assert(constraint_key(b)[i] == register_key(b.0@[i]));
+    assert(register_key(a.0[i]) == register_key(b.0[i]));
+    lemma_register_key_view(a.0[i], b.0[i]);
+    assert(a@[i] == a.0@[i]@); assert(b@[i] == b.0@[i]@);
+}
+    assert(a@ =~= b@);
 }
 
 pub(crate) proof fn lemma_constraint_literals_injective(a: implementation::ConstraintView, b: implementation::ConstraintView)
-    requires implementation::constraint_of(a) == implementation::constraint_of(b),
+    requires a.len() == b.len(), a.len() <= history_syntax::MAX_ARITY, implementation::constraint_of(a) == implementation::constraint_of(b),
     ensures a == b,
 {
     lemma_constraint_view(a); lemma_constraint_view(b);
-    assert forall|c: Component| implementation::register_of(a, c) == implementation::register_of(b, c) by {
+    assert forall|i: int| 0 <= i < a.len() implies a[i] == b[i] by {
+        let c = Component(i as u8);
         match implementation::register_of(a, c) {
             implementation::RegisterView::Equals(v) => {
                 let l = inclusion::eq_literal(c, v);
@@ -2028,10 +1989,7 @@ pub(crate) proof fn lemma_constraint_literals_injective(a: implementation::Const
             },
         }
     }
-    assert(implementation::register_of(a, Component::Principal) == implementation::register_of(b, Component::Principal));
-    assert(implementation::register_of(a, Component::Action) == implementation::register_of(b, Component::Action));
-    assert(implementation::register_of(a, Component::Resource) == implementation::register_of(b, Component::Resource));
-    assert(a.principal == b.principal); assert(a.action == b.action); assert(a.resource == b.resource);
+    assert(a =~= b);
 }
 
 pub(crate) proof fn lemma_table_injective(table: ConstraintTable, i: int, j: int)
@@ -2048,7 +2006,7 @@ verus! {
 pub(crate) open spec fn split_contract(g: Constraint, operands: Operands, universes: Universes,
     result: Seq<Constraint>) -> bool {
     inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@))
-        ==> forall|atoms: Seq<Atom>| atoms_wf(atoms) && operands_of(operands, atoms)
+        ==> forall|atoms: Seq<Atom>| atoms_wf(atoms, universes@.len()) && operands_of(operands, atoms)
             ==> inclusion::split_ok(ndomains(universes), implementation::constraint_of(g@),
                 search::domain_pairs(ndomains(universes), atom_set(atoms)),
                 constraint_views(result).map(|v: implementation::ConstraintView| implementation::constraint_of(v)))
@@ -2057,7 +2015,7 @@ pub(crate) open spec fn split_contract(g: Constraint, operands: Operands, univer
 pub(crate) open spec fn letters_contract(g: Constraint, operands: Operands, universes: Universes,
     result: Seq<Letter>) -> bool {
     inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@)) && letters_ready(g@, operands, universes)
-        ==> forall|atoms: Seq<Atom>, alpha: search::Assignment| atoms_wf(atoms) && operands_of(operands, atoms) ==>
+        ==> forall|atoms: Seq<Atom>, alpha: search::Assignment| atoms_wf(atoms, universes@.len()) && operands_of(operands, atoms) ==>
             letter_views(result).map(|l: implementation::LetterView| implementation::letter_assignment(l, atom_set(atoms))).contains(alpha)
                 == (alpha.dom() == atom_set(atoms) && exists|theta: Subst, event: EventView|
                     encoding::n_theta_ok(ndomains(universes), theta) && encoding::n_event_in(ndomains(universes), event)
@@ -2065,11 +2023,11 @@ pub(crate) open spec fn letters_contract(g: Constraint, operands: Operands, univ
 }
 
 pub(crate) proof fn lemma_split_contract(g: Constraint, operands: Operands, universes: Universes, result: Seq<Constraint>)
-    requires constraint_views(result) == split_views(g, operands, universes),
+    requires shape_wf(g, operands, universes), constraint_views(result) == split_views(g, operands, universes),
     ensures split_contract(g, operands, universes, result),
 {
     if inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@)) {
-        assert forall|atoms: Seq<Atom>| atoms_wf(atoms) && operands_of(operands, atoms) implies
+        assert forall|atoms: Seq<Atom>| atoms_wf(atoms, universes@.len()) && operands_of(operands, atoms) implies
             inclusion::split_ok(ndomains(universes), implementation::constraint_of(g@),
                 search::domain_pairs(ndomains(universes), atom_set(atoms)),
                 constraint_views(result).map(|v: implementation::ConstraintView| implementation::constraint_of(v))) by {
@@ -2079,11 +2037,11 @@ pub(crate) proof fn lemma_split_contract(g: Constraint, operands: Operands, univ
 }
 
 pub(crate) proof fn lemma_letters_contract(g: Constraint, operands: Operands, universes: Universes, result: Seq<Letter>)
-    requires letter_views(result) == letters_views(g, operands, universes),
+    requires shape_wf(g, operands, universes), letter_views(result) == letters_views(g, operands, universes),
     ensures letters_contract(g, operands, universes, result),
 {
     if inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@)) && letters_ready(g@, operands, universes) {
-        assert forall|atoms: Seq<Atom>, alpha: search::Assignment| atoms_wf(atoms) && operands_of(operands, atoms) implies
+        assert forall|atoms: Seq<Atom>, alpha: search::Assignment| atoms_wf(atoms, universes@.len()) && operands_of(operands, atoms) implies
             letter_views(result).map(|l: implementation::LetterView| implementation::letter_assignment(l, atom_set(atoms))).contains(alpha)
                 == (alpha.dom() == atom_set(atoms) && exists|theta: Subst, event: EventView|
                     encoding::n_theta_ok(ndomains(universes), theta) && encoding::n_event_in(ndomains(universes), event)
@@ -2239,6 +2197,64 @@ pub(crate) proof fn lemma_set_map_equal<A, B>(values: Set<A>, first: spec_fn(A) 
 }
 }
 
+verus! {
+
+pub(crate) open spec fn dimensions_view(sizes: Seq<usize>) -> Seq<nat> {
+    sizes.map_values(|n: usize| n as nat)
+}
+
+pub(crate) proof fn lemma_constraint_product_complete(axes: Seq<Seq<RegisterConstraint>>, values: Seq<Constraint>)
+    requires product_done(axes, constraint_views(values), product_size(axis_sizes(axes))),
+        constraint_views(values).subset_of(register_product(axes.map_values(|a: Seq<RegisterConstraint>| register_views(a)))),
+        forall|i: int| 0 <= i < axes.len() ==> axes[i].len() <= usize::MAX,
+    ensures constraint_views(values) == register_product(axes.map_values(|a: Seq<RegisterConstraint>| register_views(a))),
+{
+    let full = register_product(axes.map_values(|a: Seq<RegisterConstraint>| register_views(a)));
+    lemma_register_product_members(axes.map_values(|a: Seq<RegisterConstraint>| register_views(a)));
+    assert forall|g: implementation::ConstraintView| full.contains(g) implies constraint_views(values).contains(g) by {
+assert forall|i: int| #![trigger axes[i]] 0 <= i < axes.len() implies exists|p: usize| p < axes[i].len() && axes[i][p as int]@ == g[i] by {
+            let r = choose|r: RegisterConstraint| axes[i].to_set().contains(r) && r@ == g[i];
+            let j = choose|j: int| 0 <= j < axes[i].len() && axes[i][j] == r;
+            assert(j == j as usize);
+        }
+        let p = Seq::new(axes.len(), |i: int| choose|p: usize| p < axes[i].len() && axes[i][p as int]@ == g[i]);
+        assert(row_valid(axis_sizes(axes), p)); constraint_unique::lemma_row_bound(axis_sizes(axes), p);
+        assert(choice_view(axes, p) =~= g);
+    }
+    assert(constraint_views(values) =~= full);
+}
+
+pub(crate) proof fn lemma_letter_product_complete(axes: Seq<Seq<Option<Class>>>, registers: Seq<Class>, values: Seq<Letter>)
+    requires letter_product_done(axes, registers, letter_views(values), product_size(axis_sizes(axes))),
+        letter_views(values).subset_of(letter_product(axes.map_values(|a: Seq<Option<Class>>| option_views(a)), registers)),
+        forall|i: int| 0 <= i < axes.len() ==> axes[i].len() <= usize::MAX,
+    ensures letter_views(values) == letter_product(axes.map_values(|a: Seq<Option<Class>>| option_views(a)), registers),
+{
+    let full = letter_product(axes.map_values(|a: Seq<Option<Class>>| option_views(a)), registers);
+    lemma_letter_product_members(axes.map_values(|a: Seq<Option<Class>>| option_views(a)), registers);
+    assert forall|l: implementation::LetterView| full.contains(l) implies letter_views(values).contains(l) by {
+        assert forall|i: int| #![trigger axes[i]] 0 <= i < axes.len() implies exists|p: usize| p < axes[i].len() && class_option(axes[i][p as int]) == l.classes[i] by {
+            let domains = axes.map_values(|a: Seq<Option<Class>>| option_views(a));
+            assert(domains[i] == option_views(axes[i]));
+            assert(domains[i].contains(l.classes[i]));
+            assert(option_views(axes[i]).contains(l.classes[i]));
+            axes[i].to_set_ensures();
+            assert(axes[i].len() <= usize::MAX);
+            let r = choose|r: Option<Class>| axes[i].to_set().contains(r) && class_option(r) == l.classes[i];
+            let j = choose|j: int| 0 <= j < axes[i].len() && axes[i][j] == r;
+            assert(0 <= j < axes[i].len());
+            assert(class_option(axes[i][j as usize as int]) == l.classes[i]);
+            assert(j == j as usize);
+        }
+        let p = Seq::new(axes.len(), |i: int| choose|p: usize| p < axes[i].len() && class_option(axes[i][p as int]) == l.classes[i]);
+        assert(row_valid(axis_sizes(axes), p)); constraint_unique::lemma_row_bound(axis_sizes(axes), p);
+        assert(letter_choice_view(axes, registers, p).classes =~= l.classes);
+        assert(letter_choice_view(axes, registers, p) == l);
+    }
+    assert(letter_views(values) =~= full);
+}
+}
+
 pub(crate) mod table {
     use super::*;
     use crate::tables::Tables;
@@ -2251,7 +2267,7 @@ pub(crate) mod table {
     impl View for Tables {
         type V = FlatPair<u64>;
         open(crate) spec fn view(&self) -> FlatPair<u64> {
-            FlatPair { head: [FlatHead::Any, FlatHead::Any, FlatHead::Any],
+            FlatPair { head: self.head,
                 tests: self.tests, regexes: self.regexes, root: 0 }
         }
     }
@@ -2292,7 +2308,8 @@ pub(crate) mod table {
     }
 
     pub(crate) open spec fn frame(before: FlatPair<u64>, after: FlatPair<u64>) -> bool {
-        before.tests@.len() <= after.tests@.len()
+        before.head@.len() == after.head@.len()
+        && before.tests@.len() <= after.tests@.len()
         && before.regexes@.len() <= after.regexes@.len()
         && (forall|i: int| 0 <= i < before.tests@.len()
             ==> #[trigger] after.tests@[i] == before.tests@[i])
@@ -2511,7 +2528,8 @@ pub(crate) mod table {
 verus! {
 /// Native Eq/hash correspondence and event projection laws required by analyzer proofs.
 pub open(crate) spec fn analyzer_obligations<E: Event>() -> bool {
-    E::obeys_projection_spec() && crate::native::key_obligations::<ComponentValue<E>>()
+    1 <= history_syntax::event::specs::arity::<E>() <= history_syntax::MAX_ARITY
+        && E::obeys_projection_spec() && crate::native::key_obligations::<E::Component>()
         && search_exec::search_obligations()
 }
 }
@@ -2526,661 +2544,627 @@ pub(crate) mod frontend {
     use vstd::std_specs::cmp::PartialEqSpec;
 
     verus! {
-    broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas, vstd::set::group_set_lemmas};
+        broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas, vstd::set::group_set_lemmas};
 
-    pub(crate) open spec fn value_field<E: Event>(v: ComponentValue<E>) -> Component {
-        match v { ComponentValue::Principal(_) => Component::Principal,
-            ComponentValue::Action(_) => Component::Action,
-            ComponentValue::Resource(_) => Component::Resource }
-    }
+        pub(crate) open spec fn value_field<E: Event>(v: E::Component) -> Component {
+            Component(E::coordinate_spec(v) as u8)
+        }
 
-    pub(crate) open spec fn entries<E: Event>(values: Seq<ComponentValue<E>>) -> Seq<(ComponentValue<E>, u64)> {
-        values.map(|i: int, v: ComponentValue<E>| (v, (i + 1) as u64))
-    }
+        pub(crate) open spec fn entries<E: Event>(values: Seq<E::Component>) -> Seq<(E::Component, u64)> {
+            values.map(|i: int, v: E::Component| (v, (i + 1) as u64))
+        }
 
-    pub(crate) open spec fn field_entries<E: Event>(values: Seq<ComponentValue<E>>, field: Component)
-        -> Seq<(ComponentValue<E>, u64)> {
-        entries(values).filter(|p: (ComponentValue<E>, u64)| value_field(p.0) == field)
-    }
+        pub(crate) open spec fn field_entries<E: Event>(values: Seq<E::Component>, field: Component) -> Seq<(E::Component, u64)> {
+            entries::<E>(values).filter(|p: (E::Component, u64)| value_field::<E>(p.0) == field)
+        }
 
-    pub(crate) open spec fn constants_wf<E: Event>(c: Constants<E>) -> bool {
-        &&& c.values@.len() <= u32::MAX
-        &&& crate::native::representatives(c.ids)
-            == c.values@.map(|i: int, v: ComponentValue<E>| (v, (i + 1) as u32))
-        &&& forall|i: int, j: int| 0 <= i < j < c.values@.len()
-            ==> !c.values@[i].eq_spec(&c.values@[j])
-    }
+        pub(crate) open spec fn native_entries<E: Event>(values: Seq<E::Component>, field: Component) -> Seq<(E::Component, u32)> {
+            values.map(|i: int, v: E::Component| (v, (i + 1) as u32))
+                .filter(|p: (E::Component, u32)| value_field::<E>(p.0) == field)
+        }
 
-    pub(crate) open spec fn constants_frame<E: Event>(a: Constants<E>, b: Constants<E>) -> bool {
-        a.values@.is_prefix_of(b.values@)
-    }
+        pub(crate) open spec fn constants_wf<E: Event>(c: Constants<E>) -> bool {
+            &&& 1 <= arity::<E>() <= history_syntax::MAX_ARITY
+            &&& c.values@.len() <= u32::MAX
+            &&& c.ids@.len() == arity::<E>()
+            &&& forall|j: int| 0 <= j < c.values@.len() ==> E::coordinate_spec(c.values@[j]) < arity::<E>()
+            &&& forall|i: int| 0 <= i < c.ids@.len() ==> crate::native::representatives(c.ids@[i])
+                == native_entries::<E>(c.values@, Component(i as u8))
+            &&& forall|i: int, j: int| 0 <= i < j < c.values@.len()
+                && value_field::<E>(c.values@[i]) == value_field::<E>(c.values@[j])
+                ==> !c.values@[i].eq_spec(&c.values@[j])
+        }
 
-    pub(crate) open spec fn stored_code<E: Event>(c: Constants<E>, v: ComponentValue<E>, id: u32) -> bool {
-        id > 0 && id <= c.values@.len() && v.eq_spec(&c.values@[id as int - 1])
-    }
+        pub(crate) open spec fn constants_frame<E: Event>(a: Constants<E>, b: Constants<E>) -> bool {
+            a.values@.is_prefix_of(b.values@)
+        }
 
-    pub(crate) proof fn lemma_field_book<E: Event>(c: Constants<E>, field: Component)
-        ensures constant_book(c)[junco_core::flat::verify::field_index(field)] == field_entries(c.values@, field),
+        pub(crate) open spec fn stored_code<E: Event>(c: Constants<E>, v: E::Component, id: u32) -> bool {
+            id > 0 && id <= c.values@.len()
+                && value_field::<E>(v) == value_field::<E>(c.values@[id as int - 1])
+                && v.eq_spec(&c.values@[id as int - 1])
+        }
+
+        pub(crate) proof fn lemma_native_entry_source<E: Event>(values: Seq<E::Component>, field: Component, i: int)
+            requires 0 <= i < native_entries::<E>(values, field).len(),
+            ensures exists|j: int| 0 <= j < values.len() && native_entries::<E>(values, field)[i] == (values[j], (j + 1) as u32),
+                value_field::<E>(native_entries::<E>(values, field)[i].0) == field,
+        {
+            let source = values.map(|j: int, v: E::Component| (v, (j + 1) as u32));
+            let pred = |p: (E::Component, u32)| value_field::<E>(p.0) == field;
+            source.lemma_filter_pred(pred, i);
+            source.lemma_filter_contains_rev(pred, native_entries::<E>(values, field)[i]);
+            let j = choose|j: int| 0 <= j < source.len() && source[j] == native_entries::<E>(values, field)[i];
+        }
+
+        pub(crate) proof fn lemma_constant_lookup<E: Event>(c: Constants<E>, field: Component, value: E::Component, id: u32)
+            requires constants_wf(c), analyzer_obligations::<E>(), field.0 < arity::<E>(), value_field::<E>(value) == field,
+                exists|i: int| 0 <= i < crate::native::representatives(c.ids@[field.0 as int]).len()
+                    && crate::native::representatives(c.ids@[field.0 as int])[i].1 == id
+                    && value.eq_spec(&crate::native::representatives(c.ids@[field.0 as int])[i].0),
+            ensures stored_code(c, value, id),
+        {
+            let reps = crate::native::representatives(c.ids@[field.0 as int]);
+            let i = choose|i: int| 0 <= i < reps.len() && reps[i].1 == id && value.eq_spec(&reps[i].0);
+            lemma_native_entry_source::<E>(c.values@, field, i);
+            let j = choose|j: int| 0 <= j < c.values@.len() && reps[i] == (c.values@[j], (j + 1) as u32);
+            assert(j + 1 == id);
+        }
+
+        pub(crate) proof fn lemma_constants_insert<E: Event>(before: Constants<E>, after: Constants<E>, field: Component, value: E::Component, id: u32)
+            requires constants_wf(before), analyzer_obligations::<E>(), field.0 < arity::<E>(), value_field::<E>(value) == field,
+                E::coordinate_spec(value) < arity::<E>(), before.values@.len() < u32::MAX,
+                id as nat == before.values@.len() + 1, after.values@ == before.values@.push(value),
+                after.ids@.len() == before.ids@.len(),
+                crate::native::representatives(after.ids@[field.0 as int])
+                    == crate::native::representatives(before.ids@[field.0 as int]).push((value, id)),
+                forall|i: int| 0 <= i < before.ids@.len() && i != field.0 ==> after.ids@[i] == before.ids@[i],
+                forall|i: int| 0 <= i < crate::native::representatives(before.ids@[field.0 as int]).len()
+                    ==> !value.eq_spec(&crate::native::representatives(before.ids@[field.0 as int])[i].0),
+            ensures constants_wf(after), constants_frame(before, after), stored_code(after, value, id),
+        {
+            let source = before.values@.map(|i: int, v: E::Component| (v, (i + 1) as u32));
+            assert(after.values@.map(|i: int, v: E::Component| (v, (i + 1) as u32)) =~= source.push((value, id)));
+            assert forall|i: int| 0 <= i < after.ids@.len() implies crate::native::representatives(after.ids@[i])
+                == native_entries::<E>(after.values@, Component(i as u8)) by {
+                source.lemma_filter_push((value, id), |p: (E::Component, u32)| value_field::<E>(p.0) == Component(i as u8));
+            }
+            assert forall|i: int, j: int| 0 <= i < j < after.values@.len()
+                && value_field::<E>(after.values@[i]) == value_field::<E>(after.values@[j])
+                implies !after.values@[i].eq_spec(&after.values@[j]) by {
+                if j < before.values@.len() { assert(!before.values@[i].eq_spec(&before.values@[j])); }
+                else {
+                    source.lemma_filter_contains(|p: (E::Component, u32)| value_field::<E>(p.0) == field, i);
+                    let k = choose|k: int| 0 <= k < native_entries::<E>(before.values@, field).len()
+                        && native_entries::<E>(before.values@, field)[k] == source[i];
+                    assert(!value.eq_spec(&before.values@[i]));
+                    assert(!before.values@[i].eq_spec(&value));
+                }
+            }
+        }
+
+        pub(crate) proof fn lemma_field_book<E: Event>(c: Constants<E>, field: Component)
+            requires field.0 < arity::<E>(),
+            ensures constant_book(c)[field.0 as int] == field_entries::<E>(c.values@, field),
+        {}
+
+        pub(crate) proof fn lemma_field_entry_source<E: Event>(values: Seq<E::Component>, field: Component, i: int)
+            requires 0 <= i < field_entries::<E>(values, field).len(),
+            ensures exists|j: int| 0 <= j < values.len() && field_entries::<E>(values, field)[i] == (values[j], (j + 1) as u64),
+                value_field::<E>(field_entries::<E>(values, field)[i].0) == field,
+        {
+            let pred = |p: (E::Component, u64)| value_field::<E>(p.0) == field;
+            entries::<E>(values).lemma_filter_pred(pred, i);
+            entries::<E>(values).lemma_filter_contains_rev(pred, field_entries::<E>(values, field)[i]);
+            let j = choose|j: int| 0 <= j < entries::<E>(values).len() && entries::<E>(values)[j] == field_entries::<E>(values, field)[i];
+        }
+
+        pub(crate) proof fn lemma_constants_maps<E: Event>(c: Constants<E>)
+            requires constants_wf(c), analyzer_obligations::<E>(),
+            ensures enc::maps_wf(constant_book(c), fl::component_equality::<E>(), fl::component_domain::<E>()),
+        {
+            assert(enc::equality_laws(fl::component_equality::<E>(), fl::component_domain::<E>()));
+            assert forall|f: int, i: int| 0 <= f < arity::<E>() && 0 <= i < constant_book(c)[f].len()
+                implies fl::component_domain::<E>()(enc::field_at(f), constant_book(c)[f][i].0) && constant_book(c)[f][i].1 > 0 by {
+                lemma_field_entry_source::<E>(c.values@, enc::field_at(f), i);
+                let j = choose|j: int| 0 <= j < c.values@.len() && constant_book(c)[f][i] == (c.values@[j], (j + 1) as u64);
+            }
+            assert forall|f: int, i: int, k: int| 0 <= f < arity::<E>() && 0 <= i < constant_book(c)[f].len() && 0 <= k < constant_book(c)[f].len()
+                implies fl::component_equality::<E>()(enc::field_at(f), constant_book(c)[f][i].0, constant_book(c)[f][k].0)
+                    == (constant_book(c)[f][i].1 == constant_book(c)[f][k].1) by {
+                let field = enc::field_at(f);
+                lemma_field_entry_source::<E>(c.values@, field, i); lemma_field_entry_source::<E>(c.values@, field, k);
+                let j = choose|j: int| 0 <= j < c.values@.len() && constant_book(c)[f][i] == (c.values@[j], (j + 1) as u64);
+                let l = choose|l: int| 0 <= l < c.values@.len() && constant_book(c)[f][k] == (c.values@[l], (l + 1) as u64);
+                if j < l { assert(!c.values@[j].eq_spec(&c.values@[l])); }
+                if l < j { assert(!c.values@[l].eq_spec(&c.values@[j])); }
+            }
+        }
+
+    proof fn lemma_field_entry_at<E: Event>(values: Seq<E::Component>, field: Component, index: int)
+        requires 0 <= index < values.len(), value_field::<E>(values[index]) == field,
+        ensures field_entries::<E>(values, field).contains((values[index], (index + 1) as u64)),
     {
-        let p = |entry: (ComponentValue<E>, u64)| value_field(entry.0) == field;
-        let q = match field {
-            Component::Principal => |entry: (ComponentValue<E>, u64)| entry.0 is Principal,
-            Component::Action => |entry: (ComponentValue<E>, u64)| entry.0 is Action,
-            Component::Resource => |entry: (ComponentValue<E>, u64)| entry.0 is Resource,
-        };
-        assert forall|x: (ComponentValue<E>, u64)| #[trigger] p(x) == q(x) by { match x.0 { ComponentValue::Principal(_) => {}, ComponentValue::Action(_) => {}, ComponentValue::Resource(_) => {} } }
-        assert(entries(c.values@).filter(p) == entries(c.values@).filter(q)) by {
-            reveal(Seq::filter);
-            lemma_filter_ext(entries(c.values@), p, q);
-        }
+        let source = entries::<E>(values);
+        let pred = |p: (E::Component, u64)| value_field::<E>(p.0) == field;
+        assert(source[index] == (values[index], (index + 1) as u64));
+        source.lemma_filter_contains(pred, index);
+        assert(field_entries::<E>(values, field) == source.filter(pred));
     }
 
-    proof fn lemma_filter_ext<T>(s: Seq<T>, p: spec_fn(T) -> bool, q: spec_fn(T) -> bool)
-        requires forall|x: T| #[trigger] p(x) == q(x),
-        ensures s.filter(p) == s.filter(q),
-        decreases s.len(),
-    {
-        reveal(Seq::filter);
-        if s.len() > 0 { lemma_filter_ext(s.drop_last(), p, q); }
-    }
-
-    pub(crate) proof fn lemma_field_entry_source<E: Event>(values: Seq<ComponentValue<E>>, field: Component, i: int)
-        requires 0 <= i < field_entries(values, field).len(),
-        ensures exists|j: int| 0 <= j < values.len() && field_entries(values, field)[i]
-            == (values[j], (j + 1) as u64),
-            value_field(field_entries(values, field)[i].0) == field,
-    {
-        let p = |x: (ComponentValue<E>, u64)| value_field(x.0) == field;
-        entries(values).lemma_filter_pred(p, i);
-        entries(values).lemma_filter_contains_rev(p, field_entries(values, field)[i]);
-        let j = choose|j: int| 0 <= j < entries(values).len()
-            && entries(values)[j] == field_entries(values, field)[i];
-        assert(entries(values)[j] == (values[j], (j + 1) as u64));
-    }
-
-    proof fn lemma_component_eq<E: Event>(f: Component, a: ComponentValue<E>, b: ComponentValue<E>)
-        requires fl::component_domain::<E>()(f, a), fl::component_domain::<E>()(f, b),
-        ensures fl::component_equality::<E>()(f, a, b) == a.eq_spec(&b),
-    {
-        match (f, a, b) {
-            (Component::Principal, ComponentValue::Principal(_), ComponentValue::Principal(_)) => {},
-            (Component::Action, ComponentValue::Action(_), ComponentValue::Action(_)) => {},
-            (Component::Resource, ComponentValue::Resource(_), ComponentValue::Resource(_)) => {},
-            _ => {},
-        }
-    }
-
-    pub(crate) proof fn lemma_constants_maps<E: Event>(c: Constants<E>)
-        requires constants_wf(c), analyzer_obligations::<E>(),
-        ensures enc::maps_wf(constant_book(c), fl::component_equality::<E>(), fl::component_domain::<E>()),
-    {
-        assert forall|f: Component, a: ComponentValue<E>| #[trigger] fl::component_domain::<E>()(f, a) implies fl::component_equality::<E>()(f, a, a) by {
-            lemma_component_eq(f, a, a); assert(a.eq_spec(&a));
-        }
-        assert forall|f: Component, a: ComponentValue<E>, b: ComponentValue<E>| fl::component_domain::<E>()(f, a) && fl::component_domain::<E>()(f, b)
-            implies #[trigger] fl::component_equality::<E>()(f, a, b) == fl::component_equality::<E>()(f, b, a) by {
-            lemma_component_eq(f, a, b); lemma_component_eq(f, b, a); assert(a.eq_spec(&b) == b.eq_spec(&a));
-        }
-        assert forall|f: Component, a: ComponentValue<E>, b: ComponentValue<E>, d: ComponentValue<E>|
-            fl::component_domain::<E>()(f, a) && fl::component_domain::<E>()(f, b) && fl::component_domain::<E>()(f, d)
-                && #[trigger] fl::component_equality::<E>()(f, a, b) && #[trigger] fl::component_equality::<E>()(f, b, d)
-            implies fl::component_equality::<E>()(f, a, d) by {
-            lemma_component_eq(f, a, b); lemma_component_eq(f, b, d); lemma_component_eq(f, a, d);
-            assert(a.eq_spec(&b)); assert(b.eq_spec(&d)); assert(a.eq_spec(&d));
-        }
-        assert(enc::equality_laws(fl::component_equality::<E>(), fl::component_domain::<E>()));
-        assert forall|f: int, i: int| 0 <= f < 3 && 0 <= i < constant_book(c)[f].len()
-            implies fl::component_domain::<E>()(enc::field_at(f), constant_book(c)[f][i].0)
-                && constant_book(c)[f][i].1 > 0 by {
-            let field = enc::field_at(f);
-            assert(junco_core::flat::verify::field_index(field) == f);
-            lemma_field_book(c, field);
-            lemma_field_entry_source(c.values@, field, i);
-            let j = choose|j: int| 0 <= j < c.values@.len()
-                && field_entries(c.values@, field)[i] == (c.values@[j], (j + 1) as u64);
-            match constant_book(c)[f][i].0 { ComponentValue::Principal(_) => {}, ComponentValue::Action(_) => {}, ComponentValue::Resource(_) => {} }
-        }
-        assert forall|f: int, i: int, k: int| 0 <= f < 3 && 0 <= i < constant_book(c)[f].len()
-            && 0 <= k < constant_book(c)[f].len() implies
-            fl::component_equality::<E>()(enc::field_at(f), constant_book(c)[f][i].0, constant_book(c)[f][k].0)
-                == (constant_book(c)[f][i].1 == constant_book(c)[f][k].1) by {
-            let field = enc::field_at(f);
-            assert(junco_core::flat::verify::field_index(field) == f);
-            lemma_field_book(c, field);
-            lemma_field_entry_source(c.values@, field, i);
-            lemma_field_entry_source(c.values@, field, k);
-            let j = choose|j: int| 0 <= j < c.values@.len() && field_entries(c.values@, field)[i] == (c.values@[j], (j + 1) as u64);
-            let l = choose|l: int| 0 <= l < c.values@.len() && field_entries(c.values@, field)[k] == (c.values@[l], (l + 1) as u64);
-            if j < l { assert(!c.values@[j].eq_spec(&c.values@[l])); }
-            if l < j { assert(!c.values@[l].eq_spec(&c.values@[j])); }
-            match (c.values@[j], c.values@[l]) { (ComponentValue::Principal(_), ComponentValue::Principal(_)) => {}, (ComponentValue::Action(_), ComponentValue::Action(_)) => {}, (ComponentValue::Resource(_), ComponentValue::Resource(_)) => {}, _ => {} }
-        }
-    }
-
-    pub(crate) proof fn lemma_stored_encoded<E: Event>(c: Constants<E>, v: ComponentValue<E>, id: u32)
+    pub(crate) proof fn lemma_stored_encoded<E: Event>(c: Constants<E>, v: E::Component, id: u32)
         requires constants_wf(c), stored_code(c, v, id),
-        ensures enc::encoded(constant_book(c), fl::component_equality::<E>(), value_field(v), v, id as u64),
+        ensures enc::encoded(constant_book(c), fl::component_equality::<E>(), value_field::<E>(v), v, id as u64),
     {
-        let field = value_field(v);
+        let field = value_field::<E>(v);
         let j = id as int - 1;
-        assert(value_field(c.values@[j]) == field) by { match (v, c.values@[j]) { (ComponentValue::Principal(_), ComponentValue::Principal(_)) => {}, (ComponentValue::Action(_), ComponentValue::Action(_)) => {}, (ComponentValue::Resource(_), ComponentValue::Resource(_)) => {}, _ => {} } }
+        assert(0 <= j < c.values@.len());
+        assert(E::coordinate_spec(c.values@[j]) < arity::<E>());
+        assert(value_field::<E>(c.values@[j]) == field);
+        assert(field.0 < arity::<E>());
         lemma_field_book(c, field);
-        entries(c.values@).lemma_filter_contains(|p: (ComponentValue<E>, u64)| value_field(p.0) == field, j);
-        let i = choose|i: int| 0 <= i < field_entries(c.values@, field).len()
-            && field_entries(c.values@, field)[i] == entries(c.values@)[j];
+        lemma_field_entry_at::<E>(c.values@, field, j);
+        let entry = (c.values@[j], id as u64);
+        assert(field_entries::<E>(c.values@, field).contains(entry));
+        let i = choose|i: int| 0 <= i < field_entries::<E>(c.values@, field).len()
+            && field_entries::<E>(c.values@, field)[i] == entry;
+        assert(constant_book(c)[field.0 as int][i] == entry);
+        assert(fl::component_equality::<E>()(field, v, entry.0));
         assert(enc::encoded(constant_book(c), fl::component_equality::<E>(), field, v, id as u64));
     }
 
-    pub(crate) proof fn lemma_constants_extend<E: Event>(a: Constants<E>, b: Constants<E>)
-        requires constants_wf(a), constants_wf(b), constants_frame(a, b),
-        ensures enc::extends(constant_book(a), constant_book(b), fl::component_equality::<E>()),
-    {
-        assert forall|field: Component, v: ComponentValue<E>, id: u64|
-            enc::encoded(constant_book(a), fl::component_equality::<E>(), field, v, id)
-            implies enc::encoded(constant_book(b), fl::component_equality::<E>(), field, v, id) by {
-            lemma_field_book(a, field);
-            let f = junco_core::flat::verify::field_index(field);
-            let i = choose|i: int| 0 <= i < constant_book(a)[f].len() && constant_book(a)[f][i].1 == id
-                && fl::component_equality::<E>()(field, v, constant_book(a)[f][i].0);
-            lemma_field_entry_source(a.values@, field, i);
-            let j = choose|j: int| 0 <= j < a.values@.len() && field_entries(a.values@, field)[i] == (a.values@[j], (j + 1) as u64);
-            assert(b.values@[j] == a.values@[j]);
-            assert(stored_code(b, v, id as u32));
-            assert(value_field(v) == field);
-            lemma_stored_encoded(b, v, id as u32);
-        }
-    }
-
-    pub(crate) open spec fn universe_id<E: Event>(c: Constants<E>, values: Seq<ComponentValue<E>>, id: u32) -> bool {
-        exists|j: int| 0 <= j < values.len() && stored_code(c, values[j], id)
-    }
-
-    pub(crate) open spec fn universe_value<E: Event>(c: Constants<E>, ids: Seq<u32>, value: ComponentValue<E>) -> bool {
-        exists|i: int| 0 <= i < ids.len() && stored_code(c, value, ids[i])
-    }
-
-    pub(crate) open spec fn universe_encoded<E: Event>(c: Constants<E>, ids: Seq<u32>, values: Seq<ComponentValue<E>>) -> bool {
-        &&& ids.no_duplicates()
-        &&& forall|i: int| 0 <= i < ids.len() ==> #[trigger] universe_id(c, values, ids[i])
-        &&& forall|j: int| 0 <= j < values.len() ==> #[trigger] universe_value(c, ids, values[j])
-    }
-
-    pub(crate) proof fn lemma_stored_frame<E: Event>(a: Constants<E>, b: Constants<E>, v: ComponentValue<E>, id: u32)
-        requires constants_frame(a, b), stored_code(a, v, id),
-        ensures stored_code(b, v, id),
-    {}
-
-    pub(crate) proof fn lemma_universe_frame<E: Event>(a: Constants<E>, b: Constants<E>, ids: Seq<u32>, values: Seq<ComponentValue<E>>)
-        requires constants_frame(a, b), universe_encoded(a, ids, values),
-        ensures universe_encoded(b, ids, values),
-    {
-        hide(stored_code);
-        hide(constants_frame);
-        assert forall|i: int| 0 <= i < ids.len() implies #[trigger] universe_id(b, values, ids[i]) by {
-            assert(universe_id(a, values, ids[i]));
-            let j = choose|j: int| 0 <= j < values.len() && stored_code(a, values[j], ids[i]);
-            lemma_stored_frame(a, b, values[j], ids[i]);
-        }
-        assert forall|j: int| 0 <= j < values.len() implies #[trigger] universe_value(b, ids, values[j]) by {
-            assert(universe_value(a, ids, values[j]));
-            let i = choose|i: int| 0 <= i < ids.len() && stored_code(a, values[j], ids[i]);
-            lemma_stored_frame(a, b, values[j], ids[i]);
-        }
-    }
-
-    pub(crate) open spec fn option_len<T>(values: Option<Vec<T>>) -> nat {
-        match values { Some(v) => v@.len(), None => 0 }
-    }
-
-    /// Sufficient constructor capacity: the total number of declared values fits the u32 code space.
-    pub closed spec fn constructor_capacity<E: Event>(domains: Domains<E>) -> bool {
-        option_len(domains.principals) + option_len(domains.actions) + option_len(domains.resources) <= u32::MAX
-    }
-
-    pub(crate) open spec fn encode_capacity<E: Event>(a: PolicyAnalyzer<E>, source: FlatPair<ComponentValue<E>>) -> bool {
-        a.constants.values@.len() + 3 + source.tests@.len() <= u32::MAX
-    }
-
-    /// Sufficient capacities for constant ids and the per-state split and letter products.
-    /// Constraint-id and fresh-value exhaustion are runtime errors, not preconditions.
-    pub open(crate) spec fn query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>) -> bool {
-        // Traversal costs overbound the query's vocabulary.
-        let count = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
-        count <= u32::MAX && (count + 2) * (count + 2) * (count + 2) <= usize::MAX
-    }
-
-    pub(crate) open spec fn pins(head: Seq<FlatHead<u64>>) -> encoding::NHead {
-        encoding::NHead { principal: encoding::head_code(head[0]), action: encoding::head_code(head[1]), resource: encoding::head_code(head[2]) }
-    }
-
-    pub(crate) open spec fn numeric_head_wf(head: Seq<FlatHead<u64>>) -> bool {
-        head.len() == 3 && forall|i: int| #![trigger head[i]] 0 <= i < 3 ==> match head[i] { FlatHead::Constant(v) => v <= u32::MAX, _ => true }
-    }
-
-    pub(crate) proof fn lemma_lowered_head_bound<E: Event>(c: Constants<E>, source: FlatPair<ComponentValue<E>>, target: FlatPair<u64>)
-        requires constants_wf(c), enc::lowering(source, target, constant_book(c), fl::component_equality::<E>()),
-        ensures numeric_head_wf(target.head@),
-    {
-        assert forall|i: int| #![trigger target.head@[i]] 0 <= i < 3 implies match target.head@[i] { FlatHead::Constant(v) => v <= u32::MAX, _ => true } by {
-            if let FlatHead::Constant(id) = target.head@[i] {
-                let field = enc::field_at(i);
-                lemma_field_book(c, field);
-                let value = match source.head@[i] { FlatHead::Constant(v) => v, _ => arbitrary() };
-                let j = choose|j: int| 0 <= j < constant_book(c)[i].len() && constant_book(c)[i][j].1 == id && fl::component_equality::<E>()(field, value, constant_book(c)[i][j].0);
-                lemma_field_entry_source(c.values@, field, j);
+        pub(crate) proof fn lemma_constants_extend<E: Event>(a: Constants<E>, b: Constants<E>)
+            requires constants_wf(a), constants_wf(b), constants_frame(a, b),
+            ensures enc::extends(constant_book(a), constant_book(b), fl::component_equality::<E>()),
+        {
+            assert forall|field: Component, v: E::Component, id: u64|
+                enc::encoded(constant_book(a), fl::component_equality::<E>(), field, v, id)
+                implies enc::encoded(constant_book(b), fl::component_equality::<E>(), field, v, id) by {
+    let f = field.0 as int;
+    assert(field.0 < arity::<E>());
+    lemma_field_book(a, field); lemma_field_book(b, field);
+    let i = choose|i: int| 0 <= i < constant_book(a)[f].len() && constant_book(a)[f][i].1 == id
+        && fl::component_equality::<E>()(field, v, constant_book(a)[f][i].0);
+    lemma_field_entry_source::<E>(a.values@, field, i);
+    let j = choose|j: int| 0 <= j < a.values@.len()
+        && field_entries::<E>(a.values@, field)[i] == (a.values@[j], (j + 1) as u64);
+    assert(a.values@[j] == b.values@[j]);
+    assert(value_field::<E>(b.values@[j]) == field);
+    lemma_field_entry_at::<E>(b.values@, field, j);
+    let entry = (b.values@[j], id);
+    assert(field_entries::<E>(b.values@, field).contains(entry));
+    let k = choose|k: int| 0 <= k < field_entries::<E>(b.values@, field).len()
+        && field_entries::<E>(b.values@, field)[k] == entry;
+    assert(constant_book(b)[f][k] == entry);
+    assert(fl::component_equality::<E>()(field, v, constant_book(b)[f][k].0));
             }
         }
-    }
 
-    pub(crate) open spec fn encoding_head_code(head: FlatHead<u64>) -> Option<nat> { encoding::head_code(head) }
+        pub(crate) open spec fn universe_id<E: Event>(c: Constants<E>, values: Seq<E::Component>, id: u32) -> bool {
+            exists|j: int| 0 <= j < values.len() && stored_code(c, values[j], id)
+        }
 
-    pub(crate) open spec fn declared_universe<E: Event, T>(c: Constants<E>, u: Universe, vs: Option<Vec<T>>, f: spec_fn(T) -> ComponentValue<E>) -> bool {
-        match (u, vs) { (None, None) => true, (Some(ids), Some(values)) => universe_encoded(c, (*ids)@, values@.map_values(f)), _ => false }
-    }
+        pub(crate) open spec fn universe_value<E: Event>(c: Constants<E>, ids: Seq<u32>, value: E::Component) -> bool {
+            exists|i: int| 0 <= i < ids.len() && stored_code(c, value, ids[i])
+        }
 
-    pub(crate) open spec fn declared_domains_encoded<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
-        declared_universe(a.constants, a.universes[0], d.principals, |v: E::Principal| ComponentValue::<E>::Principal(v))
-            && declared_universe(a.constants, a.universes[1], d.actions, |v: E::Action| ComponentValue::<E>::Action(v))
-            && declared_universe(a.constants, a.universes[2], d.resources, |v: E::Resource| ComponentValue::<E>::Resource(v))
-    }
+        pub(crate) open spec fn universe_encoded<E: Event>(c: Constants<E>, ids: Seq<u32>, values: Seq<E::Component>) -> bool {
+            &&& ids.no_duplicates()
+            &&& forall|i: int| 0 <= i < ids.len() ==> #[trigger] universe_id(c, values, ids[i])
+            &&& forall|j: int| 0 <= j < values.len() ==> #[trigger] universe_value(c, ids, values[j])
+        }
 
-    pub(crate) open spec fn selected_values<E: Event>(c: Constants<E>, u: Universe) -> Option<Set<ComponentValue<E>>> {
-        match u { None => None, Some(ids) => Some((*ids)@.to_set().map(|id: u32| c.values@[id as int - 1])) }
-    }
+        pub(crate) proof fn lemma_stored_frame<E: Event>(a: Constants<E>, b: Constants<E>, v: E::Component, id: u32)
+            requires constants_frame(a, b), stored_code(a, v, id),
+            ensures stored_code(b, v, id),
+        {}
 
-    pub(crate) open spec fn principal_of<E: Event>(v: ComponentValue<E>) -> E::Principal {
-        match v { ComponentValue::Principal(x) => x, _ => arbitrary() }
-    }
-    pub(crate) open spec fn action_of<E: Event>(v: ComponentValue<E>) -> E::Action {
-        match v { ComponentValue::Action(x) => x, _ => arbitrary() }
-    }
-    pub(crate) open spec fn resource_of<E: Event>(v: ComponentValue<E>) -> E::Resource {
-        match v { ComponentValue::Resource(x) => x, _ => arbitrary() }
-    }
-
-    pub(crate) open spec fn principal_values<E: Event>(values: Set<ComponentValue<E>>) -> Set<E::Principal> {
-        values.filter(|v: ComponentValue<E>| v is Principal).map(|v: ComponentValue<E>| principal_of::<E>(v))
-    }
-    pub(crate) open spec fn action_values<E: Event>(values: Set<ComponentValue<E>>) -> Set<E::Action> {
-        values.filter(|v: ComponentValue<E>| v is Action).map(|v: ComponentValue<E>| action_of::<E>(v))
-    }
-    pub(crate) open spec fn resource_values<E: Event>(values: Set<ComponentValue<E>>) -> Set<E::Resource> {
-        values.filter(|v: ComponentValue<E>| v is Resource).map(|v: ComponentValue<E>| resource_of::<E>(v))
-    }
-
-    impl<E: Event> View for PolicyAnalyzer<E> {
-        type V = analyzer::AnalyzerView<E::Principal, E::Action, E::Resource>;
-        open(crate) spec fn view(&self) -> Self::V {
-            analyzer::AnalyzerView {
-                domains: semantics::DomainsView {
-                    principal: match selected_values(self.constants, self.universes[0]) { None => None, Some(vs) => Some(principal_values::<E>(vs)) },
-                    action: match selected_values(self.constants, self.universes[1]) { None => None, Some(vs) => Some(action_values::<E>(vs)) },
-                    resource: match selected_values(self.constants, self.universes[2]) { None => None, Some(vs) => Some(resource_values::<E>(vs)) },
-                },
-                rules: Seq::empty(),
-                known_principals: principal_values::<E>(self.constants.values@.to_set()),
-                known_actions: action_values::<E>(self.constants.values@.to_set()),
-                known_resources: resource_values::<E>(self.constants.values@.to_set()),
+        pub(crate) proof fn lemma_universe_frame<E: Event>(a: Constants<E>, b: Constants<E>, ids: Seq<u32>, values: Seq<E::Component>)
+            requires constants_frame(a, b), universe_encoded(a, ids, values),
+            ensures universe_encoded(b, ids, values),
+        {
+            hide(stored_code);
+            hide(constants_frame);
+            assert forall|i: int| 0 <= i < ids.len() implies #[trigger] universe_id(b, values, ids[i]) by {
+                assert(universe_id(a, values, ids[i]));
+                let j = choose|j: int| 0 <= j < values.len() && stored_code(a, values[j], ids[i]);
+                lemma_stored_frame(a, b, values[j], ids[i]);
+            }
+            assert forall|j: int| 0 <= j < values.len() implies #[trigger] universe_value(b, ids, values[j]) by {
+                assert(universe_value(a, ids, values[j]));
+                let i = choose|i: int| 0 <= i < ids.len() && stored_code(a, values[j], ids[i]);
+                lemma_stored_frame(a, b, values[j], ids[i]);
             }
         }
-    }
 
-    pub(crate) open spec fn universes_wf<E: Event>(c: Constants<E>, us: Universes) -> bool {
-        forall|f: int| #![trigger us[f]] 0 <= f < 3 ==> match us[f] { None => true, Some(ids) => (*ids)@.no_duplicates()
-            && forall|j: int| 0 <= j < (*ids)@.len() ==> 0 < (*ids)@[j] <= c.values@.len()
-                && value_field(c.values@[(*ids)@[j] as int - 1]) == enc::field_at(f) }
-    }
+        pub(crate) open spec fn option_len<T>(values: Option<Vec<T>>) -> nat {
+            match values { Some(v) => v@.len(), None => 0 }
+        }
 
-    /// Constant-book and declared-universe invariants preserved by analyzer queries.
-    pub open(crate) spec fn analyzer_state_wf<E: Event>(a: PolicyAnalyzer<E>) -> bool {
-        constants_wf(a.constants) && universes_wf(a.constants, a.universes)
-    }
+        pub(crate) open spec fn selected_values<E: Event>(c: Constants<E>, u: Universe) -> Option<Set<E::Component>> {
+            match u { None => None, Some(ids) => Some((*ids)@.to_set().map(|id: u32| c.values@[id as int - 1])) }
+        }
 
-    pub(crate) proof fn lemma_universes_frame<E: Event>(a: Constants<E>, b: Constants<E>, us: Universes)
-        requires constants_frame(a, b), universes_wf(a, us),
-        ensures universes_wf(b, us), selected_values(a, us[0]) == selected_values(b, us[0]),
-            selected_values(a, us[1]) == selected_values(b, us[1]), selected_values(a, us[2]) == selected_values(b, us[2]),
-    {
-        assert forall|f: int| 0 <= f < 3 implies selected_values(a, us[f]) == selected_values(b, us[f]) by {
-            if let Some(ids) = us[f] {
-                super::lemma_set_map_equal((*ids)@.to_set(), |id: u32| a.values@[id as int - 1], |id: u32| b.values@[id as int - 1]);
+        pub(crate) proof fn lemma_universe_empty<E: Event>(c: Constants<E>)
+            ensures universe_encoded(c, Seq::<u32>::empty(), Seq::<E::Component>::empty()),
+        {}
+
+        pub(crate) proof fn lemma_universe_step<E: Event>(c: Constants<E>, ids: Seq<u32>, next: Seq<u32>, vs: Seq<E::Component>, v: E::Component, id: u32)
+            requires universe_encoded(c, ids, vs), stored_code(c, v, id),
+                next == if ids.contains(id) { ids } else { ids.push(id) },
+            ensures universe_encoded(c, next, vs.push(v)),
+        {
+            hide(stored_code);
+            if ids.contains(id) { assert(next == ids); } else { assert(next[ids.len() as int] == id); }
+            assert(next.contains(id));
+            assert forall|i: int, j: int| 0 <= i < j < next.len() implies next[i] != next[j] by {
+                if j < ids.len() { assert(ids[i] != ids[j]); }
+                else { assert(!ids.contains(id)); assert(ids[i] != id); }
+            }
+            assert forall|i: int| 0 <= i < next.len() implies #[trigger] universe_id(c, vs.push(v), next[i]) by {
+                if i < ids.len() {
+                    assert(universe_id(c, vs, ids[i]));
+                    let j = choose|j: int| 0 <= j < vs.len() && stored_code(c, vs[j], ids[i]);
+                    assert(stored_code(c, vs.push(v)[j], next[i]));
+                } else { assert(stored_code(c, vs.push(v)[vs.len() as int], next[i])); }
+            }
+            assert forall|j: int| 0 <= j < vs.push(v).len() implies #[trigger] universe_value(c, next, vs.push(v)[j]) by {
+                if j < vs.len() {
+                    assert(universe_value(c, ids, vs[j]));
+                    let i = choose|i: int| 0 <= i < ids.len() && stored_code(c, vs[j], ids[i]);
+                    assert(stored_code(c, vs.push(v)[j], next[i]));
+                } else {
+                    assert(next.contains(id));
+                    let i = choose|i: int| 0 <= i < next.len() && next[i] == id;
+                    assert(stored_code(c, vs.push(v)[j], next[i]));
+                }
             }
         }
-    }
 
+        pub(crate) open spec fn selected_code_values<E: Event>(c: Constants<E>, ids: Seq<u32>) -> Set<E::Component> {
+            ids.to_set().map(|id: u32| c.values@[id as int - 1])
+        }
 
-    pub closed spec fn constructor_result<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
-        constants_wf(a.constants) && a.constants.values@.len() <= option_len(d.principals) + option_len(d.actions) + option_len(d.resources)
-            && declared_domains_encoded(a, d) && analyzer_state_wf(a) && analyzer::analyzer_wf(a@)
-            && declared_domain_equivalence(a, d)
-    }
+        proof fn lemma_selected_members<E: Event>(c: Constants<E>, ids: Seq<u32>)
+            ensures forall|v: E::Component| #[trigger] selected_code_values(c, ids).contains(v)
+                == (exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v),
+        {
+            let selected = ids.to_set().map(|id: u32| c.values@[id as int - 1]);
+            assert forall|v: E::Component| selected.contains(v) implies exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v by {
+                let id = choose|id: u32| ids.to_set().contains(id) && c.values@[id as int - 1] == v;
+                let i = choose|i: int| 0 <= i < ids.len() && ids[i] == id;
+                assert(c.values@[ids[i] as int - 1] == v);
+            }
+            assert forall|v: E::Component| (exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v) implies selected.contains(v) by {
+                let i = choose|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v;
+                assert(ids.to_set().contains(ids[i]));
+                assert(selected.contains(c.values@[ids[i] as int - 1]));
+            }
+        }
 
+        pub(crate) open spec fn domain_values_count<C>(domains: Seq<Option<Vec<C>>>) -> nat
+            decreases domains.len(),
+        {
+            if domains.len() == 0 { 0 } else { domain_values_count(domains.drop_last()) + option_len(domains.last()) }
+        }
 
-    pub(crate) proof fn lemma_constructor_contract<E: Event>()
-        ensures forall|d: Domains<E>| #[trigger] constructor_capacity(d)
-            == (option_len(d.principals) + option_len(d.actions) + option_len(d.resources) <= u32::MAX),
-            forall|a: PolicyAnalyzer<E>, d: Domains<E>| #[trigger] constructor_result(a, d)
-            == (constants_wf(a.constants) && a.constants.values@.len() <= option_len(d.principals) + option_len(d.actions) + option_len(d.resources)
-                && declared_domains_encoded(a, d) && analyzer_state_wf(a) && analyzer::analyzer_wf(a@) && declared_domain_equivalence(a, d)),
-    {}
+        pub(crate) proof fn lemma_domain_count_prefix<C>(components: Seq<Option<Vec<C>>>, count: int)
+            requires 0 <= count <= components.len(),
+            ensures domain_values_count(components.take(count)) <= domain_values_count(components),
+            decreases components.len(),
+        {
+            if count < components.len() {
+                lemma_domain_count_prefix(components.drop_last(), count);
+                assert(components.take(count) =~= components.drop_last().take(count));
+            } else { assert(components.take(count) =~= components); }
+        }
 
-    pub(crate) proof fn lemma_declared_frame<E: Event, T>(a: Constants<E>, b: Constants<E>, u: Universe, vs: Option<Vec<T>>, f: spec_fn(T) -> ComponentValue<E>)
-        requires constants_frame(a, b), declared_universe(a, u, vs, f),
-        ensures declared_universe(b, u, vs, f),
-    {
-        if let (Some(ids), Some(values)) = (u, vs) { lemma_universe_frame(a, b, (*ids)@, values@.map_values(f)); }
-    }
+        pub(crate) proof fn lemma_domain_count_step<C>(components: Seq<Option<Vec<C>>>, index: int)
+            requires 0 <= index < components.len(),
+            ensures domain_values_count(components.take(index + 1))
+                    == domain_values_count(components.take(index)) + option_len(components[index]),
+                domain_values_count(components.take(index + 1)) <= domain_values_count(components),
+        {
+            assert(components.take(index + 1).drop_last() =~= components.take(index));
+            lemma_domain_count_prefix(components, index + 1);
+        }
 
-    pub(crate) proof fn lemma_declared_wf<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
-        requires declared_domains_encoded(a, d),
-        ensures universes_wf(a.constants, a.universes), analyzer::analyzer_wf(a@),
-    {
-        assert forall|f: int| #![trigger a.universes[f]] 0 <= f < 3 implies match a.universes[f] {
-            None => true, Some(ids) => (*ids)@.no_duplicates() && forall|j: int| 0 <= j < (*ids)@.len()
-                ==> 0 < (*ids)@[j] <= a.constants.values@.len()
-                    && value_field(a.constants.values@[(*ids)@[j] as int - 1]) == enc::field_at(f)
-        } by {
-            if f == 0 {} else if f == 1 {} else {}
-            if let Some(ids) = a.universes[f] {
-                assert forall|j: int| 0 <= j < (*ids)@.len() implies
-                    0 < (*ids)@[j] <= a.constants.values@.len()
-                        && value_field(a.constants.values@[(*ids)@[j] as int - 1]) == enc::field_at(f) by {
-                    if f == 0 {
-                        let values = match d.principals { Some(vs) => vs@, _ => arbitrary() };
-                        let tagged = values.map_values(|v: E::Principal| ComponentValue::<E>::Principal(v));
-                        assert(universe_id(a.constants, tagged, (*ids)@[j]));
-                        let k = choose|k: int| 0 <= k < tagged.len() && stored_code(a.constants, tagged[k], (*ids)@[j]);
-                        assert(tagged[k] == ComponentValue::<E>::Principal(values[k]));
-                        match a.constants.values@[(*ids)@[j] as int - 1] { ComponentValue::Principal(_) => {}, _ => {} }
-                    } else if f == 1 {
-                        let values = match d.actions { Some(vs) => vs@, _ => arbitrary() };
-                        let tagged = values.map_values(|v: E::Action| ComponentValue::<E>::Action(v));
-                        assert(universe_id(a.constants, tagged, (*ids)@[j]));
-                        let k = choose|k: int| 0 <= k < tagged.len() && stored_code(a.constants, tagged[k], (*ids)@[j]);
-                        assert(tagged[k] == ComponentValue::<E>::Action(values[k]));
-                        match a.constants.values@[(*ids)@[j] as int - 1] { ComponentValue::Action(_) => {}, _ => {} }
-                    } else {
-                        let values = match d.resources { Some(vs) => vs@, _ => arbitrary() };
-                        let tagged = values.map_values(|v: E::Resource| ComponentValue::<E>::Resource(v));
-                        assert(universe_id(a.constants, tagged, (*ids)@[j]));
-                        let k = choose|k: int| 0 <= k < tagged.len() && stored_code(a.constants, tagged[k], (*ids)@[j]);
-                        assert(tagged[k] == ComponentValue::<E>::Resource(values[k]));
-                        match a.constants.values@[(*ids)@[j] as int - 1] { ComponentValue::Resource(_) => {}, _ => {} }
+        pub open(crate) spec fn domains_wf<E: Event>(domains: Domains<E>) -> bool {
+            domains.components@.len() == arity::<E>()
+    && forall|i: int| #![trigger domains.components@[i]] 0 <= i < arity::<E>() ==> match domains.components@[i] {
+        None => true, Some(vs) => forall|j: int| #![trigger vs@[j]] 0 <= j < vs@.len() ==> E::coordinate_spec(vs@[j]) == i,
+                }
+        }
+
+        /// Only the global u32 constant-id space is a construction precondition.
+        pub closed spec fn constructor_capacity<E: Event>(domains: Domains<E>) -> bool {
+            domain_values_count(domains.components@) <= u32::MAX
+        }
+
+        pub(crate) open spec fn encode_capacity<E: Event>(a: PolicyAnalyzer<E>, source: FlatPair<E::Component>) -> bool {
+            a.constants.values@.len() + source.head@.len() + source.tests@.len() <= u32::MAX
+        }
+
+        /// Cartesian-product overflow is reported by the generators, never assumed away here.
+        pub open(crate) spec fn query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>) -> bool {
+            a.constants.values@.len() + 2 * arity::<E>() + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) <= u32::MAX
+        }
+
+        pub(crate) open spec fn pins(head: Seq<FlatHead<u64>>) -> encoding::NHead {
+            head.map_values(|h: FlatHead<u64>| encoding::head_code(h))
+        }
+
+        pub(crate) open spec fn numeric_head_wf(head: Seq<FlatHead<u64>>) -> bool {
+            1 <= head.len() <= history_syntax::MAX_ARITY
+                && forall|i: int| #![trigger head[i]] 0 <= i < head.len() ==> match head[i] { FlatHead::Constant(v) => v <= u32::MAX, _ => true }
+        }
+
+        pub(crate) proof fn lemma_lowered_head_bound<E: Event>(c: Constants<E>, source: FlatPair<E::Component>, target: FlatPair<u64>)
+            requires constants_wf(c), 1 <= source.head@.len() <= history_syntax::MAX_ARITY,
+                enc::lowering(source, target, constant_book(c), fl::component_equality::<E>()),
+            ensures numeric_head_wf(target.head@),
+        {
+            assert forall|i: int| 0 <= i < target.head@.len() implies match #[trigger] target.head@[i] { FlatHead::Constant(v) => v <= u32::MAX, _ => true } by {
+                if let FlatHead::Constant(id) = target.head@[i] {
+                    match source.head@[i] {
+                        FlatHead::Constant(value) => {
+                            let j = choose|j: int| 0 <= j < constant_book(c)[i].len() && constant_book(c)[i][j].1 == id
+                                && fl::component_equality::<E>()(enc::field_at(i), value, constant_book(c)[i][j].0);
+                            lemma_field_entry_source::<E>(c.values@, enc::field_at(i), j);
+                        },
+                        _ => {},
                     }
                 }
             }
         }
-    }
 
-    impl<E: Event> View for Domains<E> {
-        type V = semantics::DomainsView<E::Principal, E::Action, E::Resource>;
-        open(crate) spec fn view(&self) -> Self::V {
-            semantics::DomainsView {
-                principal: match self.principals { None => None, Some(vs) => Some(vs@.to_set()) },
-                action: match self.actions { None => None, Some(vs) => Some(vs@.to_set()) },
-                resource: match self.resources { None => None, Some(vs) => Some(vs@.to_set()) },
+        pub(crate) open spec fn encoding_head_code(head: FlatHead<u64>) -> Option<nat> { encoding::head_code(head) }
+
+        pub(crate) open spec fn declared_universe<E: Event>(c: Constants<E>, u: Universe, vs: Option<Vec<E::Component>>) -> bool {
+            match (u, vs) { (None, None) => true, (Some(ids), Some(values)) => universe_encoded(c, (*ids)@, values@), _ => false }
+        }
+
+        pub(crate) open spec fn declared_domains_encoded<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
+            domains_wf(d) && a.universes@.len() == arity::<E>()
+                && forall|i: int| 0 <= i < arity::<E>() ==> declared_universe(a.constants, a.universes[i], d.components@[i])
+        }
+
+        pub(crate) open spec fn component_of<E: Event>(values: Set<E::Component>, coordinate: int) -> Set<E::Component> {
+            values.filter(|value: E::Component| E::coordinate_spec(value) == coordinate)
+        }
+
+        impl<E: Event> View for Domains<E> {
+            type V = semantics::DomainsView<E::Component>;
+            open(crate) spec fn view(&self) -> Self::V {
+                self.components@.map_values(|values: Option<Vec<E::Component>>| match values { None => None, Some(vs) => Some(vs@.to_set()) })
             }
         }
-    }
 
-    pub(crate) proof fn lemma_empty_constants<E: Event>(c: Constants<E>)
-        requires c.values@ == Seq::<ComponentValue<E>>::empty(), crate::native::representatives(c.ids) == Seq::<(ComponentValue<E>, u32)>::empty(),
-        ensures constants_wf(c),
-    {
-        assert(c.values@.map(|i: int, v: ComponentValue<E>| (v, (i + 1) as u32)) =~= Seq::<(ComponentValue<E>, u32)>::empty());
-    }
-
-    pub(crate) proof fn lemma_universe_empty<E: Event>(c: Constants<E>)
-        ensures universe_encoded(c, Seq::<u32>::empty(), Seq::<ComponentValue<E>>::empty()),
-    {}
-
-    pub(crate) proof fn lemma_universe_step<E: Event>(c: Constants<E>, ids: Seq<u32>, next: Seq<u32>, vs: Seq<ComponentValue<E>>, v: ComponentValue<E>, id: u32)
-        requires universe_encoded(c, ids, vs), stored_code(c, v, id),
-            next == if ids.contains(id) { ids } else { ids.push(id) },
-        ensures universe_encoded(c, next, vs.push(v)),
-    {
-        hide(stored_code);
-        if ids.contains(id) { assert(next == ids); } else { assert(next[ids.len() as int] == id); }
-        assert(next.contains(id));
-        assert forall|i: int, j: int| 0 <= i < j < next.len() implies next[i] != next[j] by {
-            if j < ids.len() { assert(ids[i] != ids[j]); }
-            else { assert(!ids.contains(id)); assert(ids[i] != id); }
+        impl<E: Event> View for PolicyAnalyzer<E> {
+            type V = analyzer::AnalyzerView<E::Component>;
+            open(crate) spec fn view(&self) -> Self::V {
+                analyzer::AnalyzerView {
+                    domains: self.universes@.map_values(|u: Universe| selected_values(self.constants, u)),
+                    rules: Seq::empty(),
+                    known: Seq::new(arity::<E>(), |i: int| component_of::<E>(self.constants.values@.to_set(), i)),
+                }
+            }
         }
-        assert forall|i: int| 0 <= i < next.len() implies #[trigger] universe_id(c, vs.push(v), next[i]) by {
-            if i < ids.len() {
-                assert(universe_id(c, vs, ids[i]));
-                let j = choose|j: int| 0 <= j < vs.len() && stored_code(c, vs[j], ids[i]);
-                assert(stored_code(c, vs.push(v)[j], next[i]));
-            } else { assert(stored_code(c, vs.push(v)[vs.len() as int], next[i])); }
+
+        pub(crate) open spec fn universes_wf<E: Event>(c: Constants<E>, us: Universes) -> bool {
+    us@.len() == arity::<E>() && forall|f: int| #![trigger us[f]] 0 <= f < us@.len() ==> match us[f] {
+        None => true, Some(ids) => (*ids)@.no_duplicates() && forall|j: int| #![trigger (*ids)@[j]] 0 <= j < (*ids)@.len()
+                    ==> 0 < (*ids)@[j] <= c.values@.len() && E::coordinate_spec(c.values@[(*ids)@[j] as int - 1]) == f,
+            }
         }
-        assert forall|j: int| 0 <= j < vs.push(v).len() implies #[trigger] universe_value(c, next, vs.push(v)[j]) by {
-            if j < vs.len() {
-                assert(universe_value(c, ids, vs[j]));
-                let i = choose|i: int| 0 <= i < ids.len() && stored_code(c, vs[j], ids[i]);
-                assert(stored_code(c, vs.push(v)[j], next[i]));
+
+        /// Constant books and declared coordinate domains remain well formed across queries.
+        pub open(crate) spec fn analyzer_state_wf<E: Event>(a: PolicyAnalyzer<E>) -> bool {
+            constants_wf(a.constants) && universes_wf(a.constants, a.universes)
+        }
+
+        pub(crate) proof fn lemma_universes_frame<E: Event>(a: Constants<E>, b: Constants<E>, us: Universes)
+            requires constants_frame(a, b), universes_wf(a, us),
+            ensures universes_wf(b, us), forall|i: int| 0 <= i < us@.len() ==> selected_values(a, us[i]) == selected_values(b, us[i]),
+        {
+            assert forall|i: int| 0 <= i < us@.len() implies selected_values(a, us[i]) == selected_values(b, us[i]) by {
+                if let Some(ids) = us[i] {
+                    super::lemma_set_map_equal((*ids)@.to_set(), |id: u32| a.values@[id as int - 1], |id: u32| b.values@[id as int - 1]);
+                }
+            }
+        }
+
+        pub closed spec fn constructor_result<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
+            constants_wf(a.constants) && a.constants.values@.len() <= domain_values_count(d.components@)
+                && declared_domains_encoded(a, d) && analyzer_state_wf(a) && analyzer::analyzer_wf(a@) && declared_domain_equivalence(a, d)
+        }
+
+        pub(crate) proof fn lemma_constructor_contract<E: Event>()
+            ensures forall|d: Domains<E>| #[trigger] constructor_capacity(d) == (domain_values_count(d.components@) <= u32::MAX),
+                forall|a: PolicyAnalyzer<E>, d: Domains<E>| #[trigger] constructor_result(a, d)
+                    == (constants_wf(a.constants) && a.constants.values@.len() <= domain_values_count(d.components@)
+                        && declared_domains_encoded(a, d) && analyzer_state_wf(a) && analyzer::analyzer_wf(a@) && declared_domain_equivalence(a, d)),
+        {}
+
+        pub(crate) proof fn lemma_declared_frame<E: Event>(a: Constants<E>, b: Constants<E>, u: Universe, vs: Option<Vec<E::Component>>)
+            requires constants_frame(a, b), declared_universe(a, u, vs),
+            ensures declared_universe(b, u, vs),
+        {
+            if let (Some(ids), Some(values)) = (u, vs) { lemma_universe_frame(a, b, (*ids)@, values@); }
+        }
+
+        pub(crate) proof fn lemma_declared_wf<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
+            requires constants_wf(a.constants), declared_domains_encoded(a, d),
+            ensures universes_wf(a.constants, a.universes), analyzer::analyzer_wf(a@),
+        {
+            assert forall|f: int| 0 <= f < a.universes@.len() implies match #[trigger] a.universes[f] {
+                None => true, Some(ids) => (*ids)@.no_duplicates() && forall|j: int| 0 <= j < (*ids)@.len()
+                    ==> 0 < (*ids)@[j] <= a.constants.values@.len() && E::coordinate_spec(a.constants.values@[(*ids)@[j] as int - 1]) == f,
+            } by {
+    assert(0 <= f < arity::<E>());
+    assert(declared_universe(a.constants, a.universes[f], d.components@[f]));
+    assert(match d.components@[f] {
+        None => true,
+        Some(values) => forall|k: int| 0 <= k < values@.len() ==> E::coordinate_spec(values@[k]) == f,
+    });
+    if let (Some(ids), Some(vs)) = (a.universes[f], d.components@[f]) {
+        assert(universe_encoded(a.constants, (*ids)@, vs@));
+        assert forall|j: int| #![trigger (*ids)@[j]] 0 <= j < (*ids)@.len() implies 0 < (*ids)@[j] <= a.constants.values@.len()
+            && E::coordinate_spec(a.constants.values@[(*ids)@[j] as int - 1]) == f by {
+            assert(universe_id(a.constants, vs@, (*ids)@[j]));
+            let k = choose|k: int| 0 <= k < vs@.len() && stored_code(a.constants, vs@[k], (*ids)@[j]);
+            assert(E::coordinate_spec(vs@[k]) == f);
+            let position = (*ids)@[j] as int - 1;
+            assert(0 <= position < a.constants.values@.len());
+            assert(E::coordinate_spec(a.constants.values@[position]) < arity::<E>());
+            assert(value_field::<E>(a.constants.values@[position]) == value_field::<E>(vs@[k]));
+            assert(E::coordinate_spec(a.constants.values@[position]) as u8 == f as u8);
+            assert(E::coordinate_spec(a.constants.values@[position]) == f);
+                    }
+                }
+            }
+        }
+
+        pub(crate) proof fn lemma_empty_constants<E: Event>(c: Constants<E>)
+            requires 1 <= arity::<E>() <= history_syntax::MAX_ARITY,
+                c.values@.len() == 0, c.ids@.len() == arity::<E>(),
+                forall|i: int| 0 <= i < c.ids@.len() ==> crate::native::representatives(c.ids@[i]).len() == 0,
+            ensures constants_wf(c),
+        {
+            assert forall|i: int| 0 <= i < c.ids@.len() implies crate::native::representatives(c.ids@[i]) == native_entries::<E>(c.values@, Component(i as u8)) by {
+                assert(c.values@ =~= Seq::<E::Component>::empty());
+                reveal(Seq::filter);
+                assert(crate::native::representatives(c.ids@[i]) =~= Seq::<(E::Component,u32)>::empty());
+            }
+        }
+
+        pub(crate) open spec fn book_entries_count<C>(book: Seq<Seq<(C, u64)>>) -> nat
+            decreases book.len(),
+        {
+            if book.len() == 0 { 0 } else { book_entries_count(book.drop_last()) + book.last().len() }
+        }
+
+        proof fn lemma_book_push<E: Event>(values: Seq<E::Component>, value: E::Component, n: nat)
+            requires n <= history_syntax::MAX_ARITY,
+            ensures book_entries_count(Seq::new(n, |i: int| field_entries::<E>(values.push(value), Component(i as u8))))
+                == book_entries_count(Seq::new(n, |i: int| field_entries::<E>(values, Component(i as u8))))
+                    + if value_field::<E>(value).0 < n { 1nat } else { 0nat },
+            decreases n,
+        {
+            if n > 0 {
+                lemma_book_push::<E>(values, value, (n - 1) as nat);
+                let entry = (value, (values.len() + 1) as u64);
+                assert(entries::<E>(values.push(value)) =~= entries::<E>(values).push(entry));
+                entries::<E>(values).lemma_filter_len_push(|p: (E::Component, u64)| value_field::<E>(p.0) == Component((n - 1) as u8), entry);
+                assert(Seq::new(n, |i: int| field_entries::<E>(values, Component(i as u8))).drop_last()
+                    =~= Seq::new((n - 1) as nat, |i: int| field_entries::<E>(values, Component(i as u8))));
+                assert(Seq::new(n, |i: int| field_entries::<E>(values.push(value), Component(i as u8))).drop_last()
+                    =~= Seq::new((n - 1) as nat, |i: int| field_entries::<E>(values.push(value), Component(i as u8))));
+            }
+        }
+
+        proof fn lemma_book_length<E: Event>(values: Seq<E::Component>)
+    requires arity::<E>() <= history_syntax::MAX_ARITY,
+        forall|i: int| 0 <= i < values.len() ==> E::coordinate_spec(values[i]) < arity::<E>(),
+            ensures book_entries_count(Seq::new(arity::<E>(), |i: int| field_entries::<E>(values, Component(i as u8)))) == values.len(),
+            decreases values.len(),
+        {
+            if values.len() > 0 {
+                lemma_book_length::<E>(values.drop_last());
+                lemma_book_push::<E>(values.drop_last(), values.last(), arity::<E>());
+                assert(values.drop_last().push(values.last()) =~= values);
             } else {
-                assert(next.contains(id));
-                let i = choose|i: int| 0 <= i < next.len() && next[i] == id;
-                assert(stored_code(c, vs.push(v)[j], next[i]));
+                let book = Seq::new(arity::<E>(), |i: int| field_entries::<E>(values, Component(i as u8)));
+                assert(forall|i: int| 0 <= i < book.len() ==> book[i].len() == 0) by { reveal(Seq::filter); }
+                lemma_empty_book_length(book);
             }
         }
-    }
 
-    proof fn lemma_book_length<E: Event>(values: Seq<ComponentValue<E>>)
-        ensures field_entries(values, Component::Principal).len() + field_entries(values, Component::Action).len()
-            + field_entries(values, Component::Resource).len() == values.len(),
-        decreases values.len(),
-    {
-        if values.len() > 0 {
-            let prior = values.drop_last();
-            lemma_book_length(prior);
-            let last = values.last();
-            let entry = (last, values.len() as u64);
-            assert(entries(values) =~= entries(prior).push(entry));
-            entries(prior).lemma_filter_len_push(|p: (ComponentValue<E>, u64)| value_field(p.0) == Component::Principal, entry);
-            entries(prior).lemma_filter_len_push(|p: (ComponentValue<E>, u64)| value_field(p.0) == Component::Action, entry);
-            entries(prior).lemma_filter_len_push(|p: (ComponentValue<E>, u64)| value_field(p.0) == Component::Resource, entry);
-            match last { ComponentValue::Principal(_) => {}, ComponentValue::Action(_) => {}, ComponentValue::Resource(_) => {} }
-        } else {
-            reveal(Seq::filter);
+        proof fn lemma_empty_book_length<C>(book: Seq<Seq<(C,u64)>>)
+            requires forall|i: int| 0 <= i < book.len() ==> book[i].len() == 0,
+            ensures book_entries_count(book) == 0,
+            decreases book.len(),
+        { if book.len() > 0 { lemma_empty_book_length(book.drop_last()); } }
+
+        pub(crate) proof fn lemma_constant_book_length<E: Event>(c: Constants<E>)
+            requires constants_wf(c), ensures book_entries_count(constant_book(c)) == c.values@.len(),
+        { lemma_book_length::<E>(c.values@); }
+
+        pub(crate) open spec fn declared_domain_equivalence<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
+            a@.domains.len() == d@.len() && forall|i: int, x: E::Component| 0 <= i < d@.len()
+                ==> semantics::in_domain(a@.domains[i], x) == semantics::in_domain(d@[i], x)
         }
-    }
 
-    pub(crate) proof fn lemma_constant_book_length<E: Event>(c: Constants<E>)
-        ensures constant_book(c)[0].len() + constant_book(c)[1].len() + constant_book(c)[2].len() == c.values@.len(),
-    {
-        lemma_field_book(c, Component::Principal);
-        lemma_field_book(c, Component::Action);
-        lemma_field_book(c, Component::Resource);
-        lemma_book_length(c.values@);
-    }
-
-    pub(crate) open spec fn tagged_codes<E: Event, T>(c: Constants<E>, u: Universe, domain: Option<Set<T>>, tag: spec_fn(T) -> ComponentValue<E>) -> bool {
-        match (u, domain) {
-            (None, None) => true,
-            (Some(ids), Some(values)) => {
-                &&& forall|x: T| #[trigger] values.contains(x)
-                    == (exists|i: int| 0 <= i < (*ids)@.len() && c.values@[(*ids)@[i] as int - 1] == tag(x))
-            },
-            _ => false,
+        proof fn lemma_declared_domain<E: Event>(c: Constants<E>, u: Universe, raw: Option<Vec<E::Component>>)
+            requires analyzer_obligations::<E>(), declared_universe(c, u, raw),
+            ensures forall|x: E::Component| #[trigger] semantics::in_domain(selected_values(c, u), x)
+                == semantics::in_domain(match raw { None => None, Some(vs) => Some(vs@.to_set()) }, x),
+        {
+    if let (Some(ids), Some(vs)) = (u, raw) {
+        assert(universe_encoded(c, (*ids)@, vs@));
+        lemma_selected_members(c, (*ids)@);
+        let values = selected_code_values(c, (*ids)@);
+        assert(selected_values(c, u) == Some(values));
+        assert forall|x: E::Component| semantics::in_domain(Some(values), x)
+            implies semantics::in_domain(Some(vs@.to_set()), x) by {
+            let y = choose|y: E::Component| values.contains(y) && x.eq_spec(&y);
+            assert(selected_code_values(c, (*ids)@).contains(y));
+            let i = choose|i: int| 0 <= i < (*ids)@.len() && c.values@[(*ids)@[i] as int - 1] == y;
+            assert(universe_id(c, vs@, (*ids)@[i]));
+            let j = choose|j: int| 0 <= j < vs@.len() && stored_code(c, vs@[j], (*ids)@[i]);
+            assert(vs@[j].eq_spec(&c.values@[(*ids)@[i] as int - 1]));
+            assert(vs@[j].eq_spec(&y));
+            assert(y.eq_spec(&vs@[j]));
+            assert(x.eq_spec(&vs@[j]));
+            assert(vs@.to_set().contains(vs@[j]));
         }
-    }
-
-    proof fn lemma_native_sym<E: Event>(a: ComponentValue<E>, b: ComponentValue<E>)
-        requires analyzer_obligations::<E>(),
-        ensures a.eq_spec(&b) == b.eq_spec(&a),
-    {}
-
-    proof fn lemma_native_trans<E: Event>(a: ComponentValue<E>, b: ComponentValue<E>, c: ComponentValue<E>)
-        requires analyzer_obligations::<E>(), a.eq_spec(&b), b.eq_spec(&c),
-        ensures a.eq_spec(&c),
-    {}
-
-    proof fn lemma_declared_domain<E: Event, T: PartialEq>(c: Constants<E>, u: Universe, raw: Option<Vec<T>>, domain: Option<Set<T>>, tag: spec_fn(T) -> ComponentValue<E>, project: spec_fn(ComponentValue<E>) -> T)
-        requires analyzer_obligations::<E>(), declared_universe(c, u, raw, tag), tagged_codes(c, u, domain, tag),
-            forall|x: T, y: T| #[trigger] tag(x).eq_spec(&tag(y)) == x.eq_spec(&y),
-            u matches Some(ids) ==> forall|i: int| #![trigger (*ids)@[i]] 0 <= i < (*ids)@.len()
-                ==> tag(project(c.values@[(*ids)@[i] as int - 1])) == c.values@[(*ids)@[i] as int - 1],
-        ensures forall|x: T| #[trigger] semantics::in_domain(domain, x)
-            == semantics::in_domain(match raw { None => None, Some(vs) => Some(vs@.to_set()) }, x),
-    {
-        hide(analyzer_obligations);
-        if let (Some(ids), Some(vs), Some(values)) = (u, raw, domain) {
-            assert forall|x: T| semantics::in_domain(domain, x) implies semantics::in_domain(Some(vs@.to_set()), x) by {
-                let y = choose|y: T| values.contains(y) && x.eq_spec(&y);
-                let i = choose|i: int| 0 <= i < (*ids)@.len() && c.values@[(*ids)@[i] as int - 1] == tag(y);
-                assert(universe_id(c, vs@.map_values(tag), (*ids)@[i]));
-                let j = choose|j: int| 0 <= j < vs@.map_values(tag).len() && stored_code(c, vs@.map_values(tag)[j], (*ids)@[i]);
-                assert(vs@.map_values(tag)[j] == tag(vs@[j]));
-                assert(tag(x).eq_spec(&tag(y)));
-                assert(tag(vs@[j]).eq_spec(&tag(y)));
-                lemma_native_sym(tag(y), tag(vs@[j]));
-                lemma_native_trans(tag(x), tag(y), tag(vs@[j]));
-                assert(x.eq_spec(&vs@[j]));
-                assert(vs@.to_set().contains(vs@[j]));
-            }
-            assert forall|x: T| semantics::in_domain(Some(vs@.to_set()), x) implies semantics::in_domain(domain, x) by {
-                let y = choose|y: T| vs@.to_set().contains(y) && x.eq_spec(&y);
-                let j = choose|j: int| 0 <= j < vs@.len() && vs@[j] == y;
-                assert(vs@.map_values(tag)[j] == tag(y));
-                assert(universe_value(c, (*ids)@, tag(y)));
-                let i = choose|i: int| 0 <= i < (*ids)@.len() && stored_code(c, tag(y), (*ids)@[i]);
-                let rep = c.values@[(*ids)@[i] as int - 1];
-                let z = project(rep);
-                assert(values.contains(z));
-                assert(tag(y).eq_spec(&tag(z)));
-                assert(tag(x).eq_spec(&tag(y)));
-                lemma_native_trans(tag(x), tag(y), tag(z));
-                assert(x.eq_spec(&z));
+        assert forall|x: E::Component| semantics::in_domain(Some(vs@.to_set()), x)
+            implies semantics::in_domain(Some(values), x) by {
+            let y = choose|y: E::Component| vs@.to_set().contains(y) && x.eq_spec(&y);
+            let j = choose|j: int| 0 <= j < vs@.len() && vs@[j] == y;
+            assert(universe_value(c, (*ids)@, vs@[j]));
+            let i = choose|i: int| 0 <= i < (*ids)@.len() && stored_code(c, y, (*ids)@[i]);
+            let z = c.values@[(*ids)@[i] as int - 1];
+            assert((*ids)@.to_set().contains((*ids)@[i]));
+            assert(selected_code_values(c, (*ids)@).contains(z));
+            assert(values.contains(z));
+            assert(y.eq_spec(&z));
+            assert(x.eq_spec(&z));
+        }
             }
         }
-    }
 
-    pub(crate) open spec fn declared_domain_equivalence<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
-        &&& forall|x: E::Principal| #[trigger] semantics::in_domain(a@.domains.principal, x) == semantics::in_domain(d@.principal, x)
-        &&& forall|x: E::Action| #[trigger] semantics::in_domain(a@.domains.action, x) == semantics::in_domain(d@.action, x)
-        &&& forall|x: E::Resource| #[trigger] semantics::in_domain(a@.domains.resource, x) == semantics::in_domain(d@.resource, x)
-    }
-
-    proof fn lemma_tag_projection<E: Event, T>(values: Set<ComponentValue<E>>, tag: spec_fn(T) -> ComponentValue<E>, project: spec_fn(ComponentValue<E>) -> T, pred: spec_fn(ComponentValue<E>) -> bool)
-        requires forall|x: T| #[trigger] project(tag(x)) == x && pred(tag(x)),
-            forall|v: ComponentValue<E>| #[trigger] pred(v) ==> tag(project(v)) == v,
-        ensures forall|x: T| #[trigger] values.filter(pred).map(project).contains(x) == values.contains(tag(x)),
-    {
-        assert forall|x: T| values.filter(pred).map(project).contains(x) implies values.contains(tag(x)) by {
-            let v = choose|v: ComponentValue<E>| values.filter(pred).contains(v) && project(v) == x;
-            assert(tag(x) == v);
+        pub(crate) proof fn lemma_constructor_domains<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
+            requires analyzer_obligations::<E>(), declared_domains_encoded(a, d), universes_wf(a.constants, a.universes),
+            ensures declared_domain_equivalence(a, d),
+        {
+            assert forall|i: int, x: E::Component| 0 <= i < d@.len() implies
+                semantics::in_domain(a@.domains[i], x) == semantics::in_domain(d@[i], x) by {
+                lemma_declared_domain(a.constants, a.universes[i], d.components@[i]);
+            }
         }
-        assert forall|x: T| values.contains(tag(x)) implies values.filter(pred).map(project).contains(x) by {
-            assert(project(tag(x)) == x);
-            assert(pred(tag(x)));
-            vstd::set::lemma_set_filter(values, pred, tag(x));
-            assert(values.filter(pred).contains(tag(x)));
-        }
-    }
 
-    pub(crate) open spec fn selected_code_values<E: Event>(c: Constants<E>, ids: Seq<u32>) -> Set<ComponentValue<E>> {
-        ids.to_set().map(|id: u32| c.values@[id as int - 1])
-    }
-
-    proof fn lemma_selected_members<E: Event>(c: Constants<E>, ids: Seq<u32>)
-        ensures forall|v: ComponentValue<E>| #[trigger] selected_code_values(c, ids).contains(v)
-            == (exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v),
-    {
-        let selected = ids.to_set().map(|id: u32| c.values@[id as int - 1]);
-        assert forall|v: ComponentValue<E>| selected.contains(v) implies exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v by {
-            let id = choose|id: u32| ids.to_set().contains(id) && c.values@[id as int - 1] == v;
-            let i = choose|i: int| 0 <= i < ids.len() && ids[i] == id;
-            assert(c.values@[ids[i] as int - 1] == v);
+        pub(crate) proof fn lemma_empty_constructor_capacity<E: Event>(d: Domains<E>)
+            requires forall|i: int| 0 <= i < d.components@.len() ==> d.components@[i] is None,
+            ensures constructor_capacity(d),
+        {
+            lemma_empty_domains_count(d.components@);
         }
-        assert forall|v: ComponentValue<E>| (exists|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v) implies selected.contains(v) by {
-            let i = choose|i: int| 0 <= i < ids.len() && c.values@[ids[i] as int - 1] == v;
-            assert(ids.to_set().contains(ids[i]));
-            assert(selected.contains(c.values@[ids[i] as int - 1]));
-        }
-    }
 
+        proof fn lemma_empty_domains_count<C>(domains: Seq<Option<Vec<C>>>)
+            requires forall|i: int| 0 <= i < domains.len() ==> domains[i] is None,
+            ensures domain_values_count(domains) == 0,
+            decreases domains.len(),
+        { if domains.len() > 0 { lemma_empty_domains_count(domains.drop_last()); } }
 
-    pub(crate) proof fn lemma_constructor_domains<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
-        requires analyzer_obligations::<E>(), declared_domains_encoded(a, d), universes_wf(a.constants, a.universes),
-        ensures declared_domain_equivalence(a, d),
-    {
-        if let Some(ids) = a.universes[0] {
-            let values = (*ids)@.to_set().map(|id: u32| a.constants.values@[id as int - 1]);
-            lemma_selected_members(a.constants, (*ids)@);
-            lemma_tag_projection(values, |x: E::Principal| ComponentValue::<E>::Principal(x), |v: ComponentValue<E>| principal_of::<E>(v), |v: ComponentValue<E>| v is Principal);
-            assert(a@.domains.principal == Some(principal_values::<E>(values)));
-            assert(values == selected_code_values(a.constants, (*ids)@));
-            assert forall|x: E::Principal| #[trigger] principal_values::<E>(values).contains(x) == values.contains(ComponentValue::<E>::Principal(x)) by {}
-            assert forall|x: E::Principal| #[trigger] principal_values::<E>(values).contains(x)
-                == (exists|i: int| 0 <= i < (*ids)@.len() && a.constants.values@[(*ids)@[i] as int - 1] == ComponentValue::<E>::Principal(x)) by {}
-            assert(tagged_codes(a.constants, a.universes[0], a@.domains.principal, |x: E::Principal| ComponentValue::<E>::Principal(x)));
-        }
-        if let Some(ids) = a.universes[1] {
-            let values = (*ids)@.to_set().map(|id: u32| a.constants.values@[id as int - 1]);
-            lemma_selected_members(a.constants, (*ids)@);
-            lemma_tag_projection(values, |x: E::Action| ComponentValue::<E>::Action(x), |v: ComponentValue<E>| action_of::<E>(v), |v: ComponentValue<E>| v is Action);
-            assert(a@.domains.action == Some(action_values::<E>(values)));
-            assert(values == selected_code_values(a.constants, (*ids)@));
-            assert forall|x: E::Action| #[trigger] action_values::<E>(values).contains(x) == values.contains(ComponentValue::<E>::Action(x)) by {}
-            assert forall|x: E::Action| #[trigger] action_values::<E>(values).contains(x)
-                == (exists|i: int| 0 <= i < (*ids)@.len() && a.constants.values@[(*ids)@[i] as int - 1] == ComponentValue::<E>::Action(x)) by {}
-            assert(tagged_codes(a.constants, a.universes[1], a@.domains.action, |x: E::Action| ComponentValue::<E>::Action(x)));
-        }
-        if let Some(ids) = a.universes[2] {
-            let values = (*ids)@.to_set().map(|id: u32| a.constants.values@[id as int - 1]);
-            lemma_selected_members(a.constants, (*ids)@);
-            lemma_tag_projection(values, |x: E::Resource| ComponentValue::<E>::Resource(x), |v: ComponentValue<E>| resource_of::<E>(v), |v: ComponentValue<E>| v is Resource);
-            assert(a@.domains.resource == Some(resource_values::<E>(values)));
-            assert(values == selected_code_values(a.constants, (*ids)@));
-            assert forall|x: E::Resource| #[trigger] resource_values::<E>(values).contains(x) == values.contains(ComponentValue::<E>::Resource(x)) by {}
-            assert forall|x: E::Resource| #[trigger] resource_values::<E>(values).contains(x)
-                == (exists|i: int| 0 <= i < (*ids)@.len() && a.constants.values@[(*ids)@[i] as int - 1] == ComponentValue::<E>::Resource(x)) by {}
-            assert(tagged_codes(a.constants, a.universes[2], a@.domains.resource, |x: E::Resource| ComponentValue::<E>::Resource(x)));
-        }
-        assert(tagged_codes(a.constants, a.universes[0], a@.domains.principal, |x: E::Principal| ComponentValue::<E>::Principal(x)));
-        assert(tagged_codes(a.constants, a.universes[1], a@.domains.action, |x: E::Action| ComponentValue::<E>::Action(x)));
-        assert(tagged_codes(a.constants, a.universes[2], a@.domains.resource, |x: E::Resource| ComponentValue::<E>::Resource(x)));
-        lemma_declared_domain(a.constants, a.universes[0], d.principals, a@.domains.principal, |x: E::Principal| ComponentValue::<E>::Principal(x), |v: ComponentValue<E>| principal_of::<E>(v));
-        lemma_declared_domain(a.constants, a.universes[1], d.actions, a@.domains.action, |x: E::Action| ComponentValue::<E>::Action(x), |v: ComponentValue<E>| action_of::<E>(v));
-        lemma_declared_domain(a.constants, a.universes[2], d.resources, a@.domains.resource, |x: E::Resource| ComponentValue::<E>::Resource(x), |v: ComponentValue<E>| resource_of::<E>(v));
-    }
+        pub(crate) proof fn lemma_query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
+            requires query_capacity(a, left, right),
+            ensures a.constants.values@.len() + 2 * arity::<E>() + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) <= u32::MAX,
+        {}
 
-    pub(crate) proof fn lemma_empty_constructor_capacity<E: Event>()
-        ensures constructor_capacity(Domains::<E> { principals: None, actions: None, resources: None }),
-    {}
-
-    pub(crate) proof fn lemma_query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
-        requires query_capacity(a, left, right),
-        ensures ({
-            let count = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
-            count <= u32::MAX && forall|v: [Set<nat>; 3]|
-                v[0].len() <= count && v[1].len() <= count && v[2].len() <= count
-                    ==> #[trigger] super::search_exec::resource_capacity(v)
-        }),
-    {
-        let count = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
-        let m = count + 2;
-        assert forall|v: [Set<nat>; 3]| v[0].len() <= count && v[1].len() <= count && v[2].len() <= count
-            implies #[trigger] super::search_exec::resource_capacity(v) by {
-            let x = v[0].len() + 2; let y = v[1].len() + 2; let z = v[2].len() + 2;
-            assert(m <= m * m * m && x * y <= m * m * m && x * y * z <= m * m * m) by(nonlinear_arith)
-                requires x <= m, y <= m, z <= m, 2 <= x, 2 <= y, 2 <= z;
+        pub(crate) proof fn lemma_query_capacity_nonvacuous<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
+            requires a.constants.values@.len() + 2 * arity::<E>() + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) <= 1000,
+            ensures query_capacity(a, left, right),
+        {}
         }
-    }
-
-    /// `query_capacity` is not vacuous: on every word size it holds whenever the vocabulary bound is
-    /// at most 1000 (the paper's running example needs about 40).
-    pub(crate) proof fn lemma_query_capacity_nonvacuous<E: Event>(a: PolicyAnalyzer<E>,
-        left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
-        requires a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) <= 1000,
-        ensures query_capacity(a, left, right),
-    {
-        let m = a.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) + 2;
-        assert(m * m * m <= 1002 * 1002 * 1002) by(nonlinear_arith)
-            requires m <= 1002;
-        assert(1002nat * 1002nat * 1002nat <= u32::MAX as nat) by(compute_only);
-        assert(u32::MAX as nat <= usize::MAX as nat);
-    }
-    }
 }

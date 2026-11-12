@@ -134,11 +134,12 @@ The only new trusted bodies are the author-approved hashbrown wrappers in
 `admit`, or `assume_specification` is introduced. Native-key Eq/hash and ordered-key view
 correspondence are explicit hypotheses of `analyzer_obligations`; see `SPEC.md` §11.
 The real search consumes `theorem_impl_search_bounded`; `finitely_many_items` is no longer an
-undischarged implementation hypothesis. Typed guarantees retain projection/Eq obligations and
-the sufficient capacity precondition `query_capacity`: constant ids fit `u32` and per-state
-split/letter products fit `usize`, over a traversal-cost bound on the query's vocabulary.
-Constraint-id and fresh-value exhaustion are runtime `Err`s (`IdExhausted`), not preconditions;
-see `SPEC.md` §9 item 30. The assumed std and smallvec specifications in junco-core's
+undischarged implementation hypothesis. Typed guarantees retain projection/Eq obligations;
+`query_capacity` bounds the query's vocabulary so constant ids fit `u32`. Event types choose
+one through eight coordinates. Split and letter products check multiplication at each coordinate;
+overflow returns `GraphLimit`, which the analyzer reports as `Exhausted`, rather than requiring
+a product-capacity precondition. Constraint-id and fresh-value exhaustion remain runtime `Err`s
+(`IdExhausted`); see `SPEC.md` §9 item 30. The assumed std and smallvec specifications in junco-core's
 `history_assumptions.rs` are tested against the real implementations by
 `scripts/spec-check.sh` (`spec-check/`, verus-spec-check; also a CI job).
 

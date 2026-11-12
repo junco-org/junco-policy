@@ -13,7 +13,9 @@ pub mod syntax;
 #[cfg(verus_keep_ghost)]
 pub mod verify;
 
-pub use event::Event;
+pub use event::{
+    Arity, Component2, Component3, Component4, Event, MAX_ARITY, N1, N2, N3, N4, N5, N6, N7, N8,
+};
 pub use frunk_core::Coprod;
 pub use frunk_core::coproduct::{CNil, Coproduct};
 pub use syntax::{

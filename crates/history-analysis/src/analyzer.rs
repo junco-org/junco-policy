@@ -18,7 +18,9 @@ use history_semantics::verify::refinement::{
 use history_semantics::{compile_verify as numeric, symbolic_language_verify as facade};
 #[cfg(verus_keep_ghost)]
 use history_syntax::Rule;
-use history_syntax::{Component, Event, Head, RegexExpr, RuleMode};
+#[cfg(verus_keep_ghost)]
+use history_syntax::event::specs::{EventSpec, arity};
+use history_syntax::{Arity, Component, Event, Head, MAX_ARITY, RegexExpr, RuleMode};
 use junco_core::compile::validate_component;
 use junco_core::flat::{FlatHead, FlatPair};
 use junco_core::flatten::flatten_rule_parts;
@@ -28,7 +30,7 @@ use junco_core::limits::Unmetered;
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::{encoding as enc, flatten as fl};
-use junco_core::{CompileError, ComponentValue, FlatEncoder, HistoryError, lower_flat};
+use junco_core::{CompileError, FlatEncoder, HistoryError, lower_flat};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
@@ -38,9 +40,7 @@ verus! {
     broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
 }
 
-use crate::constraint::{
-    COMPONENTS, Class, ConstId, Constraint, Letter, RegisterConstraint, Universes,
-};
+use crate::constraint::{Class, ConstId, Constraint, Letter, RegisterConstraint, Universes};
 use crate::search::{SearchOutcome, search};
 use crate::tables::Tables;
 
@@ -58,36 +58,44 @@ const GRAPH_BYTES: usize = 16 * 1024 * 1024;
 #[verus_verify]
 #[derive(Clone, Debug)]
 pub struct Domains<E: Event> {
-    pub(crate) principals: Option<Vec<E::Principal>>,
-    pub(crate) actions: Option<Vec<E::Action>>,
-    pub(crate) resources: Option<Vec<E::Resource>>,
+    pub(crate) components: Vec<Option<Vec<E::Component>>>,
 }
 
 impl<E: Event> Domains<E> {
     /// Every component infinite.
     pub fn infinite() -> Self {
         Self {
-            principals: None,
-            actions: None,
-            resources: None,
+            components: (0..E::Arity::value()).map(|_| None).collect(),
         }
     }
 
-    /// Declares every principal that events and candidates can have.
-    pub fn with_principals(mut self, values: impl IntoIterator<Item = E::Principal>) -> Self {
-        self.principals = Some(values.into_iter().collect());
-        self
-    }
-
-    /// Declares every action that events and candidates can have.
-    pub fn with_actions(mut self, values: impl IntoIterator<Item = E::Action>) -> Self {
-        self.actions = Some(values.into_iter().collect());
-        self
-    }
-
-    /// Declares every resource that events and candidates can have.
-    pub fn with_resources(mut self, values: impl IntoIterator<Item = E::Resource>) -> Self {
-        self.resources = Some(values.into_iter().collect());
+    /// Declares all values of one coordinate, in declaration order.
+    ///
+    /// # Panics
+    /// Panics if the coordinate is outside this event's arity or a value belongs to another coordinate.
+    pub fn with_domain(
+        mut self,
+        component: Component,
+        values: impl IntoIterator<Item = E::Component>,
+    ) -> Self {
+        let index = component.index();
+        assert!(
+            index < self.components.len(),
+            "domain coordinate is outside event arity"
+        );
+        self.components[index] = Some(
+            values
+                .into_iter()
+                .map(|value| {
+                    assert_eq!(
+                        E::coordinate(value),
+                        index,
+                        "domain value belongs to another coordinate"
+                    );
+                    value
+                })
+                .collect(),
+        );
         self
     }
 }
@@ -106,14 +114,10 @@ pub enum Value<T> {
 
 /// The components of one event of a counterexample.
 #[verus_verify]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Components<E: Event> {
-    /// The principal.
-    pub principal: Value<E::Principal>,
-    /// The action.
-    pub action: Value<E::Action>,
-    /// The resource.
-    pub resource: Value<E::Resource>,
+    /// One value per coordinate, in the event type's coordinate order.
+    pub values: Vec<Value<E::Component>>,
 }
 
 /// A candidate and a history on which an inclusion fails.
@@ -144,107 +148,82 @@ pub enum Inclusion<E: Event> {
 /// the `FlatEncoder` contract requires nonzero codes; the constant with id `i` is `values[i - 1]`.
 #[verus_verify]
 pub(crate) struct Constants<E: Event> {
-    pub(crate) ids: NativeMap<ComponentValue<E>, ConstId>,
-    pub(crate) values: Vec<ComponentValue<E>>,
+    pub(crate) ids: Vec<NativeMap<E::Component, ConstId>>,
+    pub(crate) values: Vec<E::Component>,
 }
 
 verus! {
 impl<E: Event> Constants<E> {
-    fn try_intern(&mut self, value: ComponentValue<E>) -> (result: Result<ConstId, core::num::TryFromIntError>)
+    fn try_intern(&mut self, field: Component, value: E::Component) -> (result: Result<ConstId, core::num::TryFromIntError>)
         requires constants_wf(*old(self)), crate::verify::analyzer_obligations::<E>(),
+            field.0 < arity::<E>(), E::coordinate_spec(value) == field.0 as nat,
         ensures constants_wf(*final(self)), constants_frame(*old(self), *final(self)),
             final(self).values@.len() <= old(self).values@.len() + 1,
             result matches Ok(id) ==> stored_code(*final(self), value, id),
             result is Err ==> *final(self) == *old(self) && old(self).values@.len() == u32::MAX,
     {
-        proof_decl! { let ghost before = *self; }
-        if let Some(id) = self.ids.lookup(&value) {
-            proof! {
-                let i = choose|i: int| 0 <= i < crate::native::representatives(self.ids).len()
-                    && crate::native::representatives(self.ids)[i].1 == id
-                    && value.eq_spec(&crate::native::representatives(self.ids)[i].0);
-                assert(stored_code(*self, value, id));
-            }
+        let ghost before = *self;
+        let index = field.index();
+        if let Some(id) = self.ids[index].lookup(&value) {
+            proof { lemma_constant_lookup(*self, field, value, id); }
             return Ok(id);
         }
-        proof {
-            assert forall|i: int| 0 <= i < before.values@.len() implies !value.eq_spec(&before.values@[i]) by {
-                assert(crate::native::representatives(before.ids)[i].0 == before.values@[i]);
-            }
-        }
-        // Counting in u64 keeps a saturated u32 book a checked conversion failure.
         let id = ConstId::try_from(self.values.len() as u64 + 1)?;
         self.values.push(value);
-        self.ids.insert_fresh(value, id);
-        proof! {
-            assert(self.values@ == before.values@.push(value));
-            assert(crate::native::representatives(self.ids)
-                == before.values@.map(|i: int, v: ComponentValue<E>| (v, (i + 1) as u32)).push((value, id)));
-            assert(crate::native::representatives(self.ids)
-                =~= self.values@.map(|i: int, v: ComponentValue<E>| (v, (i + 1) as u32)));
-            assert forall|i: int, j: int| 0 <= i < j < self.values@.len()
-                implies !self.values@[i].eq_spec(&self.values@[j]) by {
-                if j == before.values@.len() {
-                    assert(!value.eq_spec(&before.values@[i]));
-                }
-            }
-            assert(constants_frame(before, *self));
-        }
+        self.ids[index].insert_fresh(value, id);
+        proof { lemma_constants_insert(before, *self, field, value, id); }
         Ok(id)
     }
 
-    fn intern(&mut self, value: ComponentValue<E>) -> (result: ConstId)
-        requires constants_wf(*old(self)), crate::verify::analyzer_obligations::<E>(), old(self).values@.len() < u32::MAX,
+    fn intern(&mut self, field: Component, value: E::Component) -> (result: ConstId)
+        requires constants_wf(*old(self)), crate::verify::analyzer_obligations::<E>(),
+            old(self).values@.len() < u32::MAX,
+            field.0 < arity::<E>(), E::coordinate_spec(value) == field.0 as nat,
         ensures constants_wf(*final(self)), constants_frame(*old(self), *final(self)),
             final(self).values@.len() <= old(self).values@.len() + 1,
             stored_code(*final(self), value, result),
     {
-        self.try_intern(value).expect("constant ids fit in u32")
+        self.try_intern(field, value).expect("constant ids fit in u32")
     }
 
     /// The universe of a declared finite component, in declaration order without repeats.
-    fn universe<T: Copy>(&mut self, values: &[T], wrap: impl Fn(T) -> ComponentValue<E>,
-        Ghost(tagged): Ghost<spec_fn(T) -> ComponentValue<E>>) -> (result: Rc<Vec<ConstId>>)
+    fn universe(&mut self, field: Component, values: &[E::Component]) -> (result: Rc<Vec<ConstId>>)
         requires constants_wf(*old(self)), crate::verify::analyzer_obligations::<E>(),
             old(self).values@.len() + values@.len() <= u32::MAX,
-            forall|x: T| call_requires(wrap, (x,)),
-            forall|x: T, v: ComponentValue<E>| call_ensures(wrap, (x,), v) ==> v == tagged(x),
+            field.0 < arity::<E>(),
+            forall|i: int| 0 <= i < values@.len() ==> E::coordinate_spec(values@[i]) == field.0 as nat,
         ensures constants_wf(*final(self)), constants_frame(*old(self), *final(self)),
             final(self).values@.len() <= old(self).values@.len() + values@.len(),
-            universe_encoded(*final(self), (*result)@, values@.map_values(tagged)),
+            universe_encoded(*final(self), (*result)@, values@),
     {
         hide(universe_encoded);
-        hide(constants_wf);
-        hide(crate::verify::analyzer_obligations);
-        proof_decl! { let ghost before = *self; }
+        let ghost before = *self;
         let mut ids = Vec::new();
         let mut i = 0;
-        proof { lemma_universe_empty(*self); }
-        proof { assert(values@.take(0).map_values(tagged) =~= Seq::<ComponentValue<E>>::empty()); }
+        proof { lemma_universe_empty(*self); assert(values@.take(0) =~= Seq::<E::Component>::empty()); }
         while i < values.len()
             invariant i <= values@.len(), constants_wf(*self), crate::verify::analyzer_obligations::<E>(),
+                field.0 < arity::<E>(),
+                forall|j: int| 0 <= j < values@.len() ==> E::coordinate_spec(values@[j]) == field.0 as nat,
                 constants_frame(before, *self), self.values@.len() <= before.values@.len() + i,
-                universe_encoded(*self, ids@, values@.take(i as int).map_values(tagged)),
+                universe_encoded(*self, ids@, values@.take(i as int)),
                 before.values@.len() + values@.len() <= u32::MAX,
-                forall|x: T| call_requires(wrap, (x,)),
-                forall|x: T, v: ComponentValue<E>| call_ensures(wrap, (x,), v) ==> v == tagged(x),
             decreases values@.len() - i,
         {
-            proof_decl! { let ghost prior = *self; }
-            let value = wrap(values[i]);
-            let id = self.intern(value);
-            proof! { lemma_universe_frame(prior, *self, ids@, values@.take(i as int).map_values(tagged)); }
+            let ghost prior = *self;
+            let value = values[i];
+            let id = self.intern(field, value);
+            proof { lemma_universe_frame(prior, *self, ids@, values@.take(i as int)); }
             let ghost old_ids = ids@;
             let found = contains_id(&ids, id);
             if !found { ids.push(id); } else { proof { assert(ids@.contains(id)); } }
-            proof! {
-                assert(values@.take(i as int + 1).map_values(tagged)
-                    =~= values@.take(i as int).map_values(tagged).push(value));
-                lemma_universe_step(*self, old_ids, ids@, values@.take(i as int).map_values(tagged), value, id);
+            proof {
+                assert(values@.take(i as int + 1) =~= values@.take(i as int).push(value));
+                lemma_universe_step(*self, old_ids, ids@, values@.take(i as int), value, id);
             }
             i += 1;
         }
-        proof { assert(values@.take(i as int).map_values(tagged) =~= values@.map_values(tagged)); }
+        proof { assert(values@.take(i as int) =~= values@); }
         Rc::new(ids)
     }
 }
@@ -273,10 +252,10 @@ pub(crate) struct BorrowedEncoder<'a, E: Event> {
     pub(crate) calls: Ghost<nat>,
 }
 
-impl<'a, E: Event> FlatEncoder<ComponentValue<E>> for BorrowedEncoder<'a, E> {
-    open spec fn equality() -> enc::Equality<ComponentValue<E>> { fl::component_equality::<E>() }
-    open spec fn domain() -> enc::Domain<ComponentValue<E>> { fl::component_domain::<E>() }
-    open(crate) spec fn maps(&self) -> enc::Codebook<ComponentValue<E>> { crate::verify::constant_book(*self.constants) }
+impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
+    open spec fn equality() -> enc::Equality<E::Component> { fl::component_equality::<E>() }
+    open spec fn domain() -> enc::Domain<E::Component> { fl::component_domain::<E>() }
+    open(crate) spec fn maps(&self) -> enc::Codebook<E::Component> { crate::verify::constant_book(*self.constants) }
     open(crate) spec fn encoding_calls(&self) -> nat { self.calls@ }
     open(crate) spec fn state_wf(&self) -> bool {
         constants_wf(*self.constants) && crate::verify::analyzer_obligations::<E>()
@@ -288,19 +267,19 @@ impl<'a, E: Event> FlatEncoder<ComponentValue<E>> for BorrowedEncoder<'a, E> {
     }
     open spec fn errors_are_non_invariant(&self) -> bool { true }
     #[verifier::prophetic]
-    open(crate) spec fn restoration(&self) -> (enc::Codebook<ComponentValue<E>>, bool) {
+    open(crate) spec fn restoration(&self) -> (enc::Codebook<E::Component>, bool) {
         let future = mut_ref_future(self.constants);
         (crate::verify::constant_book(future), constants_wf(future))
     }
 
-    fn encode(&mut self, field: Component, value: &ComponentValue<E>)
+    fn encode(&mut self, field: Component, value: &E::Component)
         -> (result: Result<u64, HistoryError>)
     {
         let ghost before = *self.constants;
         self.calls = Ghost(self.calls@ + 1);
         if self.overflowed { return Err(HistoryError::IdExhausted { domain: "constant" }); }
-        validate_component(field, value)?;
-        let result = match self.constants.try_intern(*value) {
+        validate_component::<E>(field, value)?;
+        let result = match self.constants.try_intern(field, *value) {
             Ok(id) => Ok(id as u64),
             Err(_) => {
                 self.overflowed = true;
@@ -311,7 +290,7 @@ impl<'a, E: Event> FlatEncoder<ComponentValue<E>> for BorrowedEncoder<'a, E> {
             lemma_constants_maps(*self.constants);
             lemma_constants_extend(before, *self.constants);
             if let Ok(id) = result {
-                assert(value_field(*value) == field);
+                assert(value_field::<E>(*value) == field);
                 lemma_stored_encoded(*self.constants, *value, id as u32);
             }
         }
@@ -339,44 +318,68 @@ pub struct PolicyAnalyzer<E: Event> {
 verus! {
 impl<E: Event> PolicyAnalyzer<E> {
     /// Creates an analyzer for events whose components take the values of `domains`.
-    // Each `match` keeps a Verus closure contract that `Option::map` would not carry.
+    // Each match keeps the declared domain's exact vector view.
     #[allow(clippy::manual_map)]
     pub fn new(domains: Domains<E>) -> (result: Self)
-        requires crate::verify::analyzer_obligations::<E>(), constructor_capacity(domains),
+        requires crate::verify::analyzer_obligations::<E>(), domains_wf(domains), constructor_capacity(domains),
         ensures constructor_result(result, domains),
     {
-        hide(constants_wf);
-        hide(crate::verify::analyzer_obligations);
         proof { lemma_constructor_contract::<E>(); }
         let ghost input = domains;
-        let mut constants = Constants { ids: NativeMap::new(), values: Vec::new() };
-        proof { lemma_empty_constants(constants); }
-        let principals = match domains.principals {
-            Some(values) => Some(constants.universe(&values,
-                verus_exec_expr!(|v: E::Principal| -> (r: ComponentValue<E>) ensures r == ComponentValue::<E>::Principal(v), { ComponentValue::Principal(v) }),
-                Ghost(|v: E::Principal| ComponentValue::<E>::Principal(v)))),
-            None => None,
-        };
-        let ghost first = constants;
-        let actions = match domains.actions {
-            Some(values) => Some(constants.universe(&values,
-                verus_exec_expr!(|v: E::Action| -> (r: ComponentValue<E>) ensures r == ComponentValue::<E>::Action(v), { ComponentValue::Action(v) }),
-                Ghost(|v: E::Action| ComponentValue::<E>::Action(v)))),
-            None => None,
-        };
-        let ghost second = constants;
-        let resources = match domains.resources {
-            Some(values) => Some(constants.universe(&values,
-                verus_exec_expr!(|v: E::Resource| -> (r: ComponentValue<E>) ensures r == ComponentValue::<E>::Resource(v), { ComponentValue::Resource(v) }),
-                Ghost(|v: E::Resource| ComponentValue::<E>::Resource(v)))),
-            None => None,
-        };
-        proof {
-            lemma_declared_frame(first, second, principals, input.principals, |v: E::Principal| ComponentValue::<E>::Principal(v));
-            lemma_declared_frame(second, constants, principals, input.principals, |v: E::Principal| ComponentValue::<E>::Principal(v));
-            lemma_declared_frame(second, constants, actions, input.actions, |v: E::Action| ComponentValue::<E>::Action(v));
+        let arity = E::Arity::value();
+        let mut ids = Vec::with_capacity(arity);
+        let mut index = 0;
+        while index < arity
+            invariant index <= arity, arity == history_syntax::event::specs::arity::<E>(),
+                1 <= arity <= MAX_ARITY, ids@.len() == index,
+                forall|i: int| 0 <= i < index ==> crate::native::representatives(ids@[i]).len() == 0,
+            decreases arity - index,
+        {
+            ids.push(NativeMap::new());
+            index += 1;
         }
-        let result = Self { constants, universes: [principals, actions, resources] };
+        let mut constants = Constants { ids, values: Vec::new() };
+        proof { lemma_empty_constants(constants); }
+        let mut universes = Vec::with_capacity(arity);
+        index = 0;
+        while index < arity
+            invariant index <= arity, arity == history_syntax::event::specs::arity::<E>(),
+                1 <= arity <= MAX_ARITY, domains == input, constructor_capacity(input),
+                crate::verify::analyzer_obligations::<E>(), domains_wf(input),
+                constants_wf(constants), universes@.len() == index,
+                constants.values@.len() <= domain_values_count(input.components@.take(index as int)),
+                forall|i: int| 0 <= i < index ==>
+                    declared_universe(constants, universes@[i], input.components@[i]),
+            decreases arity - index,
+        {
+            let ghost before = constants;
+            proof { lemma_domain_count_step(input.components@, index as int); }
+            let field = Component::new(index);
+            let universe = match &domains.components[index] {
+                Some(values) => {
+                    proof {
+                        lemma_constructor_contract::<E>();
+                        assert(domain_values_count(input.components@) <= u32::MAX);
+                        assert(input.components@[index as int] == Some(*values));
+                        assert(option_len(input.components@[index as int]) == values@.len());
+                        assert(constants.values@.len() + values@.len() <= u32::MAX);
+                    }
+                    Some(constants.universe(field, values))
+                },
+                None => None,
+            };
+            proof {
+                assert forall|i: int| 0 <= i < index implies
+                    declared_universe(constants, universes@[i], input.components@[i]) by {
+                    lemma_declared_frame(before, constants, universes@[i], input.components@[i]);
+                }
+                assert(declared_universe(constants, universe, input.components@[index as int]));
+            }
+            universes.push(universe);
+            index += 1;
+        }
+        proof { assert(input.components@.take(index as int) =~= input.components@); }
+        let result = Self { constants, universes };
         proof { lemma_declared_wf(result, input); lemma_constructor_domains(result, input); }
         result
     }
@@ -402,7 +405,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     ) -> Result<Inclusion<E>, CompileError> {
         let ghost before = *self;
         proof { lemma_query_capacity(*self, *left, *right); }
-        let ghost bound = self.constants.values@.len() + 6 + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
+        let ghost bound = self.constants.values@.len() + 2 * arity::<E>() + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
         let ghost left_rule = Rule { mode: RuleMode::Forbid, head: *head, tail: *left };
         let ghost right_rule = Rule { mode: RuleMode::Forbid, head: *head, tail: *right };
         let left_flat = flatten_rule_parts(RuleMode::Forbid, head, left, &mut Unmetered, &mut ObservationWorld)?;
@@ -433,10 +436,13 @@ impl<E: Event> PolicyAnalyzer<E> {
             assert(self.constants.values@.len() <= bound);
         }
         let constants = Self::head_constants(&left_numeric.head);
-        let result = match Constraint::head(constants, &self.universes) {
+        proof {
+            assert(pins(left_numeric.head@) =~= crate::verify::typed_numeric::template_head(left_numeric));
+        }
+        let result = match Constraint::head(&constants, &self.universes) {
             Some(constraint) => {
-                proof { lemma_head_payload(self.constants, left_numeric.head@, constants, constraint); }
-                let mut tables = Tables::default();
+                proof { lemma_head_payload(self.constants, left_numeric.head@, constants@, constraint); }
+                let mut tables = Tables::new(self.universes.len());
                 let ghost empty = tables@;
                 proof {
                     views::table::lemma_structural_dag(left_numeric);
@@ -459,9 +465,6 @@ impl<E: Event> PolicyAnalyzer<E> {
                 proof {
                     assert(source_codes_wf(self.constants, difference));
                     assert(difference_source(input, difference));
-                    assert forall|v: [Set<nat>; 3]| v[0].len() <= self.constants.values@.len()
-                        && v[1].len() <= self.constants.values@.len() && v[2].len() <= self.constants.values@.len()
-                        implies exec::resource_capacity(v) by {}
                     assert(decision_ready(*self, input, constraint, difference));
                 }
                 #[cfg(verus_keep_ghost)]
@@ -484,35 +487,36 @@ verus! {
 impl<E: Event> PolicyAnalyzer<E> {
 
     /// The constants that an encoded head pins; variables leave their register free.
-    fn head_constants(head: &[FlatHead<u64>; COMPONENTS]) -> (result: [Option<ConstId>; COMPONENTS])
+    fn head_constants(head: &[FlatHead<u64>]) -> (result: Vec<Option<ConstId>>)
         requires numeric_head_wf(head@),
-        ensures crate::verify::head_view(result) == pins(head@),
+        ensures result@.len() == head@.len(), crate::verify::head_view(result@) == pins(head@),
     {
-        let mut result = [None; COMPONENTS];
+        let mut result = Vec::with_capacity(head.len());
         let mut i = 0;
-        #[cfg_attr(verus_keep_ghost, verus_spec(invariant i <= 3, numeric_head_wf(head@),
-            forall|j: int| 0 <= j < i ==> crate::verify::option_code(result[j]) == encoding_head_code(head@[j]),
-            decreases 3 - i))]
-        while i < COMPONENTS {
-            result[i] = match head[i] { FlatHead::Constant(v) => Some(v as u32), _ => None };
+        while i < head.len()
+            invariant i <= head@.len(), result@.len() == i, numeric_head_wf(head@),
+                forall|j: int| 0 <= j < i ==> crate::verify::option_code(result@[j]) == encoding_head_code(head@[j]),
+            decreases head@.len() - i,
+        {
+            result.push(match head[i] { FlatHead::Constant(v) => Some(v as u32), _ => None });
             i += 1;
         }
         result
     }
 
     /// `source` with each constant replaced by its constant id.
-    fn encode(&mut self, source: &FlatPair<ComponentValue<E>>) -> (result: Result<FlatPair<u64>, HistoryError>)
+    fn encode(&mut self, source: &FlatPair<E::Component>) -> (result: Result<FlatPair<u64>, HistoryError>)
         requires constants_wf(old(self).constants), crate::verify::analyzer_obligations::<E>(), encode_capacity(*old(self), *source),
         ensures constants_wf(final(self).constants), enc::extends(crate::verify::constant_book(old(self).constants), crate::verify::constant_book(final(self).constants), fl::component_equality::<E>()),
             final(self).universes == old(self).universes,
-            final(self).constants.values@.len() <= old(self).constants.values@.len() + 3 + source.tests@.len(),
+            final(self).constants.values@.len() <= old(self).constants.values@.len() + source.head@.len() + source.tests@.len(),
             result matches Ok(target) ==> enc::lowering(*source, target, crate::verify::constant_book(final(self).constants), fl::component_equality::<E>())
                 && junco_core::flat::verify::structural_wf(target) && numeric_head_wf(target.head@),
     {
         let ghost initial_count = self.constants.values@.len();
         proof { assert(initial_count == old(self).constants.values@.len()); }
         proof { lemma_constants_maps(self.constants); }
-        let (result, overflowed, Ghost(maps)) = {
+        let (result, overflowed, Ghost(maps), Ghost(count)) = {
             let mut encoder = BorrowedEncoder {
                 constants: &mut self.constants, overflowed: false,
                 calls: Ghost(initial_count),
@@ -520,18 +524,20 @@ impl<E: Event> PolicyAnalyzer<E> {
             let result = lower_flat(source, &mut encoder, &mut Unmetered, &mut ObservationWorld);
             let ghost maps = encoder.maps();
             proof {
-                assert(encoder.calls@ <= initial_count + 3 + source.tests@.len());
+                assert(encoder.calls@ <= initial_count + source.head@.len() + source.tests@.len());
+                assert(encoder.constants.values@.len() <= initial_count + source.head@.len() + source.tests@.len());
                 lemma_constant_book_length(*encoder.constants);
-                assert(maps[0].len() + maps[1].len() + maps[2].len()
-                    <= initial_count + 3 + source.tests@.len());
+                assert(book_entries_count(maps) == encoder.constants.values@.len());
                 assert(!encoder.overflowed);
             }
+            let ghost count = encoder.constants.values@.len();
             let overflowed = encoder.overflowed;
-            (result, overflowed, Ghost(maps))
+            (result, overflowed, Ghost(maps), Ghost(count))
         };
         proof {
             assert(crate::verify::constant_book(self.constants) == maps);
             lemma_constant_book_length(self.constants);
+            assert(self.constants.values@.len() == count);
             assert(!overflowed);
         }
         if overflowed {
@@ -568,10 +574,9 @@ impl<E: Event> PolicyAnalyzer<E> {
         let ghost vocabulary = exec::root_vocabulary(language, self.universes, constraint@);
         proof {
             lemma_root_payload(*self, language, difference, constraint@);
-            lemma_root_fits(*self, language, constraint@, self.constants.values@.len());
             assert(views::constraint_unique::universes_distinct(self.universes));
             assert forall|theta: junco_core::verify::history_specs::Subst, word: Seq<junco_core::verify::history_specs::EventView>|
-                junco_core::verify::history_specs::event_wf(theta) implies
+                junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
                     history_semantics::verify::refinement::encoding::n_lang(theta, start.state, word)
                         == (numeric::source_regex(input.left_numeric, input.left_numeric.root as nat, theta, word)
                             && !numeric::source_regex(input.right_numeric, input.right_numeric.root as nat, theta, word)) by {
@@ -634,27 +639,30 @@ impl<E: Event> PolicyAnalyzer<E> {
     ) -> Result<Counterexample<E>, HistoryError> {
         #[cfg(verus_keep_ghost)]
         use crate::verify::{
-            component_index, component_of, domain_view, lemma_codes, lemma_constraint_possible,
+            component_at, component_index, domain_view, lemma_codes, lemma_constraint_possible,
             reconstruction::*, register_possible, register_sat,
         };
         proof! {
             lemma_known_codes(self.constants);
             lemma_constraint_possible(*constraint, self.universes);
         }
+        let arity = self.universes.len();
         let mut fresh: usize = 0;
-        let mut candidate = [Slot::Constant(0); COMPONENTS];
+        let mut candidate = [Slot::Constant(0); MAX_ARITY];
         let mut component: usize = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            component <= 3, fresh <= component,
+            arity == self.universes@.len(), arity == history_syntax::event::specs::arity::<E>(),
+            1 <= arity <= MAX_ARITY,
+            component <= arity, fresh <= component,
             reconstruction_input(self.constants, self.universes, *constraint, letters@, alphabets@),
             forall|k: int| 0 <= k < component ==> candidate_field_ok(self.constants,
                 self.universes, *constraint, k, candidate[k]@),
             forall|k: int| #![trigger candidate[k]@] 0 <= k < component ==> (candidate[k]@ matches
                 history_semantics::verify::refinement::implementation::SlotView::Fresh(n) ==> n < fresh),
-            forall|k: int| 0 <= k < 3 ==> register_possible(constraint.0[k], self.universes[k]),
-            decreases 3 - component,
+            forall|k: int| 0 <= k < arity ==> register_possible(constraint.0[k], self.universes[k]),
+            decreases arity - component,
         ))]
-        while component < COMPONENTS {
+        while component < arity {
             proof! {
                 lemma_input_field(self.constants, self.universes, *constraint,
                     letters@, alphabets@, component);
@@ -692,17 +700,15 @@ impl<E: Event> PolicyAnalyzer<E> {
                 }
             };
             proof! {
-                let field = component_of(component);
+                let field = component_at(component);
                 assert(component_index(field) == component);
-                match field { history_syntax::syntax::Component::Principal => {},
-                    history_syntax::syntax::Component::Action => {}, history_syntax::syntax::Component::Resource => {} }
                 lemma_register_known(self.constants, field, constraint.0[component as int]@);
                 assert(candidate_field_ok(self.constants, self.universes, *constraint, component as int, slot@));
             }
             candidate[component] = slot;
             component += 1;
         }
-        let candidate_values = self.components(candidate);
+        let candidate_values = self.components(&candidate[..arity]);
         let mut values = Vec::<Components<E>>::with_capacity(letters.len());
         proof_decl! {
             let ghost mut slots_history: Seq<Seq<history_semantics::verify::refinement::implementation::SlotView>>
@@ -710,20 +716,22 @@ impl<E: Event> PolicyAnalyzer<E> {
         }
         let mut index: usize = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+            arity == self.universes@.len(), arity == history_syntax::event::specs::arity::<E>(),
+            1 <= arity <= MAX_ARITY,
             index <= letters@.len(), values@.len() == index, slots_history.len() == index,
-            candidate_values@ == components_of_slots(self.constants, slot_views(candidate)),
+            candidate_values@ == components_of_slots(self.constants, slot_views(candidate@.take(arity as int))),
             forall|i: int| 0 <= i < index ==> values@[i]@ == components_of_slots(self.constants, slots_history[i]),
-            fresh <= 3 * (index + 1),
+            fresh <= arity * (index + 1),
             reconstruction_input(self.constants, self.universes, *constraint, letters@, alphabets@),
-            slot_wf(self.constants, slot_views(candidate)),
-            forall|k: int| 0 <= k < 3 ==> candidate_field_ok(self.constants,
+            slot_wf(self.constants, slot_views(candidate@.take(arity as int))),
+            forall|k: int| 0 <= k < arity ==> candidate_field_ok(self.constants,
                 self.universes, *constraint, k, candidate[k]@),
-            forall|k: int| #![trigger candidate[k]@] 0 <= k < 3 ==> (candidate[k]@ matches
+            forall|k: int| #![trigger candidate[k]@] 0 <= k < arity ==> (candidate[k]@ matches
                 history_semantics::verify::refinement::implementation::SlotView::Fresh(n) ==> n < fresh),
             forall|i: int| 0 <= i < index ==> slot_wf(self.constants, slots_history[i])
-                && forall|k: int| 0 <= k < 3 ==> history_field_matches(slot_views(candidate), letters@[i]@,
+                && forall|k: int| 0 <= k < arity ==> history_field_matches(slot_views(candidate@.take(arity as int)), letters@[i]@,
                     k, slots_history[i][k]) && slot_domain(slots_history[i][k], domain_view(self.universes[k])),
-            forall|i: int, k: int| #![trigger slots_history[i][k]] 0 <= i < index && 0 <= k < 3
+            forall|i: int, k: int| #![trigger slots_history[i][k]] 0 <= i < index && 0 <= k < arity
                 ==> (slots_history[i][k] matches
                     history_semantics::verify::refinement::implementation::SlotView::Fresh(n) ==> n < fresh),
             decreases letters@.len() - index,
@@ -735,34 +743,36 @@ impl<E: Event> PolicyAnalyzer<E> {
                 assert(letter_codes_ok(self.constants, crate::verify::ndomains(self.universes),
                     letter@, alphabets@[index as int]));
             }
-            let mut slots = [Slot::Constant(0); COMPONENTS];
+            let mut slots = [Slot::Constant(0); MAX_ARITY];
             let mut component: usize = 0;
             #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-                component <= 3, index < letters@.len(), values@.len() == index, slots_history.len() == index,
-                fresh <= 3 * (index + 1) + component,
+            arity == self.universes@.len(), arity == history_syntax::event::specs::arity::<E>(),
+            1 <= arity <= MAX_ARITY,
+                component <= arity, index < letters@.len(), values@.len() == index, slots_history.len() == index,
+                fresh <= arity * (index + 1) + component,
                 reconstruction_input(self.constants, self.universes, *constraint, letters@, alphabets@),
                 letter@ == letters@[index as int]@,
                 letter_codes_ok(self.constants, crate::verify::ndomains(self.universes),
                     letter@, alphabets@[index as int]),
-                slot_wf(self.constants, slot_views(candidate)),
-                forall|k: int| 0 <= k < 3 ==> candidate_field_ok(self.constants,
+                slot_wf(self.constants, slot_views(candidate@.take(arity as int))),
+                forall|k: int| 0 <= k < arity ==> candidate_field_ok(self.constants,
                     self.universes, *constraint, k, candidate[k]@),
-                forall|k: int| #![trigger candidate[k]@] 0 <= k < 3 ==> (candidate[k]@ matches
+                forall|k: int| #![trigger candidate[k]@] 0 <= k < arity ==> (candidate[k]@ matches
                     history_semantics::verify::refinement::implementation::SlotView::Fresh(n) ==> n < fresh),
-                forall|k: int| 0 <= k < component ==> history_field_matches(slot_views(candidate), letter@,
+                forall|k: int| 0 <= k < component ==> history_field_matches(slot_views(candidate@.take(arity as int)), letter@,
                     k, slots[k]@) && slot_domain(slots[k]@, domain_view(self.universes[k])) && match slots[k]@ {
                         history_semantics::verify::refinement::implementation::SlotView::Code(v) =>
-                            code_field(self.constants, component_of(k as usize), v), _ => true },
+                            code_field(self.constants, component_at(k as usize), v), _ => true },
                 forall|i: int| #![trigger slots_history[i]] 0 <= i < index
                     ==> slot_wf(self.constants, slots_history[i]),
-                forall|i: int, k: int| #![trigger slots_history[i][k]] 0 <= i < index && 0 <= k < 3
+                forall|i: int, k: int| #![trigger slots_history[i][k]] 0 <= i < index && 0 <= k < arity
                     ==> (slots_history[i][k] matches
                         history_semantics::verify::refinement::implementation::SlotView::Fresh(n) ==> n < fresh),
                 forall|k: int| #![trigger slots[k]@] 0 <= k < component ==> (slots[k]@ matches
                     history_semantics::verify::refinement::implementation::SlotView::Fresh(n) ==> n < fresh),
-                decreases 3 - component,
+                decreases arity - component,
             ))]
-            while component < COMPONENTS {
+            while component < arity {
                 let slot = match letter.class(component) {
                     Some(Class::Constant(value)) => Slot::Constant(value),
                     Some(Class::Register) => candidate[component],
@@ -780,15 +790,19 @@ impl<E: Event> PolicyAnalyzer<E> {
                     }
                 };
                 proof! {
-                    assert(history_field_matches(slot_views(candidate), letter@, component as int, slot@));
-                    lemma_history_field(self.constants, self.universes, slot_views(candidate),
+                    assert(history_field_matches(slot_views(candidate@.take(arity as int)), letter@, component as int, slot@));
+                    lemma_history_field(self.constants, self.universes, slot_views(candidate@.take(arity as int)),
                         letter@, alphabets@[index as int], component, slot@);
                 }
                 slots[component] = slot;
                 component += 1;
             }
-            values.push(self.components(slots));
-            proof! { slots_history = slots_history.push(slot_views(slots)); }
+            values.push(self.components(&slots[..arity]));
+            proof! {
+                slots_history = slots_history.push(slot_views(slots@.take(arity as int)));
+                assert(fresh <= arity * (index + 2)) by(nonlinear_arith)
+                    requires fresh <= arity * (index + 1) + arity;
+            }
             index += 1;
         }
         let result = Counterexample {
@@ -796,13 +810,13 @@ impl<E: Event> PolicyAnalyzer<E> {
             history: values,
         };
         proof! {
-            assert(constructed(self.constants, self.universes, *constraint, letters@, slot_views(candidate), slots_history));
+            assert(constructed(self.constants, self.universes, *constraint, letters@, slot_views(candidate@.take(arity as int)), slots_history));
             assert(result@.history =~= slots_history.map(
                 |i: int, row: Seq<history_semantics::verify::refinement::implementation::SlotView>|
                     components_of_slots(self.constants, row)));
-            assert(result@ == cex_of_slots(self.constants, slot_views(candidate), slots_history));
+            assert(result@ == cex_of_slots(self.constants, slot_views(candidate@.take(arity as int)), slots_history));
             lemma_reconstruction(self.constants, self.universes, *constraint, letters@, alphabets@,
-                slot_views(candidate), slots_history);
+                slot_views(candidate@.take(arity as int)), slots_history);
             assert(reconstructed(self.constants, self.universes, *constraint, letters@, alphabets@, result));
         }
         Ok(result)
@@ -811,44 +825,37 @@ impl<E: Event> PolicyAnalyzer<E> {
     #[verus_verify]
     #[verus_spec(result =>
         requires crate::verify::reconstruction::slot_wf(self.constants,
-            crate::verify::reconstruction::slot_views(slots)),
+            crate::verify::reconstruction::slot_views(slots@)),
         ensures result@ == crate::verify::reconstruction::components_of_slots(self.constants,
-            crate::verify::reconstruction::slot_views(slots)))]
-    fn components(&self, slots: [Slot; COMPONENTS]) -> Components<E> {
-        let principal = match slots[0] {
-            Slot::Fresh(n) => Value::Fresh(n),
-            Slot::Constant(id) => match self.constants.values[id as usize - 1] {
-                ComponentValue::Principal(v) => Value::Constant(v),
-                _ => {
-                    proof! { assert(false); }
-                    unreachable!("principal constants are principals")
+            crate::verify::reconstruction::slot_views(slots@)))]
+    fn components(&self, slots: &[Slot]) -> Components<E> {
+        let mut values: Vec<Value<E::Component>> = Vec::with_capacity(slots.len());
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant index <= slots@.len(), values@.len() == index,
+                crate::verify::reconstruction::slot_wf(self.constants,
+                    crate::verify::reconstruction::slot_views(slots@)),
+                forall|i: int| 0 <= i < index ==> values@[i]@ ==
+                    crate::verify::reconstruction::components_of_slots(self.constants,
+                        crate::verify::reconstruction::slot_views(slots@))[i],
+            decreases slots@.len() - index,
+        ))]
+        while index < slots.len() {
+            let value = match slots[index] {
+                Slot::Fresh(n) => Value::Fresh(n),
+                Slot::Constant(id) => {
+                    proof! {
+                        let view = crate::verify::reconstruction::slot_views(slots@);
+                        assert(view[index as int] == history_semantics::verify::refinement::implementation::SlotView::Code(id as nat));
+                        assert(crate::verify::reconstruction::code_field(self.constants,
+                            crate::verify::component_at(index), id as nat));
+                    }
+                    Value::Constant(self.constants.values[id as usize - 1])
                 }
-            },
-        };
-        let action = match slots[1] {
-            Slot::Fresh(n) => Value::Fresh(n),
-            Slot::Constant(id) => match self.constants.values[id as usize - 1] {
-                ComponentValue::Action(v) => Value::Constant(v),
-                _ => {
-                    proof! { assert(false); }
-                    unreachable!("action constants are actions")
-                }
-            },
-        };
-        let resource = match slots[2] {
-            Slot::Fresh(n) => Value::Fresh(n),
-            Slot::Constant(id) => match self.constants.values[id as usize - 1] {
-                ComponentValue::Resource(v) => Value::Constant(v),
-                _ => {
-                    proof! { assert(false); }
-                    unreachable!("resource constants are resources")
-                }
-            },
-        };
-        Components {
-            principal,
-            action,
-            resource,
+            };
+            values.push(value);
+            index += 1;
         }
+        Components { values }
     }
 }

@@ -9,8 +9,9 @@
 use crate::graph::allocation;
 use crate::history::StoredHistory;
 use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
+use history_syntax::{Component, MAX_ARITY};
 use junco_core::error::HistoryError;
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
@@ -26,71 +27,16 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::option::OptionAdditionalFns;
 
-// One process-wide owner; event buffers stay owned by their handles, never by this static.
-static STORE: spin::Mutex<Option<Arc<HistoryStore>>> = spin::Mutex::new(None);
+// Per-arity byte domains share one process-wide numeric issuance authority.
+static STORES: spin::Mutex<Option<StoreRegistry>> = spin::Mutex::new(None);
 
-/// An interned principal identity, issued by the process-wide store.
-#[verus_verify]
-#[verus_verify(external_derive)]
-#[repr(transparent)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Principal(u64);
-#[verus_verify]
-impl Principal {
-    /// Return the full-width identity.
-    #[verus_spec(result => ensures result == self@)]
-    pub const fn get(self) -> u64 {
-        proof! { reveal(<Principal as View>::view); }
-        self.0
-    }
-}
-
-/// An interned action identity, issued by the process-wide store.
-#[verus_verify]
-#[verus_verify(external_derive)]
-#[repr(transparent)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Action(u64);
-#[verus_verify]
-impl Action {
-    /// Return the full-width identity.
-    #[verus_spec(result => ensures result == self@)]
-    pub const fn get(self) -> u64 {
-        proof! { reveal(<Action as View>::view); }
-        self.0
-    }
-}
-
-/// An interned resource identity, issued by the process-wide store.
-#[verus_verify]
-#[verus_verify(external_derive)]
-#[repr(transparent)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Resource(u64);
-#[verus_verify]
-impl Resource {
-    /// Return the full-width identity.
-    #[verus_spec(result => ensures result == self@)]
-    pub const fn get(self) -> u64 {
-        proof! { reveal(<Resource as View>::view); }
-        self.0
-    }
+struct StoreRegistry {
+    authorities: Arc<NumericAuthorities>,
+    stores: [Option<Arc<HistoryStore>>; MAX_ARITY],
 }
 
 #[cfg(verus_keep_ghost)]
 verus! {
-impl View for Principal {
-    type V = nat;
-    closed spec fn view(&self) -> nat { self.0 as nat }
-}
-impl View for Action {
-    type V = nat;
-    closed spec fn view(&self) -> nat { self.0 as nat }
-}
-impl View for Resource {
-    type V = nat;
-    closed spec fn view(&self) -> nat { self.0 as nat }
-}
 
 impl View for Domain {
     type V = DomainView;
@@ -101,32 +47,63 @@ impl View for Domain {
 
 }
 
-/// The three mandatory coordinates of a history event.
+/// An inline numeric event; identity and hashing use only its active coordinates.
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Copy, Debug)]
 pub struct Event {
-    pub principal: Principal,
-    pub action: Action,
-    pub resource: Resource,
+    pub(crate) arity: u8,
+    pub(crate) slots: [u64; MAX_ARITY],
+}
+
+#[cfg(verus_keep_ghost)]
+verus! {
+impl Event {
+    #[verifier::type_invariant]
+    closed spec fn inv(&self) -> bool { self.arity <= MAX_ARITY }
+}
 }
 
 #[verus_verify]
 impl Event {
-    #[verus_spec(result => ensures result@ == (junco_core::verify::history_specs::EventView {
-        principal: principal as nat, action: action as nat, resource: resource as nat,
-    }))]
-    pub(crate) const fn from_encoded(principal: u64, action: u64, resource: u64) -> Self {
-        proof! {
-            reveal(<Principal as View>::view);
-            reveal(<Action as View>::view);
-            reveal(<Resource as View>::view);
+    #[verus_spec(result => requires values@.len() <= MAX_ARITY,
+        ensures result@ == values@.map(|i: int, value: u64| value as nat))]
+    pub(crate) fn from_encoded(values: &[u64]) -> Self {
+        assert!(values.len() <= MAX_ARITY);
+        let mut slots = [0; MAX_ARITY];
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant index <= values@.len() <= MAX_ARITY,
+                forall|i: int| 0 <= i < MAX_ARITY ==> slots@[i] ==
+                    if i < index { values@[i] } else { 0 },
+            decreases values@.len() - index,
+        ))]
+        while index < values.len() {
+            slots[index] = values[index];
+            index += 1;
         }
         Self {
-            principal: Principal(principal),
-            action: Action(action),
-            resource: Resource(resource),
+            arity: values.len() as u8,
+            slots,
         }
+    }
+
+    /// Return a coordinate, or zero when the index is outside the active tuple.
+    #[verus_spec(result => ensures index < self@.len() ==> result as nat == self@[index as int],
+        index >= self@.len() ==> result == 0)]
+    pub fn component(&self, index: usize) -> u64 {
+        proof! { use_type_invariant(self); }
+        if index < self.arity as usize {
+            self.slots[index]
+        } else {
+            0
+        }
+    }
+
+    #[verus_spec(result => ensures result == self@.len(), result <= MAX_ARITY)]
+    pub const fn arity(&self) -> usize {
+        proof! { use_type_invariant(self); }
+        self.arity as usize
     }
 }
 
@@ -142,18 +119,32 @@ impl Clone for Event {
 impl PartialEq for Event {
     #[verus_spec(result => ensures result == (self@ == other@))]
     fn eq(&self, other: &Self) -> bool {
-        self.principal.get() == other.principal.get()
-            && self.action.get() == other.action.get()
-            && self.resource.get() == other.resource.get()
+        proof! { use_type_invariant(self); use_type_invariant(other); }
+        if self.arity != other.arity {
+            return false;
+        }
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant index <= self.arity <= MAX_ARITY, self.arity == other.arity,
+                forall|i: int| 0 <= i < index ==> self.slots@[i] == other.slots@[i],
+            decreases self.arity - index,
+        ))]
+        while index < self.arity as usize {
+            if self.slots[index] != other.slots[index] {
+                proof! { assert(self@[index as int] != other@[index as int]); }
+                return false;
+            }
+            index += 1;
+        }
+        proof! { assert(self@ =~= other@); }
+        true
     }
 }
 impl Eq for Event {}
 
 impl core::hash::Hash for Event {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        core::hash::Hash::hash(&self.principal, state);
-        core::hash::Hash::hash(&self.action, state);
-        core::hash::Hash::hash(&self.resource, state);
+        core::hash::Hash::hash(&self.slots[..self.arity as usize], state);
     }
 }
 
@@ -161,7 +152,7 @@ impl core::hash::Hash for Event {
 #[verus_verify(external_derive)]
 #[derive(Debug)]
 struct Domain {
-    paths: BTreeMap<String, u64>,
+    paths: BTreeMap<Vec<u8>, u64>,
     ids: BTreeSet<u64>,
     #[cfg(verus_keep_ghost)]
     issued: Tracked<Option<ComponentReceipts>>,
@@ -219,38 +210,38 @@ impl Domain {
         Ok(id)
     }
 
-    // Borrowed String keys and native BTree ordering are outside the pinned vstd model.
+    // Borrowed byte-slice keys and native BTree ordering are outside the pinned vstd model.
     #[verus_verify(external_body)]
     #[verus_spec(result => ensures match result {
-        Some(id) => path_map(*paths).contains_key(vstd::utf8::encode_utf8(path@))
-            && path_map(*paths)[vstd::utf8::encode_utf8(path@)] == id as nat,
-        None => !path_map(*paths).contains_key(vstd::utf8::encode_utf8(path@)),
+        Some(id) => path_map(*paths).contains_key(path@)
+            && path_map(*paths)[path@] == id as nat,
+        None => !path_map(*paths).contains_key(path@),
     })]
     #[inline]
-    fn path_lookup(paths: &BTreeMap<String, u64>, path: &str) -> Option<u64> {
+    fn path_lookup(paths: &BTreeMap<Vec<u8>, u64>, path: &[u8]) -> Option<u64> {
         paths.get(path).copied()
     }
 
     #[verus_verify(external_body)]
     #[verus_spec(ensures path_map(*final(paths)) == path_map(*old(paths)).insert(
-        vstd::utf8::encode_utf8(path@), id as nat))]
+        path@, id as nat))]
     #[inline]
-    fn path_insert(paths: &mut BTreeMap<String, u64>, path: String, id: u64) {
+    fn path_insert(paths: &mut BTreeMap<Vec<u8>, u64>, path: Vec<u8>, id: u64) {
         paths.insert(path, id);
     }
 
     #[verus_verify(external_body)]
     #[verus_spec(ensures path_map(*final(paths)) == path_map(*old(paths)).remove(
-        vstd::utf8::encode_utf8(path@)))]
+        path@))]
     #[inline]
-    fn path_remove(paths: &mut BTreeMap<String, u64>, path: &str) {
+    fn path_remove(paths: &mut BTreeMap<Vec<u8>, u64>, path: &[u8]) {
         paths.remove(path);
     }
 
     #[verus_spec(result =>
-        requires domain_wf(old(self)@), domain_provenance(*old(self), index as int), index < 3,
+        requires domain_wf(old(self)@), domain_provenance(*old(self), index as int), index < MAX_ARITY,
             domain_bindings_wf(*old(self)),
-            *numeric_store == *singleton_store(),
+            numeric_store_wf(*numeric_store),
         ensures domain_wf(final(self)@), domain_provenance(*final(self), index as int),
             domain_bindings_wf(*final(self)),
             domain_forward_authority(*final(self)) == domain_forward_authority(*old(self)),
@@ -259,23 +250,23 @@ impl Domain {
             result is Err ==> final(self).issued@ == old(self).issued@,
             result is Err ==> final(self).bindings@ == old(self).bindings@,
             result matches Ok((id, receipt)) ==> receipt@.valid()
-                && receipt@.path() == vstd::utf8::encode_utf8(path@) && receipt@.id() == id
+                && receipt@.path() == path@ && receipt@.id() == id
                 && receipt@.coordinate_authority() == coordinate_authority(index as int)
                 && receipt@.forward_authority() == domain_forward_authority(*old(self))
                 && receipt@.reverse_authority() == domain_reverse_authority(*old(self))
                 && 0 < id < u64::MAX
-                && final(self)@.paths == old(self)@.paths.insert(vstd::utf8::encode_utf8(path@), id as nat),
+                && final(self)@.paths == old(self)@.paths.insert(path@, id as nat),
             result matches Ok((id, receipt)) ==> final(self)@.ids == old(self)@.ids.insert(id),
-            old(self)@.paths.contains_key(vstd::utf8::encode_utf8(path@)) ==> result is Ok
+            old(self)@.paths.contains_key(path@) ==> result is Ok
                 && final(self)@ == old(self)@
-                && result->Ok_0.0 as nat == old(self)@.paths[vstd::utf8::encode_utf8(path@)],
+                && result->Ok_0.0 as nat == old(self)@.paths[path@],
             forall|old_path: Seq<u8>| old(self)@.paths.contains_key(old_path)
                 ==> final(self)@.paths.contains_key(old_path)
                     && final(self)@.paths[old_path] == old(self)@.paths[old_path],
     )]
     fn intern<L: Limits>(
         &mut self,
-        path: &str,
+        path: &[u8],
         index: usize,
         domain: &'static str,
         limits: &mut L,
@@ -289,7 +280,7 @@ impl Domain {
             proof! {
                 reveal(domain_bindings_wf);
                 reveal(domain_provenance);
-                let key = vstd::utf8::encode_utf8(path@);
+                let key = path@;
                 assert(self@.paths.contains_key(key));
                 assert(self.bindings@.forward@[key] == id);
                 assert(self@.ids.contains(id));
@@ -317,9 +308,9 @@ impl Domain {
             }
             return Ok((id, verus_exec_expr! { Tracked(binding) }));
         }
-        let mut owned = String::new();
+        let mut owned = Vec::new();
         allocation(owned.try_reserve(path.len()))?;
-        owned.push_str(path);
+        owned.extend_from_slice(path);
         limits.enforce_memory()?;
         proof_decl! { let tracked prior = match self.issued.borrow() { Some(previous) => Some(previous), None => None }; }
         proof_decl! { let ghost prior_view = prior; }
@@ -331,7 +322,7 @@ impl Domain {
             verus_exec_expr! { Tracked(prior) },
         )?;
         proof! {
-            assert(vstd::utf8::encode_utf8(owned@) == vstd::utf8::encode_utf8(path@));
+            assert(owned@ == path@);
             assert(entry.ids == self.ids@);
             assert forall|old_path: Seq<u8>| entry.paths.contains_key(old_path)
                 implies 0 < entry.paths[old_path] < id as nat by {
@@ -349,7 +340,7 @@ impl Domain {
             assert(!entry.ids.contains(id));
             assert(junco_core::verify::history_specs::interner_wf(entry.paths, id as nat));
             junco_core::verify::history_specs::lemma_interner_fresh_nonreuse(entry.paths, id as nat,
-                vstd::utf8::encode_utf8(path@), id as nat);
+                path@, id as nat);
         }
         Self::path_insert(&mut self.paths, owned, id);
         self.ids.insert(id);
@@ -369,7 +360,7 @@ impl Domain {
                 id as nat + 1, u64::MAX as nat);
             assert forall|known_id: u64| self.ids@.contains(known_id)
                 <==> self@.paths.values().contains(known_id as nat) by {
-                let key = vstd::utf8::encode_utf8(path@);
+                let key = path@;
                 let updated = entry.paths.insert(key, id as nat);
                 if updated.values().contains(known_id as nat) {
                     let witness = choose|p: Seq<u8>| updated.contains_key(p)
@@ -394,7 +385,7 @@ impl Domain {
                     assert(updated.values().contains(known_id as nat));
                 }
             }
-            let key = vstd::utf8::encode_utf8(path@);
+            let key = path@;
             let tracked forward = self.bindings.borrow_mut().forward.insert(key, id).persist();
             let tracked reverse = self.bindings.borrow_mut().reverse.insert(id, key).persist();
             self.bindings.borrow_mut().paths.combine_points_to(forward.duplicate());
@@ -569,14 +560,12 @@ pub proof fn lemma_byte_binding_separation(tracked left: &ByteBindingReceipt, tr
 
 #[cfg(verus_keep_ghost)]
 pub(crate) tracked struct CoordinateAuthorities {
-    pub(crate) principal: vstd::resource::map::GhostMapAuth<u64, ComponentIssuer>,
-    pub(crate) action: vstd::resource::map::GhostMapAuth<u64, ComponentIssuer>,
-    pub(crate) resource: vstd::resource::map::GhostMapAuth<u64, ComponentIssuer>,
+    pub(crate) entries: Seq<vstd::resource::map::GhostMapAuth<u64, ComponentIssuer>>,
 }
 #[verifier::external_derive]
 #[derive(Debug)]
 pub(crate) struct CoordinateState {
-    pub(crate) next: [u64; 3],
+    pub(crate) next: [u64; MAX_ARITY],
     #[cfg(verus_keep_ghost)]
     pub(crate) authorities: Tracked<CoordinateAuthorities>,
 }
@@ -590,10 +579,10 @@ pub(crate) struct HistoryKeyState {
 #[cfg(any(test, verus_keep_ghost))]
 impl CoordinateState {
     pub(crate) fn new() -> (result: Self)
-        ensures coordinate_wf(result), result.next@ == seq![1u64, 1u64, 1u64],
+        ensures coordinate_wf(result), result.next@ == Seq::new(MAX_ARITY as nat, |i: int| 1u64),
     {
-        let tracked authorities = empty_coordinate_authorities();
-        Self { next: [1; 3], #[cfg(verus_keep_ghost)] authorities: Tracked(authorities) }
+        let tracked authorities = empty_coordinate_authorities(MAX_ARITY as nat);
+        Self { next: [1; MAX_ARITY], #[cfg(verus_keep_ghost)] authorities: Tracked(authorities) }
     }
 }
 #[cfg(any(test, verus_keep_ghost))]
@@ -614,14 +603,12 @@ pub(crate) fn allocate_coordinate_state(state: &mut CoordinateState, index: usiz
     ensures coordinate_result(*old(state), *final(state), index, domain, last, issuer, prior, result),
         result != Err(HistoryError::WrongHistoryOwner),
 {
-    if index >= 3 { return Err(HistoryError::invariant("invalid identity domain")); }
+    if index >= MAX_ARITY { return Err(HistoryError::invariant("invalid identity domain")); }
     let ghost entry = *state;
     let ghost before = coordinate_map(*state, index as int);
     proof {
         if let Some(previous) = prior {
-            if index == 0 { previous.agree(&state.authorities.borrow().principal); }
-            else if index == 1 { previous.agree(&state.authorities.borrow().action); }
-            else { previous.agree(&state.authorities.borrow().resource); }
+            previous.agree(state.authorities.borrow().entries.tracked_borrow(index as int));
             if previous@.contains_key(last) {
                 assert(before.contains_key(last));
                 assert(last < entry.next@[index as int]);
@@ -641,10 +628,9 @@ pub(crate) fn allocate_coordinate_state(state: &mut CoordinateState, index: usiz
     let tracked receipt;
     proof {
         assert(!before.contains_key(id));
-        if index == 0 { receipt = state.authorities.borrow_mut().principal.insert(id, issuer).persist(); }
-        else if index == 1 { receipt = state.authorities.borrow_mut().action.insert(id, issuer).persist(); }
-        else { receipt = state.authorities.borrow_mut().resource.insert(id, issuer).persist(); }
-        assert forall|d: int, key: u64| 0 <= d < 3 implies
+        receipt = state.authorities.borrow_mut().entries.tracked_borrow_mut(index as int)
+            .insert(id, issuer).persist();
+        assert forall|d: int, key: u64| 0 <= d < MAX_ARITY implies
             (coordinate_map(*state, d).contains_key(key) <==> 0 < key < state.next@[d]) by {
             if d == index { assert(coordinate_map(*state, d) == before.insert(id, issuer)); }
             else {
@@ -701,8 +687,8 @@ impl NativeCoordinates {
     pub(crate) const fn new() -> (result: Self)
         ensures coordinates_mutex_valid(result),
     {
-        let tracked authorities = empty_coordinate_authorities();
-        let state = CoordinateState { next: [1; 3], #[cfg(verus_keep_ghost)] authorities: Tracked(authorities) };
+        let tracked authorities = empty_coordinate_authorities(MAX_ARITY as nat);
+        let state = CoordinateState { next: [1; MAX_ARITY], #[cfg(verus_keep_ghost)] authorities: Tracked(authorities) };
         Self { inner: spin::Mutex::new(state) }
     }
     // Only installation and mutex/callback fidelity are native leaves.
@@ -771,7 +757,7 @@ pub(crate) struct NativeDomain {
 }
 #[verus_verify]
 impl NativeDomain {
-    #[verus_spec(result => requires index@ < 3,
+    #[verus_spec(result => requires index@ < MAX_ARITY,
         ensures native_domain_valid(result), native_domain_index(result) == index@ as int)]
     fn new(index: Ghost<usize>) -> Self {
         let domain = Domain::default();
@@ -779,7 +765,7 @@ impl NativeDomain {
     }
     // Only placement of the checked payload in the native mutex is trusted.
     #[verus_verify(external_body)]
-    #[verus_spec(result => requires _index@ < 3, domain_wf(domain@), domain_unissued(domain),
+    #[verus_spec(result => requires _index@ < MAX_ARITY, domain_wf(domain@), domain_unissued(domain),
         domain_bindings_wf(domain),
         ensures native_domain_valid(result), native_domain_index(result) == _index@ as int,
             native_domain_forward_authority(result) == domain_forward_authority(domain),
@@ -975,7 +961,7 @@ pub mod verify {
     }
     pub open(crate) spec fn handle_owner(handle: HistoryHandle) -> Arc<HistoryStore> { handle.owner }
     pub open(crate) spec fn handle_wf(handle: HistoryHandle) -> bool {
-        handle.owner == singleton_store() && record_valid(handle.record)
+        numeric_store_wf(*handle.owner) && record_valid(handle.record)
             && handle.record.record_id() == handle.index
             && handle.global_registration@.id() == history_authority()
             && handle.global_registration@@ == (handle.index, HistoryIssuer::Byte)
@@ -1018,12 +1004,12 @@ pub mod verify {
     }
 
     pub(super) open spec fn byte_domain(store: &HistoryStore, index: int) -> NativeDomain {
-        if index == 0 { store.principals } else if index == 1 { store.actions } else { store.resources }
+        store.domains@[index]
     }
 
     /// Fixed identities, transparent to the owning facade but closed to its callers.
     pub open(super) spec fn byte_coordinate_authority(store: &HistoryStore, index: int) -> vstd::resource::Loc {
-        coordinate_ids(store.coordinates)[index]
+        coordinate_ids(store.authorities.coordinates)[index]
     }
     pub open(super) spec fn byte_forward_authority(store: &HistoryStore, index: int) -> vstd::resource::Loc {
         native_domain_forward_authority(byte_domain(store, index))
@@ -1036,53 +1022,57 @@ pub mod verify {
     #[verifier::prophetic]
     pub open(super) spec fn byte_domain_transaction(store: &HistoryStore, index: int,
         before: DomainView, after: DomainView) -> bool {
-        0 <= index < 3 && exists|borrow: &mut Domain|
+        0 <= index < store.arity_spec() && exists|borrow: &mut Domain|
             domain_acquired(mut_ref_current(borrow), byte_domain(store, index))
                 && domain_acquired(mut_ref_future(borrow), byte_domain(store, index))
                 && mut_ref_current(borrow)@ == before && mut_ref_future(borrow)@ == after
     }
 
     pub open spec fn byte_intern_maps(before: DomainView, after: DomainView,
-        path: Seq<char>, result: Result<u64, HistoryError>) -> bool {
+        path: Seq<u8>, result: Result<u64, HistoryError>) -> bool {
         domain_wf(before) && domain_wf(after) && before.paths.submap_of(after.paths)
             && match result {
                 Ok(id) => 0 < id < u64::MAX
-                    && after.paths == before.paths.insert(vstd::utf8::encode_utf8(path), id as nat)
+                    && after.paths == before.paths.insert(path, id as nat)
                     && after.ids == before.ids.insert(id),
                 Err(_) => after == before,
             }
-            && (before.paths.contains_key(vstd::utf8::encode_utf8(path))
-                ==> result == Ok(before.paths[vstd::utf8::encode_utf8(path)] as u64) && after == before)
+            && (before.paths.contains_key(path)
+                ==> result == Ok(before.paths[path] as u64) && after == before)
     }
 
     #[verifier::prophetic]
     pub open spec fn byte_intern_result(store: &HistoryStore, index: int,
-        path: Seq<char>, result: Result<u64, HistoryError>) -> bool {
-        exists|before: DomainView, after: DomainView| byte_domain_transaction(store, index, before, after)
-            && byte_intern_maps(before, after, path, result)
+        path: Seq<u8>, result: Result<u64, HistoryError>) -> bool {
+        if 0 <= index < store.arity_spec() {
+            exists|before: DomainView, after: DomainView| byte_domain_transaction(store, index, before, after)
+                && byte_intern_maps(before, after, path, result)
+        } else {
+            match result { Err(error) => component_index_error(error), Ok(_) => false }
+        }
     }
 
     pub open spec fn byte_binding_result(store: &HistoryStore, index: int,
-        path: Seq<char>, id: u64, receipt: ByteBindingReceipt) -> bool {
-        receipt.valid() && receipt.path() == vstd::utf8::encode_utf8(path) && receipt.id() == id
+        path: Seq<u8>, id: u64, receipt: ByteBindingReceipt) -> bool {
+        receipt.valid() && receipt.path() == path && receipt.id() == id
             && receipt.coordinate_authority() == byte_coordinate_authority(store, index)
             && receipt.forward_authority() == byte_forward_authority(store, index)
             && receipt.reverse_authority() == byte_reverse_authority(store, index)
     }
 
     pub proof fn lemma_byte_binding_pair_facts(store: &HistoryStore, index: int,
-        left_path: Seq<char>, left_id: u64, left: ByteBindingReceipt,
-        right_path: Seq<char>, right_id: u64, right: ByteBindingReceipt)
+        left_path: Seq<u8>, left_id: u64, left: ByteBindingReceipt,
+        right_path: Seq<u8>, right_id: u64, right: ByteBindingReceipt)
         requires byte_binding_result(store, index, left_path, left_id, left),
             byte_binding_result(store, index, right_path, right_id, right),
-        ensures left.path() == vstd::utf8::encode_utf8(left_path), left.id() == left_id,
-            right.path() == vstd::utf8::encode_utf8(right_path), right.id() == right_id,
+        ensures left.path() == left_path, left.id() == left_id,
+            right.path() == right_path, right.id() == right_id,
             left.forward_authority() == right.forward_authority(),
             left.reverse_authority() == right.reverse_authority(),
             left.coordinate_authority() == right.coordinate_authority(),
     {}
 
-    /// A read observation of one domain. The three coordinates are never one snapshot.
+    /// A read observation of one domain. Coordinates are read independently, never as one snapshot.
     #[verifier::prophetic]
     pub open(super) spec fn byte_validation_observed(store: &HistoryStore, index: int,
         id: u64, known: bool) -> bool {
@@ -1090,22 +1080,36 @@ pub mod verify {
             && domain_wf(view) && known == view.ids.contains(id)
     }
 
-    /// Principal is checked first; only its success permits action, then resource.
+    pub open spec fn event_arity_error(error: HistoryError) -> bool {
+        match error {
+            HistoryError::InvalidPolicy { path, message } => path@ == "event"@
+                && message == "event arity does not match store",
+            _ => false,
+        }
+    }
+
+    pub open spec fn component_index_error(error: HistoryError) -> bool {
+        match error {
+            HistoryError::InvalidPolicy { path, message } => path@ == "component"@
+                && message == "component index is outside event arity",
+            _ => false,
+        }
+    }
+
+    /// Validation reads coordinates in increasing index order, stopping at the first absent ID.
     #[verifier::prophetic]
     pub open spec fn event_validation_result(store: &HistoryStore, event: Event,
         result: Result<(), HistoryError>) -> bool {
-        (byte_validation_observed(store, 0, event.principal@ as u64, false)
-            && result == Err(HistoryError::UnknownId { domain: "principal", id: event.principal@ as u64 }))
-        || (byte_validation_observed(store, 0, event.principal@ as u64, true)
-            && byte_validation_observed(store, 1, event.action@ as u64, false)
-            && result == Err(HistoryError::UnknownId { domain: "action", id: event.action@ as u64 }))
-        || (byte_validation_observed(store, 0, event.principal@ as u64, true)
-            && byte_validation_observed(store, 1, event.action@ as u64, true)
-            && byte_validation_observed(store, 2, event.resource@ as u64, false)
-            && result == Err(HistoryError::UnknownId { domain: "resource", id: event.resource@ as u64 }))
-        || (byte_validation_observed(store, 0, event.principal@ as u64, true)
-            && byte_validation_observed(store, 1, event.action@ as u64, true)
-            && byte_validation_observed(store, 2, event.resource@ as u64, true) && result == Ok(()))
+        if event@.len() != store.arity_spec() {
+            match result { Err(error) => event_arity_error(error), Ok(_) => false }
+        } else {
+            (result == Ok(()) && forall|i: int| 0 <= i < event@.len()
+                ==> byte_validation_observed(store, i, event@[i] as u64, true))
+            || (exists|i: int| 0 <= i < event@.len()
+                && (forall|j: int| 0 <= j < i ==> byte_validation_observed(store, j, event@[j] as u64, true))
+                && byte_validation_observed(store, i, event@[i] as u64, false)
+                && result == Err(HistoryError::UnknownId { domain: "component", id: event@[i] as u64 }))
+        }
     }
 
     pub proof fn lemma_byte_validation_observed(store: &HistoryStore, index: int, id: u64, known: bool)
@@ -1118,25 +1122,31 @@ pub mod verify {
         result: Result<(), HistoryError>)
         requires event_validation_result(store, event, result),
         ensures result matches Err(error) ==> event_validation_error(event, error),
-            result is Ok ==> byte_validation_observed(store, 0, event.principal@ as u64, true)
-                && byte_validation_observed(store, 1, event.action@ as u64, true)
-                && byte_validation_observed(store, 2, event.resource@ as u64, true),
-            result == Err(HistoryError::UnknownId { domain: "principal", id: event.principal@ as u64 })
-                ==> byte_validation_observed(store, 0, event.principal@ as u64, false),
-            result == Err(HistoryError::UnknownId { domain: "action", id: event.action@ as u64 })
-                ==> byte_validation_observed(store, 0, event.principal@ as u64, true)
-                    && byte_validation_observed(store, 1, event.action@ as u64, false),
-            result == Err(HistoryError::UnknownId { domain: "resource", id: event.resource@ as u64 })
-                ==> byte_validation_observed(store, 0, event.principal@ as u64, true)
-                    && byte_validation_observed(store, 1, event.action@ as u64, true)
-                    && byte_validation_observed(store, 2, event.resource@ as u64, false),
-    {}
+            result is Ok ==> event@.len() == store.arity_spec()
+                && (forall|i: int| 0 <= i < event@.len()
+                    ==> byte_validation_observed(store, i, event@[i] as u64, true)),
+            result matches Err(HistoryError::UnknownId { domain, id }) ==>
+                domain == "component" && event@.len() == store.arity_spec()
+                && (exists|i: int| 0 <= i < event@.len() && id == event@[i]
+                    && byte_validation_observed(store, i, id, false)
+                    && (forall|j: int| 0 <= j < i
+                        ==> byte_validation_observed(store, j, event@[j] as u64, true))),
+            result matches Err(HistoryError::InvalidPolicy { .. }) ==> event@.len() != store.arity_spec(),
+    {
+        if let Err(HistoryError::UnknownId { domain, id }) = result {
+            let i = choose|i: int| 0 <= i < event@.len()
+                && (forall|j: int| 0 <= j < i ==> byte_validation_observed(store, j, event@[j] as u64, true))
+                && byte_validation_observed(store, i, event@[i] as u64, false)
+                && result == Err(HistoryError::UnknownId { domain: "component", id: event@[i] as u64 });
+            assert(event@[i] <= u64::MAX);
+            assert(id == event@[i]);
+        }
+    }
 
-    /// A validation error identifies the first absent coordinate at its own read observation.
+    /// Errors retain the absent numeric coordinate or report an event/store arity mismatch.
     pub open spec fn event_validation_error(event: Event, error: HistoryError) -> bool {
-        error == (HistoryError::UnknownId { domain: "principal", id: event.principal@ as u64 })
-            || error == (HistoryError::UnknownId { domain: "action", id: event.action@ as u64 })
-            || error == (HistoryError::UnknownId { domain: "resource", id: event.resource@ as u64 })
+        event_arity_error(error) || exists|i: int| 0 <= i < event@.len()
+            && error == (HistoryError::UnknownId { domain: "component", id: event@[i] as u64 })
     }
 
     #[verifier::prophetic]
@@ -1261,22 +1271,31 @@ pub mod verify {
             && before.global_registration@.id() == after.global_registration@.id()
             && before.global_registration@@ == after.global_registration@@
     }
-    pub open(crate) spec fn singleton_valid() -> bool {
-        coordinates_mutex_valid(singleton_store().coordinates)
-            && history_keys_mutex_valid(singleton_store().history_keys)
-            && native_domain_valid(singleton_store().principals) && native_domain_index(singleton_store().principals) == 0
-            && native_domain_valid(singleton_store().actions) && native_domain_index(singleton_store().actions) == 1
-            && native_domain_valid(singleton_store().resources) && native_domain_index(singleton_store().resources) == 2
+    pub open(crate) spec fn singleton_valid(arity: nat) -> bool {
+        let store = singleton_store(arity);
+        1 <= arity <= MAX_ARITY && store.arity_spec() == arity
+            && store.domains@.len() == arity
+            && store.authorities == numeric_authorities()
+            && coordinates_mutex_valid(store.authorities.coordinates)
+            && history_keys_mutex_valid(store.authorities.history_keys)
+            && (forall|i: int| 0 <= i < arity ==> native_domain_valid(store.domains@[i])
+                && native_domain_index(store.domains@[i]) == i)
     }
     // Static installation and persistent mutex-invariant fidelity, not issuance.
     #[verifier::external_body]
-    pub(crate) proof fn singleton_invariants() ensures singleton_valid() {}
+    pub(crate) proof fn singleton_invariants(arity: nat)
+        requires 1 <= arity <= MAX_ARITY,
+        ensures singleton_valid(arity),
+    {}
 
+    pub open spec fn numeric_store_wf(store: HistoryStore) -> bool {
+        1 <= store.arity_spec() <= MAX_ARITY && store == *singleton_store(store.arity_spec())
+    }
 
     pub uninterp spec fn coordinate_ids(wrapper: NativeCoordinates) -> Seq<vstd::resource::Loc>;
     pub uninterp spec fn coordinates_mutex_valid(wrapper: NativeCoordinates) -> bool;
     pub open(crate) spec fn coordinates_acquired(state: CoordinateState, wrapper: NativeCoordinates) -> bool {
-        coordinate_wf(state) && forall|d: int| 0 <= d < 3 ==> coordinate_id(state,d) == coordinate_ids(wrapper)[d]
+        coordinate_wf(state) && forall|d: int| 0 <= d < MAX_ARITY ==> coordinate_id(state,d) == coordinate_ids(wrapper)[d]
     }
     pub uninterp spec fn history_keys_id(wrapper: NativeHistoryKeys) -> vstd::resource::Loc;
     pub uninterp spec fn history_keys_mutex_valid(wrapper: NativeHistoryKeys) -> bool;
@@ -1287,29 +1306,29 @@ pub mod verify {
     pub(crate) fn allocator_stale_and_drop_client() {
         let mut coordinates = CoordinateState::new();
         let ghost original = coordinates;
-        let stale = allocate_coordinate_state(&mut coordinates, 0, "principal", 1,
+        let stale = allocate_coordinate_state(&mut coordinates, 0, "component", 1,
             Ghost(ComponentIssuer::Byte), Tracked(None));
         assert(stale is Err);
         assert(coordinates.next@[0] == 2);
         assert(coordinate_map(coordinates,0).contains_key(1));
-        let second = allocate_coordinate_state(&mut coordinates, 0, "principal", 0,
+        let second = allocate_coordinate_state(&mut coordinates, 0, "component", 0,
             Ghost(ComponentIssuer::Byte), Tracked(None));
         assert(second is Ok);
         assert(second.unwrap().0 == 2);
         assert(coordinate_map(coordinates,0).contains_key(1));
         assert(coordinate_map(coordinates,0).contains_key(2));
         // A consumer may fail after issuance and discard its persistent receipt.
-        let third = allocate_coordinate_state(&mut coordinates, 0, "principal", 0,
+        let third = allocate_coordinate_state(&mut coordinates, 0, "component", 0,
             Ghost(ComponentIssuer::Byte), Tracked(None));
         assert(third is Ok);
         assert(third.unwrap().0 == 3);
         assert(coordinate_frame(original,coordinates));
         let ghost before_invalid = coordinates;
-        let invalid = allocate_coordinate_state(&mut coordinates, 3, "principal", 0,
+        let invalid = allocate_coordinate_state(&mut coordinates, MAX_ARITY, "component", 0,
             Ghost(ComponentIssuer::Byte), Tracked(None));
         assert(invalid is Err);
         assert(coordinates.next == before_invalid.next);
-        assert forall|d: int| 0 <= d < 3 implies coordinate_map(coordinates,d) == coordinate_map(before_invalid,d) by {}
+        assert forall|d: int| 0 <= d < MAX_ARITY implies coordinate_map(coordinates,d) == coordinate_map(before_invalid,d) by {}
         let mut histories = HistoryKeyState::new();
         let stale = allocate_history_state(&mut histories, 1, Ghost(HistoryIssuer::Byte));
         assert(stale is Err);
@@ -1335,7 +1354,7 @@ pub mod verify {
             final(histories).next == old(histories).next,
             (final(histories).issued@)@ == (old(histories).issued@)@,
     {
-        let component = allocate_coordinate_state(coordinates,0,"principal",0,
+        let component = allocate_coordinate_state(coordinates,0,"component",0,
             Ghost(ComponentIssuer::Byte),Tracked(None));
         assert(component is Err);
         let history = allocate_history_state(histories,0,Ghost(HistoryIssuer::Byte));
@@ -1345,12 +1364,12 @@ pub mod verify {
     pub(crate) fn allocator_later_failure_client() {
         let mut coordinates = CoordinateState::new();
         let failure: Result<(), HistoryError> = match allocate_coordinate_state(&mut coordinates,
-            0, "principal", 0, Ghost(ComponentIssuer::Byte), Tracked(None)) {
+            0, "component", 0, Ghost(ComponentIssuer::Byte), Tracked(None)) {
             Ok((_id, _receipt)) => Err(HistoryError::AllocationFailed),
             Err(error) => Err(error),
         };
         assert(failure == Err(HistoryError::AllocationFailed));
-        let second = allocate_coordinate_state(&mut coordinates, 0, "principal", 0,
+        let second = allocate_coordinate_state(&mut coordinates, 0, "component", 0,
             Ghost(ComponentIssuer::Byte), Tracked(None));
         assert(second matches Ok((id, _)) && id == 2);
         assert(coordinate_map(coordinates, 0).contains_key(1));
@@ -1379,12 +1398,12 @@ pub mod verify {
             history_key_frame(*old(histories), *final(histories)), final(histories).next == usize::MAX,
             (final(histories).issued@)@ == (old(histories).issued@)@.insert((usize::MAX - 1) as usize, HistoryIssuer::Byte),
     {
-        let component = allocate_coordinate_state(coordinates, 0, "principal", 0,
+        let component = allocate_coordinate_state(coordinates, 0, "component", 0,
             Ghost(ComponentIssuer::Byte), Tracked(None));
         assert(component matches Ok((id, _)) && id == u64::MAX - 1);
-        let exhausted = allocate_coordinate_state(coordinates, 0, "principal", 0,
+        let exhausted = allocate_coordinate_state(coordinates, 0, "component", 0,
             Ghost(ComponentIssuer::Byte), Tracked(None));
-        assert(exhausted == Err(HistoryError::IdExhausted { domain: "principal" }));
+        assert(exhausted == Err(HistoryError::IdExhausted { domain: "component" }));
         let history = allocate_history_state(histories, 0, Ghost(HistoryIssuer::Byte));
         assert(history matches Ok((id, _)) && id == usize::MAX - 1);
         let exhausted = allocate_history_state(histories, 0, Ghost(HistoryIssuer::Byte));
@@ -1392,45 +1411,42 @@ pub mod verify {
     }
 
     pub open(crate) spec fn coordinate_map(state: CoordinateState, index: int) -> Map<u64, ComponentIssuer> {
-        if index == 0 { state.authorities@.principal@ }
-        else if index == 1 { state.authorities@.action@ }
-        else { state.authorities@.resource@ }
+        state.authorities@.entries[index]@
     }
     pub open(crate) spec fn coordinate_id(state: CoordinateState, index: int) -> vstd::resource::Loc {
-        if index == 0 { state.authorities@.principal.id() }
-        else if index == 1 { state.authorities@.action.id() }
-        else { state.authorities@.resource.id() }
+        state.authorities@.entries[index].id()
     }
     pub open(crate) spec fn coordinate_wf(state: CoordinateState) -> bool {
-        forall|d: int| 0 <= d < 3 ==> state.next@[d] > 0
-            && (forall|id: u64| coordinate_map(state, d).contains_key(id) <==> 0 < id < state.next@[d])
+        state.authorities@.entries.len() == MAX_ARITY
+            && forall|d: int| 0 <= d < MAX_ARITY ==> state.next@[d] > 0
+                && (forall|id: u64| coordinate_map(state, d).contains_key(id) <==> 0 < id < state.next@[d])
     }
     pub open(crate) spec fn coordinate_frame(before: CoordinateState, after: CoordinateState) -> bool {
-        coordinate_wf(after) && forall|d: int| 0 <= d < 3 ==>
+        coordinate_wf(after) && forall|d: int| 0 <= d < MAX_ARITY ==>
             coordinate_id(before, d) == coordinate_id(after, d)
                 && coordinate_map(before, d).submap_of(coordinate_map(after, d))
     }
     pub open(crate) spec fn coordinate_prior(state: CoordinateState, index: usize,
         prior: Option<&ComponentReceipts>) -> bool {
-        match prior { None => true, Some(previous) => index < 3 && previous.id() == coordinate_id(state, index as int) }
+        match prior { None => true, Some(previous) => index < MAX_ARITY && previous.id() == coordinate_id(state, index as int) }
     }
     pub open(crate) spec fn coordinate_result(before: CoordinateState, after: CoordinateState,
         index: usize, domain: &'static str, last: u64, issuer: ComponentIssuer, prior: Option<&ComponentReceipts>,
         result: Result<(u64, Tracked<ComponentIdReceipt>), HistoryError>) -> bool {
         coordinate_frame(before, after)
-        && (index < 3 && (last == 0 || match prior {
+        && (index < MAX_ARITY && (last == 0 || match prior {
             Some(previous) => previous@.contains_key(last), None => false,
         }) ==> (result matches Err(error) ==> error == HistoryError::IdExhausted { domain }))
-        && if index >= 3 {
-            after.next == before.next && (forall|d: int| 0 <= d < 3 ==> coordinate_map(after,d) == coordinate_map(before,d))
+        && if index >= MAX_ARITY {
+            after.next == before.next && (forall|d: int| 0 <= d < MAX_ARITY ==> coordinate_map(after,d) == coordinate_map(before,d))
                 && result == Err(HistoryError::Invariant { message: "invalid identity domain" })
         } else if before.next@[index as int] == u64::MAX {
-            after.next == before.next && (forall|d: int| 0 <= d < 3 ==> coordinate_map(after,d) == coordinate_map(before,d))
+            after.next == before.next && (forall|d: int| 0 <= d < MAX_ARITY ==> coordinate_map(after,d) == coordinate_map(before,d))
                 && result == Err(HistoryError::IdExhausted { domain })
         } else {
             let id = before.next@[index as int];
             after.next@ == before.next@.update(index as int, (id + 1) as u64)
-            && (forall|d: int| 0 <= d < 3 ==> coordinate_map(after,d) ==
+            && (forall|d: int| 0 <= d < MAX_ARITY ==> coordinate_map(after,d) ==
                 if d == index { coordinate_map(before,d).insert(id,issuer) } else { coordinate_map(before,d) })
             && if id <= last { result == Err(HistoryError::Invariant { message: "identity allocator moved backwards" }) }
             else { match result { Ok((key, receipt)) => key == id && 0 < key < u64::MAX
@@ -1458,13 +1474,22 @@ pub mod verify {
                     && receipt@.id() == after.issued@.id() && receipt@@ == (key,issuer), Err(_) => false } }
         }
     }
-    pub(crate) proof fn empty_coordinate_authorities() -> (tracked result: CoordinateAuthorities)
-        ensures result.principal@ == Map::empty(), result.action@ == Map::empty(), result.resource@ == Map::empty(),
+    pub(crate) proof fn empty_coordinate_authorities(count: nat) -> (tracked result: CoordinateAuthorities)
+        ensures result.entries.len() == count,
+            forall|i: int| 0 <= i < count ==> result.entries[i]@ == Map::empty(),
+        decreases count,
     {
-        let tracked (principal, _) = vstd::resource::map::GhostMapAuth::new(Map::empty());
-        let tracked (action, _) = vstd::resource::map::GhostMapAuth::new(Map::empty());
-        let tracked (resource, _) = vstd::resource::map::GhostMapAuth::new(Map::empty());
-        CoordinateAuthorities { principal, action, resource }
+        if count == 0 {
+            CoordinateAuthorities { entries: Seq::tracked_empty() }
+        } else {
+            let tracked mut result = empty_coordinate_authorities((count - 1) as nat);
+            let tracked (authority, _) = vstd::resource::map::GhostMapAuth::new(Map::empty());
+            result.entries.tracked_push(authority);
+            assert forall|i: int| 0 <= i < count implies result.entries[i]@ == Map::empty() by {
+                if i < count - 1 { assert(result.entries[i]@ == Map::empty()); }
+            }
+            result
+        }
     }
     pub(crate) proof fn empty_history_authority() -> (tracked result: vstd::resource::map::GhostMapAuth<usize, HistoryIssuer>)
         ensures result@ == Map::empty(),
@@ -1473,20 +1498,21 @@ pub mod verify {
         authority
     }
 
-    /// The one Arc allocated by native `HistoryStore::global` initialization.
-    pub uninterp spec fn singleton_store() -> Arc<HistoryStore>;
+    /// One process-wide store per arity, installed by `HistoryStore::new`.
+    pub uninterp spec fn singleton_store(arity: nat) -> Arc<HistoryStore>;
+    pub(crate) uninterp spec fn numeric_authorities() -> Arc<NumericAuthorities>;
     pub open(crate) spec fn coordinate_authority(index: int) -> vstd::resource::Loc {
-        coordinate_ids(singleton_store().coordinates)[index]
+        coordinate_ids(numeric_authorities().coordinates)[index]
     }
     pub open(crate) spec fn history_authority() -> vstd::resource::Loc {
-        history_keys_id(singleton_store().history_keys)
+        history_keys_id(numeric_authorities().history_keys)
     }
 
     use junco_core::verify::history_specs as language;
     impl View for Event {
         type V = language::EventView;
-        open spec fn view(&self) -> language::EventView {
-            language::EventView { principal: self.principal@, action: self.action@, resource: self.resource@ }
+        open(crate) spec fn view(&self) -> language::EventView {
+            Seq::new(self.arity as nat, |i: int| self.slots@[i] as nat)
         }
     }
     impl vstd::std_specs::cmp::PartialEqSpecImpl for Event {
@@ -1504,12 +1530,12 @@ pub mod verify {
     }
 
     #[verifier::opaque]
-    pub(super) open spec fn path_map(paths: BTreeMap<String, u64>) -> Map<Seq<u8>, nat> {
+    pub(super) open spec fn path_map(paths: BTreeMap<Vec<u8>, u64>) -> Map<Seq<u8>, nat> {
         Map::new(
-            paths@.dom().map(|path: String| vstd::utf8::encode_utf8(path@)),
+            paths@.dom().map(|path: Vec<u8>| path@),
             |bytes: Seq<u8>| {
-                let path = choose|path: String| paths@.contains_key(path)
-                    && vstd::utf8::encode_utf8(path@) == bytes;
+                let path = choose|path: Vec<u8>| paths@.contains_key(path)
+                    && path@ == bytes;
                 paths@[path] as nat
             },
         )
@@ -1575,9 +1601,14 @@ pub mod verify {
 #[verus_verify(external_derive)]
 #[cfg_attr(not(verus_keep_ghost), derive(Debug))]
 pub struct HistoryStore {
-    pub(crate) principals: NativeDomain,
-    pub(crate) actions: NativeDomain,
-    pub(crate) resources: NativeDomain,
+    pub(crate) domains: Vec<NativeDomain>,
+    pub(crate) authorities: Arc<NumericAuthorities>,
+}
+
+#[verus_verify]
+#[verus_verify(external_derive)]
+#[cfg_attr(not(verus_keep_ghost), derive(Debug))]
+pub(crate) struct NumericAuthorities {
     pub(crate) coordinates: NativeCoordinates,
     pub(crate) history_keys: NativeHistoryKeys,
 }
@@ -1854,34 +1885,62 @@ impl HistoryRecordReadGuard<'_> {
 
 #[verus_verify]
 impl HistoryStore {
-    /// Return the process-wide store, creating it on first use.
+    /// Return the process-wide store for `arity`, sharing numeric issuance across all arities.
+    /// Panics unless `1 <= arity <= MAX_ARITY`.
     // Native static initialization and Arc allocation; no user code runs under this lock.
     #[verus_verify(external_body)]
-    #[verus_spec(result => ensures result == singleton_store(), singleton_valid(),
-        arc_identity(result) == arc_identity(singleton_store()))]
-    pub fn global() -> Arc<Self> {
-        let mut store = STORE.lock();
-        Arc::clone(store.get_or_insert_with(|| {
-            Arc::new(Self {
-                principals: NativeDomain::new(verus_exec_expr! { Ghost(0usize) }),
-                actions: NativeDomain::new(verus_exec_expr! { Ghost(1usize) }),
-                resources: NativeDomain::new(verus_exec_expr! { Ghost(2usize) }),
+    #[verus_spec(result => requires 1 <= arity <= MAX_ARITY,
+        ensures result == singleton_store(arity as nat), singleton_valid(arity as nat),
+            numeric_store_wf(*result), result.arity_spec() == arity,
+            arc_identity(result) == arc_identity(singleton_store(arity as nat)))]
+    pub fn new(arity: usize) -> Arc<Self> {
+        assert!(
+            (1..=MAX_ARITY).contains(&arity),
+            "event arity must be between 1 and MAX_ARITY"
+        );
+        let mut registry = STORES.lock();
+        let registry = registry.get_or_insert_with(|| StoreRegistry {
+            authorities: Arc::new(NumericAuthorities {
                 coordinates: NativeCoordinates::new(),
                 history_keys: NativeHistoryKeys::new(),
-            })
-        }))
+            }),
+            stores: core::array::from_fn(|_| None),
+        });
+        if let Some(store) = &registry.stores[arity - 1] {
+            return Arc::clone(store);
+        }
+        let mut domains = Vec::with_capacity(arity);
+        for _index in 0..arity {
+            domains.push(NativeDomain::new(verus_exec_expr! { Ghost(_index) }));
+        }
+        let store = Arc::new(Self {
+            domains,
+            authorities: Arc::clone(&registry.authorities),
+        });
+        registry.stores[arity - 1] = Some(Arc::clone(&store));
+        store
+    }
+
+    #[cfg(verus_keep_ghost)]
+    verus! {
+        pub closed spec fn arity_spec(&self) -> nat { self.domains@.len() }
+    }
+
+    #[verus_spec(result => ensures result == self.arity_spec())]
+    pub fn arity(&self) -> usize {
+        self.domains.len()
     }
 
     /// Issue a component ID above `last` from the counters shared by byte and typed views,
     /// so a numeric event from one view can never name another view's identity.
     #[verus_spec(result =>
-        requires *self == *singleton_store(),
-            match prior@ { None => true, Some(previous) => index < 3 && previous.id() == coordinate_authority(index as int) },
+        requires numeric_store_wf(*self),
+            match prior@ { None => true, Some(previous) => index < MAX_ARITY && previous.id() == coordinate_authority(index as int) },
         ensures result matches Ok((id, receipt)) ==> last < id < u64::MAX
             && receipt@.id() == coordinate_authority(index as int) && receipt@@ == (id, issuer@)
             && (match prior@ { None => true, Some(previous) => forall|key: u64| previous@.contains_key(key) ==> key < id }),
         result != Err(HistoryError::WrongHistoryOwner),
-        index < 3 && (last == 0 || match prior@ {
+        index < MAX_ARITY && (last == 0 || match prior@ {
             Some(previous) => previous@.contains_key(last), None => false,
         }) ==> (result matches Err(error) ==> error == HistoryError::IdExhausted { domain }),
     )]
@@ -1893,23 +1952,23 @@ impl HistoryStore {
         issuer: Ghost<ComponentIssuer>,
         prior: Tracked<Option<&ComponentReceipts>>,
     ) -> Result<(u64, Tracked<ComponentIdReceipt>), HistoryError> {
-        proof! { singleton_invariants(); reveal(coordinate_authority); }
-        self.coordinates.with_state((index, domain, last, issuer, prior),
+        proof! { singleton_invariants(self.arity_spec()); reveal(coordinate_authority); }
+        self.authorities.coordinates.with_state((index, domain, last, issuer, prior),
             verus_exec_expr! {
             |state: &mut CoordinateState, context: (usize, &'static str, u64, Ghost<ComponentIssuer>, Tracked<Option<&ComponentReceipts>>)|
                 -> (result: Result<(u64, Tracked<ComponentIdReceipt>), HistoryError>)
-                requires coordinates_acquired(*old(state), self.coordinates),
+                requires coordinates_acquired(*old(state), self.authorities.coordinates),
                     coordinate_prior(*old(state), context.0, context.4@),
                 ensures coordinate_result(*old(state), *final(state), context.0, context.1, context.2, context.3@, context.4@, result),
                     result != Err(HistoryError::WrongHistoryOwner),
-                    context.0 < 3 && (context.2 == 0 || match context.4@ {
+                    context.0 < MAX_ARITY && (context.2 == 0 || match context.4@ {
                         Some(previous) => previous@.contains_key(context.2), None => false,
                     }) ==> (result matches Err(error) ==> error == HistoryError::IdExhausted { domain: context.1 }),
             { allocate_coordinate_state(state, context.0, context.1, context.2, context.3, context.4) } })
     }
 
     /// Issue a never-recycled history ID above `last`; retained receipts certify a live frontier.
-    #[verus_spec(result => requires *self == *singleton_store(),
+    #[verus_spec(result => requires numeric_store_wf(*self),
         match prior@ { Some(previous) => previous.id() == history_authority(), None => true },
         ensures result matches Ok((id, receipt)) ==> last < id < usize::MAX
             && receipt@.id() == history_authority() && receipt@@ == (id, issuer@),
@@ -1921,15 +1980,15 @@ impl HistoryStore {
         issuer: Ghost<HistoryIssuer>,
         prior: Tracked<Option<&HistoryKeyReceipt>>,
     ) -> Result<(usize, Tracked<HistoryKeyReceipt>), HistoryError> {
-        proof! { singleton_invariants(); reveal(history_authority); }
+        proof! { singleton_invariants(self.arity_spec()); reveal(history_authority); }
         if last == usize::MAX {
             return Err(HistoryError::IdExhausted { domain: "history" });
         }
-        self.history_keys.with_state((last, issuer, prior),
+        self.authorities.history_keys.with_state((last, issuer, prior),
             verus_exec_expr! {
             |state: &mut HistoryKeyState, context: (usize, Ghost<HistoryIssuer>, Tracked<Option<&HistoryKeyReceipt>>)|
                 -> (result: Result<(usize, Tracked<HistoryKeyReceipt>), HistoryError>)
-                requires history_keys_acquired(*old(state), self.history_keys),
+                requires history_keys_acquired(*old(state), self.authorities.history_keys),
                     match context.2@ { Some(previous) => previous.id() == old(state).issued@.id(), None => true },
                 ensures history_key_result(*old(state), *final(state), context.0, context.1@, result),
                     context.0 == 0 || (match context.2@ { Some(previous) => previous.key() == context.0, None => false }) ==>
@@ -1950,18 +2009,20 @@ impl HistoryStore {
 
 #[verus_verify]
 impl HistoryStore {
-    /// Intern exact UTF-8 bytes; prior bindings survive both success and failure.
+    /// Intern arbitrary exact bytes in one coordinate; prior bindings survive every outcome.
+    /// A coordinate outside this store's arity returns `InvalidPolicy` without touching a domain.
     #[verus_verify]
-    #[verus_spec(result => requires *self == *singleton_store(),
-        ensures result matches Ok(id) ==> 0 < id@ < u64::MAX,
-            byte_intern_result(self, 0, path@, match result { Ok(id) => Ok(id@ as u64), Err(error) => Err(error) }))]
-    pub fn intern_principal<L: Limits>(
+    #[verus_spec(result => requires numeric_store_wf(*self),
+        ensures result matches Ok(id) ==> 0 < id < u64::MAX,
+            byte_intern_result(self, component.0 as int, bytes@, result))]
+    pub fn intern<L: Limits>(
         &self,
-        path: &str,
+        component: Component,
+        bytes: &[u8],
         limits: &mut L,
         world: &mut ObservationWorld,
-    ) -> Result<Principal, HistoryError> {
-        match self.intern_principal_observed(path, limits, world) {
+    ) -> Result<u64, HistoryError> {
+        match self.intern_observed(component, bytes, limits, world) {
             Ok((id, _receipt)) => Ok(id),
             Err(error) => Err(error),
         }
@@ -1970,190 +2031,65 @@ impl HistoryStore {
     /// Retain persistent byte identity evidence without another native lookup or allocation.
     #[doc(hidden)]
     #[verus_verify]
-    #[verus_spec(result => requires *self == *singleton_store(),
-        ensures byte_intern_result(self, 0, path@,
-            match result { Ok((id, _)) => Ok(id@ as u64), Err(error) => Err(error) }),
-            result matches Ok((id, receipt)) ==> 0 < id@ < u64::MAX
-                && byte_binding_result(self, 0, path@, id@ as u64, receipt@)
-                && receipt@.coordinate_authority() == coordinate_authority(0))]
-    pub fn intern_principal_observed<L: Limits>(
+    #[verus_spec(result => requires numeric_store_wf(*self),
+        ensures byte_intern_result(self, component.0 as int, bytes@,
+            match result { Ok((id, _)) => Ok(id), Err(error) => Err(error) }),
+            result matches Ok((id, receipt)) ==> 0 < id < u64::MAX
+                && component.0 < self.arity_spec()
+                && byte_binding_result(self, component.0 as int, bytes@, id, receipt@)
+                && receipt@.coordinate_authority() == coordinate_authority(component.0 as int))]
+    pub fn intern_observed<L: Limits>(
         &self,
-        path: &str,
+        component: Component,
+        bytes: &[u8],
         limits: &mut L,
         _world: &mut ObservationWorld,
-    ) -> Result<(Principal, Tracked<ByteBindingReceipt>), HistoryError> {
-        proof! { singleton_invariants(); }
-        let context = (path, limits);
+    ) -> Result<(u64, Tracked<ByteBindingReceipt>), HistoryError> {
+        proof! { singleton_invariants(self.arity_spec()); }
+        let index = component.index();
+        if index >= self.arity() {
+            return Err(HistoryError::invalid_policy(
+                "component",
+                "component index is outside event arity",
+            ));
+        }
+        let native = &self.domains[index];
+        let context = (bytes, limits);
         proof_decl! { let ghost input = context; }
         let operation = verus_exec_expr! {
-            |domain: &mut Domain, context: (&str, &mut L)|
+            |domain: &mut Domain, context: (&[u8], &mut L)|
                 -> (result: Result<(u64, Tracked<ByteBindingReceipt>), HistoryError>)
-                requires domain_acquired(*old(domain), self.principals),
-                    native_domain_index(self.principals) == 0, *self == *singleton_store(),
-                ensures domain_acquired(*final(domain), self.principals),
+                requires domain_acquired(*old(domain), *native),
+                    native_domain_index(*native) == index, numeric_store_wf(*self),
+                    index < self.arity_spec() <= MAX_ARITY,
+                    *native == byte_domain(self, index as int),
+                ensures domain_acquired(*final(domain), *native),
                     byte_intern_maps(old(domain)@, final(domain)@, context.0@,
                         match result { Ok((id, _)) => Ok(id), Err(error) => Err(error) }),
-                    result matches Ok((id, receipt)) ==> byte_binding_result(self, 0, context.0@, id, receipt@)
-                        && receipt@.coordinate_authority() == coordinate_authority(0),
-            { domain.intern(context.0, 0, "principal", context.1, self) }
+                    result matches Ok((id, receipt)) ==> byte_binding_result(self, index as int, context.0@, id, receipt@)
+                        && 0 < id < u64::MAX
+                        && receipt@.coordinate_authority() == coordinate_authority(index as int),
+            { domain.intern(context.0, index, "component", context.1, self) }
         };
-        let result = self.principals.with_domain(context, operation);
+        let result = native.with_domain(context, operation);
         proof! {
-            let borrow = choose|borrow: &mut Domain| domain_acquired(mut_ref_current(borrow), self.principals)
-                && domain_acquired(mut_ref_future(borrow), self.principals)
+            let borrow = choose|borrow: &mut Domain| domain_acquired(mut_ref_current(borrow), *native)
+                && domain_acquired(mut_ref_future(borrow), *native)
                 && call_ensures(operation, (borrow, input), result);
             let before = mut_ref_current(borrow)@;
             let after = mut_ref_future(borrow)@;
-            assert(byte_domain_transaction(self, 0, before, after));
-            assert(byte_intern_maps(before, after, path@,
+            assert(byte_domain_transaction(self, index as int, before, after));
+            assert(byte_intern_maps(before, after, bytes@,
                 match result { Ok((id, _)) => Ok(id), Err(error) => Err(error) }));
-            assert(byte_intern_result(self, 0, path@,
+            assert(byte_intern_result(self, index as int, bytes@,
                 match result { Ok((id, _)) => Ok(id), Err(error) => Err(error) }));
-            reveal(<Principal as View>::view);
         }
-        match result {
-            Ok((id, receipt)) => Ok((Principal(id), receipt)),
-            Err(error) => Err(error),
-        }
-    }
-
-    /// Intern exact UTF-8 bytes; prior bindings survive both success and failure.
-    #[verus_verify]
-    #[verus_spec(result => requires *self == *singleton_store(),
-        ensures result matches Ok(id) ==> 0 < id@ < u64::MAX,
-            byte_intern_result(self, 1, path@, match result { Ok(id) => Ok(id@ as u64), Err(error) => Err(error) }))]
-    pub fn intern_action<L: Limits>(
-        &self,
-        path: &str,
-        limits: &mut L,
-        world: &mut ObservationWorld,
-    ) -> Result<Action, HistoryError> {
-        match self.intern_action_observed(path, limits, world) {
-            Ok((id, _receipt)) => Ok(id),
-            Err(error) => Err(error),
-        }
-    }
-
-    /// Retain persistent byte identity evidence without another native lookup or allocation.
-    #[doc(hidden)]
-    #[verus_verify]
-    #[verus_spec(result => requires *self == *singleton_store(),
-        ensures byte_intern_result(self, 1, path@,
-            match result { Ok((id, _)) => Ok(id@ as u64), Err(error) => Err(error) }),
-            result matches Ok((id, receipt)) ==> 0 < id@ < u64::MAX
-                && byte_binding_result(self, 1, path@, id@ as u64, receipt@)
-                && receipt@.coordinate_authority() == coordinate_authority(1))]
-    pub fn intern_action_observed<L: Limits>(
-        &self,
-        path: &str,
-        limits: &mut L,
-        _world: &mut ObservationWorld,
-    ) -> Result<(Action, Tracked<ByteBindingReceipt>), HistoryError> {
-        proof! { singleton_invariants(); }
-        let context = (path, limits);
-        proof_decl! { let ghost input = context; }
-        let operation = verus_exec_expr! {
-            |domain: &mut Domain, context: (&str, &mut L)|
-                -> (result: Result<(u64, Tracked<ByteBindingReceipt>), HistoryError>)
-                requires domain_acquired(*old(domain), self.actions),
-                    native_domain_index(self.actions) == 1, *self == *singleton_store(),
-                ensures domain_acquired(*final(domain), self.actions),
-                    byte_intern_maps(old(domain)@, final(domain)@, context.0@,
-                        match result { Ok((id, _)) => Ok(id), Err(error) => Err(error) }),
-                    result matches Ok((id, receipt)) ==> byte_binding_result(self, 1, context.0@, id, receipt@)
-                        && receipt@.coordinate_authority() == coordinate_authority(1),
-            { domain.intern(context.0, 1, "action", context.1, self) }
-        };
-        let result = self.actions.with_domain(context, operation);
-        proof! {
-            let borrow = choose|borrow: &mut Domain| domain_acquired(mut_ref_current(borrow), self.actions)
-                && domain_acquired(mut_ref_future(borrow), self.actions)
-                && call_ensures(operation, (borrow, input), result);
-            let before = mut_ref_current(borrow)@;
-            let after = mut_ref_future(borrow)@;
-            assert(byte_domain_transaction(self, 1, before, after));
-            assert(byte_intern_maps(before, after, path@,
-                match result { Ok((id, _)) => Ok(id), Err(error) => Err(error) }));
-            assert(byte_intern_result(self, 1, path@,
-                match result { Ok((id, _)) => Ok(id), Err(error) => Err(error) }));
-            reveal(<Action as View>::view);
-        }
-        match result {
-            Ok((id, receipt)) => Ok((Action(id), receipt)),
-            Err(error) => Err(error),
-        }
-    }
-
-    /// Intern exact UTF-8 bytes; prior bindings survive both success and failure.
-    #[verus_verify]
-    #[verus_spec(result => requires *self == *singleton_store(),
-        ensures result matches Ok(id) ==> 0 < id@ < u64::MAX,
-            byte_intern_result(self, 2, path@, match result { Ok(id) => Ok(id@ as u64), Err(error) => Err(error) }))]
-    pub fn intern_resource<L: Limits>(
-        &self,
-        path: &str,
-        limits: &mut L,
-        world: &mut ObservationWorld,
-    ) -> Result<Resource, HistoryError> {
-        match self.intern_resource_observed(path, limits, world) {
-            Ok((id, _receipt)) => Ok(id),
-            Err(error) => Err(error),
-        }
-    }
-
-    /// Retain persistent byte identity evidence without another native lookup or allocation.
-    #[doc(hidden)]
-    #[verus_verify]
-    #[verus_spec(result => requires *self == *singleton_store(),
-        ensures byte_intern_result(self, 2, path@,
-            match result { Ok((id, _)) => Ok(id@ as u64), Err(error) => Err(error) }),
-            result matches Ok((id, receipt)) ==> 0 < id@ < u64::MAX
-                && byte_binding_result(self, 2, path@, id@ as u64, receipt@)
-                && receipt@.coordinate_authority() == coordinate_authority(2))]
-    pub fn intern_resource_observed<L: Limits>(
-        &self,
-        path: &str,
-        limits: &mut L,
-        _world: &mut ObservationWorld,
-    ) -> Result<(Resource, Tracked<ByteBindingReceipt>), HistoryError> {
-        proof! { singleton_invariants(); }
-        let context = (path, limits);
-        proof_decl! { let ghost input = context; }
-        let operation = verus_exec_expr! {
-            |domain: &mut Domain, context: (&str, &mut L)|
-                -> (result: Result<(u64, Tracked<ByteBindingReceipt>), HistoryError>)
-                requires domain_acquired(*old(domain), self.resources),
-                    native_domain_index(self.resources) == 2, *self == *singleton_store(),
-                ensures domain_acquired(*final(domain), self.resources),
-                    byte_intern_maps(old(domain)@, final(domain)@, context.0@,
-                        match result { Ok((id, _)) => Ok(id), Err(error) => Err(error) }),
-                    result matches Ok((id, receipt)) ==> byte_binding_result(self, 2, context.0@, id, receipt@)
-                        && receipt@.coordinate_authority() == coordinate_authority(2),
-            { domain.intern(context.0, 2, "resource", context.1, self) }
-        };
-        let result = self.resources.with_domain(context, operation);
-        proof! {
-            let borrow = choose|borrow: &mut Domain| domain_acquired(mut_ref_current(borrow), self.resources)
-                && domain_acquired(mut_ref_future(borrow), self.resources)
-                && call_ensures(operation, (borrow, input), result);
-            let before = mut_ref_current(borrow)@;
-            let after = mut_ref_future(borrow)@;
-            assert(byte_domain_transaction(self, 2, before, after));
-            assert(byte_intern_maps(before, after, path@,
-                match result { Ok((id, _)) => Ok(id), Err(error) => Err(error) }));
-            assert(byte_intern_result(self, 2, path@,
-                match result { Ok((id, _)) => Ok(id), Err(error) => Err(error) }));
-            reveal(<Resource as View>::view);
-        }
-        match result {
-            Ok((id, receipt)) => Ok((Resource(id), receipt)),
-            Err(error) => Err(error),
-        }
+        result
     }
 
     /// Create an empty history owned by its handles and read-only records.
     #[verus_verify]
-    #[verus_spec(result => requires *self == singleton_store(),
+    #[verus_spec(result => requires numeric_store_wf(**self),
         ensures result matches Ok(handle) ==> handle_wf(handle)
             && handle_owner_identity(handle) == arc_identity(*self) && history_created(handle))]
     pub fn new_history<L: Limits>(
@@ -2190,106 +2126,92 @@ impl HistoryStore {
         Ok(handle)
     }
 
-    /// Validate principal, then action, then resource at separate read linearizations.
+    /// Build an inline event from IDs belonging to this store's byte domains.
+    /// Wrong arity and unknown IDs are rejected before the event is returned.
     #[verus_verify]
-    #[verus_spec(result => requires *self == *singleton_store(),
+    #[verus_spec(result => requires numeric_store_wf(*self),
+        ensures result matches Ok(event) ==> event@ == slots@.map(|i: int, id: u64| id as nat)
+            && event@.len() == self.arity_spec() && event_validation_result(self, event, Ok(())),
+            slots@.len() != self.arity_spec() ==> match result {
+                Err(error) => event_arity_error(error), Ok(_) => false,
+            },
+            slots@.len() == self.arity_spec() ==> exists|event: Event|
+                event@ == slots@.map(|i: int, id: u64| id as nat)
+                && event_validation_result(self, event,
+                    match result { Ok(_) => Ok(()), Err(error) => Err(error) }))]
+    pub fn event(&self, slots: &[u64]) -> Result<Event, HistoryError> {
+        if slots.len() != self.arity() {
+            return Err(HistoryError::invalid_policy(
+                "event",
+                "event arity does not match store",
+            ));
+        }
+        let event = Event::from_encoded(slots);
+        let validation = self.validate_event(&event);
+        proof! {
+            assert(exists|candidate: Event| candidate@ == slots@.map(|i: int, id: u64| id as nat)
+                && event_validation_result(self, candidate, validation));
+        }
+        validation?;
+        Ok(event)
+    }
+
+    /// Validate arity, then coordinates in index order at separate read linearizations.
+    #[verus_verify]
+    #[verus_spec(result => requires numeric_store_wf(*self),
         ensures event_validation_result(self, *event, result),
             result matches Err(error) ==> event_validation_error(*event, error))]
     pub fn validate_event(&self, event: &Event) -> Result<(), HistoryError> {
-        proof! { singleton_invariants(); }
-        let id = event.principal.get();
-        let operation = verus_exec_expr! {
-            |domain: &mut Domain, id: u64| -> (result: Result<(), HistoryError>)
-                requires domain_acquired(*old(domain), self.principals),
-                ensures domain_acquired(*final(domain), self.principals), final(domain)@ == old(domain)@,
-                    (result is Ok) == old(domain)@.ids.contains(id),
-                    result is Ok ==> result == Ok(()),
-                    result is Err ==> result == Err(HistoryError::UnknownId { domain: "principal", id }),
-            {
-                proof { reveal(<Domain as View>::view); }
-                domain.validate(id, "principal")
-            }
-        };
-        let result = self.principals.with_domain(id, operation);
-        proof! {
-            let borrow = choose|borrow: &mut Domain| domain_acquired(mut_ref_current(borrow), self.principals)
-                && domain_acquired(mut_ref_future(borrow), self.principals)
-                && call_ensures(operation, (borrow, id), result);
-            let view = mut_ref_current(borrow)@;
-            assert(mut_ref_future(borrow)@ == view);
-            assert(byte_domain_transaction(self, 0, view, view));
-            assert((result is Ok) == view.ids.contains(id));
-            assert(byte_validation_observed(self, 0, id, result is Ok));
-            if result is Err {
-                assert(event_validation_result(self, *event, result));
-                lemma_event_validation_result_facts(self, *event, result);
-            }
+        proof! { singleton_invariants(self.arity_spec()); }
+        let arity = self.arity();
+        if event.arity() != arity {
+            return Err(HistoryError::invalid_policy(
+                "event",
+                "event arity does not match store",
+            ));
         }
-        result?;
-        let id = event.action.get();
-        let operation = verus_exec_expr! {
-            |domain: &mut Domain, id: u64| -> (result: Result<(), HistoryError>)
-                requires domain_acquired(*old(domain), self.actions),
-                ensures domain_acquired(*final(domain), self.actions), final(domain)@ == old(domain)@,
-                    (result is Ok) == old(domain)@.ids.contains(id),
-                    result is Ok ==> result == Ok(()),
-                    result is Err ==> result == Err(HistoryError::UnknownId { domain: "action", id }),
-            {
-                proof { reveal(<Domain as View>::view); }
-                domain.validate(id, "action")
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant numeric_store_wf(*self), singleton_valid(self.arity_spec()),
+                index <= arity == self.arity_spec(), event@.len() == arity,
+                forall|i: int| 0 <= i < index ==> byte_validation_observed(self, i, event@[i] as u64, true),
+            decreases arity - index,
+        ))]
+        while index < arity {
+            let native = &self.domains[index];
+            let id = event.component(index);
+            let operation = verus_exec_expr! {
+                |domain: &mut Domain, id: u64| -> (result: Result<(), HistoryError>)
+                    requires domain_acquired(*old(domain), *native),
+                    ensures domain_acquired(*final(domain), *native), final(domain)@ == old(domain)@,
+                        (result is Ok) == old(domain)@.ids.contains(id),
+                        result is Ok ==> result == Ok(()),
+                        result is Err ==> result == Err(HistoryError::UnknownId { domain: "component", id }),
+                {
+                    proof { reveal(<Domain as View>::view); }
+                    domain.validate(id, "component")
+                }
+            };
+            let result = native.with_domain(id, operation);
+            proof! {
+                let borrow = choose|borrow: &mut Domain| domain_acquired(mut_ref_current(borrow), *native)
+                    && domain_acquired(mut_ref_future(borrow), *native)
+                    && call_ensures(operation, (borrow, id), result);
+                let view = mut_ref_current(borrow)@;
+                assert(mut_ref_future(borrow)@ == view);
+                assert(byte_domain_transaction(self, index as int, view, view));
+                assert((result is Ok) == view.ids.contains(id));
+                assert(byte_validation_observed(self, index as int, id, result is Ok));
+                if result is Err {
+                    assert(event_validation_result(self, *event, result));
+                    lemma_event_validation_result_facts(self, *event, result);
+                }
             }
-        };
-        let result = self.actions.with_domain(id, operation);
-        proof! {
-            let borrow = choose|borrow: &mut Domain| domain_acquired(mut_ref_current(borrow), self.actions)
-                && domain_acquired(mut_ref_future(borrow), self.actions)
-                && call_ensures(operation, (borrow, id), result);
-            let view = mut_ref_current(borrow)@;
-            assert(mut_ref_future(borrow)@ == view);
-            assert(byte_domain_transaction(self, 1, view, view));
-            assert((result is Ok) == view.ids.contains(id));
-            assert(byte_validation_observed(self, 1, id, result is Ok));
-            if result is Err {
-                assert(event_validation_result(self, *event, result));
-                lemma_event_validation_result_facts(self, *event, result);
-            }
+            result?;
+            index += 1;
         }
-        result?;
-        let id = event.resource.get();
-        let operation = verus_exec_expr! {
-            |domain: &mut Domain, id: u64| -> (result: Result<(), HistoryError>)
-                requires domain_acquired(*old(domain), self.resources),
-                ensures domain_acquired(*final(domain), self.resources), final(domain)@ == old(domain)@,
-                    (result is Ok) == old(domain)@.ids.contains(id),
-                    result is Ok ==> result == Ok(()),
-                    result is Err ==> result == Err(HistoryError::UnknownId { domain: "resource", id }),
-            {
-                proof { reveal(<Domain as View>::view); }
-                domain.validate(id, "resource")
-            }
-        };
-        let result = self.resources.with_domain(id, operation);
-        proof! {
-            let borrow = choose|borrow: &mut Domain| domain_acquired(mut_ref_current(borrow), self.resources)
-                && domain_acquired(mut_ref_future(borrow), self.resources)
-                && call_ensures(operation, (borrow, id), result);
-            let view = mut_ref_current(borrow)@;
-            assert(mut_ref_future(borrow)@ == view);
-            assert(byte_domain_transaction(self, 2, view, view));
-            assert((result is Ok) == view.ids.contains(id));
-            assert(byte_validation_observed(self, 2, id, result is Ok));
-            assert(byte_validation_observed(self, 0, event.principal@ as u64, true));
-            assert(byte_validation_observed(self, 1, event.action@ as u64, true));
-            assert(id == event.resource@ as u64);
-            if result is Err {
-                assert(result == Err(HistoryError::UnknownId { domain: "resource", id }));
-            } else {
-                assert(result == Ok(()));
-            }
-            assert(event_validation_result(self, *event, result));
-            lemma_event_validation_result_facts(self, *event, result);
-        }
-        result
+        proof! { assert(event_validation_result(self, *event, Ok(()))); }
+        Ok(())
     }
 }
 
@@ -2312,7 +2234,7 @@ impl HistoryStore {
         ensures result is Ok <==> reference_identity(self) == handle_owner_identity(*history),
             result is Err ==> result == Err(HistoryError::WrongHistoryOwner),
             result matches Ok(record) ==> record == history.record && record_valid(record)
-                && *self == *singleton_store())]
+                && numeric_store_wf(*self))]
     fn history_record_inner(&self, history: &HistoryHandle) -> Result<NativeRecord, HistoryError> {
         if !history.belongs_to(self) {
             return Err(HistoryError::WrongHistoryOwner);
@@ -2340,7 +2262,7 @@ impl HistoryStore {
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant index <= events@.len(), events@.len() > 0, handle_wf(*history),
-                record == history.record, record_valid(record), *self == *singleton_store(),
+                record == history.record, record_valid(record), numeric_store_wf(*self),
                 reference_identity(self) == handle_owner_identity(*history),
             decreases events@.len() - index))]
         while index < events.len() {
@@ -2439,49 +2361,54 @@ mod tests {
     use junco_core::limits::Unmetered;
 
     fn event(store: &HistoryStore) -> Event {
-        Event {
-            principal: store
-                .intern_principal("alice", &mut Unmetered, &mut ObservationWorld)
+        Event::from_encoded(&[
+            store
+                .intern(
+                    Component(0),
+                    b"alice",
+                    &mut Unmetered,
+                    &mut ObservationWorld,
+                )
                 .unwrap(),
-            action: store
-                .intern_action("edit", &mut Unmetered, &mut ObservationWorld)
+            store
+                .intern(Component(1), b"edit", &mut Unmetered, &mut ObservationWorld)
                 .unwrap(),
-            resource: store
-                .intern_resource("doc", &mut Unmetered, &mut ObservationWorld)
+            store
+                .intern(Component(2), b"doc", &mut Unmetered, &mut ObservationWorld)
                 .unwrap(),
-        }
+        ])
     }
 
     fn typed_event() -> Event {
         // A fresh typed view issues IDs that are never members of a byte domain.
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-        struct Typed;
-        impl history_syntax::Event for Typed {
-            type Principal = ();
-            type Action = ();
-            type Resource = ();
-            fn principal(self) {}
-            fn action(self) {}
-            fn resource(self) {}
-        }
-        crate::typed::Store::<Typed>::new()
+        crate::typed::Store::<((), (), ())>::new()
             .unwrap()
-            .encode_event(&Typed)
+            .encode_event(&((), (), ()))
             .unwrap()
     }
 
     #[test]
     fn global_owners_share_identities_and_handles() {
-        let first = HistoryStore::global();
-        let second = HistoryStore::global();
+        let first = HistoryStore::new(3);
+        let second = HistoryStore::new(3);
         assert!(Arc::ptr_eq(&first, &second));
         let principal = first
-            .intern_principal("global-test/alice", &mut Unmetered, &mut ObservationWorld)
+            .intern(
+                Component(0),
+                b"global-test/alice",
+                &mut Unmetered,
+                &mut ObservationWorld,
+            )
             .unwrap();
         assert_eq!(
             principal,
             second
-                .intern_principal("global-test/alice", &mut Unmetered, &mut ObservationWorld)
+                .intern(
+                    Component(0),
+                    b"global-test/alice",
+                    &mut Unmetered,
+                    &mut ObservationWorld
+                )
                 .unwrap()
         );
         let history = first
@@ -2504,8 +2431,146 @@ mod tests {
     }
 
     #[test]
+    fn all_arities_share_numeric_authorities_not_byte_domains() {
+        let first = HistoryStore::new(1);
+        let mut history_ids = BTreeSet::new();
+        let mut coordinate_ids: Vec<BTreeSet<u64>> =
+            (0..MAX_ARITY).map(|_| BTreeSet::new()).collect();
+        for arity in 1..=MAX_ARITY {
+            let store = HistoryStore::new(arity);
+            assert_eq!(store.arity(), arity);
+            assert_eq!(store.domains.len(), arity);
+            assert!(Arc::ptr_eq(&store, &HistoryStore::new(arity)));
+            assert!(Arc::ptr_eq(&first.authorities, &store.authorities));
+            let mut slots = [0; MAX_ARITY];
+            for index in 0..arity {
+                let bytes = b"all-arities/\xff\x80\0";
+                let component = Component(index as u8);
+                let id = store
+                    .intern(component, bytes, &mut Unmetered, &mut ObservationWorld)
+                    .unwrap();
+                assert_eq!(
+                    id,
+                    store
+                        .intern(component, bytes, &mut Unmetered, &mut ObservationWorld)
+                        .unwrap()
+                );
+                assert!(coordinate_ids[index].insert(id));
+                slots[index] = id;
+            }
+            let event = store.event(&slots[..arity]).unwrap();
+            assert_eq!(event.arity(), arity);
+            store.validate_event(&event).unwrap();
+            let history = store
+                .new_history(&mut Unmetered, &mut ObservationWorld)
+                .unwrap();
+            assert!(history_ids.insert(history.index()));
+            store
+                .append(&history, &[event], &mut Unmetered, &mut ObservationWorld)
+                .unwrap();
+            if arity != 1 {
+                assert!(!history.belongs_to(&first));
+                assert!(matches!(
+                    first.len(&history),
+                    Err(HistoryError::WrongHistoryOwner)
+                ));
+                assert!(matches!(
+                    first.validate_event(&event),
+                    Err(HistoryError::InvalidPolicy { .. })
+                ));
+            }
+            for index in [arity as u8, u8::MAX] {
+                assert!(matches!(
+                    store.intern(
+                        Component(index),
+                        b"invalid",
+                        &mut Unmetered,
+                        &mut ObservationWorld
+                    ),
+                    Err(HistoryError::InvalidPolicy { .. })
+                ));
+            }
+            let malformed = Event::from_encoded(&slots[..arity - 1]);
+            assert!(matches!(
+                store.event(&slots[..arity - 1]),
+                Err(HistoryError::InvalidPolicy { .. })
+            ));
+            assert!(matches!(
+                store.event(&[1; MAX_ARITY + 1]),
+                Err(HistoryError::InvalidPolicy { .. })
+            ));
+            assert!(matches!(
+                store.event(&[0; MAX_ARITY][..arity]),
+                Err(HistoryError::UnknownId {
+                    domain: "component",
+                    id: 0
+                })
+            ));
+            assert!(matches!(
+                store.validate_event(&malformed),
+                Err(HistoryError::InvalidPolicy { .. })
+            ));
+            assert!(matches!(
+                store.append(
+                    &history,
+                    &[event, malformed],
+                    &mut Unmetered,
+                    &mut ObservationWorld
+                ),
+                Err(HistoryError::InvalidPolicy { .. })
+            ));
+            assert_eq!(store.len(&history).unwrap(), 1);
+            assert_eq!(event.component(arity), 0);
+            assert_eq!(event.component(usize::MAX), 0);
+        }
+    }
+
+    #[test]
+    fn numeric_event_equality_and_hash_ignore_inactive_slots() {
+        use core::hash::{Hash, Hasher};
+        #[derive(Default)]
+        struct TestHasher(u64);
+        impl Hasher for TestHasher {
+            fn finish(&self) -> u64 {
+                self.0
+            }
+            fn write(&mut self, bytes: &[u8]) {
+                for byte in bytes {
+                    self.0 = self.0.wrapping_mul(31).wrapping_add(u64::from(*byte));
+                }
+            }
+        }
+        for arity in 1..=MAX_ARITY {
+            let left = Event::from_encoded(&[17; MAX_ARITY][..arity]);
+            let mut right = left;
+            right.slots[arity..].fill(u64::MAX);
+            assert_eq!(left, right);
+            let mut left_hash = TestHasher::default();
+            let mut right_hash = TestHasher::default();
+            left.hash(&mut left_hash);
+            right.hash(&mut right_hash);
+            assert_eq!(left_hash.finish(), right_hash.finish());
+            if arity < MAX_ARITY {
+                assert_ne!(left, Event::from_encoded(&[17; MAX_ARITY][..arity + 1]));
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "event arity must be between 1 and MAX_ARITY")]
+    fn zero_store_arity_is_rejected() {
+        HistoryStore::new(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "event arity must be between 1 and MAX_ARITY")]
+    fn oversized_store_arity_is_rejected() {
+        HistoryStore::new(MAX_ARITY + 1);
+    }
+
+    #[test]
     fn read_only_record_clones_observe_store_transactions() {
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let history = store
             .new_history(&mut Unmetered, &mut ObservationWorld)
             .unwrap();
@@ -2548,31 +2613,47 @@ mod tests {
 
     #[test]
     fn exact_identities_and_large_domain() {
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let paths = ["a", "A", "/a", "a/", "a\0", "é", "e\u{301}"];
         let mut ids = BTreeSet::new();
         for path in paths {
             let id = store
-                .intern_principal(path, &mut Unmetered, &mut ObservationWorld)
+                .intern(
+                    Component(0),
+                    path.as_bytes(),
+                    &mut Unmetered,
+                    &mut ObservationWorld,
+                )
                 .unwrap();
             assert_eq!(
                 id,
                 store
-                    .intern_principal(path, &mut Unmetered, &mut ObservationWorld)
+                    .intern(
+                        Component(0),
+                        path.as_bytes(),
+                        &mut Unmetered,
+                        &mut ObservationWorld
+                    )
                     .unwrap()
             );
             assert!(ids.insert(id));
         }
         let first = store
-            .intern_resource("common/prefix/0", &mut Unmetered, &mut ObservationWorld)
+            .intern(
+                Component(2),
+                b"common/prefix/0",
+                &mut Unmetered,
+                &mut ObservationWorld,
+            )
             .unwrap();
         let mut resources = BTreeSet::from([first]);
         for index in 1..5000 {
             assert!(
                 resources.insert(
                     store
-                        .intern_resource(
-                            &alloc::format!("common/prefix/{index}"),
+                        .intern(
+                            Component(2),
+                            alloc::format!("common/prefix/{index}").as_bytes(),
                             &mut Unmetered,
                             &mut ObservationWorld,
                         )
@@ -2583,29 +2664,44 @@ mod tests {
         assert_eq!(
             first,
             store
-                .intern_resource("common/prefix/0", &mut Unmetered, &mut ObservationWorld)
+                .intern(
+                    Component(2),
+                    b"common/prefix/0",
+                    &mut Unmetered,
+                    &mut ObservationWorld
+                )
                 .unwrap()
         );
         assert_eq!(resources.len(), 5000);
         let action = store
-            .intern_action("a", &mut Unmetered, &mut ObservationWorld)
+            .intern(Component(1), b"a", &mut Unmetered, &mut ObservationWorld)
             .unwrap();
         store
-            .intern_principal("new", &mut Unmetered, &mut ObservationWorld)
+            .intern(Component(0), b"new", &mut Unmetered, &mut ObservationWorld)
             .unwrap();
         assert_eq!(
             action,
             store
-                .intern_action("a", &mut Unmetered, &mut ObservationWorld)
+                .intern(Component(1), b"a", &mut Unmetered, &mut ObservationWorld)
                 .unwrap()
         );
         let long = "x".repeat(4096);
         assert_ne!(
             store
-                .intern_resource(&long, &mut Unmetered, &mut ObservationWorld)
+                .intern(
+                    Component(2),
+                    long.as_bytes(),
+                    &mut Unmetered,
+                    &mut ObservationWorld
+                )
                 .unwrap(),
             store
-                .intern_resource(&(long + "/"), &mut Unmetered, &mut ObservationWorld)
+                .intern(
+                    Component(2),
+                    (long + "/").as_bytes(),
+                    &mut Unmetered,
+                    &mut ObservationWorld
+                )
                 .unwrap()
         );
     }
@@ -2614,18 +2710,18 @@ mod tests {
     fn checked_full_width_allocator() {
         let mut next = u64::from(u32::MAX) + 1;
         assert_eq!(
-            Domain::allocate_id(&mut next, "principal").unwrap(),
+            Domain::allocate_id(&mut next, "component").unwrap(),
             u64::from(u32::MAX) + 1
         );
         next = u64::MAX - 1;
         assert_eq!(
-            Domain::allocate_id(&mut next, "principal").unwrap(),
+            Domain::allocate_id(&mut next, "component").unwrap(),
             u64::MAX - 1
         );
         assert!(matches!(
-            Domain::allocate_id(&mut next, "principal"),
+            Domain::allocate_id(&mut next, "component"),
             Err(HistoryError::IdExhausted {
-                domain: "principal"
+                domain: "component"
             })
         ));
         assert_eq!(next, u64::MAX);
@@ -2653,29 +2749,31 @@ mod tests {
             allocate_coordinate_state(
                 &mut coordinates,
                 0,
-                "principal",
+                "component",
                 1,
                 Ghost::assume_new(),
                 Tracked::assume_new()
             ),
             Err(HistoryError::Invariant { .. })
         ));
-        assert_eq!(coordinates.next, [2, 1, 1]);
+        assert_eq!(coordinates.next[0], 2);
+        assert_eq!(&coordinates.next[1..], &[1; MAX_ARITY - 1]);
         let (second, _) = allocate_coordinate_state(
             &mut coordinates,
             0,
-            "principal",
+            "component",
             0,
             Ghost::assume_new(),
             Tracked::assume_new(),
         )
         .unwrap();
         assert_eq!(second, 2);
-        assert_eq!(coordinates.next, [3, 1, 1]);
+        assert_eq!(coordinates.next[0], 3);
+        assert_eq!(&coordinates.next[1..], &[1; MAX_ARITY - 1]);
         assert!(matches!(
             allocate_coordinate_state(
                 &mut coordinates,
-                3,
+                MAX_ARITY,
                 "invalid",
                 0,
                 Ghost::assume_new(),
@@ -2683,7 +2781,8 @@ mod tests {
             ),
             Err(HistoryError::Invariant { .. })
         ));
-        assert_eq!(coordinates.next, [3, 1, 1]);
+        assert_eq!(coordinates.next[0], 3);
+        assert_eq!(&coordinates.next[1..], &[1; MAX_ARITY - 1]);
 
         let mut histories = HistoryKeyState::new();
         assert!(matches!(
@@ -2703,7 +2802,7 @@ mod tests {
 
     #[test]
     fn atomic_append_and_revisions() {
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let history = store
             .new_history(&mut Unmetered, &mut ObservationWorld)
             .unwrap();
@@ -2720,7 +2819,7 @@ mod tests {
                 &mut ObservationWorld
             ),
             Err(HistoryError::UnknownId {
-                domain: "principal",
+                domain: "component",
                 ..
             })
         ));
@@ -2728,22 +2827,24 @@ mod tests {
         assert_eq!(record.read().as_slice(), [valid]);
         assert_eq!(record.read().revision, 0);
         assert!(matches!(
-            store.validate_event(&Event {
-                action: typed.action,
-                ..valid
-            }),
+            store.validate_event(&Event::from_encoded(&[
+                valid.component(0),
+                typed.component(1),
+                valid.component(2),
+            ])),
             Err(HistoryError::UnknownId {
-                domain: "action",
+                domain: "component",
                 ..
             })
         ));
         assert!(matches!(
-            store.validate_event(&Event {
-                resource: typed.resource,
-                ..valid
-            }),
+            store.validate_event(&Event::from_encoded(&[
+                valid.component(0),
+                valid.component(1),
+                typed.component(2),
+            ])),
             Err(HistoryError::UnknownId {
-                domain: "resource",
+                domain: "component",
                 ..
             })
         ));
@@ -2788,7 +2889,7 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait();
-                    let store = HistoryStore::global();
+                    let store = HistoryStore::new(3);
                     let history = store
                         .new_history(&mut Unmetered, &mut ObservationWorld)
                         .unwrap();
@@ -2800,7 +2901,7 @@ mod tests {
             .into_iter()
             .map(|thread| thread.join().unwrap())
             .collect();
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let mut keys = BTreeSet::new();
         for (event, history) in &results {
             assert_eq!(*event, results[0].0);
@@ -2832,19 +2933,32 @@ mod tests {
                 }
             }
         }
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let known = store
-            .intern_principal("rollback-test/known", &mut Unmetered, &mut ObservationWorld)
+            .intern(
+                Component(0),
+                b"rollback-test/known",
+                &mut Unmetered,
+                &mut ObservationWorld,
+            )
             .unwrap();
         for fail_at in [1, 2] {
             let mut limits = FailMemory { calls: 0, fail_at };
             assert!(matches!(
-                store.intern_principal("rollback-test/new", &mut limits, &mut ObservationWorld),
+                store.intern(
+                    Component(0),
+                    b"rollback-test/new",
+                    &mut limits,
+                    &mut ObservationWorld
+                ),
                 Err(HistoryError::Limit(_))
             ));
-            let domain = store.principals.inner.lock();
-            assert_eq!(domain.paths.get("rollback-test/known"), Some(&known.get()));
-            assert!(!domain.paths.contains_key("rollback-test/new"));
+            let domain = store.domains[0].inner.lock();
+            assert_eq!(
+                domain.paths.get(b"rollback-test/known".as_slice()),
+                Some(&known)
+            );
+            assert!(!domain.paths.contains_key(b"rollback-test/new".as_slice()));
             drop(domain);
 
             let mut limits = FailMemory { calls: 0, fail_at };

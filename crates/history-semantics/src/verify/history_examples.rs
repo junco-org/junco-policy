@@ -28,22 +28,22 @@ verus! {
 broadcast use junco_core::kernel::verify::group_kernel_views;
 
 pub open spec fn event(principal: nat, action: nat, resource: nat) -> EventView {
-    EventView { principal, action, resource }
+    seq![principal, action, resource]
 }
 
 pub open spec fn any_head() -> Head {
-    Head { principal: HeadField::Any, action: HeadField::Any, resource: HeadField::Any }
+    seq![HeadField::Any, HeadField::Any, HeadField::Any]
 }
 
 pub open spec fn release_head() -> Head {
-    Head { principal: HeadField::Bind, action: HeadField::Constant(3), resource: HeadField::Bind }
+    seq![HeadField::Bind, HeadField::Constant(3), HeadField::Bind]
 }
 
 pub open spec fn prior_edit_test() -> SrcTest {
     SrcTest::And(seq![
-        SrcTest::Eq(Component::Principal, Term::Variable(Component::Principal)),
-        SrcTest::Eq(Component::Action, Term::Constant(2)),
-        SrcTest::Eq(Component::Resource, Term::Variable(Component::Resource)),
+        SrcTest::Eq(Component(0), Term::Variable(Component(0))),
+        SrcTest::Eq(Component(1), Term::Constant(2)),
+        SrcTest::Eq(Component(2), Term::Variable(Component(2))),
     ])
 }
 
@@ -52,6 +52,7 @@ pub open spec fn prior_edit_tail() -> Regex<SrcTest> {
 }
 
 pub proof fn epsilon_versus_test_true_on_empty_history(request: EventView)
+    requires request.len() == 3,
     ensures language::pair_lang(any_head(), Regex::Epsilon, request, Seq::empty()),
         !language::pair_lang(any_head(), Regex::Test(SrcTest::Bool(true)), request, Seq::empty()),
 {
@@ -190,7 +191,7 @@ pub(crate) proof fn cache_rejects_wrong_residual(
         cursor.residual@ == pair.store.graph().constants.all,
         snapshots.contains_key((cursor.history, cursor.revision)),
         cursor.consumed <= snapshots[(cursor.history, cursor.revision)].len(),
-        language::event_wf(cursor.bindings@),
+        language::event_wf(cursor.bindings@, cursor.bindings@.len()),
     ensures !cache::cursor_matches_snapshot(pair, cursor, snapshots),
         !cache::cursor_cache_wf(pair, seq![cursor], snapshots),
 {
@@ -220,7 +221,7 @@ pub(crate) fn cached_decision<L: Limits>(
     requires cache::cursor_cache_wf(old(runtime).pair, old(runtime).cursors@, old(runtime).snapshots@),
         cache::snapshot_compatible(old(runtime).snapshots@, stored.id(), stored.revision(),
             stored@.events),
-        language::event_wf(bindings@), batch_size > 0, target_len <= stored@.events.len(),
+        language::event_wf(bindings@, bindings@.len()), batch_size > 0, target_len <= stored@.events.len(),
     ensures cache::cursor_cache_wf(final(runtime).pair, final(runtime).cursors@, final(runtime).snapshots@),
         progress::pair_frame(old(runtime).pair, final(runtime).pair),
         final(runtime).spec_store() == old(runtime).spec_store(),
@@ -250,7 +251,7 @@ pub(crate) fn cached_decision<L: Limits>(
             cache::batch_matches_snapshot(runtime.pair, cursor, stored.id(), stored.revision(),
                 *bindings, runtime.snapshots@),
             cursor.consumed <= target_len, target_len <= stored@.events.len(),
-            language::event_wf(bindings@), batch_size > 0,
+            language::event_wf(bindings@, bindings@.len()), batch_size > 0,
         decreases target_len - cursor.consumed,
     {
         proof {
@@ -292,7 +293,7 @@ pub(crate) fn template_cached_decision<L: Limits>(
     stored: &StoredHistory, target_len: usize, batch_size: usize,
     limits: &mut L, world: &mut ObservationWorld,
 ) -> (result: KernelResult<bool>)
-    requires language::event_wf(bindings@), batch_size > 0, target_len <= stored@.events.len(),
+    requires language::event_wf(bindings@, bindings@.len()), batch_size > 0, target_len <= stored@.events.len(),
     ensures result matches Ok(answer) ==> answer == source::source_regex(
         *template, template.root as nat, bindings@,
         stored@.events.take(target_len as int)),
@@ -320,6 +321,7 @@ pub(crate) fn flat_template_cached_decision<L: Limits>(
     requires junco_core::flat::verify::structural_wf(*template), batch_size > 0,
         target_len <= stored@.events.len(), junco_core::verify::encoding::event_representation(candidate, request@),
         junco_core::verify::encoding::word_representation(word, stored@.events.take(target_len as int)),
+        forall|i: int| 0 <= i < word.len() ==> #[trigger] word[i].len() == candidate.len(),
     ensures result matches Ok(answer) ==> match answer {
         None => !junco_core::flat::verify::head_matches(template.head@, candidate,
             junco_core::verify::encoding::numeric_equality()),
@@ -340,7 +342,7 @@ pub(crate) fn flat_template_cached_decision<L: Limits>(
             return Ok(None);
         },
     };
-    proof { assert(language::event_wf(bindings@)); }
+    proof { assert(language::event_wf(bindings@, bindings@.len())); }
     let accepted = template_cached_decision(store, template, precompile, &bindings,
         stored, target_len, batch_size, limits, world)?;
     proof {

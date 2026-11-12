@@ -7,6 +7,8 @@
 //! state was seen before, or if an inserted state subsumes it (see [`crate::prune`]). The
 //! first expanded state whose residual accepts the empty history ends the search, and its parent
 //! chain yields a counterexample of minimum length.
+//! Cartesian-product overflow propagates as `HistoryError::GraphLimit`; it never becomes a
+//! successful inclusion verdict or a capacity precondition on the query.
 
 use crate::native::NativeSet;
 use alloc::boxed::Box;
@@ -24,7 +26,7 @@ use crate::simulation::Simulation;
 #[cfg(verus_keep_ghost)]
 use crate::verify::table_wf;
 #[cfg(verus_keep_ghost)]
-use crate::verify::{atoms_wf, component_of, search_exec::*};
+use crate::verify::{atoms_wf, search_exec::*};
 #[cfg(verus_keep_ghost)]
 use crate::verify::{prune_exec::*, simulation_exec::*};
 #[cfg(verus_keep_ghost)]
@@ -74,7 +76,9 @@ pub(crate) struct Refutation {
     crate::verify::constraint_wf(constraint),
     history_semantics::verify::refinement::inclusion::satisfiable(crate::verify::ndomains(*universes),implementation::constraint_of(constraint@)),
     history_semantics::verify::finite_impl::regex_nf(model::lift_regex(facade::graph(*old(language)),facade::root(*old(language)))),
-    crate::verify::constraint_unique::universes_distinct(*universes),search_fits(*old(language),*universes,constraint@),
+    crate::verify::constraint_unique::universes_distinct(*universes),
+    1 <= universes@.len() <= history_syntax::MAX_ARITY, constraint@.len() == universes@.len(),
+    paper_search::atoms_bounded(symbolic::regex_primitives(model::lift_regex(facade::graph(*old(language)),facade::root(*old(language)))),universes@.len()),
     ensures result matches Ok(outcome) ==> search_result(crate::verify::ndomains(*universes),
         paper_search::Item { constraint:implementation::constraint_of(constraint@),
             state:model::lift_regex(facade::graph(*old(language)),facade::root(*old(language))) },outcome_view(outcome))
@@ -136,7 +140,7 @@ pub(crate) fn search(
 
 /// Inserted search state with its parent link, for counterexample reconstruction.
 #[verus_verify]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct Item {
     pub(crate) constraint: ConstraintId,
     pub(crate) residual: RegexId,
@@ -164,7 +168,7 @@ pub(crate) struct Search<'search> {
     #[cfg(verus_keep_ghost)]
     pub(crate) start: Ghost<paper_search::Item>,
     #[cfg(verus_keep_ghost)]
-    pub(crate) vocabulary: Ghost<[Set<nat>; 3]>,
+    pub(crate) vocabulary: Ghost<Seq<Set<nat>>>,
 }
 
 impl Search<'_> {
@@ -253,9 +257,8 @@ impl Search<'_> {
     verus! {
     /// Inserts the successor of the item by each step of its constraint and the atoms its
     /// derivative tests.
-    // `?` on `intern` exceeds the verifier's resource limit on the letter loop that follows, and
-    // the `verus!` expansion writes the `Item` pattern's shorthand fields out in full.
-    #[allow(clippy::question_mark, non_shorthand_field_patterns)]
+    // `?` on `intern` exceeds the verifier's resource limit on the letter loop that follows.
+    #[allow(clippy::question_mark)]
     fn expand(&mut self, index: usize) -> (result: Result<(), HistoryError>)
         requires running(*old(self),index as nat,old(self).start@,old(self).vocabulary@),
             search_obligations(),index < old(self).items@.len(),
@@ -271,6 +274,11 @@ impl Search<'_> {
         hide(model::unique_nodes);hide(model::tables_wf);
         hide(Seq::<_>::no_duplicates);
         hide(queue_order);hide(seen_certified);
+        hide(crate::verify::steps_result);hide(crate::verify::constraint_unique::steps_alphas_unique);
+        hide(crate::verify::split_views);hide(crate::verify::letters_views);
+        hide(crate::verify::register_options);hide(crate::verify::class_options);
+        hide(implementation::letter_assignment);hide(implementation::letter_holds);
+        hide(implementation::constraint_of);
         proof! { reveal(running); reveal(vocabulary_wf); reveal(expansion_state); }
         proof_decl! {
             let ghost entry = *self;
@@ -287,11 +295,14 @@ impl Search<'_> {
             paper_search::lemma_node_realizable(crate::verify::ndomains(*self.universes),start.constraint,
                 start.state,archive_cases(self.archive@),trace(*self,index as nat),index as int);
         }
-        let Item { constraint,residual,.. } = self.items[index];
+        let constraint = self.items[index].constraint;
+        let residual = self.items[index].residual;
         let (transition, atoms) = derive_atoms(self.language, residual)?;
         proof! {
             lemma_state_frame(entry,*self);
             lemma_vocabulary_frame(entry,*self,vocabulary);
+            assert(paper_search::atoms_bounded(facade::residual_primitives(*self.language,residual),vocabulary.len()));
+            assert(atoms_wf(atoms@,vocabulary.len()));
             lemma_edges_frame(entry,*self);
             assert forall|j: int| #![trigger self.items@[j]] 0 < j < self.items@.len() implies match self.items@[j].parent {
                 None => false,Some((p,_)) => p < index,
@@ -308,10 +319,11 @@ impl Search<'_> {
             assert(vocabulary_wf(*self,vocabulary));
             assert(state_wf(*self));
             lemma_queue_atoms_vocabulary(*self,index as int,atoms@,vocabulary);
-            lemma_steps_capacity(source,atoms@,*self.universes,vocabulary);
             lemma_expansion_begin(entry,*self,index as nat);
         }
-        let branches = steps(self.constraints.get(constraint), &atoms, self.universes);
+        let source_constraint = &self.constraints.constraints[constraint as usize];
+        proof! { assert(*source_constraint == source); }
+        let branches = steps(source_constraint, &atoms, self.universes)?;
         proof_decl! {
             let ghost groups = branches@;
             let ghost records: Seq<Emission> = Seq::empty();
@@ -347,7 +359,7 @@ impl Search<'_> {
             forall|b: int| 0 <= b < groups.len() ==> constraint_in_vocabulary(groups[b].0@,vocabulary),
             groups.map_values(|row: (Constraint,Vec<Letter>)| row.0@).no_duplicates(),
             crate::verify::constraint_unique::steps_alphas_unique(source,atoms@,*self.universes,groups),
-            atoms_wf(atoms@),atoms_in_vocabulary(atoms@,vocabulary),
+            atoms_wf(atoms@,universes@.len()),atoms_in_vocabulary(atoms@,vocabulary),
             crate::verify::atom_set(atoms@).subset_of(symbolic::regex_primitives(parent.state)),
             forall|n: int| 0 <= n < records.len() ==> paper_search::successor_ok(parent.state,records[n].case.alpha,records[n].case.next),
             facade::has_atoms(*self.language,transition),
@@ -362,6 +374,7 @@ impl Search<'_> {
             proof! {
                 reveal(expansion_state); reveal(vocabulary_wf);
                 assert(refined == groups[group as int].0);
+                lemma_steps_group_evidence(source,atoms@,*self.universes,groups,group as int);
             }
             let refined = match self.constraints.intern(refined) {
                 Ok(id) => id,
@@ -402,7 +415,9 @@ impl Search<'_> {
                 groups.map_values(|row: (Constraint,Vec<Letter>)| row.0@).no_duplicates(),
                 crate::verify::constraint_unique::steps_alphas_unique(source,atoms@,*self.universes,groups),
                 self.constraints@[refined as int] == groups[group as int].0@,refined < self.constraints@.len(),
-                atoms_wf(atoms@),atoms_in_vocabulary(atoms@,vocabulary),
+                forall|j: int| 0 <= j < groups[group as int].1@.len() ==> crate::verify::letter_wf(groups[group as int].1@[j])
+                    && groups[group as int].1@[j]@.classes.len() == universes@.len(),
+                atoms_wf(atoms@,universes@.len()),atoms_in_vocabulary(atoms@,vocabulary),
                 crate::verify::atom_set(atoms@).subset_of(symbolic::regex_primitives(parent.state)),
                 forall|n: int| 0 <= n < records.len() ==> paper_search::successor_ok(parent.state,records[n].case.alpha,records[n].case.next),
                 facade::has_atoms(*self.language,transition),
@@ -435,6 +450,7 @@ impl Search<'_> {
                     model::lemma_lift_regex_stable(facade::graph(*before_successor.language),facade::graph(*self.language),residual@);
                     lemma_vocabulary_frame(before_successor,*self,vocabulary);
                     facade::lemma_successor_vocabulary(*before_successor.language,*self.language,residual,transition,successor);
+                    assert(paper_search::atoms_bounded(facade::residual_primitives(*self.language,successor),vocabulary.len()));
                     lemma_successor_nf(facade::graph(*before_successor.language),residual@,transition@,
                         facade::graph(*self.language),successor@);
                     lemma_resolved_successor(*self.language,residual,transition,successor,atoms@,letter,words.view());
@@ -657,7 +673,7 @@ impl Search<'_> {
         state_wf(*self),queue_order(*self),vocabulary_wf(*self,self.vocabulary@),
         ensures result matches SearchOutcome::Refuted(r)
             && r.constraint@ == self.constraints@[self.items@[index as int].constraint as int]
-            && r.letters@ == letter_chain(self.items@, index as int)
+            && r.letters@.map_values(|l: Letter| l@) == letter_chain(self.items@, index as int).map_values(|l: Letter| l@)
             && r.alphabets@ == alphabet_chain(self.items@, self.alphabets@, index as int)
             && r.assignments@ == chain_assignments(r.letters@, r.alphabets@)
             && r.letters@.len() == r.alphabets@.len()
@@ -677,18 +693,19 @@ impl Search<'_> {
         proof! { lemma_letter_chain_len(self.items@, index as int); }
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
             current <= index, index < self.items@.len(), parents_wf(self.items@),
-            letter_chain(self.items@, current as int) + letters@.reverse()
-                == letter_chain(self.items@, index as int),
+            letter_chain(self.items@, current as int).map_values(|l: Letter| l@)
+                + letters@.map_values(|l: Letter| l@).reverse()
+                == letter_chain(self.items@, index as int).map_values(|l: Letter| l@),
             decreases current))]
         while self.items[current].parent.is_some() {
-            let (parent, letter) = match self.items[current].parent {
-                Some(link) => link,
+            let (parent, letter) = match &self.items[current].parent {
+                Some((parent, letter)) => (*parent, letter.copy()),
                 None => unreachable!(),
             };
             letters.push(letter);
             proof! {
-                assert(letter_chain(self.items@, current as int)
-                    == letter_chain(self.items@, parent as int).push(letter));
+                assert(letter_chain(self.items@, current as int).map_values(|l: Letter| l@)
+                    == letter_chain(self.items@, parent as int).map_values(|l: Letter| l@).push(letter@));
             }
             current = parent;
         }
@@ -698,22 +715,50 @@ impl Search<'_> {
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
             index <= count / 2, count == backwards.len(), letters@.len() == count,
+            backwards.map_values(|l: Letter| l@).reverse()
+                == letter_chain(self.items@, start).map_values(|l: Letter| l@),
             forall|i: int| 0 <= i < count ==> letters@[i]
                 == backwards[if i < index || count - index <= i { count - 1 - i } else { i }],
             decreases count / 2 - index))]
         while index < count / 2 {
             let other = count - 1 - index;
-            let first = letters[index];
-            let last = letters[other];
-            letters[index] = last;
-            letters[other] = first;
+            // The empty vectors allocate nothing; three verified swaps move each letter intact.
+            let mut temporary = Letter {
+                classes: Vec::new(),
+                registers: Vec::new(),
+            };
+            letters.set_and_swap(index, &mut temporary);
+            letters.set_and_swap(other, &mut temporary);
+            letters.set_and_swap(index, &mut temporary);
             index += 1;
         }
-        proof! { assert(letters@ =~= backwards.reverse()); }
+        proof! {
+            assert(letters@ =~= backwards.reverse());
+            assert(letters@.map_values(|l: Letter| l@) =~= backwards.map_values(|l: Letter| l@).reverse());
+            lemma_chain_assignments_views(letters@,letter_chain(self.items@,start),
+                alphabet_chain(self.items@,self.alphabets@,start));
+        }
         proof_decl! {
             let ghost returned_alphabets = alphabet_chain(self.items@, self.alphabets@, start);
             let ghost returned_assignments = chain_assignments(letter_chain(self.items@, start),
                 returned_alphabets);
+        }
+        proof! {
+            reveal(refutation_ready);reveal(vocabulary_wf);
+            lemma_state_evidence(*self);
+            lemma_chain_ready(*self,start,self.constraints@[self.items@[start].constraint as int]);
+            assert(letters@.len() == returned_alphabets.len());
+            assert(constraint@ == self.constraints@[self.items@[start].constraint as int]);
+            assert(constraint_in_vocabulary(constraint@,self.vocabulary@));
+            assert(constraint@.len() == self.universes@.len());
+            assert(returned_assignments == chain_assignments(letters@,returned_alphabets));
+            assert forall|k: int| 0 <= k < letters@.len() implies
+                crate::verify::reconstruction::letter_coherent(constraint@,letters@[k]@,returned_alphabets[k])
+                    && letter_numeric_codes(self.vocabulary@,*self.universes,letters@[k]@,returned_alphabets[k]) by {
+                assert(letters@.map_values(|l: Letter| l@)[k] == letters@[k]@);
+                assert(letter_chain(self.items@,start).map_values(|l: Letter| l@)[k] == letter_chain(self.items@,start)[k]@);
+                assert(letters@[k]@ == letter_chain(self.items@,start)[k]@);
+            }
         }
         SearchOutcome::Refuted(Box::new(Refutation {
             constraint,
@@ -729,7 +774,10 @@ impl Search<'_> {
 #[verus_verify]
 #[verus_spec(result => requires facade::language_wf(*old(language)),
     ensures facade::language_wf(*final(language)), facade::frame(*old(language), *final(language)),
-        result matches Ok((t, atoms)) ==> atoms_wf(atoms@)
+        result matches Ok((t, atoms)) ==> (forall|arity: nat|
+            1 <= arity <= history_syntax::MAX_ARITY
+                && paper_search::atoms_bounded(facade::residual_primitives(*final(language),residual),arity)
+                ==> atoms_wf(atoms@,arity))
             && paper_search::atoms_local(crate::verify::atom_set(atoms@))
             && facade::has_atoms(*final(language), t)
             && history_semantics::verify::finite_deriv::dbound(facade::graph(*final(language)), residual@, t@)
@@ -776,12 +824,20 @@ fn derive_atoms(
         assert(atoms@ == mapped.remaining());
         assert(atoms@.len() == original.len());
         assert forall|i: int| 0 <= i < atoms@.len() implies
-            atoms@[i]@ == original[i]@ && atoms@[i].component < 3 by {}
+            atoms@[i]@ == original[i]@ && atoms@[i].component <= u8::MAX by {}
     }
     proof! {
         assert(atoms@.map_values(|a: Atom| a@) =~= original.map_values(|p: Primitive| p@));
         atoms@.lemma_to_set_map_commutes(|a: Atom| a@);
         assert(crate::verify::atom_set(atoms@) =~= original.map_values(|p: Primitive| p@).to_set());
+        assert forall|arity: nat| 1 <= arity <= history_syntax::MAX_ARITY
+            && paper_search::atoms_bounded(facade::residual_primitives(*language,residual),arity)
+            implies atoms_wf(atoms@,arity) by {
+            assert forall|i: int| 0 <= i < atoms@.len() implies atoms@[i].component < arity by {
+                assert(atoms@.to_set().contains(atoms@[i]));
+                assert(crate::verify::atom_set(atoms@).contains(atoms@[i]@));
+            }
+        }
         assert forall|c: history_syntax::syntax::Component, c2: history_syntax::syntax::Component|
             crate::verify::atom_set(atoms@).contains(model::Primitive::Eq(c, model::GTerm::Variable(c2)))
             implies c == c2 by {
@@ -818,7 +874,7 @@ fn validate_atom(primitive: Primitive) -> Result<(), HistoryError> {
 /// The atom of a compiled primitive. Compiled tails encode each constant as its constant id, and
 /// a tail variable names the candidate's value of its own component.
 #[verus_verify]
-#[verus_spec(result => requires atom_valid(primitive), ensures result.component < 3
+#[verus_spec(result => requires atom_valid(primitive), ensures result.component <= u8::MAX
     && result@ == primitive@ && paper_search::atoms_local(Set::empty().insert(result@)))]
 fn atom(primitive: Primitive) -> Atom {
     let Primitive::Eq { field, term } = primitive;
@@ -834,7 +890,7 @@ fn atom(primitive: Primitive) -> Atom {
 
 /// Truth words of `atoms` under `letter`: bit `i % 64` of word `i / 64` is atom `i`.
 #[verus_verify]
-#[verus_spec(result => requires atoms_wf(atoms@),
+#[verus_spec(result => requires atoms_wf(atoms@,letter.classes@.len()),letter.classes@.len() == letter.registers@.len(),
     ensures truth_bits(atoms@, *letter, result.view()))]
 // vstd specifies `%` but not `is_multiple_of`.
 #[allow(clippy::manual_is_multiple_of)]
@@ -852,7 +908,7 @@ fn truth(atoms: &[Atom], letter: &Letter) -> SmallVec<[u64; 2]> {
     }
     let mut index = 0;
     #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-        atoms_wf(atoms@), index <= atoms@.len(),
+        atoms_wf(atoms@,letter.classes@.len()),letter.classes@.len() == letter.registers@.len(),index <= atoms@.len(),
         words.view().len() == (atoms@.len() + 63) / 64,
         forall|i: int| 0 <= i < index ==> symbolic::truth_word_bit(words.view(), i as nat)
             == implementation::letter_holds(letter@, atoms@[i]@),

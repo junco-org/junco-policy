@@ -20,15 +20,17 @@ verus! {
 pub enum RegisterView { Equals(nat), Differs(Set<nat>) }
 
 /// `Constraint`: one register constraint per component.
-pub struct ConstraintView { pub principal: RegisterView, pub action: RegisterView, pub resource: RegisterView }
+pub type ConstraintView = Seq<RegisterView>;
 
-pub open spec fn register_of(g: ConstraintView, c: Component) -> RegisterView {
-    match c { Component::Principal => g.principal, Component::Action => g.action, Component::Resource => g.resource }
+pub open spec fn register_of(g: ConstraintView, c: Component) -> RegisterView
+    recommends c.0 < g.len(),
+{
+    g[c.0 as int]
 }
 
 /// The literals a constraint view stands for.
 pub open spec fn constraint_of(g: ConstraintView) -> Constraint {
-    Set::new(|l: Literal| match register_of(g, l.component) {
+    Set::new(|l: Literal| l.component.0 < g.len() && match register_of(g, l.component) {
         RegisterView::Equals(v) => l.equal && l.value == v,
         RegisterView::Differs(ds) => !l.equal && ds.contains(l.value),
     }).unwrap_or(Set::empty())
@@ -40,23 +42,29 @@ pub enum ClassView { Constant(nat), Register }
 /// `Letter`: per component, a class (`None` = a value outside every class), and the class the
 /// register takes under the letter's constraint.
 pub struct LetterView {
-    pub principal: Option<ClassView>, pub action: Option<ClassView>, pub resource: Option<ClassView>,
-    pub reg_principal: ClassView, pub reg_action: ClassView, pub reg_resource: ClassView,
+    pub classes: Seq<Option<ClassView>>,
+    pub registers: Seq<ClassView>,
 }
 
-pub open spec fn letter_class(l: LetterView, c: Component) -> Option<ClassView> {
-    match c { Component::Principal => l.principal, Component::Action => l.action, Component::Resource => l.resource }
+pub open spec fn letter_class(l: LetterView, c: Component) -> Option<ClassView>
+    recommends c.0 < l.classes.len(),
+{
+    l.classes[c.0 as int]
 }
 
-pub open spec fn letter_register(l: LetterView, c: Component) -> ClassView {
-    match c { Component::Principal => l.reg_principal, Component::Action => l.reg_action, Component::Resource => l.reg_resource }
+pub open spec fn letter_register(l: LetterView, c: Component) -> ClassView
+    recommends c.0 < l.registers.len(),
+{
+    l.registers[c.0 as int]
 }
 
 /// `Letter::holds` (`constraint.rs`): an atom holds iff the component's class is the atom's class.
 pub open spec fn letter_holds(l: LetterView, p: model::Primitive) -> bool {
     match p {
-        model::Primitive::Eq(c, model::GTerm::Constant(v)) => letter_class(l, c) == Some(ClassView::Constant(v)),
-        model::Primitive::Eq(c, model::GTerm::Variable(_)) => letter_class(l, c) == Some(letter_register(l, c)),
+        model::Primitive::Eq(c, model::GTerm::Constant(v)) => c.0 < l.classes.len()
+            && letter_class(l, c) == Some(ClassView::Constant(v)),
+        model::Primitive::Eq(c, model::GTerm::Variable(v)) => c.0 < l.classes.len()
+            && v.0 < l.registers.len() && letter_class(l, c) == Some(letter_register(l, v)),
     }
 }
 
@@ -80,6 +88,10 @@ pub open spec fn impl_cases(g: model::Graph, atoms: Set<model::Primitive>,
 pub open spec fn expansion_ok(d: NDomains, g: model::Graph, gamma: ConstraintView, q: nat,
     atoms: Set<model::Primitive>, steps: Set<(ConstraintView, LetterView, nat)>) -> bool {
     let item = Item { constraint: constraint_of(gamma), state: abs_state(g, q) };
+    &&& gamma.len() == d.len()
+    &&& atoms_local(atoms) && atoms_bounded(atoms, d.len())
+    &&& forall|s: (ConstraintView, LetterView, nat)| #[trigger] steps.contains(s)
+        ==> s.0.len() == d.len() && s.1.classes.len() == d.len() && s.1.registers.len() == d.len()
     &&& atoms_complete(item.state, atoms)
     &&& steps_ok(d, item, impl_cases(g, atoms, steps))
 }
@@ -113,7 +125,7 @@ pub open spec fn fresh_codes_ok(fresh: spec_fn(nat) -> nat, known: Set<nat>) -> 
 }
 
 pub open spec fn slots_event(slots: Seq<SlotView>, fresh: spec_fn(nat) -> nat) -> EventView {
-    EventView { principal: slot_value(slots[0], fresh), action: slot_value(slots[1], fresh), resource: slot_value(slots[2], fresh) }
+    slots.map(|i: int, s: SlotView| slot_value(s, fresh))
 }
 
 // ----- the policy-level glue (`analyzer.rs:460-497`, `tables.rs`) -----
@@ -122,9 +134,11 @@ pub open spec fn slots_event(slots: Seq<SlotView>, fresh: spec_fn(nat) -> nat) -
 /// `split_ok` and the searched expression has the language of `inclusion::firing_denials`.
 pub open spec fn covered_with_ok(d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>,
     query: spec_fn(Constraint) -> (Regex<model::Test>, Regex<model::Test>)) -> bool {
+    &&& rule.head.len() == d.len()
+    &&& forall|i: int| 0 <= i < p.len() ==> #[trigger] p[i].head.len() == d.len()
     &&& split_ok(d, head_constraint(rule.head), head_pairs(p), cases)
     &&& forall|g1: Constraint| #[trigger] cases.contains(g1) ==> query(g1).0 == denial(rule)
-        && forall|theta: Subst, w: Seq<EventView>| language::event_wf(theta)
+        && forall|theta: Subst, w: Seq<EventView>| language::event_wf(theta, theta.len())
             ==> (#[trigger] n_lang(theta, query(g1).1, w) == n_lang(theta, firing_denials(d, p, g1), w))
 }
 

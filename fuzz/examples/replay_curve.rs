@@ -8,7 +8,7 @@ use history_semantics::CompiledRule;
 use history_semantics::policy::{action_is, last_state_change, principal_is, resource_is};
 use history_store::{History, Store};
 use history_syntax::{Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr};
-use junco_policy::{Action, LockEvent, LockPolicy};
+use junco_policy::{Action, LockComponent, LockEvent, LockPolicy};
 use lock_policy_harness::{Agent, BYTES_PER_EVENT, PooledPath, check, entropy, granted_history};
 
 type E = LockEvent<Agent, PooledPath>;
@@ -26,7 +26,7 @@ const LABELS: [&str; 7] = [
 fn foreign_on_r(action: Action) -> TestExpr<E> {
     TestExpr::and([
         resource_is(Comparison::Eq),
-        action_is(action, Comparison::Eq),
+        action_is(LockComponent::Action(action), Comparison::Eq),
         principal_is(Comparison::Neq),
     ])
 }
@@ -48,7 +48,7 @@ fn stale_view() -> RegexExpr<E> {
             stable(&[Action::Edit, Action::Remove]),
             TestExpr::or([
                 resource_is(Comparison::Neq),
-                action_is(Action::Read, Comparison::Neq),
+                action_is(LockComponent::Action(Action::Read), Comparison::Neq),
                 principal_is(Comparison::Neq),
             ]),
         ]),
@@ -61,7 +61,7 @@ fn stable(changes: &[Action]) -> TestExpr<E> {
         TestExpr::and(
             changes
                 .iter()
-                .map(|&action| action_is(action, Comparison::Neq)),
+                .map(|&action| action_is(LockComponent::Action(action), Comparison::Neq)),
         ),
     ])
 }
@@ -82,11 +82,11 @@ fn rules(store: &Arc<Store<E>>) -> Vec<CompiledRule<E>> {
             Arc::clone(store),
             Rule::new(
                 RuleMode::Forbid,
-                Head::new(
+                Head::new([
                     ComponentPattern::Variable("p".to_owned()),
-                    ComponentPattern::Constant(action),
+                    ComponentPattern::Constant(LockComponent::Action(action)),
                     ComponentPattern::Variable("r".to_owned()),
-                ),
+                ]),
                 tail,
             ),
         )

@@ -3,7 +3,7 @@
 
 use super::error::HistoryError;
 use alloc::vec::Vec;
-use history_syntax::syntax::Component;
+use history_syntax::{MAX_ARITY, syntax::Component};
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
@@ -137,22 +137,89 @@ pub enum Primitive {
 
 #[verus_verify]
 #[verus_verify(external_derive)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Bindings(pub(crate) [u64; 3]);
+#[derive(Clone, Copy, Debug)]
+pub struct Bindings {
+    pub(crate) arity: u8,
+    pub(crate) slots: [u64; MAX_ARITY],
+}
+
+#[cfg(verus_keep_ghost)]
+verus! {
+impl Bindings {
+    #[verifier::type_invariant]
+    closed spec fn inv(&self) -> bool {
+        self.arity <= MAX_ARITY
+    }
+}
+}
 
 #[verus_verify]
 impl Bindings {
-    #[verus_spec(result => ensures result@ == (crate::verify::history_specs::EventView {
-        principal: values@[0] as nat, action: values@[1] as nat, resource: values@[2] as nat,
-    }))]
-    pub const fn new(values: [u64; 3]) -> Self {
-        Self(values)
+    #[verus_spec(result => requires values@.len() <= MAX_ARITY,
+        ensures result@ == values@.map(|i: int, value: u64| value as nat))]
+    pub fn new(values: &[u64]) -> Self {
+        assert!(values.len() <= MAX_ARITY);
+        let mut slots = [0; MAX_ARITY];
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant index <= values@.len() <= MAX_ARITY,
+                forall|i: int| 0 <= i < MAX_ARITY ==> slots@[i] ==
+                    if i < index { values@[i] } else { 0 },
+            decreases values@.len() - index,
+        ))]
+        while index < values.len() {
+            slots[index] = values[index];
+            index += 1;
+        }
+        Self {
+            arity: values.len() as u8,
+            slots,
+        }
     }
 
-    #[verus_spec(result => ensures result@[0] as nat == self@.principal,
-        result@[1] as nat == self@.action, result@[2] as nat == self@.resource)]
-    pub const fn values(&self) -> &[u64; 3] {
-        &self.0
+    #[verus_spec(result => requires index < self@.len(), ensures result as nat == self@[index as int])]
+    pub fn get(&self, index: usize) -> u64 {
+        proof! { use_type_invariant(self); }
+        self.slots[index]
+    }
+
+    #[verus_spec(result => ensures result == self@.len(), result <= MAX_ARITY)]
+    pub const fn arity(&self) -> usize {
+        proof! { use_type_invariant(self); }
+        self.arity as usize
+    }
+}
+
+#[verus_verify]
+impl PartialEq for Bindings {
+    fn eq(&self, other: &Self) -> bool {
+        proof! { use_type_invariant(self); use_type_invariant(other); }
+        if self.arity != other.arity {
+            return false;
+        }
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant index <= self.arity <= MAX_ARITY, self.arity == other.arity,
+                forall|i: int| 0 <= i < index ==> self.slots@[i] == other.slots@[i],
+            decreases self.arity - index,
+        ))]
+        while index < self.arity as usize {
+            if self.slots[index] != other.slots[index] {
+                proof! { assert(self@[index as int] != other@[index as int]); }
+                return false;
+            }
+            index += 1;
+        }
+        proof! { assert(self@ =~= other@); }
+        true
+    }
+}
+
+impl Eq for Bindings {}
+
+impl core::hash::Hash for Bindings {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        core::hash::Hash::hash(&self.slots[..self.arity as usize], state);
     }
 }
 
@@ -1023,25 +1090,16 @@ pub mod verify {
     impl View for Bindings {
         type V = Subst;
         open(crate) spec fn view(&self) -> Subst {
-            EventView { principal: self.0@[0] as nat, action: self.0@[1] as nat, resource: self.0@[2] as nat }
+            Seq::new(self.arity as nat, |i: int| self.slots@[i] as nat)
         }
     }
     impl PartialEqSpecImpl for Bindings {
         open spec fn obeys_eq_spec() -> bool { true }
         open spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
     }
-    pub proof fn lemma_bindings_eq(left: Bindings, right: Bindings)
-        ensures (left == right) == (left@ == right@),
-    {
-        broadcast use vstd::array::group_array_axioms;
-        if left@ == right@ {
-            assert(left.0@ =~= right.0@);
-            assert(left.0 =~= right.0);
-        }
-    }
-    /// Each binding is a `u64`, so foreign proofs keep the bound crate-local proofs read off `self.0`.
+    /// Binding coordinates fit u64, including zero-valued unbound slots.
     pub broadcast proof fn lemma_bindings_view_wf(bindings: Bindings)
-        ensures language::event_wf(#[trigger] bindings@),
+        ensures language::event_wf(#[trigger] bindings@, bindings@.len()),
     {}
 
     /// Representation facts restored for proofs outside this crate, where the payload views are opaque.
@@ -1337,9 +1395,10 @@ pub mod verify {
     pub open spec fn graph_extends(old: Graph, new: Graph) -> bool { tables_extend(old, new) && old.constants == new.constants }
     pub open spec fn primitive_holds(theta: Subst, p: Primitive, e: EventView) -> bool {
         match p {
-            Primitive::Eq(field, term) => language::field_value(e, field) == match term {
-                GTerm::Constant(c) => c,
-                GTerm::Variable(v) => language::field_value(theta, v),
+            Primitive::Eq(field, term) => field.0 < e.len() && match term {
+                GTerm::Constant(c) => language::field_value(e, field) == c,
+                GTerm::Variable(v) => v.0 < theta.len()
+                    && language::field_value(e, field) == language::field_value(theta, v),
             },
         }
     }

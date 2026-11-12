@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use criterion::{Criterion, SamplingMode, Throughput, criterion_group};
 use history_semantics::Validator;
 use history_store::{Checkpoint, Store};
-use history_syntax::{ComponentPattern, Head, RegexExpr, Rule, RuleMode};
+use history_syntax::{Component3, ComponentPattern, Head, RegexExpr, Rule, RuleMode};
 use junco_core::Request;
 use resharp::{RegexOptions, UnicodeMode};
 
@@ -109,11 +109,11 @@ fn resharp_regex(pattern: &str) -> resharp::Regex {
 }
 
 fn candidate_head() -> Head<Symbol> {
-    Head::new(
+    Head::new([
         ComponentPattern::variable("P"),
         ComponentPattern::variable("A"),
-        ComponentPattern::constant(Symbol::Candidate),
-    )
+        ComponentPattern::constant(Component3::C2(Symbol::Candidate)),
+    ])
 }
 
 struct Scenario {

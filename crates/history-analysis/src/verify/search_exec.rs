@@ -307,6 +307,22 @@ pub(crate) open spec fn chain_assignments(letters: Seq<Letter>, alphabets: Seq<S
     letters.map(|j: int, l: Letter| implementation::letter_assignment(l@, alphabets[j]))
 }
 
+pub(crate) proof fn lemma_chain_assignments_views(before: Seq<Letter>,after: Seq<Letter>,alphabets: Seq<Set<model::Primitive>>)
+    requires before.map_values(|l: Letter| l@) == after.map_values(|l: Letter| l@),
+    ensures chain_assignments(before,alphabets) == chain_assignments(after,alphabets),
+{
+    assert(before.map_values(|l: Letter| l@).len() == before.len());
+    assert(after.map_values(|l: Letter| l@).len() == after.len());
+    assert(before.len() == after.len());
+    assert forall|i: int| 0 <= i < before.len() implies
+        chain_assignments(before,alphabets)[i] == chain_assignments(after,alphabets)[i] by {
+        assert(before.map_values(|l: Letter| l@)[i] == before[i]@);
+        assert(after.map_values(|l: Letter| l@)[i] == after[i]@);
+        assert(before[i]@ == after[i]@);
+    }
+    assert(chain_assignments(before,alphabets) =~= chain_assignments(after,alphabets));
+}
+
 pub(crate) proof fn lemma_chain_correspondence(g: model::Graph,
     table: Seq<implementation::ConstraintView>, items: Seq<Item>,
     alphabets: Map<nat, Set<model::Primitive>>, j: int, fuel: nat)
@@ -352,6 +368,8 @@ pub(crate) open spec fn state_wf(s: Search<'_>) -> bool {
     let nodes = impl_nodes(g,s.constraints@,s.items@,s.alphabets@);
     facade::language_wf(*s.language) && table_wf(s.constraints)
         && parents_wf(s.items@) && ids_valid(g,s.constraints@,s.items@)
+        && 1 <= s.universes@.len() <= history_syntax::MAX_ARITY
+        && (forall|i: int| 0 <= i < s.constraints@.len() ==> s.constraints@[i].len() == s.universes@.len())
         && crate::verify::simulation_exec::memo_wf(s.simulation,*s.language)
         && crate::verify::prune_exec::antichain_wf(s.antichain,g,s.constraints,nodes)
         && seen_certified(s)
@@ -511,11 +529,21 @@ pub(crate) proof fn lemma_emitted_member(records: Seq<Emission>, c: paper::Case)
     }
 }
 
+pub(crate) proof fn lemma_steps_group_evidence(g: crate::constraint::Constraint,atoms: Seq<Atom>,u: Universes,
+    groups: Seq<(crate::constraint::Constraint,alloc::vec::Vec<Letter>)>,b: int)
+    requires crate::verify::steps_result(g,atoms,u,groups),0 <= b < groups.len(),
+    ensures crate::verify::constraint_wf(groups[b].0),groups[b].0@.len() == u@.len(),
+        forall|j: int| 0 <= j < groups[b].1@.len() ==> crate::verify::letter_wf(groups[b].1@[j])
+            && groups[b].1@[j]@.classes.len() == u@.len(),
+{
+    reveal(crate::verify::steps_result);
+}
+
 #[verifier::rlimit(20)]
 pub(crate) proof fn lemma_emitted_steps(g: crate::constraint::Constraint,atoms: Seq<Atom>,
     universes: Universes,groups: Seq<(crate::constraint::Constraint,alloc::vec::Vec<Letter>)>,
     records: Seq<Emission>,state: Regex<model::Test>)
-    requires atoms_wf(atoms),crate::verify::steps_result(g,atoms,universes,groups),
+    requires atoms_wf(atoms,universes@.len()),crate::verify::steps_result(g,atoms,universes,groups),
         inclusion::satisfiable(ndomains(universes),implementation::constraint_of(g@)),
         enumeration_prefix(groups,atoms,records,groups.len() as int,0),
         groups.map_values(|group: (crate::constraint::Constraint,alloc::vec::Vec<Letter>)| group.0@).no_duplicates(),
@@ -538,9 +566,11 @@ pub(crate) proof fn lemma_emitted_steps(g: crate::constraint::Constraint,atoms: 
     let d = ndomains(universes);
     let operands = choose|operands: crate::constraint::Operands|
         crate::verify::operands_of(operands,atoms)
+        && crate::verify::shape_wf(g,operands,universes)
         && crate::verify::constraint_views(crate::verify::group_constraints(groups))
             == crate::verify::split_views(g,operands,universes)
         && forall|b: int| 0 <= b < groups.len() ==> crate::verify::constraint_wf(groups[b].0)
+            && groups[b].0@.len() == universes@.len()
             && crate::verify::letter_views(groups[b].1@)
                 == crate::verify::letters_views(groups[b].0,operands,universes);
     let splits = crate::verify::split_views(g,operands,universes).map(
@@ -651,7 +681,7 @@ pub(crate) proof fn lemma_option_literals(source: implementation::RegisterView,
 pub(crate) proof fn lemma_emitted_literals(g: crate::constraint::Constraint,atoms: Seq<Atom>,
     universes: Universes,groups: Seq<(crate::constraint::Constraint,alloc::vec::Vec<Letter>)>,
     records: Seq<Emission>)
-    requires atoms_wf(atoms),crate::verify::steps_result(g,atoms,universes,groups),
+    requires atoms_wf(atoms,universes@.len()),crate::verify::steps_result(g,atoms,universes,groups),
         forall|n: int| 0 <= n < records.len() ==> emitted_valid(groups,atoms,records[n]),
     ensures forall|c: paper::Case,l: inclusion::Literal|
         emitted_cases(records).contains(c) && c.constraint.contains(l) ==>
@@ -662,17 +692,16 @@ pub(crate) proof fn lemma_emitted_literals(g: crate::constraint::Constraint,atom
 {
     let operands = choose|operands: crate::constraint::Operands|
         crate::verify::operands_of(operands,atoms)
+        && crate::verify::shape_wf(g,operands,universes)
         && crate::verify::constraint_views(crate::verify::group_constraints(groups))
             == crate::verify::split_views(g,operands,universes)
         && forall|b: int| 0 <= b < groups.len() ==> crate::verify::constraint_wf(groups[b].0)
+            && groups[b].0@.len() == universes@.len()
             && crate::verify::letter_views(groups[b].1@)
                 == crate::verify::letters_views(groups[b].0,operands,universes);
     crate::verify::lemma_operand_atoms(operands,atoms);
     crate::verify::lemma_group_constraints(groups);
-    crate::verify::lemma_register_product_members(
-        crate::verify::register_options(g.0[0]@,operands.register[0],crate::verify::codes(operands.constants[0].view()),crate::verify::domain_view(universes[0])),
-        crate::verify::register_options(g.0[1]@,operands.register[1],crate::verify::codes(operands.constants[1].view()),crate::verify::domain_view(universes[1])),
-        crate::verify::register_options(g.0[2]@,operands.register[2],crate::verify::codes(operands.constants[2].view()),crate::verify::domain_view(universes[2])));
+    crate::verify::lemma_register_product_members(crate::verify::split_axes(g,operands,universes));
     assert forall|c: paper::Case,l: inclusion::Literal|
         emitted_cases(records).contains(c) && c.constraint.contains(l) implies
             implementation::constraint_of(g@).contains(l)
@@ -686,8 +715,8 @@ pub(crate) proof fn lemma_emitted_literals(g: crate::constraint::Constraint,atom
         assert(crate::verify::split_views(g,operands,universes).contains(target));
         crate::verify::lemma_constraint_view(target);crate::verify::lemma_constraint_view(g@);
         let k = crate::verify::component_index(l.component) as int;
-        match l.component { history_syntax::syntax::Component::Principal => {},
-            history_syntax::syntax::Component::Action => {},history_syntax::syntax::Component::Resource => {} }
+        assert(l.component.0 < target.len());
+        assert(target.len() == g@.len() && target.len() == universes@.len());
         lemma_option_literals(implementation::register_of(g@,l.component),implementation::register_of(target,l.component),
             operands.register[k],crate::verify::codes(operands.constants[k].view()),
             crate::verify::domain_view(universes[k]),l.equal,l.value);
@@ -703,22 +732,26 @@ pub(crate) open spec fn register_in_vocabulary(g: implementation::RegisterView,v
         implementation::RegisterView::Differs(ds) => ds.subset_of(values) }
 }
 
-pub(crate) open spec fn constraint_in_vocabulary(g: implementation::ConstraintView,v: [Set<nat>;3]) -> bool {
-    register_in_vocabulary(g.principal,v[0]) && register_in_vocabulary(g.action,v[1])
-        && register_in_vocabulary(g.resource,v[2])
+pub(crate) open spec fn constraint_in_vocabulary(g: implementation::ConstraintView,v: Seq<Set<nat>>) -> bool {
+    g.len() == v.len() && forall|i: int| 0 <= i < g.len() ==> register_in_vocabulary(g[i],v[i])
 }
 
-pub(crate) open spec fn atoms_in_vocabulary(atoms: Seq<Atom>,v: [Set<nat>;3]) -> bool {
-    forall|i: int| #![trigger atoms[i]] 0 <= i < atoms.len() ==> atoms[i].component < 3
+pub(crate) open spec fn atoms_in_vocabulary(atoms: Seq<Atom>,v: Seq<Set<nat>>) -> bool {
+    forall|i: int| #![trigger atoms[i]] 0 <= i < atoms.len() ==> atoms[i].component < v.len()
         && match atoms[i].operand { crate::constraint::Operand::Constant(code) =>
             v[atoms[i].component as int].contains(code as nat),_ => true }
 }
 
-/// Bounds the per-state split and letter products, which size native vectors.
-pub(crate) open spec fn resource_capacity(v: [Set<nat>;3]) -> bool {
-    let a = v[0].len()+2; let b = v[1].len()+2; let c = v[2].len()+2;
-    &&& a <= usize::MAX && b <= usize::MAX && c <= usize::MAX
-    &&& a*b <= usize::MAX && a*b*c <= usize::MAX
+/// A sufficient product bound, not a precondition of search or successor generation.
+pub(crate) open spec fn resource_prefix(v: Seq<Set<nat>>,count: nat) -> nat
+    recommends count <= v.len(),
+    decreases count,
+{
+    if count == 0 { 1 } else { resource_prefix(v,(count-1) as nat)*(v[count as int-1].len()+2) }
+}
+
+pub(crate) open spec fn resource_capacity(v: Seq<Set<nat>>) -> bool {
+    forall|count: nat| count <= v.len() ==> resource_prefix(v,count) <= usize::MAX
 }
 
 
@@ -876,43 +909,6 @@ pub(crate) proof fn lemma_partial_case(d: encoding::NDomains,start: paper::Item,
     }
 }
 
-pub(crate) proof fn lemma_option_count(source: implementation::RegisterView,register: bool,
-    constants: Set<nat>,domain: Option<Set<nat>>,values: Set<nat>)
-    requires constants.subset_of(values),match domain { Some(ds) => ds.subset_of(values),None => true },
-    ensures crate::verify::register_options(source,register,constants,domain).len() <= values.len()+1,
-{
-    use vstd::set_lib::{lemma_len_subset,lemma_len_difference,lemma_map_size_bound};
-    match source {
-        implementation::RegisterView::Equals(_) => {},
-        implementation::RegisterView::Differs(differs) => { if register { match domain {
-            Some(ds) => {
-                lemma_len_subset(ds,values);lemma_len_difference(ds,differs);
-                let f = |v: nat| implementation::RegisterView::Equals(v);
-                lemma_map_size_bound(ds.difference(differs),ds.difference(differs).map(f),f);
-            },
-            None => {
-                lemma_len_subset(constants,values);lemma_len_difference(constants,differs);
-                let f = |v: nat| implementation::RegisterView::Equals(v);
-                lemma_map_size_bound(constants.difference(differs),constants.difference(differs).map(f),f);
-            },
-        } } },
-    }
-}
-
-pub(crate) proof fn lemma_class_count(source: implementation::RegisterView,register: bool,
-    constants: Set<nat>,universe: crate::constraint::Universe,values: Set<nat>)
-    requires constants.subset_of(values),register_in_vocabulary(source,values),
-    ensures crate::verify::class_options(source,register,constants,universe).len() <= values.len()+2,
-{
-    let names = crate::verify::named_codes(source,register,constants,crate::verify::domain_view(universe));
-    assert(names.subset_of(values));
-    vstd::set_lib::lemma_len_subset(names,values);
-    let f = |v: nat| Some(implementation::ClassView::Constant(v));
-    vstd::set_lib::lemma_map_size_bound(names,names.map(f),f);
-    match universe { None => {},Some(ds) => {
-        match crate::verify::first_other((*ds)@,names) { None => {},Some(_) => {} }
-    } }
-}
 
 pub(crate) proof fn lemma_option_vocabulary(source: implementation::RegisterView,
     target: implementation::RegisterView,register: bool,constants: Set<nat>,
@@ -935,9 +931,7 @@ pub(crate) proof fn lemma_option_vocabulary(source: implementation::RegisterView
 }
 
 pub(crate) open spec fn syntactic_entails(a: implementation::ConstraintView,b: implementation::ConstraintView) -> bool {
-    crate::verify::register_entails(a.principal,b.principal)
-        && crate::verify::register_entails(a.action,b.action)
-        && crate::verify::register_entails(a.resource,b.resource)
+    a.len() == b.len() && forall|i: int| 0 <= i < a.len() ==> crate::verify::register_entails(a[i],b[i])
 }
 
 pub(crate) proof fn lemma_register_entails_trans(a: implementation::RegisterView,
@@ -955,9 +949,9 @@ pub(crate) proof fn lemma_syntactic_entails_trans(a: implementation::ConstraintV
     requires syntactic_entails(a,b),syntactic_entails(b,c),
     ensures syntactic_entails(a,c),
 {
-    lemma_register_entails_trans(a.principal,b.principal,c.principal);
-    lemma_register_entails_trans(a.action,b.action,c.action);
-    lemma_register_entails_trans(a.resource,b.resource,c.resource);
+    assert forall|i: int| 0 <= i < a.len() implies crate::verify::register_entails(a[i],c[i]) by {
+        lemma_register_entails_trans(a[i],b[i],c[i]);
+    }
 }
 
 pub(crate) proof fn lemma_letter_coherent_strengthen(a: implementation::ConstraintView,
@@ -965,7 +959,7 @@ pub(crate) proof fn lemma_letter_coherent_strengthen(a: implementation::Constrai
     requires syntactic_entails(a,b),crate::verify::reconstruction::letter_coherent(b,l,atoms),
     ensures crate::verify::reconstruction::letter_coherent(a,l,atoms),
 {
-    assert forall|c: history_syntax::syntax::Component| #![trigger implementation::letter_register(l,c)] match implementation::letter_register(l,c) {
+    assert forall|c: history_syntax::syntax::Component| #![trigger implementation::letter_register(l,c)] c.0 < a.len() implies match implementation::letter_register(l,c) {
         implementation::ClassView::Constant(v) => implementation::register_of(a,c) == implementation::RegisterView::Equals(v),
         implementation::ClassView::Register => (atoms.contains(model::Primitive::Eq(c,model::GTerm::Variable(c)))
             || implementation::letter_class(l,c) == Some(implementation::ClassView::Register)) ==> {
@@ -999,19 +993,22 @@ pub(crate) proof fn lemma_letter_coherent_strengthen(a: implementation::Constrai
 pub(crate) proof fn lemma_generated_letter_coherent(g: crate::constraint::Constraint,
     operands: crate::constraint::Operands,atoms: Seq<Atom>,universes: Universes,
     l: implementation::LetterView)
-    requires atoms_wf(atoms),crate::verify::operands_of(operands,atoms),
+    requires atoms_wf(atoms,universes@.len()),crate::verify::operands_of(operands,atoms),
         crate::verify::letters_ready(g@,operands,universes),
+        crate::verify::shape_wf(g,operands,universes),
         crate::verify::letters_views(g,operands,universes).contains(l),
     ensures crate::verify::reconstruction::letter_coherent(g@,l,atom_set(atoms)),
 {
     crate::verify::lemma_letters_members(g,operands,universes);
     crate::verify::lemma_operand_atoms(operands,atoms);
     assert forall|p: model::Primitive| atom_set(atoms).contains(p) implies match p {
-        model::Primitive::Eq(c,model::GTerm::Variable(c2)) => c == c2,_ => true,
+        model::Primitive::Eq(c,model::GTerm::Variable(c2)) => c == c2 && c.0 < g@.len(),
+        model::Primitive::Eq(c,model::GTerm::Constant(_)) => c.0 < g@.len(),
     } by {
         let a = choose|a: Atom| atoms.to_set().contains(a) && a@ == p;
+        let i = choose|i: int| 0 <= i < atoms.len() && atoms[i] == a;
     }
-    assert forall|c: history_syntax::syntax::Component| #![trigger implementation::letter_register(l,c)] match implementation::letter_register(l,c) {
+    assert forall|c: history_syntax::syntax::Component| #![trigger implementation::letter_register(l,c)] c.0 < g@.len() implies match implementation::letter_register(l,c) {
         implementation::ClassView::Constant(v) => implementation::register_of(g@,c) == implementation::RegisterView::Equals(v),
         implementation::ClassView::Register => (atom_set(atoms).contains(model::Primitive::Eq(c,model::GTerm::Variable(c)))
             || implementation::letter_class(l,c) == Some(implementation::ClassView::Register)) ==> {
@@ -1046,7 +1043,7 @@ pub(crate) proof fn lemma_generated_letter_coherent(g: crate::constraint::Constr
         }
     }
     assert forall|c: history_syntax::syntax::Component| #![trigger implementation::letter_class(l,c)]
-        implementation::letter_class(l,c) == Some(implementation::ClassView::Register) implies
+        c.0 < g@.len() && implementation::letter_class(l,c) == Some(implementation::ClassView::Register) implies
         implementation::letter_register(l,c) == implementation::ClassView::Register by {
         let k = crate::verify::component_index(c) as int;
         crate::verify::lemma_class_options_members(implementation::register_of(g@,c),operands.register[k],
@@ -1060,15 +1057,10 @@ pub(crate) open spec fn domain_values(universe: crate::constraint::Universe) -> 
 }
 
 pub(crate) open spec fn root_vocabulary(l: SymbolicLanguage,u: Universes,g: implementation::ConstraintView)
-    -> [Set<nat>;3] {
+    -> Seq<Set<nat>> {
     let ps = symbolic::regex_primitives(model::lift_regex(facade::graph(l),facade::root(l)));
-    [facade::primitive_codes(ps,history_syntax::syntax::Component::Principal).union(crate::verify::register_codes(g.principal)).union(domain_values(u[0])),
-        facade::primitive_codes(ps,history_syntax::syntax::Component::Action).union(crate::verify::register_codes(g.action)).union(domain_values(u[1])),
-        facade::primitive_codes(ps,history_syntax::syntax::Component::Resource).union(crate::verify::register_codes(g.resource)).union(domain_values(u[2]))]
-}
-
-pub(crate) open spec fn search_fits(l: SymbolicLanguage,u: Universes,g: implementation::ConstraintView) -> bool {
-    resource_capacity(root_vocabulary(l,u,g))
+    Seq::new(u@.len(),|i: int| facade::primitive_codes(ps,crate::verify::component_at(i as usize))
+        .union(crate::verify::register_codes(g[i])).union(domain_values(u[i])))
 }
 
 pub(crate) open spec fn queue_order(s: Search<'_>) -> bool {
@@ -1084,6 +1076,8 @@ pub(crate) proof fn lemma_node_items_distinct(l: SymbolicLanguage,table: Constra
     requires facade::language_wf(l),table_wf(table),ids_valid(facade::graph(l),table@,items),
         forall|i: int,j: int| 0 <= i < j < items.len()
             ==> (items[i].constraint,items[i].residual) != (items[j].constraint,items[j].residual),
+        forall|i: int,j: int| 0 <= i < items.len() && 0 <= j < items.len()
+            ==> table@[items[i].constraint as int].len() == table@[items[j].constraint as int].len(),
     ensures forall|i: int,j: int| 0 <= i < j < items.len()
         ==> impl_nodes(facade::graph(l),table@,items,alphabets)[i].item
             != impl_nodes(facade::graph(l),table@,items,alphabets)[j].item,
@@ -1140,18 +1134,21 @@ pub(crate) proof fn theorem_retained_search_bounded(d: encoding::NDomains,
         |q: Regex<model::Test>| symbolic::regex_primitives(q),start.constraint,start.state);
 }
 
-pub(crate) open spec fn letter_numeric_codes(v: [Set<nat>;3],u: Universes,
+pub(crate) open spec fn letter_numeric_codes(v: Seq<Set<nat>>,u: Universes,
     l: implementation::LetterView,atoms: Set<model::Primitive>) -> bool {
+    &&& 1 <= v.len() <= history_syntax::MAX_ARITY
+    &&& v.len() == u@.len() && l.classes.len() == v.len() && l.registers.len() == v.len()
+    &&& paper::atoms_bounded(atoms,v.len())
     &&& forall|c: history_syntax::syntax::Component| #![trigger implementation::letter_class(l,c)]
-        match implementation::letter_class(l,c) {
+        c.0 < v.len() ==> match implementation::letter_class(l,c) {
             None => encoding::n_domain(ndomains(u),c) is None,
             Some(implementation::ClassView::Register) => true,
             Some(implementation::ClassView::Constant(code)) => v[crate::verify::component_index(c) as int].contains(code)
                 && match encoding::n_domain(ndomains(u),c) { Some(ds) => ds.contains(code),None => true },
         }
     &&& forall|c: history_syntax::syntax::Component| #![trigger implementation::letter_register(l,c)]
-        implementation::letter_register(l,c) matches implementation::ClassView::Constant(code)
-            ==> v[crate::verify::component_index(c) as int].contains(code)
+        c.0 < v.len() ==> (implementation::letter_register(l,c) matches implementation::ClassView::Constant(code)
+            ==> v[crate::verify::component_index(c) as int].contains(code))
     &&& forall|p: model::Primitive| atoms.contains(p) ==> match p {
         model::Primitive::Eq(c,model::GTerm::Constant(code)) => v[crate::verify::component_index(c) as int].contains(code),
         _ => true,
@@ -1159,9 +1156,11 @@ pub(crate) open spec fn letter_numeric_codes(v: [Set<nat>;3],u: Universes,
 }
 
 pub(crate) proof fn lemma_letter_payload<E: history_syntax::Event>(constants: crate::analyzer::Constants<E>,
-    v: [Set<nat>;3],u: Universes,l: implementation::LetterView,atoms: Set<model::Primitive>)
+    v: Seq<Set<nat>>,u: Universes,l: implementation::LetterView,atoms: Set<model::Primitive>)
     requires letter_numeric_codes(v,u,l,atoms),
-        forall|c: history_syntax::syntax::Component,code: nat| v[crate::verify::component_index(c) as int].contains(code)
+        v.len() == history_syntax::event::specs::arity::<E>(),
+        forall|c: history_syntax::syntax::Component,code: nat| c.0 < v.len()
+            && v[crate::verify::component_index(c) as int].contains(code)
             ==> crate::verify::reconstruction::code_field(constants,c,code),
     ensures crate::verify::reconstruction::letter_codes_ok(constants,ndomains(u),l,atoms),
 {}
@@ -1179,23 +1178,24 @@ pub(crate) open spec fn trace(s: Search<'_>, expanded: nat) -> paper::Trace {
 }
 
 #[verifier::opaque]
-pub(crate) open spec fn vocabulary_wf(s: Search<'_>, v: [Set<nat>;3]) -> bool {
-    &&& resource_capacity(v)
+pub(crate) open spec fn vocabulary_wf(s: Search<'_>, v: Seq<Set<nat>>) -> bool {
+    &&& 1 <= v.len() <= history_syntax::MAX_ARITY && v.len() == s.universes@.len()
     &&& crate::verify::constraint_unique::universes_distinct(*s.universes)
-    &&& forall|k: int| 0 <= k < 3 ==> domain_values(s.universes[k]).subset_of(v[k])
+    &&& forall|k: int| 0 <= k < v.len() ==> domain_values(s.universes[k]).subset_of(v[k])
     &&& forall|k: int| #![trigger s.constraints@[k]] 0 <= k < s.constraints@.len()
         ==> constraint_in_vocabulary(s.constraints@[k],v)
     &&& forall|j: int| #![trigger s.items@[j]] 0 <= j < s.items@.len() ==> {
         let q = s.items@[j].residual;
         finite_impl::regex_nf(facade::abs(*s.language,q))
-            && forall|c: history_syntax::syntax::Component|
+            && paper::atoms_bounded(facade::residual_primitives(*s.language,q),v.len())
+            && forall|c: history_syntax::syntax::Component| c.0 < v.len() ==>
                 facade::residual_codes(*s.language,q,c).subset_of(v[crate::verify::component_index(c) as int])
     }
 }
 
 #[verifier::opaque]
 pub(crate) open spec fn running(s: Search<'_>, expanded: nat, start: paper::Item,
-    v: [Set<nat>;3]) -> bool {
+    v: Seq<Set<nat>>) -> bool {
     &&& state_wf(s) && queue_order(s) && vocabulary_wf(s,v) && edges_wf(s)
     &&& inclusion::satisfiable(ndomains(*s.universes),start.constraint)
     &&& finite_impl::regex_nf(start.state)
@@ -1219,6 +1219,7 @@ pub(crate) proof fn lemma_state_frame(a: Search<'_>,b: Search<'_>)
         table_wf(b.constraints),a.constraints@.is_prefix_of(b.constraints@),
         a.items@ == b.items@,a.alphabets@ == b.alphabets@,*a.universes == *b.universes,
         a.seen == b.seen,a.seen_records@ == b.seen_records@,
+        forall|i: int| 0 <= i < b.constraints@.len() ==> b.constraints@[i].len() == b.universes@.len(),
         a.antichain == b.antichain,a.simulation == b.simulation,
     ensures state_wf(b), trace(a,0).nodes == trace(b,0).nodes,
 {
@@ -1260,7 +1261,7 @@ pub(crate) proof fn lemma_archive_atoms_add(d: encoding::NDomains,
 }
 
 pub(crate) proof fn lemma_running_outcome(s: Search<'_>, expanded: nat,start: paper::Item,
-    v: [Set<nat>;3], outcome: paper::Outcome)
+    v: Seq<Set<nat>>, outcome: paper::Outcome)
     requires running(s,expanded,start,v),paper::trace_outcome(trace(s,expanded),outcome),
     ensures paper::trace_wf(ndomains(*s.universes),start.constraint,start.state,
             archive_cases(s.archive@),trace(s,expanded)),
@@ -1275,73 +1276,29 @@ pub(crate) proof fn lemma_running_outcome(s: Search<'_>, expanded: nat,start: pa
     theorem_retained_search_bounded(ndomains(*s.universes),s.archive@,start);
 }
 
-pub(crate) proof fn lemma_distinct_codes_bound(s: Seq<u32>,values: Set<nat>)
-    requires s.no_duplicates(),crate::verify::codes(s).subset_of(values),
-    ensures s.len() <= values.len(),
-{
-    let ns = s.map_values(|k: u32| k as nat);
-    assert(ns.no_duplicates());
-    assert forall|i: int| 0 <= i < ns.len() implies values.contains(ns[i]) by {
-        assert(s.to_set().contains(s[i]));
-        assert(crate::verify::codes(s).contains(ns[i]));
-    }
-    finite_impl::lemma_nodup_len(ns,values);
-}
-
-pub(crate) proof fn lemma_register_sequence_count(r: implementation::RegisterView,register: bool,
-    constants: Seq<u32>,u: crate::constraint::Universe,values: Set<nat>)
-    requires constants.no_duplicates(),crate::verify::codes(constants).subset_of(values),
-        crate::verify::constraint_unique::universe_distinct(u),domain_values(u).subset_of(values),
-    ensures crate::verify::register_count(r,register,constants,u) <= values.len()+1,
-{
-    lemma_distinct_codes_bound(constants,values);
-    match r {
-        implementation::RegisterView::Equals(_) => {},
-        implementation::RegisterView::Differs(ds) => {
-            if register { match u {
-                None => { constants.lemma_filter_len(|k: u32| !ds.contains(k as nat)); },
-                Some(ids) => {
-                    lemma_distinct_codes_bound((*ids)@,values);
-                    (*ids)@.lemma_filter_len(|k: u32| !ds.contains(k as nat));
-                },
-            } }
-        },
-    }
-}
 
 pub(crate) proof fn lemma_refined_vocabulary(g: crate::constraint::Constraint,operands: crate::constraint::Operands,
-    u: Universes,v: [Set<nat>;3],target: implementation::ConstraintView)
+    u: Universes,v: Seq<Set<nat>>,target: implementation::ConstraintView)
     requires crate::verify::split_views(g,operands,u).contains(target),constraint_in_vocabulary(g@,v),
-        forall|k: int| 0 <= k < 3 ==> crate::verify::codes(operands.constants[k].view()).subset_of(v[k])
+        crate::verify::shape_wf(g,operands,u),
+        forall|k: int| 0 <= k < v.len() ==> crate::verify::codes(operands.constants[k].view()).subset_of(v[k])
             && domain_values(u[k]).subset_of(v[k]),
     ensures constraint_in_vocabulary(target,v),
 {
-    crate::verify::lemma_register_product_members(
-        crate::verify::register_options(g.0[0]@,operands.register[0],crate::verify::codes(operands.constants[0].view()),crate::verify::domain_view(u[0])),
-        crate::verify::register_options(g.0[1]@,operands.register[1],crate::verify::codes(operands.constants[1].view()),crate::verify::domain_view(u[1])),
-        crate::verify::register_options(g.0[2]@,operands.register[2],crate::verify::codes(operands.constants[2].view()),crate::verify::domain_view(u[2])));
-    lemma_option_vocabulary(g.0[0]@,target.principal,operands.register[0],crate::verify::codes(operands.constants[0].view()),crate::verify::domain_view(u[0]),v[0]);
-    lemma_option_vocabulary(g.0[1]@,target.action,operands.register[1],crate::verify::codes(operands.constants[1].view()),crate::verify::domain_view(u[1]),v[1]);
-    lemma_option_vocabulary(g.0[2]@,target.resource,operands.register[2],crate::verify::codes(operands.constants[2].view()),crate::verify::domain_view(u[2]),v[2]);
+    crate::verify::lemma_register_product_members(crate::verify::split_axes(g,operands,u));
+    assert forall|k: int| 0 <= k < target.len() implies register_in_vocabulary(target[k],v[k]) by {
+        lemma_option_vocabulary(g@[k],target[k],operands.register[k],
+            crate::verify::codes(operands.constants[k].view()),crate::verify::domain_view(u[k]),v[k]);
+    }
 }
 
-pub(crate) proof fn lemma_product_capacity(n0: nat,n1: nat,n2: nat,v: [Set<nat>;3])
-    requires resource_capacity(v),n0 <= v[0].len()+2,n1 <= v[1].len()+2,n2 <= v[2].len()+2,
-    ensures n0 <= usize::MAX && n1 <= usize::MAX && n2 <= usize::MAX
-        && n0*n1 <= usize::MAX && n0*n1*n2 <= usize::MAX,
-{
-    assert(n0*n1 <= (v[0].len()+2)*(v[1].len()+2)) by(nonlinear_arith)
-        requires n0 <= v[0].len()+2,n1 <= v[1].len()+2;
-    assert(n0*n1*n2 <= (v[0].len()+2)*(v[1].len()+2)*(v[2].len()+2)) by(nonlinear_arith)
-        requires n0 <= v[0].len()+2,n1 <= v[1].len()+2,n2 <= v[2].len()+2;
-}
 
-pub(crate) proof fn lemma_operand_vocabulary(operands: crate::constraint::Operands,atoms: Seq<Atom>,v: [Set<nat>;3])
-    requires crate::verify::operands_of(operands,atoms),atoms_in_vocabulary(atoms,v),
-    ensures forall|k: int| 0 <= k < 3 ==> crate::verify::codes(operands.constants[k].view()).subset_of(v[k])
+pub(crate) proof fn lemma_operand_vocabulary(operands: crate::constraint::Operands,atoms: Seq<Atom>,v: Seq<Set<nat>>)
+    requires crate::verify::operands_of(operands,atoms),atoms_in_vocabulary(atoms,v),operands.register@.len() == v.len(),
+    ensures forall|k: int| 0 <= k < v.len() ==> crate::verify::codes(operands.constants[k].view()).subset_of(v[k])
         && operands.constants[k].view().no_duplicates(),
 {
-    assert forall|k: int| 0 <= k < 3 implies crate::verify::codes(operands.constants[k].view()).subset_of(v[k])
+    assert forall|k: int| 0 <= k < v.len() implies crate::verify::codes(operands.constants[k].view()).subset_of(v[k])
         && operands.constants[k].view().no_duplicates() by {
         assert forall|code: nat| crate::verify::codes(operands.constants[k].view()).contains(code) implies v[k].contains(code) by {
             let raw = choose|raw: u32| operands.constants[k].view().to_set().contains(raw) && raw as nat == code;
@@ -1353,45 +1310,6 @@ pub(crate) proof fn lemma_operand_vocabulary(operands: crate::constraint::Operan
     }
 }
 
-pub(crate) proof fn lemma_letter_capacity(g: crate::constraint::Constraint,o: crate::constraint::Operands,
-    u: Universes,v: [Set<nat>;3])
-    requires resource_capacity(v),constraint_in_vocabulary(g@,v),
-        forall|k: int| 0 <= k < 3 ==> crate::verify::codes(o.constants[k].view()).subset_of(v[k]),
-    ensures crate::verify::letter_capacity(g,o,u),
-{
-    lemma_class_count(g.0[0]@,o.register[0],crate::verify::codes(o.constants[0].view()),u[0],v[0]);
-    lemma_class_count(g.0[1]@,o.register[1],crate::verify::codes(o.constants[1].view()),u[1],v[1]);
-    lemma_class_count(g.0[2]@,o.register[2],crate::verify::codes(o.constants[2].view()),u[2],v[2]);
-    lemma_product_capacity(crate::verify::class_options(g.0[0]@,o.register[0],crate::verify::codes(o.constants[0].view()),u[0]).len(),
-        crate::verify::class_options(g.0[1]@,o.register[1],crate::verify::codes(o.constants[1].view()),u[1]).len(),
-        crate::verify::class_options(g.0[2]@,o.register[2],crate::verify::codes(o.constants[2].view()),u[2]).len(),v);
-}
-
-pub(crate) proof fn lemma_steps_capacity(g: crate::constraint::Constraint,atoms: Seq<Atom>,u: Universes,v: [Set<nat>;3])
-    requires resource_capacity(v),constraint_in_vocabulary(g@,v),atoms_wf(atoms),atoms_in_vocabulary(atoms,v),
-        crate::verify::constraint_unique::universes_distinct(u),
-        forall|k: int| 0 <= k < 3 ==> domain_values(u[k]).subset_of(v[k]),
-    ensures crate::verify::steps_capacity(g,atoms,u),
-{
-    assert forall|o: crate::constraint::Operands| crate::verify::operands_of(o,atoms) implies
-        crate::verify::split_capacity(g,o,u)
-            && forall|refined: crate::constraint::Constraint| crate::verify::constraint_wf(refined)
-                && crate::verify::split_views(g,o,u).contains(refined@)
-                    ==> crate::verify::letter_capacity(refined,o,u) by {
-        lemma_operand_vocabulary(o,atoms,v);
-        lemma_register_sequence_count(g.0[0]@,o.register[0],o.constants[0].view(),u[0],v[0]);
-        lemma_register_sequence_count(g.0[1]@,o.register[1],o.constants[1].view(),u[1],v[1]);
-        lemma_register_sequence_count(g.0[2]@,o.register[2],o.constants[2].view(),u[2],v[2]);
-        lemma_product_capacity(crate::verify::register_count(g.0[0]@,o.register[0],o.constants[0].view(),u[0]),
-            crate::verify::register_count(g.0[1]@,o.register[1],o.constants[1].view(),u[1]),
-            crate::verify::register_count(g.0[2]@,o.register[2],o.constants[2].view(),u[2]),v);
-        assert forall|refined: crate::constraint::Constraint| crate::verify::constraint_wf(refined)
-            && crate::verify::split_views(g,o,u).contains(refined@) implies crate::verify::letter_capacity(refined,o,u) by {
-            lemma_refined_vocabulary(g,o,u,v,refined@);
-            lemma_letter_capacity(refined,o,u,v);
-        }
-    }
-}
 
 #[verifier::opaque]
 pub(crate) open spec fn search_result(d: encoding::NDomains,start: paper::Item,outcome: paper::Outcome) -> bool {
@@ -1407,7 +1325,7 @@ pub(crate) open spec fn search_result(d: encoding::NDomains,start: paper::Item,o
 }
 
 #[verifier::rlimit(20)]
-pub(crate) proof fn lemma_search_result(s: Search<'_>,expanded: nat,start: paper::Item,v: [Set<nat>;3],
+pub(crate) proof fn lemma_search_result(s: Search<'_>,expanded: nat,start: paper::Item,v: Seq<Set<nat>>,
     outcome: paper::Outcome)
     requires running(s,expanded,start,v),paper::trace_outcome(trace(s,expanded),outcome),
     ensures search_result(ndomains(*s.universes),start,outcome),
@@ -1441,7 +1359,7 @@ pub(crate) open spec fn expansion_state(s: Search<'_>,index: nat,records: Seq<Em
     &&& forall|j: int| 0 <= j < s.items@.len() ==> depth(s.items@,j) <= depth(s.items@,index as int)+1
 }
 
-pub(crate) proof fn lemma_vocabulary_frame(a: Search<'_>,b: Search<'_>,v: [Set<nat>;3])
+pub(crate) proof fn lemma_vocabulary_frame(a: Search<'_>,b: Search<'_>,v: Seq<Set<nat>>)
     requires vocabulary_wf(a,v),facade::language_wf(*a.language),facade::language_wf(*b.language),
         facade::frame(*a.language,*b.language),a.items@ == b.items@,a.constraints@ == b.constraints@,
         *a.universes == *b.universes,ids_valid(facade::graph(*a.language),a.constraints@,a.items@),
@@ -1453,8 +1371,9 @@ pub(crate) proof fn lemma_vocabulary_frame(a: Search<'_>,b: Search<'_>,v: [Set<n
     assert forall|j: int| #![trigger b.items@[j]] 0 <= j < b.items@.len() implies {
         let q = b.items@[j].residual;
         finite_impl::regex_nf(facade::abs(*b.language,q))
-            && forall|c: history_syntax::syntax::Component| facade::residual_codes(*b.language,q,c)
-                .subset_of(v[crate::verify::component_index(c) as int])
+            && paper::atoms_bounded(facade::residual_primitives(*b.language,q),v.len())
+            && forall|c: history_syntax::syntax::Component| c.0 < v.len() ==>
+                facade::residual_codes(*b.language,q,c).subset_of(v[crate::verify::component_index(c) as int])
     } by {
         facade::lemma_residual_vocabulary_frame(*a.language,*b.language,b.items@[j].residual);
         model::lemma_lift_regex_stable(facade::graph(*a.language),facade::graph(*b.language),b.items@[j].residual@);
@@ -1514,16 +1433,19 @@ pub(crate) proof fn lemma_enumeration_advance(groups: Seq<(crate::constraint::Co
     }
 }
 
-pub(crate) proof fn lemma_atoms_vocabulary(atoms: Seq<Atom>,ps: Set<model::Primitive>,v: [Set<nat>;3])
-    requires atoms_wf(atoms),atom_set(atoms).subset_of(ps),
-        forall|c: history_syntax::syntax::Component| facade::primitive_codes(ps,c).subset_of(v[crate::verify::component_index(c) as int]),
+pub(crate) proof fn lemma_atoms_vocabulary(atoms: Seq<Atom>,ps: Set<model::Primitive>,v: Seq<Set<nat>>)
+    requires atoms_wf(atoms,v.len()),atom_set(atoms).subset_of(ps),paper::atoms_bounded(ps,v.len()),
+        forall|c: history_syntax::syntax::Component| c.0 < v.len() ==>
+            facade::primitive_codes(ps,c).subset_of(v[crate::verify::component_index(c) as int]),
     ensures atoms_in_vocabulary(atoms,v),
 {
-    assert forall|i: int| #![trigger atoms[i]] 0 <= i < atoms.len() implies atoms[i].component < 3
+    assert forall|i: int| #![trigger atoms[i]] 0 <= i < atoms.len() implies atoms[i].component < v.len()
         && match atoms[i].operand { crate::constraint::Operand::Constant(code) =>
             v[atoms[i].component as int].contains(code as nat),_ => true } by {
+        assert(atoms.to_set().contains(atoms[i]));
+        assert(atom_set(atoms).contains(atoms[i]@));
         if let crate::constraint::Operand::Constant(code) = atoms[i].operand {
-            let c = crate::verify::component_of(atoms[i].component);
+            let c = crate::verify::component_at(atoms[i].component);
             assert(atoms.to_set().contains(atoms[i]));
             assert(atom_set(atoms).contains(atoms[i]@));
             facade::lemma_primitive_codes_contains(ps,c,code as nat);
@@ -1533,14 +1455,16 @@ pub(crate) proof fn lemma_atoms_vocabulary(atoms: Seq<Atom>,ps: Set<model::Primi
 }
 
 pub(crate) proof fn lemma_group_vocabulary(g: crate::constraint::Constraint,atoms: Seq<Atom>,u: Universes,
-    groups: Seq<(crate::constraint::Constraint,alloc::vec::Vec<Letter>)>,v: [Set<nat>;3])
+    groups: Seq<(crate::constraint::Constraint,alloc::vec::Vec<Letter>)>,v: Seq<Set<nat>>)
     requires crate::verify::steps_result(g,atoms,u,groups),constraint_in_vocabulary(g@,v),
-        atoms_in_vocabulary(atoms,v),forall|k: int| 0 <= k < 3 ==> domain_values(u[k]).subset_of(v[k]),
+        atoms_in_vocabulary(atoms,v),forall|k: int| 0 <= k < v.len() ==> domain_values(u[k]).subset_of(v[k]),
     ensures forall|b: int| 0 <= b < groups.len() ==> constraint_in_vocabulary(groups[b].0@,v),
 {
     let o = choose|o: crate::constraint::Operands| crate::verify::operands_of(o,atoms)
+        && crate::verify::shape_wf(g,o,u)
         && crate::verify::constraint_views(crate::verify::group_constraints(groups)) == crate::verify::split_views(g,o,u)
         && forall|b: int| 0 <= b < groups.len() ==> crate::verify::constraint_wf(groups[b].0)
+            && groups[b].0@.len() == u@.len()
             && crate::verify::letter_views(groups[b].1@) == crate::verify::letters_views(groups[b].0,o,u);
     lemma_operand_vocabulary(o,atoms,v);
     crate::verify::lemma_group_constraints(groups);
@@ -1577,7 +1501,7 @@ pub(crate) proof fn lemma_resolved_successor(l: SymbolicLanguage,q: RegexId,t: j
     requires facade::language_wf(l),symbolic::derivative_correct(facade::graph(l),q@,t),
         truth_bits(atoms,letter,words),facade::atom_ids(l,t).len() == atoms.len(),
         forall|i: int| 0 <= i < atoms.len() ==> model::lift_test(facade::graph(l),facade::atom_ids(l,t)[i]@) == model::Test::Atom(atoms[i]@,true),
-        forall|theta: Subst,e: EventView,w: Seq<EventView>| language::event_wf(theta)
+        forall|theta: Subst,e: EventView,w: Seq<EventView>| language::event_wf(theta,theta.len())
             && symbolic::truth_words_realize(facade::graph(l),facade::atom_ids(l,t),words,theta,e)
                 ==> model::regex_lang(facade::graph(l),theta,v@,w)
                     == history_semantics::normalize_verify::transition_lang(facade::graph(l),theta,t,e,w),
@@ -1585,7 +1509,7 @@ pub(crate) proof fn lemma_resolved_successor(l: SymbolicLanguage,q: RegexId,t: j
 {
     hide(language::lang);hide(history_semantics::normalize_verify::transition_lang);
     lemma_truth_realizes(facade::graph(l),facade::atom_ids(l,t),atoms,letter,words);
-    assert forall|theta: Subst,e: EventView,w: Seq<EventView>| language::event_wf(theta)
+    assert forall|theta: Subst,e: EventView,w: Seq<EventView>| language::event_wf(theta,theta.len())
         && paper::realizes(theta,e,implementation::letter_assignment(letter@,atom_set(atoms))) implies
         encoding::n_lang(theta,facade::abs(l,v),w) == encoding::n_lang(theta,facade::abs(l,q),seq![e]+w) by {
         assert(symbolic::truth_words_realize(facade::graph(l),facade::atom_ids(l,t),words,theta,e));
@@ -1652,32 +1576,35 @@ pub(crate) proof fn lemma_option_strengthens(source: implementation::RegisterVie
 pub(crate) proof fn lemma_refined_strengthens(g: crate::constraint::Constraint,o: crate::constraint::Operands,
     u: Universes,target: implementation::ConstraintView)
     requires crate::verify::split_views(g,o,u).contains(target),
+        crate::verify::shape_wf(g,o,u),
     ensures syntactic_entails(target,g@),
 {
-    crate::verify::lemma_register_product_members(
-        crate::verify::register_options(g.0[0]@,o.register[0],crate::verify::codes(o.constants[0].view()),crate::verify::domain_view(u[0])),
-        crate::verify::register_options(g.0[1]@,o.register[1],crate::verify::codes(o.constants[1].view()),crate::verify::domain_view(u[1])),
-        crate::verify::register_options(g.0[2]@,o.register[2],crate::verify::codes(o.constants[2].view()),crate::verify::domain_view(u[2])));
-    lemma_option_strengthens(g.0[0]@,target.principal,o.register[0],crate::verify::codes(o.constants[0].view()),crate::verify::domain_view(u[0]));
-    lemma_option_strengthens(g.0[1]@,target.action,o.register[1],crate::verify::codes(o.constants[1].view()),crate::verify::domain_view(u[1]));
-    lemma_option_strengthens(g.0[2]@,target.resource,o.register[2],crate::verify::codes(o.constants[2].view()),crate::verify::domain_view(u[2]));
+    crate::verify::lemma_register_product_members(crate::verify::split_axes(g,o,u));
+    assert forall|k: int| 0 <= k < target.len() implies crate::verify::register_entails(target[k],g@[k]) by {
+        lemma_option_strengthens(g@[k],target[k],o.register[k],
+            crate::verify::codes(o.constants[k].view()),crate::verify::domain_view(u[k]));
+    }
 }
 
 pub(crate) proof fn lemma_numeric_letter(g: crate::constraint::Constraint,o: crate::constraint::Operands,
-    atoms: Seq<Atom>,u: Universes,v: [Set<nat>;3],l: implementation::LetterView)
-    requires crate::verify::operands_of(o,atoms),atoms_in_vocabulary(atoms,v),atoms_wf(atoms),
+    atoms: Seq<Atom>,u: Universes,v: Seq<Set<nat>>,l: implementation::LetterView)
+    requires crate::verify::operands_of(o,atoms),atoms_in_vocabulary(atoms,v),atoms_wf(atoms,u@.len()),
         constraint_in_vocabulary(g@,v),crate::verify::letters_views(g,o,u).contains(l),
         inclusion::satisfiable(ndomains(u),implementation::constraint_of(g@)),
-        forall|k: int| 0 <= k < 3 ==> domain_values(u[k]).subset_of(v[k]),
+        crate::verify::shape_wf(g,o,u),
+        forall|k: int| 0 <= k < v.len() ==> domain_values(u[k]).subset_of(v[k]),
     ensures letter_numeric_codes(v,u,l,atom_set(atoms)),
 {
     lemma_operand_vocabulary(o,atoms,v);
     crate::verify::lemma_letters_members(g,o,u);
+    assert forall|i: int| 0 <= i < g@.len() implies
+        crate::verify::class_options(g.0[i]@,o.register[i],crate::verify::codes(o.constants[i].view()),u[i]).contains(l.classes[i])
+            && l.registers[i] == crate::verify::register_class(g.0[i]@) by {}
     let theta = choose|theta: Subst| encoding::n_theta_ok(ndomains(u),theta)
         && inclusion::sat_by(theta,implementation::constraint_of(g@));
     crate::verify::lemma_constraint_sat(g@,theta);crate::verify::lemma_theta_allowed(u,theta);
     assert forall|c: history_syntax::syntax::Component| #![trigger implementation::letter_class(l,c)]
-        match implementation::letter_class(l,c) {
+        c.0 < v.len() implies match implementation::letter_class(l,c) {
             None => encoding::n_domain(ndomains(u),c) is None,
             Some(implementation::ClassView::Register) => true,
             Some(implementation::ClassView::Constant(code)) => v[crate::verify::component_index(c) as int].contains(code)
@@ -1687,6 +1614,31 @@ pub(crate) proof fn lemma_numeric_letter(g: crate::constraint::Constraint,o: cra
         let r = implementation::register_of(g@,c);
         let constants = crate::verify::codes(o.constants[k].view());
         let names = crate::verify::named_codes(r,o.register[k],constants,crate::verify::domain_view(u[k]));
+        assert(0 <= k < g@.len() && k < u@.len());
+        assert(r == g.0[k]@ && implementation::letter_class(l,c) == l.classes[k]);
+        assert(l.registers[k] == crate::verify::register_class(g.0[k]@));
+        assert(crate::verify::class_options(g.0[k]@,o.register[k],crate::verify::codes(o.constants[k].view()),u[k]).contains(l.classes[k]));
+        assert(crate::verify::class_options(r,o.register[k],constants,u[k]).contains(implementation::letter_class(l,c)));
+        assert(register_in_vocabulary(r,v[k]));
+        assert(constants.subset_of(v[k]));
+        assert(crate::verify::register_sat(r,theta[k]));
+        assert(crate::verify::register_allowed(crate::verify::domain_view(u[k]),theta[k]));
+        assert forall|code: nat| names.contains(code) implies v[k].contains(code) by {
+            match r {
+                implementation::RegisterView::Equals(value) => {},
+                implementation::RegisterView::Differs(_) => {},
+            }
+        }
+        if let Some(ids) = u[k] {
+            assert forall|code: nat| names.contains(code) implies crate::verify::codes((*ids)@).contains(code) by {
+                match r {
+                    implementation::RegisterView::Equals(value) => {
+                        assert(theta[k] == value);
+                    },
+                    implementation::RegisterView::Differs(_) => {},
+                }
+            }
+        }
         crate::verify::lemma_class_options_members(r,o.register[k],constants,u[k],implementation::letter_class(l,c));
         match implementation::letter_class(l,c) {
             None => {},Some(implementation::ClassView::Register) => {},
@@ -1694,8 +1646,13 @@ pub(crate) proof fn lemma_numeric_letter(g: crate::constraint::Constraint,o: cra
                 if let Some(ids) = u[k] {
                     crate::verify::lemma_first_other((*ids)@,names);
                     if !names.contains(code) {
+                        assert(crate::verify::first_other((*ids)@,names) matches Some(w) && w as nat == code);
+                        assert(crate::verify::first_other_index((*ids)@,names) is Some);
                         let j = crate::verify::first_other_index((*ids)@,names)->Some_0;
+                        assert(0 <= j < (*ids)@.len());
+                        assert((*ids)@[j] as nat == code);
                         assert((*ids)@.to_set().contains((*ids)@[j]));
+                        assert(crate::verify::codes((*ids)@).contains(code));
                         assert(domain_values(u[k]).contains(code));
                     }
                 }
@@ -1707,7 +1664,7 @@ pub(crate) proof fn lemma_numeric_letter(g: crate::constraint::Constraint,o: cra
         }
     }
     assert forall|c: history_syntax::syntax::Component| #![trigger implementation::letter_register(l,c)]
-        match implementation::letter_register(l,c) {
+        c.0 < v.len() implies match implementation::letter_register(l,c) {
             implementation::ClassView::Constant(code) => v[crate::verify::component_index(c) as int].contains(code),
             implementation::ClassView::Register => true,
         } by {
@@ -1722,21 +1679,30 @@ pub(crate) proof fn lemma_numeric_letter(g: crate::constraint::Constraint,o: cra
         let a = choose|a: Atom| atoms.to_set().contains(a) && a@ == p;
         let i = choose|i: int| 0 <= i < atoms.len() && atoms[i] == a;
     }
+    assert forall|p: model::Primitive| atom_set(atoms).contains(p) implies match p {
+        model::Primitive::Eq(c,model::GTerm::Constant(_)) => c.0 < v.len(),
+        model::Primitive::Eq(c,model::GTerm::Variable(r)) => c.0 < v.len() && r.0 < v.len(),
+    } by {
+        let a = choose|a: Atom| atoms.to_set().contains(a) && a@ == p;
+        let i = choose|i: int| 0 <= i < atoms.len() && atoms[i] == a;
+    }
 }
 
 pub(crate) proof fn lemma_generated_edge(g: crate::constraint::Constraint,atoms: Seq<Atom>,u: Universes,
-    groups: Seq<(crate::constraint::Constraint,alloc::vec::Vec<Letter>)>,v: [Set<nat>;3],b: int,j: int)
-    requires crate::verify::steps_result(g,atoms,u,groups),atoms_wf(atoms),atoms_in_vocabulary(atoms,v),
+    groups: Seq<(crate::constraint::Constraint,alloc::vec::Vec<Letter>)>,v: Seq<Set<nat>>,b: int,j: int)
+    requires crate::verify::steps_result(g,atoms,u,groups),atoms_wf(atoms,u@.len()),atoms_in_vocabulary(atoms,v),
         constraint_in_vocabulary(g@,v),0 <= b < groups.len(),0 <= j < groups[b].1@.len(),
         inclusion::satisfiable(ndomains(u),implementation::constraint_of(g@)),
-        forall|k: int| 0 <= k < 3 ==> domain_values(u[k]).subset_of(v[k]),
+        forall|k: int| 0 <= k < v.len() ==> domain_values(u[k]).subset_of(v[k]),
     ensures syntactic_entails(groups[b].0@,g@),
         crate::verify::reconstruction::letter_coherent(groups[b].0@,groups[b].1@[j]@,atom_set(atoms)),
         letter_numeric_codes(v,u,groups[b].1@[j]@,atom_set(atoms)),
 {
     let o = choose|o: crate::constraint::Operands| crate::verify::operands_of(o,atoms)
+        && crate::verify::shape_wf(g,o,u)
         && crate::verify::constraint_views(crate::verify::group_constraints(groups)) == crate::verify::split_views(g,o,u)
         && forall|b: int| 0 <= b < groups.len() ==> crate::verify::constraint_wf(groups[b].0)
+            && groups[b].0@.len() == u@.len()
             && crate::verify::letter_views(groups[b].1@) == crate::verify::letters_views(groups[b].0,o,u);
     crate::verify::lemma_constraint_view_at(crate::verify::group_constraints(groups),b);
     crate::verify::lemma_group_constraints(groups);
@@ -1784,11 +1750,12 @@ pub(crate) proof fn lemma_chain_ready(s: Search<'_>,j: int,final_constraint: imp
 }
 
 #[verifier::opaque]
-pub(crate) open spec fn refutation_ready(outcome: crate::search::SearchOutcome,u: Universes,v: [Set<nat>;3]) -> bool {
+pub(crate) open spec fn refutation_ready(outcome: crate::search::SearchOutcome,u: Universes,v: Seq<Set<nat>>) -> bool {
     refutation_packed(outcome) && match outcome {
         crate::search::SearchOutcome::Holds => true,
         crate::search::SearchOutcome::Refuted(r) => crate::verify::constraint_wf(r.constraint)
             && constraint_in_vocabulary(r.constraint@,v)
+            && r.constraint@.len() == u@.len()
             && (forall|k: int| #![trigger r.letters@[k]] 0 <= k < r.letters@.len() ==>
                 crate::verify::reconstruction::letter_coherent(r.constraint@,r.letters@[k]@,r.alphabets@[k])
                     && letter_numeric_codes(v,u,r.letters@[k]@,r.alphabets@[k])),
@@ -1883,7 +1850,7 @@ pub(crate) proof fn lemma_expansion_begin(a: Search<'_>,b: Search<'_>,index: nat
     }
 }
 
-pub(crate) proof fn lemma_running_limits(s: Search<'_>,n: nat,start: paper::Item,v: [Set<nat>;3])
+pub(crate) proof fn lemma_running_limits(s: Search<'_>,n: nat,start: paper::Item,v: Seq<Set<nat>>)
     requires running(s,n,start,v),
     ensures n <= s.items@.len(),
 {
@@ -1902,7 +1869,7 @@ pub(crate) open spec fn items_bound_ok(u: Universes,start: paper::Item,f: Set<pa
 /// The queue of a running search is a paper trace, whose nodes are distinct reachable items, so
 /// it never exceeds the finite item bound (Lemma Finitely many residuals, `lem:finite-states`, lifted to items) for the implementation's model.
 pub(crate) proof fn lemma_running_items_bound(s: Search<'_>,n: nat,start: paper::Item,
-    v: [Set<nat>;3],f: Set<paper::Item>)
+    v: Seq<Set<nat>>,f: Set<paper::Item>)
     requires running(s,n,start,v),items_bound_ok(*s.universes,start,f),
     ensures s.items@.len() <= f.len(),
 {
@@ -1921,7 +1888,7 @@ pub(crate) proof fn lemma_trace_refuted(s: Search<'_>,index: nat,outcome: crate:
         paper::nullable_state(trace(s,index).nodes[index as int].item.state),
         outcome matches crate::search::SearchOutcome::Refuted(r)
             && r.constraint@ == s.constraints@[s.items@[index as int].constraint as int]
-            && r.letters@ == letter_chain(s.items@,index as int)
+            && r.letters@.map_values(|l: Letter| l@) == letter_chain(s.items@,index as int).map_values(|l: Letter| l@)
             && r.alphabets@ == alphabet_chain(s.items@,s.alphabets@,index as int)
             && r.assignments@ == chain_assignments(r.letters@,r.alphabets@),
     ensures paper::trace_outcome(trace(s,index),outcome_view(outcome)),
@@ -1929,6 +1896,9 @@ pub(crate) proof fn lemma_trace_refuted(s: Search<'_>,index: nat,outcome: crate:
     hide(paper::chain);
     lemma_chain_correspondence(facade::graph(*s.language),s.constraints@,s.items@,s.alphabets@,
         index as int,depth(s.items@,index as int));
+    if let crate::search::SearchOutcome::Refuted(r) = outcome {
+        lemma_chain_assignments_views(r.letters@,letter_chain(s.items@,index as int),r.alphabets@);
+    }
 }
 
 pub(crate) proof fn lemma_parent_archive_frame(archive: Map<paper::Item,Set<paper::Case>>,
@@ -2002,6 +1972,8 @@ pub(crate) proof fn lemma_state_evidence(s: Search<'_>)
     requires state_wf(s),
     ensures facade::language_wf(*old(s.language)),table_wf(s.constraints),parents_wf(s.items@),
         ids_valid(facade::graph(*old(s.language)),s.constraints@,s.items@),
+        1 <= s.universes@.len() <= history_syntax::MAX_ARITY,
+        forall|i: int| 0 <= i < s.constraints@.len() ==> s.constraints@[i].len() == s.universes@.len(),
 {
     hide(crate::verify::table_wf);hide(parents_wf);hide(ids_valid);hide(seen_certified);
     hide(crate::verify::simulation_exec::memo_wf);hide(crate::verify::prune_exec::antichain_wf);
@@ -2013,7 +1985,7 @@ pub(crate) proof fn lemma_queue_frame(a: Search<'_>,b: Search<'_>)
     ensures queue_order(b),
 { hide(letter_chain);reveal(queue_order); }
 
-pub(crate) proof fn lemma_running_evidence(s: Search<'_>,n: nat,start: paper::Item,v: [Set<nat>;3])
+pub(crate) proof fn lemma_running_evidence(s: Search<'_>,n: nat,start: paper::Item,v: Seq<Set<nat>>)
     requires running(s,n,start,v),
     ensures state_wf(s),queue_order(s),vocabulary_wf(s,v),edges_wf(s),
         paper::trace_steps_ok(ndomains(*s.universes),archive_cases(s.archive@),trace(s,n)),
@@ -2025,8 +1997,8 @@ pub(crate) proof fn lemma_running_evidence(s: Search<'_>,n: nat,start: paper::It
     reveal(running);
 }
 
-pub(crate) proof fn lemma_queue_atoms_vocabulary(s: Search<'_>,index: int,atoms: Seq<Atom>,v: [Set<nat>;3])
-    requires vocabulary_wf(s,v),0 <= index < s.items@.len(),atoms_wf(atoms),
+pub(crate) proof fn lemma_queue_atoms_vocabulary(s: Search<'_>,index: int,atoms: Seq<Atom>,v: Seq<Set<nat>>)
+    requires vocabulary_wf(s,v),0 <= index < s.items@.len(),atoms_wf(atoms,v.len()),
         atom_set(atoms).subset_of(facade::residual_primitives(*s.language,s.items@[index].residual)),
     ensures atoms_in_vocabulary(atoms,v),
 {
@@ -2034,11 +2006,13 @@ pub(crate) proof fn lemma_queue_atoms_vocabulary(s: Search<'_>,index: int,atoms:
     reveal(facade::residual_codes);reveal(facade::residual_primitives);
     let q = s.items@[index].residual;
     let l = *s.language;
-    assert forall|i: int| #![trigger atoms[i]] 0 <= i < atoms.len() implies atoms[i].component < 3
+    assert forall|i: int| #![trigger atoms[i]] 0 <= i < atoms.len() implies atoms[i].component < v.len()
         && match atoms[i].operand { crate::constraint::Operand::Constant(code) =>
             v[atoms[i].component as int].contains(code as nat),_ => true } by {
+        assert(atoms.to_set().contains(atoms[i]));
+        assert(atom_set(atoms).contains(atoms[i]@));
         if let crate::constraint::Operand::Constant(code) = atoms[i].operand {
-            let c = crate::verify::component_of(atoms[i].component);
+            let c = crate::verify::component_at(atoms[i].component);
             assert(atoms.to_set().contains(atoms[i]));
             assert(atom_set(atoms).contains(atoms[i]@));
             facade::lemma_primitive_codes_contains(facade::residual_primitives(l,q),c,code as nat);
@@ -2048,7 +2022,7 @@ pub(crate) proof fn lemma_queue_atoms_vocabulary(s: Search<'_>,index: int,atoms:
     }
 }
 
-pub(crate) proof fn lemma_running_language_frame(a: Search<'_>,b: Search<'_>,n: nat,start: paper::Item,v: [Set<nat>;3])
+pub(crate) proof fn lemma_running_language_frame(a: Search<'_>,b: Search<'_>,n: nat,start: paper::Item,v: Seq<Set<nat>>)
     requires running(a,n,start,v),*a.language == *b.language,
         a.constraints == b.constraints,a.items@ == b.items@,a.alphabets@ == b.alphabets@,
         a.archive@ == b.archive@,a.start@ == b.start@,a.vocabulary@ == b.vocabulary@,*a.universes == *b.universes,

@@ -444,6 +444,8 @@ impl Antichain {
 
     #[verus_spec(result => requires facade::language_wf(*old(language)),table_wf(*constraints),
         constraint < constraints@.len(),entries_valid(*self,facade::graph(*old(language)),*constraints),
+        forall|i: int| 0 <= i < constraints@.len()
+            ==> constraints@[i].len() == constraints@[constraint as int].len(),
         decomposition_valid(facade::graph(*old(language)),*state),parts_key_obligations(),
         memo_wf(*old(simulation),*old(language)),memo_obligations(),
         ensures *final(language) == *old(language),memo_wf(*final(simulation),*final(language)),
@@ -478,6 +480,7 @@ impl Antichain {
                 mask <= limit, parts.view().len() <= ENUMERATED_PARTS,
                 constraint < constraints@.len(),parts.view() == state.parts.view(),
                 c@ == constraints@[constraint as int], crate::verify::constraint_wf(*c),
+                forall|i: int| 0 <= i < constraints@.len() ==> constraints@[i].len() == c@.len(),
                 found ==> raw_subsumes(*self,facade::graph(*language),*constraints,c@,*state),
                 decreases limit-mask))]
             while mask < limit && !found {
@@ -521,6 +524,7 @@ impl Antichain {
 
     #[verus_spec(result => requires facade::language_wf(*old(language)),table_wf(*constraints),
         crate::verify::constraint_wf(*constraint),entries_valid(*self,facade::graph(*old(language)),*constraints),
+        forall|i: int| 0 <= i < constraints@.len() ==> constraints@[i].len() == constraint@.len(),
         decomposition_valid(facade::graph(*old(language)),*state),parts_key_obligations(),
         parts.view().to_set().subset_of(state.parts.view().to_set()),valid(facade::graph(*old(language)),parts.view()),
         memo_wf(*old(simulation),*old(language)),memo_obligations(),
@@ -548,6 +552,7 @@ impl Antichain {
         #[cfg_attr(verus_keep_ghost,verus_spec(invariant
             index <= entries@.len(),*language == *old(language),facade::language_wf(*language),
             table_wf(*constraints),crate::verify::constraint_wf(*constraint),
+            forall|i: int| 0 <= i < constraints@.len() ==> constraints@[i].len() == constraint@.len(),
             entries_valid(*self,facade::graph(*language),*constraints),
             decomposition_valid(facade::graph(*language),*state),parts_key_obligations(),
             parts.view().to_set().subset_of(state.parts.view().to_set()),key.view() == parts.view(),

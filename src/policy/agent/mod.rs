@@ -26,18 +26,17 @@
 //! data and logs [`AgentAction::Receive`] when data moves; [`AgentRule::no_contact_after_read`]
 //! treats receiving the class like reading it.
 
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::fmt::{self, Debug, Display};
 use std::hash::Hash;
 
+use history_semantics::TraceRule;
 use history_semantics::policy::{action_is, last_state_change, principal_is};
-use history_semantics::{PolicyDecision, TracePolicy, TraceRule};
-use history_store::History;
 use history_syntax::{
-    AtomPattern, Comparison, ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Event, Head, N3, RegexExpr, Rule,
+    RuleMode, TestExpr,
 };
-use junco_core::{CompileError, HistoryError};
+
+use super::rules::{RuleDenial, RulePolicy, RuleSet};
 
 // These names match the bindings used by the shared policy atom helpers.
 const PRINCIPAL_VAR: &str = "p";
@@ -109,25 +108,39 @@ impl<P, C> AgentEvent<P, C> {
     }
 }
 
+/// Tagged coordinates of an [`AgentEvent`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AgentComponent<P, C> {
+    /// Coordinate 0: the principal.
+    Principal(P),
+    /// Coordinate 1: the observed action.
+    Action(AgentAction),
+    /// Coordinate 2: the resource class.
+    Class(C),
+}
+
 impl<P, C> Event for AgentEvent<P, C>
 where
     P: Copy + Debug + Eq + Hash,
     C: Copy + Debug + Eq + Hash,
 {
-    type Principal = P;
-    type Action = AgentAction;
-    type Resource = C;
+    type Component = AgentComponent<P, C>;
+    type Arity = N3;
 
-    fn principal(self) -> P {
-        self.principal
+    fn component(self, index: usize) -> Self::Component {
+        match index {
+            0 => AgentComponent::Principal(self.principal),
+            1 => AgentComponent::Action(self.action),
+            _ => AgentComponent::Class(self.resource),
+        }
     }
 
-    fn action(self) -> AgentAction {
-        self.action
-    }
-
-    fn resource(self) -> C {
-        self.resource
+    fn coordinate(component: Self::Component) -> usize {
+        match component {
+            AgentComponent::Principal(_) => 0,
+            AgentComponent::Action(_) => 1,
+            AgentComponent::Class(_) => 2,
+        }
     }
 }
 
@@ -141,212 +154,14 @@ impl<P: Display, C: Display> Display for AgentEvent<P, C> {
     }
 }
 
-/// One refused candidate, with the violated rule's explanation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentDenial<P, C> {
-    /// The refused candidate.
-    pub event: AgentEvent<P, C>,
-    /// The precondition it failed.
-    pub failed_precondition: String,
-    /// Ways to make it legal.
-    pub allowed_fixes: Vec<String>,
-}
+/// One refused classified observation, with the violated rule's explanation.
+pub type AgentDenial<P, C> = RuleDenial<AgentEvent<P, C>>;
 
-impl<P: Display, C: Display> Display for AgentDenial<P, C> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.event, self.failed_precondition)?;
-        if !self.allowed_fixes.is_empty() {
-            write!(formatter, "\n    fix: {}", self.allowed_fixes.join("; "))?;
-        }
-        Ok(())
-    }
-}
+/// Ordered rules over classified observations, with optional auditing.
+pub type AgentPolicy<P, C> = RulePolicy<AgentEvent<P, C>>;
 
-/// Rules over classified observations, and how their verdicts are applied.
-pub struct AgentPolicy<P: Label, C: Label> {
-    rules: Vec<AgentRule<P, C>>,
-    audit: bool,
-}
-
-impl<P: Label, C: Label> Default for AgentPolicy<P, C> {
-    fn default() -> Self {
-        Self {
-            rules: Vec::new(),
-            audit: false,
-        }
-    }
-}
-
-impl<P: Label, C: Label> Debug for AgentPolicy<P, C> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AgentPolicy")
-            .field("rules", &self.rules)
-            .field("audit", &self.audit)
-            .finish()
-    }
-}
-
-impl<P: Label, C: Label> AgentPolicy<P, C> {
-    /// A policy with no rules: it denies nothing.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Appends a rule or a constructor's rule set. Rules apply in order and the first violation
-    /// is reported.
-    #[must_use]
-    pub fn rule(mut self, rules: impl Into<AgentRuleSet<P, C>>) -> Self {
-        self.rules.extend(rules.into().rules);
-        self
-    }
-
-    /// Reports every decision but never denies: a would-be denial is recorded as granted. For
-    /// measuring a policy's false denials on unmodified runs.
-    #[must_use]
-    pub const fn audit(mut self) -> Self {
-        self.audit = true;
-        self
-    }
-
-    /// The rules whose head can match `event`; no other rule can judge it.
-    fn firing(&self, event: &AgentEvent<P, C>) -> Vec<TraceRule<AgentEvent<P, C>>> {
-        self.rules
-            .iter()
-            .filter(|rule| could_fire(&rule.0.rule.head, event))
-            .map(|rule| rule.0.clone())
-            .collect()
-    }
-
-    /// Decides `batch` in order, appending grants (and audit denials) to `history`.
-    /// Each candidate sees the events appended before it, including earlier calls to `check`.
-    /// Every decision is passed to `observe`; enforcing denials are not appended.
-    ///
-    /// A rule that does not compile denies every candidate it could judge.
-    ///
-    /// # Errors
-    /// The denials, in batch order. History failures are returned even in audit mode.
-    pub fn check(
-        &self,
-        history: &mut History<AgentEvent<P, C>>,
-        batch: &[AgentEvent<P, C>],
-        mut observe: impl FnMut(&AgentEvent<P, C>, &PolicyDecision),
-    ) -> Result<(), Vec<AgentDenial<P, C>>> {
-        // Each distinct candidate compiles only the rules that can judge it, once per batch.
-        let mut judges = HashMap::new();
-        let mut denials = Vec::new();
-        for event in batch {
-            let judge = match judges.entry(*event) {
-                Entry::Occupied(judge) => judge.into_mut(),
-                Entry::Vacant(slot) => {
-                    let firing = self.firing(event);
-                    slot.insert((!firing.is_empty()).then(|| {
-                        TracePolicy::new(history.store().clone(), firing)
-                            .map_err(|error| uncompiled(event, &error))
-                    }))
-                }
-            };
-            let mut decision = match judge {
-                None => PolicyDecision::Grant,
-                Some(Ok(judge)) => judge.decide(history, event).unwrap_or_else(history_failure),
-                Some(Err(denial)) => PolicyDecision::Deny {
-                    failed_precondition: denial.failed_precondition.clone(),
-                    allowed_fixes: denial.allowed_fixes.clone(),
-                },
-            };
-            let mut append_failed = false;
-            if (matches!(decision, PolicyDecision::Grant) || self.audit)
-                && let Err(error) = history.push(*event)
-            {
-                decision = history_failure(error);
-                append_failed = true;
-            }
-            observe(event, &decision);
-            if let PolicyDecision::Deny {
-                failed_precondition,
-                allowed_fixes,
-            } = decision
-                && (!self.audit || append_failed)
-            {
-                denials.push(AgentDenial {
-                    event: *event,
-                    failed_precondition,
-                    allowed_fixes,
-                });
-            }
-        }
-        if denials.is_empty() {
-            Ok(())
-        } else {
-            Err(denials)
-        }
-    }
-
-    /// Decides `candidate` alone against `history`, for example while the observation that
-    /// produced it is still in progress. Returns the denial, if any; an auditing policy's denial
-    /// is the caller's to report, not to enforce.
-    pub fn decide(
-        &self,
-        history: &History<AgentEvent<P, C>>,
-        candidate: &AgentEvent<P, C>,
-    ) -> Option<AgentDenial<P, C>> {
-        let rules = self.firing(candidate);
-        if rules.is_empty() {
-            return None;
-        }
-        let mut judge = match TracePolicy::new(history.store().clone(), rules) {
-            Ok(judge) => judge,
-            Err(error) => return Some(uncompiled(candidate, &error)),
-        };
-        match judge
-            .decide(history, candidate)
-            .unwrap_or_else(history_failure)
-        {
-            PolicyDecision::Grant => None,
-            PolicyDecision::Deny {
-                failed_precondition,
-                allowed_fixes,
-            } => Some(AgentDenial {
-                event: *candidate,
-                failed_precondition,
-                allowed_fixes,
-            }),
-        }
-    }
-}
-
-fn history_failure(error: HistoryError) -> PolicyDecision {
-    PolicyDecision::Deny {
-        failed_precondition: format!("agent policy failed: {error}"),
-        allowed_fixes: Vec::new(),
-    }
-}
-
-/// The denial of `event` when a rule that could judge it does not compile.
-fn uncompiled<P, C>(event: &AgentEvent<P, C>, error: &CompileError) -> AgentDenial<P, C>
-where
-    P: Copy,
-    C: Copy,
-{
-    AgentDenial {
-        event: *event,
-        failed_precondition: format!("agent policy does not compile: {error}"),
-        allowed_fixes: Vec::new(),
-    }
-}
-
-/// Whether `head` can match `event`: every constant component equals the event's.
-fn could_fire<P: Label, C: Label>(head: &Head<AgentEvent<P, C>>, event: &AgentEvent<P, C>) -> bool {
-    fn admits<T: PartialEq>(pattern: &ComponentPattern<T>, value: &T) -> bool {
-        match pattern {
-            ComponentPattern::Constant(constant) => constant == value,
-            ComponentPattern::Variable(_) => true,
-        }
-    }
-    admits(&head.principal, &event.principal)
-        && admits(&head.action, &event.action)
-        && admits(&head.resource, &event.resource)
-}
+/// The ordered rules produced by an [`AgentRule`] constructor.
+pub type AgentRuleSet<P, C> = RuleSet<AgentEvent<P, C>>;
 
 /// One rule of an [`AgentPolicy`]: a past-regex over classified observations, with the diagnostic
 /// its violation renders.
@@ -374,7 +189,10 @@ type Regex<P, C> = RegexExpr<AgentEvent<P, C>>;
 fn class_is<P: Label, C: Label>(class: C, comparison: Comparison) -> Test<P, C> {
     TestExpr::atom(
         comparison,
-        AtomPattern::Resource(ComponentPattern::constant(class)),
+        AtomPattern::new(
+            Component(2),
+            ComponentPattern::constant(AgentComponent::Class(class)),
+        ),
     )
 }
 
@@ -386,7 +204,7 @@ fn changed_by_p<P: Label, C: Label>(class: C) -> Test<P, C> {
         TestExpr::or(
             CHANGES
                 .into_iter()
-                .map(|action| action_is(action, Comparison::Eq)),
+                .map(|action| action_is(AgentComponent::Action(action), Comparison::Eq)),
         ),
     ])
 }
@@ -394,7 +212,10 @@ fn changed_by_p<P: Label, C: Label>(class: C) -> Test<P, C> {
 /// Any event that is not an approval of `label`.
 fn not_approval<P: Label, C: Label>(label: C) -> Test<P, C> {
     TestExpr::or([
-        action_is(AgentAction::Approve, Comparison::Neq),
+        action_is(
+            AgentComponent::Action(AgentAction::Approve),
+            Comparison::Neq,
+        ),
         class_is(label, Comparison::Neq),
     ])
 }
@@ -408,7 +229,10 @@ fn since_unapproved<P: Label, C: Label>(trigger: Test<P, C>, label: C) -> Regex<
 fn not_declassified<P: Label, C: Label>(class: C) -> Test<P, C> {
     TestExpr::or([
         principal_is(Comparison::Neq),
-        action_is(AgentAction::Declassify, Comparison::Neq),
+        action_is(
+            AgentComponent::Action(AgentAction::Declassify),
+            Comparison::Neq,
+        ),
         class_is(class, Comparison::Neq),
     ])
 }
@@ -432,11 +256,11 @@ fn forbid<P: Label, C: Label>(
 ) -> Rule<AgentEvent<P, C>> {
     Rule::new(
         RuleMode::Forbid,
-        Head::new(
+        Head::new([
             ComponentPattern::variable(PRINCIPAL_VAR),
-            ComponentPattern::constant(action),
-            ComponentPattern::constant(class),
-        ),
+            ComponentPattern::constant(AgentComponent::Action(action)),
+            ComponentPattern::constant(AgentComponent::Class(class)),
+        ]),
         tail,
     )
 }
@@ -461,12 +285,7 @@ impl<P: Label, C: Label> AgentRule<P, C> {
         AgentRuleSet::new(
             actions
                 .into_iter()
-                .map(|action| {
-                    Self(TraceRule::new(
-                        forbid(action, class, tail.clone()),
-                        render.clone(),
-                    ))
-                })
+                .map(|action| TraceRule::new(forbid(action, class, tail.clone()), render.clone()))
                 .collect(),
         )
     }
@@ -478,8 +297,8 @@ impl<P: Label, C: Label> AgentRule<P, C> {
         let read = TestExpr::and([
             principal_is(Comparison::Eq),
             TestExpr::or([
-                action_is(AgentAction::Read, Comparison::Eq),
-                action_is(AgentAction::Receive, Comparison::Eq),
+                action_is(AgentComponent::Action(AgentAction::Read), Comparison::Eq),
+                action_is(AgentComponent::Action(AgentAction::Receive), Comparison::Eq),
             ]),
             class_is(secret, Comparison::Eq),
         ]);
@@ -488,20 +307,18 @@ impl<P: Label, C: Label> AgentRule<P, C> {
             peers
                 .iter()
                 .map(|&peer| {
-                    Self(TraceRule::new(
-                        forbid(AgentAction::Contact, peer, tail.clone()),
-                        move |event: &AgentEvent<P, C>| {
-                            (
-                                format!(
-                                    "{} contacted an {peer} peer after reading {secret} data",
-                                    event.principal
-                                ),
-                                vec![format!(
-                                    "contact {peer} peers only from a principal that has not read {secret}"
-                                )],
-                            )
-                        },
-                    ))
+                    TraceRule::new(forbid(AgentAction::Contact, peer, tail.clone()),
+                    move |event: &AgentEvent<P, C>| {
+                        (
+                            format!(
+                                "{} contacted an {peer} peer after reading {secret} data",
+                                event.principal
+                            ),
+                            vec![format!(
+                                "contact {peer} peers only from a principal that has not read {secret}"
+                            )],
+                        )
+                    },)
                 })
                 .collect(),
         )
@@ -542,7 +359,7 @@ impl<P: Label, C: Label> AgentRule<P, C> {
     /// operator approval of `class`.
     pub fn requires_approval(class: C) -> AgentRuleSet<P, C> {
         let approval = TestExpr::and([
-            action_is(AgentAction::Approve, Comparison::Eq),
+            action_is(AgentComponent::Action(AgentAction::Approve), Comparison::Eq),
             class_is(class, Comparison::Eq),
         ]);
         let unapproved = RegexExpr::complement(ever(approval));
@@ -578,7 +395,7 @@ impl<P: Label, C: Label> AgentRule<P, C> {
     pub fn tainted_by_run(programs: &[C], protected: &[C]) -> AgentRuleSet<P, C> {
         let ran = TestExpr::and([
             principal_is(Comparison::Eq),
-            action_is(AgentAction::Run, Comparison::Eq),
+            action_is(AgentComponent::Action(AgentAction::Run), Comparison::Eq),
             TestExpr::or(
                 programs
                     .iter()
@@ -633,7 +450,7 @@ impl<P: Label, C: Label> AgentRule<P, C> {
     pub fn deletion_budget(limit: usize, approval: C) -> AgentRuleSet<P, C> {
         let deletion = TestExpr::and([
             principal_is(Comparison::Eq),
-            action_is(AgentAction::Remove, Comparison::Eq),
+            action_is(AgentComponent::Action(AgentAction::Remove), Comparison::Eq),
         ]);
         let quiet = RegexExpr::star(RegexExpr::test(not_approval(approval)));
         let mut tail = vec![RegexExpr::all()];
@@ -643,14 +460,14 @@ impl<P: Label, C: Label> AgentRule<P, C> {
         }
         let rule = Rule::new(
             RuleMode::Forbid,
-            Head::new(
+            Head::new([
                 ComponentPattern::variable(PRINCIPAL_VAR),
-                ComponentPattern::constant(AgentAction::Remove),
+                ComponentPattern::constant(AgentComponent::Action(AgentAction::Remove)),
                 ComponentPattern::variable(RESOURCE_VAR),
-            ),
+            ]),
             RegexExpr::concat(tail),
         );
-        AgentRuleSet::new(vec![Self(TraceRule::new(
+        AgentRuleSet::new(vec![TraceRule::new(
             rule,
             move |event: &AgentEvent<P, C>| {
                 (
@@ -661,33 +478,13 @@ impl<P: Label, C: Label> AgentRule<P, C> {
                     vec![format!("an operator approves {approval}")],
                 )
             },
-        ))])
-    }
-}
-
-/// The rules one [`AgentRule`] constructor produces; [`AgentPolicy::rule`] adds them all.
-pub struct AgentRuleSet<P: Label, C: Label> {
-    rules: Vec<AgentRule<P, C>>,
-}
-
-impl<P: Label, C: Label> AgentRuleSet<P, C> {
-    const fn new(rules: Vec<AgentRule<P, C>>) -> Self {
-        Self { rules }
-    }
-}
-
-impl<P: Label, C: Label> Debug for AgentRuleSet<P, C> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AgentRuleSet")
-            .field("rules", &self.rules)
-            .finish()
+        )])
     }
 }
 
 impl<P: Label, C: Label> From<AgentRule<P, C>> for AgentRuleSet<P, C> {
     fn from(rule: AgentRule<P, C>) -> Self {
-        Self::new(vec![rule])
+        Self::new(vec![rule.0])
     }
 }
 

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use history_semantics::{PolicyDecision, TracePolicy, TraceRule};
 use history_store::{History, Store};
 use history_syntax::{
-    AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
-use junco_policy::{Action, LockEvent};
+use junco_policy::{Action, LockComponent, LockEvent};
 
 type Event = LockEvent<&'static str, &'static str>;
 
@@ -14,25 +14,31 @@ fn taint() -> TraceRule<Event> {
     let read_secret = TestExpr::and([
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Principal(ComponentPattern::variable("p")),
+            AtomPattern::new(Component(0), ComponentPattern::variable("p")),
         ),
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Action(ComponentPattern::constant(Action::Read)),
+            AtomPattern::new(
+                Component(1),
+                ComponentPattern::constant(LockComponent::Action(Action::Read)),
+            ),
         ),
         TestExpr::atom(
             Comparison::Eq,
-            AtomPattern::Resource(ComponentPattern::constant("secret")),
+            AtomPattern::new(
+                Component(2),
+                ComponentPattern::constant(LockComponent::Resource("secret")),
+            ),
         ),
     ]);
     TraceRule::new(
         Rule::new(
             RuleMode::Forbid,
-            Head::new(
+            Head::new([
                 ComponentPattern::variable("p"),
-                ComponentPattern::constant(Action::Edit),
+                ComponentPattern::constant(LockComponent::Action(Action::Edit)),
                 ComponentPattern::variable("r"),
-            ),
+            ]),
             RegexExpr::concat([
                 RegexExpr::all(),
                 RegexExpr::test(read_secret),

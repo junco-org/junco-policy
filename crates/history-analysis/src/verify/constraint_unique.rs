@@ -19,7 +19,7 @@ pub(crate) open spec fn universe_distinct(universe: Universe) -> bool {
     match universe { None => true, Some(values) => (*values)@.no_duplicates() }
 }
 pub(crate) open spec fn universes_distinct(universes: Universes) -> bool {
-    universe_distinct(universes[0]) && universe_distinct(universes[1]) && universe_distinct(universes[2])
+    forall|i: int| 0 <= i < universes@.len() ==> universe_distinct(universes[i])
 }
 
 pub(crate) proof fn lemma_filter_distinct(values: Seq<u32>, p: spec_fn(u32) -> bool)
@@ -82,103 +82,231 @@ pub(crate) proof fn lemma_class_choices_distinct(c: ClassChoices)
     }
 }
 
-pub(crate) open spec fn row_position(n0: nat, n1: nat, n2: nat, n: int, p: (int, int, int)) -> bool {
-    0 <= p.0 < n0 && 0 <= p.1 < n1 && 0 <= p.2 < n2
-        && n == (p.0 * n1 + p.1) * n2 + p.2
+/// Prefix product; the last coordinate is the least-significant digit.
+pub(crate) open spec fn product_size(sizes: Seq<nat>) -> nat
+    decreases sizes.len(),
+{
+    if sizes.len() == 0 { 1 } else { product_size(sizes.drop_last()) * sizes.last() }
 }
 
-pub(crate) open spec fn constraint_position(axes: [Seq<RegisterConstraint>; 3], g: implementation::ConstraintView, n: int) -> bool {
-    exists|p: (int, int, int)| row_position(axes[0].len(), axes[1].len(), axes[2].len(), n, p)
-        && g == choice_view(axes, p.0, p.1, p.2)
+pub(crate) open spec fn row_valid(sizes: Seq<nat>, p: Seq<usize>) -> bool {
+    p.len() == sizes.len() && forall|i: int| 0 <= i < sizes.len() ==> p[i] < sizes[i]
 }
 
-pub(crate) open spec fn letter_position(axes: [Seq<Option<Class>>; 3], registers: [Class; 3], l: implementation::LetterView, n: int) -> bool {
-    exists|p: (int, int, int)| row_position(axes[0].len(), axes[1].len(), axes[2].len(), n, p)
-        && l == letter_choice_view(axes, registers, p.0, p.1, p.2)
+pub(crate) open spec fn row_rank(sizes: Seq<nat>, p: Seq<usize>) -> nat
+    decreases sizes.len(),
+{
+    if sizes.len() == 0 { 0 } else {
+        row_rank(sizes.drop_last(), p.drop_last()) * sizes.last() + p.last() as nat
+    }
 }
 
-pub(crate) open spec fn constraint_positions(axes: [Seq<RegisterConstraint>; 3], values: Seq<Constraint>) -> bool {
+pub(crate) open spec fn row_position(sizes: Seq<nat>, n: int, p: Seq<usize>) -> bool {
+    row_valid(sizes, p) && n == row_rank(sizes, p)
+}
+
+pub(crate) proof fn lemma_row_bound(sizes: Seq<nat>, p: Seq<usize>)
+    requires row_valid(sizes, p),
+    ensures row_rank(sizes, p) < product_size(sizes),
+    decreases sizes.len(),
+{
+    if sizes.len() > 0 {
+        lemma_row_bound(sizes.drop_last(), p.drop_last());
+        assert(row_rank(sizes, p) < product_size(sizes)) by(nonlinear_arith)
+            requires row_rank(sizes.drop_last(), p.drop_last()) < product_size(sizes.drop_last()),
+                p.last() < sizes.last();
+    }
+}
+
+pub(crate) proof fn lemma_row_zero(sizes: Seq<nat>, p: Seq<usize>)
+    requires p.len() == sizes.len(), forall|i: int| 0 <= i < p.len() ==> p[i] == 0,
+    ensures row_rank(sizes, p) == 0,
+    decreases sizes.len(),
+{
+if sizes.len() > 0 {
+    lemma_row_zero(sizes.drop_last(), p.drop_last());
+    assert(p.last() == p[p.len() as int - 1]);
+    assert(p.last() == 0);
+    assert(row_rank(sizes, p) == 0 * sizes.last() + 0);
+}
+}
+
+pub(crate) proof fn lemma_product_positive(sizes: Seq<nat>)
+    ensures (product_size(sizes) > 0) == (forall|i: int| 0 <= i < sizes.len() ==> sizes[i] > 0),
+    decreases sizes.len(),
+{
+    if sizes.len() > 0 {
+let prior = sizes.drop_last();
+let prefix_product = product_size(prior);
+let last = sizes.last();
+lemma_product_positive(prior);
+assert(product_size(sizes) == prefix_product * last);
+assert((prefix_product * last > 0) == (prefix_product > 0 && last > 0)) by(nonlinear_arith);
+assert(last == sizes[sizes.len() as int - 1]);
+if product_size(sizes) > 0 {
+    assert forall|i: int| 0 <= i < sizes.len() implies sizes[i] > 0 by {
+        if i < prior.len() { assert(prior[i] == sizes[i]); }
+        else { assert(i == sizes.len() - 1); }
+    }
+} else if forall|i: int| 0 <= i < sizes.len() ==> sizes[i] > 0 {
+    assert forall|i: int| 0 <= i < prior.len() implies prior[i] > 0 by {
+        assert(prior[i] == sizes[i]);
+    }
+    assert(prefix_product > 0);
+}
+    }
+}
+
+pub(crate) proof fn lemma_row_max(sizes: Seq<nat>, p: Seq<usize>)
+    requires row_valid(sizes, p), forall|i: int| 0 <= i < sizes.len() ==> p[i] + 1 == sizes[i],
+    ensures row_rank(sizes, p) + 1 == product_size(sizes),
+    decreases sizes.len(),
+{
+    if sizes.len() > 0 {
+        lemma_row_max(sizes.drop_last(), p.drop_last());
+        assert(row_rank(sizes, p) + 1 == product_size(sizes)) by(nonlinear_arith)
+            requires row_rank(sizes.drop_last(), p.drop_last()) + 1 == product_size(sizes.drop_last()),
+                p.last() + 1 == sizes.last();
+    }
+}
+
+pub(crate) proof fn lemma_row_rank_injective(sizes: Seq<nat>, p: Seq<usize>, q: Seq<usize>)
+    requires row_valid(sizes, p), row_valid(sizes, q), row_rank(sizes, p) == row_rank(sizes, q),
+    ensures p == q,
+    decreases sizes.len(),
+{
+    if sizes.len() > 0 {
+        let pr = row_rank(sizes.drop_last(), p.drop_last());
+        let qr = row_rank(sizes.drop_last(), q.drop_last());
+        assert(pr == qr && p.last() == q.last()) by(nonlinear_arith)
+            requires pr * sizes.last() + p.last() == qr * sizes.last() + q.last(),
+                p.last() < sizes.last(), q.last() < sizes.last(), sizes.last() > 0;
+        lemma_row_rank_injective(sizes.drop_last(), p.drop_last(), q.drop_last());
+assert forall|i: int| 0 <= i < p.len() implies p[i] == q[i] by {
+    if i < p.len() - 1 {
+        assert(p[i] == p.drop_last()[i]);
+        assert(q[i] == q.drop_last()[i]);
+    } else {
+        assert(p[i] == p.last());
+        assert(q[i] == q.last());
+    }
+}
+assert(p =~= q);
+    } else { assert(p =~= q); }
+}
+
+pub(crate) proof fn lemma_row_successor(sizes: Seq<nat>, before: Seq<usize>, after: Seq<usize>, pivot: int)
+    requires row_valid(sizes, before), after.len() == sizes.len(), 0 <= pivot < sizes.len(),
+        before[pivot] + 1 < sizes[pivot], after[pivot] == before[pivot] + 1,
+        forall|i: int| 0 <= i < pivot ==> after[i] == before[i],
+        forall|i: int| pivot < i < sizes.len() ==> before[i] + 1 == sizes[i] && after[i] == 0,
+    ensures row_valid(sizes, after), row_rank(sizes, after) == row_rank(sizes, before) + 1,
+    decreases sizes.len(),
+{
+let last = sizes.len() as int - 1;
+let base = sizes[last];
+let before_prefix = row_rank(sizes.drop_last(), before.drop_last());
+let after_prefix = row_rank(sizes.drop_last(), after.drop_last());
+assert(sizes.last() == base);
+assert(before.last() == before[last]);
+assert(after.last() == after[last]);
+assert(row_rank(sizes, before) == before_prefix * base + before[last]);
+assert(row_rank(sizes, after) == after_prefix * base + after[last]);
+if pivot == last {
+    assert(after.drop_last() =~= before.drop_last());
+    assert(after_prefix == before_prefix);
+    assert(after[last] == before[last] + 1);
+} else {
+    lemma_row_successor(sizes.drop_last(), before.drop_last(), after.drop_last(), pivot);
+    assert(after_prefix == before_prefix + 1);
+    assert(after[last] == 0 && before[last] + 1 == base);
+    assert(after_prefix * base + after[last] == before_prefix * base + before[last] + 1) by(nonlinear_arith)
+        requires after_prefix == before_prefix + 1, after[last] == 0, before[last] + 1 == base;
+}
+assert forall|i: int| 0 <= i < sizes.len() implies after[i] < sizes[i] by {
+    if i < pivot { assert(after[i] == before[i]); }
+    else if i > pivot { assert(after[i] == 0 && before[i] + 1 == sizes[i]); }
+}
+}
+
+pub(crate) open spec fn constraint_position(axes: Seq<Seq<RegisterConstraint>>, g: implementation::ConstraintView, n: int) -> bool {
+    exists|p: Seq<usize>| row_position(axis_sizes(axes), n, p) && g == choice_view(axes, p)
+}
+
+pub(crate) open spec fn letter_position(axes: Seq<Seq<Option<Class>>>, registers: Seq<Class>, l: implementation::LetterView, n: int) -> bool {
+    exists|p: Seq<usize>| row_position(axis_sizes(axes), n, p) && l == letter_choice_view(axes, registers, p)
+}
+
+pub(crate) open spec fn constraint_positions(axes: Seq<Seq<RegisterConstraint>>, values: Seq<Constraint>) -> bool {
     forall|n: int| #![trigger values[n]] 0 <= n < values.len() ==> constraint_position(axes, values[n]@, n)
 }
 
-pub(crate) open spec fn letter_positions(axes: [Seq<Option<Class>>; 3], registers: [Class; 3], values: Seq<Letter>) -> bool {
+pub(crate) open spec fn letter_positions(axes: Seq<Seq<Option<Class>>>, registers: Seq<Class>, values: Seq<Letter>) -> bool {
     forall|n: int| #![trigger values[n]] 0 <= n < values.len() ==> letter_position(axes, registers, values[n]@, n)
 }
 
-pub(crate) proof fn lemma_constraint_position_push(axes: [Seq<RegisterConstraint>; 3], before: Seq<Constraint>,
-    added: Constraint, i: int, j: int, k: int)
-    requires constraint_positions(axes, before),
-        row_position(axes[0].len(), axes[1].len(), axes[2].len(), before.len() as int, (i, j, k)),
-        added@ == choice_view(axes, i, j, k),
+pub(crate) proof fn lemma_constraint_position_push(axes: Seq<Seq<RegisterConstraint>>, before: Seq<Constraint>, added: Constraint, p: Seq<usize>)
+    requires constraint_positions(axes, before), row_position(axis_sizes(axes), before.len() as int, p), added@ == choice_view(axes, p),
     ensures constraint_positions(axes, before.push(added)),
 {
-    let values = before.push(added);
-    assert forall|n: int| #![trigger values[n]] 0 <= n < values.len() implies constraint_position(axes, values[n]@, n) by {
-        if n < before.len() {
-            assert(values[n] == before[n]);
-            assert(constraint_position(axes, before[n]@, n));
-        } else {
-            assert(n == before.len());
-            assert(row_position(axes[0].len(), axes[1].len(), axes[2].len(), n, (i, j, k)));
-            assert(constraint_position(axes, values[n]@, n));
-        }
+    assert forall|n: int| 0 <= n < before.push(added).len() implies constraint_position(axes, before.push(added)[n]@, n) by {
+        if n < before.len() { assert(before.push(added)[n] == before[n]); }
+        else { assert(constraint_position(axes, added@, n)); }
     }
 }
 
-pub(crate) proof fn lemma_letter_position_push(axes: [Seq<Option<Class>>; 3], registers: [Class; 3], before: Seq<Letter>,
-    added: Letter, i: int, j: int, k: int)
-    requires letter_positions(axes, registers, before),
-        row_position(axes[0].len(), axes[1].len(), axes[2].len(), before.len() as int, (i, j, k)),
-        added@ == letter_choice_view(axes, registers, i, j, k),
+pub(crate) proof fn lemma_letter_position_push(axes: Seq<Seq<Option<Class>>>, registers: Seq<Class>, before: Seq<Letter>, added: Letter, p: Seq<usize>)
+    requires letter_positions(axes, registers, before), row_position(axis_sizes(axes), before.len() as int, p), added@ == letter_choice_view(axes, registers, p),
     ensures letter_positions(axes, registers, before.push(added)),
 {
-    let values = before.push(added);
-    assert forall|n: int| #![trigger values[n]] 0 <= n < values.len() implies letter_position(axes, registers, values[n]@, n) by {
-        if n < before.len() {
-            assert(values[n] == before[n]);
-            assert(letter_position(axes, registers, before[n]@, n));
-        } else {
-            assert(n == before.len());
-            assert(row_position(axes[0].len(), axes[1].len(), axes[2].len(), n, (i, j, k)));
-            assert(letter_position(axes, registers, values[n]@, n));
-        }
+    assert forall|n: int| 0 <= n < before.push(added).len() implies letter_position(axes, registers, before.push(added)[n]@, n) by {
+        if n < before.len() { assert(before.push(added)[n] == before[n]); }
+        else { assert(letter_position(axes, registers, added@, n)); }
     }
 }
 
-pub(crate) proof fn lemma_constraint_product_distinct(axes: [Seq<RegisterConstraint>; 3], values: Seq<Constraint>)
-    requires constraint_positions(axes, values),
-        register_sequence(axes[0]).no_duplicates(), register_sequence(axes[1]).no_duplicates(), register_sequence(axes[2]).no_duplicates(),
+pub(crate) proof fn lemma_constraint_product_distinct(axes: Seq<Seq<RegisterConstraint>>, values: Seq<Constraint>)
+    requires constraint_positions(axes, values), forall|i: int| 0 <= i < axes.len() ==> register_sequence(axes[i]).no_duplicates(),
     ensures constraint_sequence(values).no_duplicates(),
 {
     assert forall|n: int, m: int| 0 <= n < m < values.len() implies values[n]@ != values[m]@ by {
-        let p = choose|p: (int, int, int)| row_position(axes[0].len(), axes[1].len(), axes[2].len(), n, p)
-            && values[n]@ == choice_view(axes, p.0, p.1, p.2);
-        let q = choose|q: (int, int, int)| row_position(axes[0].len(), axes[1].len(), axes[2].len(), m, q)
-            && values[m]@ == choice_view(axes, q.0, q.1, q.2);
+        let p = choose|p: Seq<usize>| row_position(axis_sizes(axes), n, p) && values[n]@ == choice_view(axes, p);
+        let q = choose|q: Seq<usize>| row_position(axis_sizes(axes), m, q) && values[m]@ == choice_view(axes, q);
         if values[n]@ == values[m]@ {
-            assert(register_sequence(axes[0])[p.0] == register_sequence(axes[0])[q.0]);
-            assert(register_sequence(axes[1])[p.1] == register_sequence(axes[1])[q.1]);
-            assert(register_sequence(axes[2])[p.2] == register_sequence(axes[2])[q.2]);
-            assert(p.0 == q.0); assert(p.1 == q.1); assert(p.2 == q.2);
+            assert forall|i: int| 0 <= i < axes.len() implies p[i] == q[i] by {
+assert(p[i] < axes[i].len() && q[i] < axes[i].len());
+assert(choice_view(axes, p)[i] == axes[i][p[i] as int]@);
+assert(choice_view(axes, q)[i] == axes[i][q[i] as int]@);
+assert(values[n]@[i] == choice_view(axes, p)[i]);
+assert(values[m]@[i] == choice_view(axes, q)[i]);
+assert(register_sequence(axes[i])[p[i] as int] == axes[i][p[i] as int]@);
+assert(register_sequence(axes[i])[q[i] as int] == axes[i][q[i] as int]@);
+assert(register_sequence(axes[i])[p[i] as int] == register_sequence(axes[i])[q[i] as int]);
+            }
+            assert(p =~= q);
         }
     }
 }
 
-pub(crate) proof fn lemma_letter_product_distinct(axes: [Seq<Option<Class>>; 3], registers: [Class; 3], values: Seq<Letter>)
-    requires letter_positions(axes, registers, values),
-        class_sequence(axes[0]).no_duplicates(), class_sequence(axes[1]).no_duplicates(), class_sequence(axes[2]).no_duplicates(),
+pub(crate) proof fn lemma_letter_product_distinct(axes: Seq<Seq<Option<Class>>>, registers: Seq<Class>, values: Seq<Letter>)
+    requires letter_positions(axes, registers, values), forall|i: int| 0 <= i < axes.len() ==> class_sequence(axes[i]).no_duplicates(),
     ensures letter_sequence(values).no_duplicates(),
 {
     assert forall|n: int, m: int| 0 <= n < m < values.len() implies values[n]@ != values[m]@ by {
-        let p = choose|p: (int, int, int)| row_position(axes[0].len(), axes[1].len(), axes[2].len(), n, p)
-            && values[n]@ == letter_choice_view(axes, registers, p.0, p.1, p.2);
-        let q = choose|q: (int, int, int)| row_position(axes[0].len(), axes[1].len(), axes[2].len(), m, q)
-            && values[m]@ == letter_choice_view(axes, registers, q.0, q.1, q.2);
+        let p = choose|p: Seq<usize>| row_position(axis_sizes(axes), n, p) && values[n]@ == letter_choice_view(axes, registers, p);
+        let q = choose|q: Seq<usize>| row_position(axis_sizes(axes), m, q) && values[m]@ == letter_choice_view(axes, registers, q);
         if values[n]@ == values[m]@ {
-            assert(class_sequence(axes[0])[p.0] == class_sequence(axes[0])[q.0]);
-            assert(class_sequence(axes[1])[p.1] == class_sequence(axes[1])[q.1]);
-            assert(class_sequence(axes[2])[p.2] == class_sequence(axes[2])[q.2]);
-            assert(p.0 == q.0); assert(p.1 == q.1); assert(p.2 == q.2);
+            assert forall|i: int| 0 <= i < axes.len() implies p[i] == q[i] by {
+assert(p[i] < axes[i].len() && q[i] < axes[i].len());
+assert(letter_choice_view(axes, registers, p).classes[i] == class_option(axes[i][p[i] as int]));
+assert(letter_choice_view(axes, registers, q).classes[i] == class_option(axes[i][q[i] as int]));
+assert(values[n]@.classes[i] == letter_choice_view(axes, registers, p).classes[i]);
+assert(values[m]@.classes[i] == letter_choice_view(axes, registers, q).classes[i]);
+assert(class_sequence(axes[i])[p[i] as int] == class_option(axes[i][p[i] as int]));
+assert(class_sequence(axes[i])[q[i] as int] == class_option(axes[i][q[i] as int]));
+assert(class_sequence(axes[i])[p[i] as int] == class_sequence(axes[i])[q[i] as int]);
+            }
+            assert(p =~= q);
         }
     }
 }
@@ -228,13 +356,14 @@ pub(crate) proof fn lemma_field_class_injective(r: implementation::RegisterView,
 
 pub(crate) proof fn lemma_letter_assignment_injective(g: Constraint, operands: Operands, atoms: Seq<Atom>, universes: Universes,
     a: implementation::LetterView, b: implementation::LetterView)
-    requires atoms_wf(atoms), operands_of(operands, atoms),
+    requires shape_wf(g, operands, universes), operands_of(operands, atoms),
         letters_views(g, operands, universes).contains(a), letters_views(g, operands, universes).contains(b),
         implementation::letter_assignment(a, atom_set(atoms)) == implementation::letter_assignment(b, atom_set(atoms)),
     ensures a == b,
 {
     lemma_letters_members(g, operands, universes); lemma_operand_atoms(operands, atoms);
-    assert forall|c: Component| implementation::letter_class(a, c) == implementation::letter_class(b, c) by {
+    assert forall|i: int| 0 <= i < g@.len() implies a.classes[i] == b.classes[i] by {
+        let c = Component(i as u8);
         let k = component_index(c) as int;
         let av = implementation::letter_class(a, c); let bv = implementation::letter_class(b, c);
         assert(implementation::letter_register(a, c) == register_class(implementation::register_of(g@, c)));
@@ -258,23 +387,19 @@ pub(crate) proof fn lemma_letter_assignment_injective(g: Constraint, operands: O
         }
         lemma_field_class_injective(implementation::register_of(g@, c), operands.register[k], codes(operands.constants[k].view()), universes[k], av, bv);
     }
-    assert(implementation::letter_class(a, Component::Principal) == implementation::letter_class(b, Component::Principal));
-    assert(implementation::letter_class(a, Component::Action) == implementation::letter_class(b, Component::Action));
-    assert(implementation::letter_class(a, Component::Resource) == implementation::letter_class(b, Component::Resource));
-    assert(implementation::letter_register(a, Component::Principal) == implementation::letter_register(b, Component::Principal));
-    assert(implementation::letter_register(a, Component::Action) == implementation::letter_register(b, Component::Action));
-    assert(implementation::letter_register(a, Component::Resource) == implementation::letter_register(b, Component::Resource));
+    assert(a.classes =~= b.classes);
+    assert(a.registers =~= b.registers);
 }
 
 pub(crate) open spec fn letter_alpha_unique(g: Constraint, operands: Operands, universes: Universes, values: Seq<Letter>) -> bool {
-    forall|atoms: Seq<Atom>| atoms_wf(atoms) && operands_of(operands, atoms) ==>
+    forall|atoms: Seq<Atom>| atoms_wf(atoms, universes@.len()) && operands_of(operands, atoms) ==>
         values.map_values(|l: Letter| implementation::letter_assignment(l@, atom_set(atoms))).no_duplicates()
 }
 pub(crate) proof fn lemma_letter_alpha_unique(g: Constraint, operands: Operands, universes: Universes, values: Seq<Letter>)
-    requires letter_sequence(values).no_duplicates(), letter_views(values) == letters_views(g, operands, universes),
+    requires shape_wf(g, operands, universes), letter_sequence(values).no_duplicates(), letter_views(values) == letters_views(g, operands, universes),
     ensures letter_alpha_unique(g, operands, universes, values),
 {
-    assert forall|atoms: Seq<Atom>| atoms_wf(atoms) && operands_of(operands, atoms) implies
+    assert forall|atoms: Seq<Atom>| atoms_wf(atoms, universes@.len()) && operands_of(operands, atoms) implies
         values.map_values(|l: Letter| implementation::letter_assignment(l@, atom_set(atoms))).no_duplicates() by {
         assert forall|i: int, j: int| 0 <= i < j < values.len() implies
             implementation::letter_assignment(values[i]@, atom_set(atoms)) != implementation::letter_assignment(values[j]@, atom_set(atoms)) by {
@@ -301,7 +426,7 @@ pub(crate) open spec fn steps_alphas_unique(g: Constraint, atoms: Seq<Atom>, uni
 }
 pub(crate) proof fn lemma_steps_alphas_unique(g: Constraint, atoms: Seq<Atom>, universes: Universes, operands: Operands,
     groups: Seq<(Constraint, Vec<Letter>)>)
-    requires atoms_wf(atoms), operands_of(operands, atoms),
+    requires atoms_wf(atoms, universes@.len()), operands_of(operands, atoms), operands.register@.len() == universes@.len(),
         forall|i: int| 0 <= i < groups.len() ==> letter_alpha_unique(groups[i].0, operands, universes, groups[i].1@),
     ensures steps_alphas_unique(g, atoms, universes, groups),
 {

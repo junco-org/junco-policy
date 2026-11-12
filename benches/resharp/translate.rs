@@ -1,7 +1,10 @@
 //! Translates standard regex syntax (parsed by `regex_syntax` in byte mode) into
 //! `history_syntax` regexes over `Symbol` events, one byte per event.
 
-use history_syntax::{AtomPattern, Comparison, ComponentPattern, Event, RegexExpr, TestExpr};
+use history_syntax::{
+    AtomPattern, Comparison, Component, Component3, ComponentPattern, Event, N3, RegexExpr,
+    TestExpr,
+};
 use regex_syntax::hir::{Class, Hir, HirKind, Look};
 
 /// One haystack byte as an open-domain resource, or the candidate triggering the rule.
@@ -12,14 +15,23 @@ pub enum Symbol {
 }
 
 impl Event for Symbol {
-    type Principal = ();
-    type Action = ();
-    type Resource = Symbol;
+    type Component = Component3<(), (), Symbol>;
+    type Arity = N3;
 
-    fn principal(self) {}
-    fn action(self) {}
-    fn resource(self) -> Symbol {
-        self
+    fn component(self, index: usize) -> Self::Component {
+        match index {
+            0 => Component3::C0(()),
+            1 => Component3::C1(()),
+            _ => Component3::C2(self),
+        }
+    }
+
+    fn coordinate(component: Self::Component) -> usize {
+        match component {
+            Component3::C0(_) => 0,
+            Component3::C1(_) => 1,
+            Component3::C2(_) => 2,
+        }
     }
 }
 
@@ -113,7 +125,10 @@ pub fn class(members: impl IntoIterator<Item = u8>) -> RegexExpr<Symbol> {
     let atom = |comparison, byte| {
         TestExpr::atom(
             comparison,
-            AtomPattern::Resource(ComponentPattern::constant(Symbol::Byte(byte))),
+            AtomPattern::new(
+                Component(2),
+                ComponentPattern::constant(Component3::C2(Symbol::Byte(byte))),
+            ),
         )
     };
     match count {

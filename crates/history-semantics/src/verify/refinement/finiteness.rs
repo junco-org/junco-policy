@@ -292,24 +292,46 @@ pub open spec fn option_values(o: Option<Set<nat>>) -> ISet<nat> {
     match o { Some(values) => values.to_iset(), None => ISet::<nat>::empty() }
 }
 
+/// Union of every declared coordinate domain, folded over the policy's arity.
+pub open spec fn domain_values_fold(d: NDomains) -> ISet<nat>
+    decreases d.len(),
+{
+    if d.len() == 0 { ISet::empty() }
+    else { domain_values_fold(d.drop_last()).union(option_values(d.last())) }
+}
+
+pub proof fn lemma_domain_values_fold(d: NDomains)
+    ensures domain_values_fold(d).finite(),
+        forall|i: int, v: nat| 0 <= i < d.len() && #[trigger] option_values(d[i]).contains(v)
+            ==> domain_values_fold(d).contains(v),
+    decreases d.len(),
+{
+    broadcast use vstd::set::lemma_to_iset_finite, vstd::iset::lemma_iset_empty_finite,
+        vstd::iset::lemma_iset_union_finite;
+    if d.len() > 0 {
+        lemma_domain_values_fold(d.drop_last());
+        assert(option_values(d.last()).finite());
+        assert forall|i: int, v: nat| 0 <= i < d.len() && #[trigger] option_values(d[i]).contains(v)
+            implies domain_values_fold(d).contains(v) by {
+            if i < d.len() - 1 {
+                assert(d.drop_last()[i] == d[i]);
+            } else {
+                assert(d[i] == d.last());
+            }
+        }
+    }
+}
+
 pub proof fn lemma_domain_values_finite(d: NDomains)
     ensures domain_values(d).finite(),
 {
-    broadcast use vstd::set::lemma_to_iset_finite, vstd::iset::lemma_iset_empty_finite, vstd::iset::lemma_iset_union_finite;
-    let dv = domain_values(d);
-    let a = option_values(d.principal);
-    let b = option_values(d.action);
-    let r = option_values(d.resource);
-    assert(a.finite() && b.finite() && r.finite());
-    assert forall|v: nat| dv.contains(v) implies a.union(b).union(r).contains(v) by {
+    lemma_domain_values_fold(d);
+    assert forall|v: nat| domain_values(d).contains(v) implies domain_values_fold(d).contains(v) by {
         let c = choose|c: Component| #[trigger] n_domain(d, c) matches Some(values) && values.contains(v);
-        match c {
-            Component::Principal => { assert(a.contains(v)); },
-            Component::Action => { assert(b.contains(v)); },
-            Component::Resource => { assert(r.contains(v)); },
-        }
+        assert(c.0 < d.len());
+        assert(option_values(d[c.0 as int]).contains(v));
     }
-    lemma_iset_subset_finite(a.union(b).union(r), dv);
+    lemma_iset_subset_finite(domain_values_fold(d), domain_values(d));
 }
 
 pub open spec fn literal_maker(codes: ISet<nat>) -> spec_fn((Component, bool)) -> ISet<Literal> {
@@ -340,8 +362,13 @@ pub proof fn lemma_item_literals_finite(d: NDomains, atoms_of: spec_fn(Regex<mod
     }
     lemma_iset_subset_finite(ac.union(dv), codes);
     let mk = literal_maker(codes);
-    let idx = set![(Component::Principal, true), (Component::Principal, false), (Component::Action, true),
-        (Component::Action, false), (Component::Resource, true), (Component::Resource, false)];
+    // Components are byte-sized indices. Bounding all representable indices also bounds
+    // malformed literals, so termination needs no extra well-formedness assumption.
+    let coordinates = Seq::new((u8::MAX as nat) + 1, |i: int| Component(i as u8));
+    let coords = coordinates.to_set();
+    let yes = |c: Component| (c, true);
+    let no = |c: Component| (c, false);
+    let idx = coords.map(yes).union(coords.map(no));
     assert forall|cb: (Component, bool)| idx.contains(cb) implies #[trigger] mk(cb).finite() by {
         codes.lemma_map_finite(|v: nat| Literal { component: cb.0, value: v, equal: cb.1 });
     }
@@ -350,11 +377,10 @@ pub proof fn lemma_item_literals_finite(d: NDomains, atoms_of: spec_fn(Regex<mod
     assert forall|l: Literal| item_literals(d, atoms_of, f).contains(l) implies all.contains(l) by {
         let cb = (l.component, l.equal);
         assert(idx.contains(cb)) by {
-            match l.component {
-                Component::Principal => {},
-                Component::Action => {},
-                Component::Resource => {},
-            }
+            assert(coordinates[l.component.0 as int] == l.component);
+            assert(coords.contains(l.component));
+            if l.equal { assert(coords.map(yes).contains(cb)); }
+            else { assert(coords.map(no).contains(cb)); }
         }
         assert(codes.contains(l.value));
         assert(Literal { component: cb.0, value: l.value, equal: cb.1 } == l);

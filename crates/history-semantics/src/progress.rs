@@ -677,7 +677,7 @@ impl CompiledPair {
             let g = self.store.graph();
             if mask != 0 {
                 assert forall|theta: Subst, event: EventView, word: Seq<EventView>|
-                    language::event_wf(theta) && guard_blocks(g, atoms@, mask, theta, event)
+                    language::event_wf(theta, theta.len()) && guard_blocks(g, atoms@, mask, theta, event)
                     implies model::regex_lang(g, theta, residual@, word)
                         == norm::transition_lang(g, theta, transition, event, word) by {
                     lemma_guard_blocks_word(g, atoms@, mask, theta, event);
@@ -1042,7 +1042,7 @@ impl CompiledPair {
         let successor = successor?;
         proof! {
             assert forall|theta: Subst, current: EventView, word: Seq<EventView>|
-                language::event_wf(theta) && symbolic::verify::truth_words_realize(self.store.graph(), atoms@, key.words.view(), theta, current)
+                language::event_wf(theta, theta.len()) && symbolic::verify::truth_words_realize(self.store.graph(), atoms@, key.words.view(), theta, current)
                     implies model::regex_lang(self.store.graph(), theta, successor@, word)
                         == norm::transition_lang(self.store.graph(), theta, key.transition, current, word) by {}
             fint::lemma_entry_val_intro(entry.store.graph(), self.store.graph(), key.transition@, successor@);
@@ -1069,7 +1069,7 @@ impl CompiledPair {
                     && successor_entries((*self).caches.successors)[other]@ < self.store.graph().regexes.len()
                     && fint::entry_val(self.store.graph(), other.transition@, successor_entries((*self).caches.successors)[other]@)
                     && forall|theta: Subst, current: EventView, word: Seq<EventView>|
-                        language::event_wf(theta) && symbolic::verify::truth_words_realize(self.store.graph(), self.caches.atoms@[i].unwrap()@, other.words, theta, current)
+                        language::event_wf(theta, theta.len()) && symbolic::verify::truth_words_realize(self.store.graph(), self.caches.atoms@[i].unwrap()@, other.words, theta, current)
                             ==> model::regex_lang(self.store.graph(), theta, successor_entries((*self).caches.successors)[other]@, word)
                                 == norm::transition_lang(self.store.graph(), theta, other.transition, current, word)
             } by {
@@ -2266,7 +2266,7 @@ pub(crate) mod verify {
             && entries[key]@ < g.regexes.len()
             && fint::entry_val(g, key.transition@, entries[key]@)
             && forall|theta: Subst, event: EventView, word: Seq<EventView>|
-                language::event_wf(theta) && symbolic::verify::truth_words_realize(g, atoms[index].unwrap()@, key.words, theta, event)
+                language::event_wf(theta, theta.len()) && symbolic::verify::truth_words_realize(g, atoms[index].unwrap()@, key.words, theta, event)
                     ==> model::regex_lang(g, theta, entries[key]@, word)
                         == norm::transition_lang(g, theta, key.transition, event, word)
         }
@@ -2286,7 +2286,7 @@ pub(crate) mod verify {
             0 <= residual < g.regexes.len() && guard.transition@ < g.transitions.len()
             && 0 <= t < atoms_cache.len() && atoms_cache[t] is Some
             && forall|theta: Subst, event: EventView, word: Seq<EventView>|
-                language::event_wf(theta) && guard_blocks(g, atoms_cache[t].unwrap()@, guard.mask, theta, event)
+                language::event_wf(theta, theta.len()) && guard_blocks(g, atoms_cache[t].unwrap()@, guard.mask, theta, event)
                     ==> model::regex_lang(g, theta, residual as nat, word)
                         == norm::transition_lang(g, theta, guard.transition, event, word)
         }
@@ -2305,7 +2305,7 @@ pub(crate) mod verify {
         g: model::Graph, atoms: Seq<TestId>, residual: RegexId, transition: TransitionId, w: u64,
     ) -> bool {
         forall|theta: Subst, event: EventView, word: Seq<EventView>|
-            language::event_wf(theta) && symbolic::verify::truth_words_realize(g, atoms, seq![w], theta, event)
+            language::event_wf(theta, theta.len()) && symbolic::verify::truth_words_realize(g, atoms, seq![w], theta, event)
                 ==> model::regex_lang(g, theta, residual@, word) == norm::transition_lang(g, theta, transition, event, word)
     }
 
@@ -2458,7 +2458,7 @@ pub(crate) mod verify {
             && entries[key]@ < b.regexes.len()
             && fint::entry_val(b, key.transition@, entries[key]@)
             && forall|theta: Subst, event: EventView, word: Seq<EventView>|
-                language::event_wf(theta) && symbolic::verify::truth_words_realize(b, atoms[index].unwrap()@, key.words, theta, event)
+                language::event_wf(theta, theta.len()) && symbolic::verify::truth_words_realize(b, atoms[index].unwrap()@, key.words, theta, event)
                     ==> model::regex_lang(b, theta, entries[key]@, word)
                         == norm::transition_lang(b, theta, key.transition, event, word)
         } by {
@@ -2468,7 +2468,7 @@ pub(crate) mod verify {
             fint::lemma_entry_val_stable(a, b, key.transition@, entries[key]@);
             model::lemma_lift_transition_stable(a, b, key.transition@);
             assert forall|theta: Subst, event: EventView, word: Seq<EventView>|
-                language::event_wf(theta) && symbolic::verify::truth_words_realize(b, atoms[index].unwrap()@, key.words, theta, event)
+                language::event_wf(theta, theta.len()) && symbolic::verify::truth_words_realize(b, atoms[index].unwrap()@, key.words, theta, event)
                 implies model::regex_lang(b, theta, entries[key]@, word)
                     == norm::transition_lang(b, theta, key.transition, event, word) by {
                 assert(symbolic::verify::truth_words_realize(a, atoms[index].unwrap()@, key.words, theta, event));
@@ -2534,7 +2534,7 @@ pub(crate) mod verify {
             model::lemma_lift_regex_stable(a, b, r as nat);
             model::lemma_lift_transition_stable(a, b, guard.transition@);
             assert forall|theta: Subst, event: EventView, word: Seq<EventView>|
-                language::event_wf(theta) && guard_blocks(b, atoms, guard.mask, theta, event)
+                language::event_wf(theta, theta.len()) && guard_blocks(b, atoms, guard.mask, theta, event)
                 implies model::regex_lang(b, theta, r as nat, word)
                     == norm::transition_lang(b, theta, guard.transition, event, word) by {
                 lemma_guard_blocks_frame(a, b, atoms, guard.mask, theta, event);
@@ -2571,7 +2571,7 @@ pub(crate) mod verify {
         model::lemma_lift_regex_stable(before, after, residual@);
         model::lemma_lift_transition_stable(before, after, transition@);
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>|
-            language::event_wf(theta) && symbolic::verify::truth_words_realize(after, atoms, seq![w], theta, event)
+            language::event_wf(theta, theta.len()) && symbolic::verify::truth_words_realize(after, atoms, seq![w], theta, event)
             implies model::regex_lang(after, theta, residual@, word) == norm::transition_lang(after, theta, transition, event, word) by {
             assert(symbolic::verify::truth_words_realize(before, atoms, seq![w], theta, event));
             assert(model::regex_lang(before, theta, residual@, word) == norm::transition_lang(before, theta, transition, event, word));
@@ -2671,7 +2671,7 @@ pub(crate) mod verify {
 
     pub(super) proof fn lemma_guard_hit(pair: CompiledPair, residual: RegexId, guard: Guard, bindings: Subst, event: Event)
         requires pair_wf(pair), has_guard(pair, residual), pair.caches.guards@[residual@ as int] == Some(guard), guard.mask != 0,
-            language::event_wf(bindings),
+            language::event_wf(bindings, bindings.len()),
             guard_blocks(pair.store.graph(), pair.caches.atoms@[guard.transition@ as int].unwrap()@, guard.mask,
                 bindings, event@),
         ensures instantiation_result(pair, guard.transition, bindings, event, residual),
@@ -2736,7 +2736,7 @@ pub(crate) mod verify {
 
     pub(super) proof fn lemma_fold_step(pair: CompiledPair, bindings: Subst, from: RegexId, events: Seq<EventView>, residual: RegexId, transition: TransitionId, event: Event, successor: RegexId)
         requires pair_wf(pair), residual_folds(pair, bindings, from, events, residual),
-            language::event_wf(bindings),
+            language::event_wf(bindings, bindings.len()),
             symbolic::verify::derivative_correct(pair.store.graph(), residual@, transition),
             instantiation_result(pair, transition, bindings, event, successor),
         ensures residual_folds(pair, bindings, from, events.push(event@), successor),
@@ -2816,10 +2816,10 @@ mod tests {
 
     fn template(regexes: Vec<FlatRegex>) -> FlatPair<u64> {
         FlatPair {
-            head: [FlatHead::Bind, FlatHead::Any, FlatHead::Any],
+            head: vec![FlatHead::Bind, FlatHead::Any, FlatHead::Any],
             tests: vec![FlatTest::Atom {
-                field: Component::Principal,
-                term: FlatTerm::Variable(Component::Principal),
+                field: Component(0),
+                term: FlatTerm::Variable(Component(0)),
                 positive: true,
             }],
             root: u32::try_from(regexes.len().checked_sub(1).unwrap()).unwrap(),
@@ -2828,29 +2828,23 @@ mod tests {
     }
 
     fn events() -> (Event, Event) {
-        let store = HistoryStore::global();
+        let store = HistoryStore::new(3);
         let mut limits = Unmetered;
         let mut world = ObservationWorld;
         let action = store
-            .intern_action("read", &mut limits, &mut world)
+            .intern(Component(1), b"read", &mut limits, &mut world)
             .unwrap();
         let resource = store
-            .intern_resource("doc", &mut limits, &mut world)
+            .intern(Component(2), b"doc", &mut limits, &mut world)
             .unwrap();
-        let alice = Event {
-            principal: store
-                .intern_principal("alice", &mut limits, &mut world)
-                .unwrap(),
-            action,
-            resource,
-        };
-        let bob = Event {
-            principal: store
-                .intern_principal("bob", &mut limits, &mut world)
-                .unwrap(),
-            action,
-            resource,
-        };
+        let alice = store
+            .intern(Component(0), b"alice", &mut limits, &mut world)
+            .unwrap();
+        let bob = store
+            .intern(Component(0), b"bob", &mut limits, &mut world)
+            .unwrap();
+        let alice = store.event(&[alice, action, resource]).unwrap();
+        let bob = store.event(&[bob, action, resource]).unwrap();
         (alice, bob)
     }
 

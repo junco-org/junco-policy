@@ -21,17 +21,32 @@ broadcast use {vstd::seq::group_seq_lemmas, vstd::std_specs::vec::group_vec_axio
 /// Tests and regexes of one search; every reference points backward within its own table.
 #[verus_verify]
 pub(crate) struct Tables {
+    pub(crate) head: Vec<FlatHead<u64>>,
     pub(crate) tests: Vec<FlatTest<u64>>,
     pub(crate) regexes: Vec<FlatRegex>,
 }
 
-// A derived `Default` would carry no Verus contract.
-#[allow(clippy::derivable_impls)]
 #[verus_verify]
-impl Default for Tables {
-    #[verus_spec(result => ensures result@.tests@.len() == 0, result@.regexes@.len() == 0)]
-    fn default() -> Self {
+impl Tables {
+    #[verus_spec(result => requires 1 <= arity <= history_syntax::MAX_ARITY,
+        ensures result@.head@.len() == arity,
+            forall|i: int| 0 <= i < arity ==> result@.head@[i] is Any,
+            result@.tests@.len() == 0, result@.regexes@.len() == 0)]
+    pub(crate) fn new(arity: usize) -> Self {
+        proof! { reveal(<Tables as View>::view); }
+        let mut head = Vec::with_capacity(arity);
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(
+            invariant index <= arity, head@.len() == index,
+                forall|i: int| 0 <= i < index ==> head@[i] is Any,
+            decreases arity - index,
+        ))]
+        while index < arity {
+            head.push(FlatHead::Any);
+            index += 1;
+        }
         Self {
+            head,
             tests: Vec::new(),
             regexes: Vec::new(),
         }
@@ -221,7 +236,7 @@ impl Tables {
         children.push(excluded);
         let root = tables.push(FlatRegex::Intersect(children))?;
         let pair = FlatPair {
-            head: [FlatHead::Any, FlatHead::Any, FlatHead::Any],
+            head: tables.head,
             tests: tables.tests,
             regexes: tables.regexes,
             root,

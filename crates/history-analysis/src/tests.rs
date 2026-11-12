@@ -8,7 +8,8 @@ use alloc::vec::Vec;
 use history_semantics::{PolicyDecision, TracePolicy, TraceRule};
 use history_store::{History, Store};
 use history_syntax::{
-    AtomPattern, Comparison, ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Event, Head, N1, N2, N3, N4, N8,
+    RegexExpr, Rule, RuleMode, TestExpr,
 };
 
 use crate::constraint::{Atom, Constraint, Operand, Universes, steps};
@@ -30,21 +31,31 @@ struct Access {
     resource: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum AccessComponent {
+    Principal(u32),
+    Action(Action),
+    Resource(u32),
+}
+
 impl Event for Access {
-    type Principal = u32;
-    type Action = Action;
-    type Resource = u32;
+    type Component = AccessComponent;
+    type Arity = N3;
 
-    fn principal(self) -> u32 {
-        self.principal
+    fn component(self, index: usize) -> AccessComponent {
+        match index {
+            0 => AccessComponent::Principal(self.principal),
+            1 => AccessComponent::Action(self.action),
+            _ => AccessComponent::Resource(self.resource),
+        }
     }
 
-    fn action(self) -> Action {
-        self.action
-    }
-
-    fn resource(self) -> u32 {
-        self.resource
+    fn coordinate(component: AccessComponent) -> usize {
+        match component {
+            AccessComponent::Principal(_) => 0,
+            AccessComponent::Action(_) => 1,
+            AccessComponent::Resource(_) => 2,
+        }
     }
 }
 
@@ -52,37 +63,40 @@ impl Event for Access {
 const X: u32 = 10;
 
 fn finite_actions() -> Domains<Access> {
-    Domains::infinite().with_actions(ACTIONS)
+    Domains::infinite().with_domain(Component(1), ACTIONS.map(AccessComponent::Action))
 }
 
 fn head() -> Head<Access> {
-    Head::new(
+    Head::new([
         ComponentPattern::variable("p"),
-        ComponentPattern::constant(Action::Edit),
+        ComponentPattern::constant(AccessComponent::Action(Action::Edit)),
         ComponentPattern::variable("r"),
-    )
+    ])
 }
 
 fn principal_is_p() -> TestExpr<Access> {
     TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Principal(ComponentPattern::variable("p")),
+        AtomPattern::new(Component(0), ComponentPattern::variable("p")),
     )
 }
 
 fn action_is(comparison: Comparison, action: Action) -> TestExpr<Access> {
     TestExpr::atom(
         comparison,
-        AtomPattern::Action(ComponentPattern::constant(action)),
+        AtomPattern::new(
+            Component(1),
+            ComponentPattern::constant(AccessComponent::Action(action)),
+        ),
     )
 }
 
 fn resource_is(comparison: Comparison, resource: Option<u32>) -> TestExpr<Access> {
     let pattern = match resource {
-        Some(value) => ComponentPattern::constant(value),
+        Some(value) => ComponentPattern::constant(AccessComponent::Resource(value)),
         None => ComponentPattern::variable("r"),
     };
-    TestExpr::atom(comparison, AtomPattern::Resource(pattern))
+    TestExpr::atom(comparison, AtomPattern::new(Component(2), pattern))
 }
 
 fn ever(test: TestExpr<Access>) -> RegexExpr<Access> {
@@ -95,29 +109,41 @@ fn forbid(head: Head<Access>, tail: RegexExpr<Access>) -> Rule<Access> {
 
 /// Instantiates counterexample components; fresh values equal no constant the tests use.
 fn concrete(components: &Components<Access>) -> Access {
-    let value = |value: Value<u32>| match value {
-        Value::Constant(value) => value,
+    assert_eq!(components.values.len(), 3);
+    let principal = match components.values[0] {
+        Value::Constant(AccessComponent::Principal(value)) => value,
         Value::Fresh(number) => 1_000 + u32::try_from(number).unwrap(),
+        _ => panic!("principal constant has the wrong coordinate"),
     };
-    let Value::Constant(action) = components.action else {
-        panic!("declared actions are never fresh");
+    let Value::Constant(AccessComponent::Action(action)) = components.values[1] else {
+        panic!("declared actions are never fresh or another coordinate");
+    };
+    let resource = match components.values[2] {
+        Value::Constant(AccessComponent::Resource(value)) => value,
+        Value::Fresh(number) => 1_000 + u32::try_from(number).unwrap(),
+        _ => panic!("resource constant has the wrong coordinate"),
     };
     Access {
-        principal: value(components.principal),
+        principal,
         action,
-        resource: value(components.resource),
+        resource,
     }
 }
 
 /// Whether some rule of `rules` denies the counterexample's candidate after its history, by the
 /// runtime.
-fn denied(rules: &[Rule<Access>], counterexample: &Counterexample<Access>) -> bool {
+fn denied<E: Event + 'static>(
+    rules: &[Rule<E>],
+    counterexample: &Counterexample<E>,
+    concrete: impl Fn(&Components<E>) -> E,
+) -> bool {
     let store = Arc::new(Store::new().unwrap());
     let rules = rules
         .iter()
         .map(|rule| TraceRule::new(rule.clone(), |_| (String::new(), Vec::new())));
     let mut policy = TracePolicy::new(store.clone(), rules).unwrap();
-    let history = History::from_events(store, counterexample.history.iter().map(concrete)).unwrap();
+    let history =
+        History::from_events(store, counterexample.history.iter().map(&concrete)).unwrap();
     let candidate = concrete(&counterexample.candidate);
     policy.decide(&history, &candidate).unwrap() != PolicyDecision::Grant
 }
@@ -130,11 +156,11 @@ fn included(left: &RegexExpr<Access>, right: &RegexExpr<Access>) -> bool {
         Inclusion::Holds => true,
         Inclusion::Counterexample(counterexample) => {
             assert!(
-                denied(&[forbid(head(), left.clone())], &counterexample),
+                denied(&[forbid(head(), left.clone())], &counterexample, concrete),
                 "{counterexample:?} is not in the left tail"
             );
             assert!(
-                !denied(&[forbid(head(), right.clone())], &counterexample),
+                !denied(&[forbid(head(), right.clone())], &counterexample, concrete),
                 "{counterexample:?} is in the right tail"
             );
             false
@@ -329,9 +355,10 @@ fn a_register_and_a_constant_give_five_letters() {
             operand: Operand::Constant(0),
         },
     ];
-    let universes: Universes = [None, None, None];
-    let constraint = Constraint::head([None; 3], &universes).unwrap();
+    let universes: Universes = Vec::from([None, None, None]);
+    let constraint = Constraint::head(&[None; 3], &universes).unwrap();
     let mut counts = steps(&constraint, &atoms, &universes)
+        .unwrap()
         .iter()
         .map(|(_, letters)| letters.len())
         .collect::<Vec<_>>();
@@ -354,20 +381,23 @@ fn declared_actions_leave_no_other_action() {
     let Inclusion::Counterexample(counterexample) = verdict else {
         panic!("an infinite action domain has a fourth action");
     };
-    assert!(matches!(counterexample.history[0].action, Value::Fresh(_)));
+    assert!(matches!(
+        counterexample.history[0].values[1],
+        Value::Fresh(_)
+    ));
 }
 
 #[test]
 fn a_declared_register_takes_each_declared_value() {
     // The candidate's action is one of the declared actions, so its case analysis is exhaustive.
-    let head = Head::new(
+    let head = Head::new([
         ComponentPattern::variable("p"),
         ComponentPattern::variable("a"),
         ComponentPattern::variable("r"),
-    );
+    ]);
     let own_action = ever(TestExpr::atom(
         Comparison::Eq,
-        AtomPattern::Action(ComponentPattern::variable("a")),
+        AtomPattern::new(Component(1), ComponentPattern::variable("a")),
     ));
     let by_case = RegexExpr::union(ACTIONS.map(|action| ever(action_is(Comparison::Eq, action))));
 
@@ -384,9 +414,274 @@ fn a_declared_register_takes_each_declared_value() {
     let Inclusion::Counterexample(counterexample) = verdict else {
         panic!("an infinite action domain has a fourth action");
     };
-    assert!(matches!(counterexample.candidate.action, Value::Fresh(_)));
+    assert!(matches!(
+        counterexample.candidate.values[1],
+        Value::Fresh(_)
+    ));
     assert_eq!(
-        counterexample.history[0].action,
-        counterexample.candidate.action
+        counterexample.history[0].values[1],
+        counterexample.candidate.values[1]
     );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct IndexedComponent {
+    coordinate: usize,
+    value: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct IndexedEvent<const N: usize>([u16; N]);
+
+macro_rules! indexed_event {
+    ($length:literal, $arity:ty) => {
+        impl Event for IndexedEvent<$length> {
+            type Component = IndexedComponent;
+            type Arity = $arity;
+
+            fn component(self, index: usize) -> IndexedComponent {
+                let coordinate = index.min($length - 1);
+                IndexedComponent {
+                    coordinate,
+                    value: self.0[coordinate],
+                }
+            }
+
+            fn coordinate(component: IndexedComponent) -> usize {
+                component.coordinate
+            }
+        }
+    };
+}
+
+indexed_event!(1, N1);
+indexed_event!(4, N4);
+indexed_event!(8, N8);
+
+const VARIABLES: [&str; 8] = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"];
+
+fn concrete_indexed<const N: usize>(components: &Components<IndexedEvent<N>>) -> IndexedEvent<N>
+where
+    IndexedEvent<N>: Event<Component = IndexedComponent>,
+{
+    assert_eq!(components.values.len(), N);
+    IndexedEvent(core::array::from_fn(|coordinate| {
+        let Value::Constant(component) = components.values[coordinate] else {
+            panic!("finite coordinate {coordinate} must reconstruct a constant");
+        };
+        assert_eq!(component.coordinate, coordinate);
+        assert!(component.value <= 1);
+        component.value
+    }))
+}
+
+fn check_non_three_arity<const N: usize>()
+where
+    IndexedEvent<N>: Event<Component = IndexedComponent>,
+{
+    let head = Head::<IndexedEvent<N>>::new(
+        VARIABLES[..N]
+            .iter()
+            .map(|&name| ComponentPattern::variable(name)),
+    );
+    let same = RegexExpr::test(TestExpr::and((0..N).map(|coordinate| {
+        TestExpr::atom(
+            Comparison::Eq,
+            AtomPattern::new(
+                Component(coordinate as u8),
+                ComponentPattern::variable(VARIABLES[coordinate]),
+            ),
+        )
+    })));
+    for (different, &different_name) in VARIABLES[..N].iter().enumerate() {
+        // Vary two axes at most: exercise every coordinate without a large Cartesian product.
+        let mut domains = Domains::<IndexedEvent<N>>::infinite();
+        for coordinate in 0..N {
+            let count = if coordinate == different || coordinate == (different + 1) % N {
+                2
+            } else {
+                1
+            };
+            domains = domains.with_domain(
+                Component(coordinate as u8),
+                (0..count).map(|value| IndexedComponent { coordinate, value }),
+            );
+        }
+        let different_axis = RegexExpr::test(TestExpr::atom(
+            Comparison::Neq,
+            AtomPattern::new(
+                Component(different as u8),
+                ComponentPattern::variable(different_name),
+            ),
+        ));
+        let mut analyzer = PolicyAnalyzer::new(domains);
+        assert_eq!(
+            analyzer
+                .tail_included(&head, &same, &RegexExpr::test(TestExpr::True))
+                .unwrap(),
+            Inclusion::Holds,
+        );
+        let verdict = analyzer
+            .tail_included(&head, &different_axis, &same)
+            .unwrap();
+        let Inclusion::Counterexample(counterexample) = verdict else {
+            panic!("coordinate {different} of arity {N} must distinguish the tails");
+        };
+        assert_eq!(counterexample.history.len(), 1);
+        let candidate = concrete_indexed(&counterexample.candidate);
+        let event = concrete_indexed(&counterexample.history[0]);
+        assert_ne!(event.0[different], candidate.0[different]);
+        assert!(denied(
+            &[Rule::new(RuleMode::Forbid, head.clone(), different_axis)],
+            &counterexample,
+            concrete_indexed,
+        ));
+        assert!(!denied(
+            &[Rule::new(RuleMode::Forbid, head.clone(), same.clone())],
+            &counterexample,
+            concrete_indexed,
+        ));
+    }
+}
+
+#[test]
+fn one_coordinate_inclusion_and_counterexamples() {
+    check_non_three_arity::<1>();
+}
+
+#[test]
+fn four_coordinate_inclusion_and_counterexamples() {
+    check_non_three_arity::<4>();
+}
+
+#[test]
+fn eight_coordinate_inclusion_and_counterexamples() {
+    check_non_three_arity::<8>();
+}
+
+#[test]
+fn overflowing_eight_coordinate_register_product_is_exhausted() {
+    // 256^8 exceeds usize::MAX on both 32- and 64-bit targets. The analyzer must check
+    // the whole product before reserving or enumerating any of its rows.
+    let mut domains = Domains::<IndexedEvent<8>>::infinite();
+    for coordinate in 0..8 {
+        domains = domains.with_domain(
+            Component(coordinate as u8),
+            (0..256).map(|value| IndexedComponent { coordinate, value }),
+        );
+    }
+    let head = Head::new(VARIABLES.map(ComponentPattern::variable));
+    let tail = RegexExpr::test(TestExpr::and((0..8).map(|coordinate| {
+        TestExpr::atom(
+            Comparison::Eq,
+            AtomPattern::new(
+                Component(coordinate as u8),
+                ComponentPattern::variable(VARIABLES[coordinate]),
+            ),
+        )
+    })));
+    let mut analyzer = PolicyAnalyzer::new(domains);
+    assert_eq!(
+        analyzer
+            .tail_included(&head, &tail, &RegexExpr::empty())
+            .unwrap(),
+        Inclusion::Exhausted,
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UntaggedEqualityComponent {
+    coordinate: usize,
+    value: u16,
+}
+
+impl PartialEq for UntaggedEqualityComponent {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl Eq for UntaggedEqualityComponent {}
+
+impl core::hash::Hash for UntaggedEqualityComponent {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        core::hash::Hash::hash(&self.value, state);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct UntaggedEqualityEvent([u16; 2]);
+
+impl Event for UntaggedEqualityEvent {
+    type Component = UntaggedEqualityComponent;
+    type Arity = N2;
+
+    fn component(self, index: usize) -> UntaggedEqualityComponent {
+        let coordinate = index.min(1);
+        UntaggedEqualityComponent {
+            coordinate,
+            value: self.0[coordinate],
+        }
+    }
+
+    fn coordinate(component: UntaggedEqualityComponent) -> usize {
+        component.coordinate
+    }
+}
+
+#[test]
+fn constants_remain_coordinate_separated_when_equality_ignores_tags() {
+    let constant = |coordinate, value| UntaggedEqualityComponent { coordinate, value };
+    assert_eq!(constant(0, 7), constant(1, 7));
+    let domains = Domains::<UntaggedEqualityEvent>::infinite()
+        .with_domain(Component(0), [constant(0, 7), constant(0, 9)])
+        .with_domain(Component(1), [constant(1, 7), constant(1, 9)]);
+    let head =
+        Head::new((0..2).map(|coordinate| ComponentPattern::constant(constant(coordinate, 7))));
+    let tail = RegexExpr::test(TestExpr::and((0..2).map(|coordinate| {
+        TestExpr::atom(
+            Comparison::Eq,
+            AtomPattern::new(
+                Component(coordinate as u8),
+                ComponentPattern::constant(constant(coordinate, 9)),
+            ),
+        )
+    })));
+    let mut analyzer = PolicyAnalyzer::new(domains);
+    let verdict = analyzer
+        .tail_included(&head, &tail, &RegexExpr::empty())
+        .unwrap();
+    let Inclusion::Counterexample(counterexample) = verdict else {
+        panic!("the two-coordinate constant tail is inhabited");
+    };
+    assert_eq!(counterexample.history.len(), 1);
+    let concrete = |components: &Components<UntaggedEqualityEvent>| {
+        assert_eq!(components.values.len(), 2);
+        UntaggedEqualityEvent(core::array::from_fn(|coordinate| {
+            let Value::Constant(component) = components.values[coordinate] else {
+                panic!("a finite component must reconstruct a constant");
+            };
+            // Comparing components with Eq would miss a representative from the wrong axis.
+            assert_eq!(component.coordinate, coordinate);
+            component.value
+        }))
+    };
+    assert_eq!(
+        concrete(&counterexample.candidate),
+        UntaggedEqualityEvent([7, 7])
+    );
+    assert_eq!(
+        concrete(&counterexample.history[0]),
+        UntaggedEqualityEvent([9, 9])
+    );
+    assert!(denied(
+        &[Rule::new(RuleMode::Forbid, head.clone(), tail)],
+        &counterexample,
+        concrete,
+    ));
+    assert!(!denied(
+        &[Rule::new(RuleMode::Forbid, head, RegexExpr::empty())],
+        &counterexample,
+        concrete,
+    ));
 }

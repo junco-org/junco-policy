@@ -7,7 +7,7 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 use self::verify::{diagnostic_identity, policy_rule_diagnostic, policy_rule_source};
 use super::atoms::{PRINCIPAL_VAR, RESOURCE_VAR};
 #[cfg(verus_keep_ghost)]
-use history_syntax::verify::dsl::{HeadView, PatternView};
+use history_syntax::verify::dsl::PatternView;
 use history_syntax::{ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
@@ -99,20 +99,20 @@ pub(crate) fn pack_policy_rule<E: Event, C>(
     PolicyRule { rule, diagnostic }
 }
 
-/// Builds a `Forbid` rule with an action-constant head over the acting principal and resource.
+/// Builds a `Forbid` rule using the three-ary `(principal, action, resource)` convention.
 #[verus_verify]
 #[verus_spec(result => ensures
     policy_rule_source(result).mode == RuleMode::Forbid,
-    policy_rule_source(result).head@ == (HeadView {
-        principal: PatternView::Variable(seq!['p']),
-        action: PatternView::Constant(action),
-        resource: PatternView::Variable(seq!['r']),
-    }),
+    policy_rule_source(result).head@ == seq![
+        PatternView::Variable(seq!['p']), PatternView::Constant(action), PatternView::Variable(seq!['r']),
+    ],
     policy_rule_source(result).tail == tail,
     policy_rule_diagnostic(result) == diagnostic_identity(diagnostic),
 )]
+// The iterator proof below needs a Vec built by pushes, not vec!.
+#[allow(clippy::vec_init_then_push)]
 pub fn forbid<E: Event, C>(
-    action: E::Action,
+    action: E::Component,
     tail: RegexExpr<E>,
     diagnostic: Diagnostic<C>,
 ) -> PolicyRule<E, C> {
@@ -122,14 +122,13 @@ pub fn forbid<E: Event, C>(
         assert(PRINCIPAL_VAR@ == seq!['p']);
         assert(RESOURCE_VAR@ == seq!['r']);
     }
-    let rule = Rule::new(
-        RuleMode::Forbid,
-        Head::new(
-            ComponentPattern::Variable(String::from_str(PRINCIPAL_VAR)),
-            ComponentPattern::Constant(action),
-            ComponentPattern::Variable(String::from_str(RESOURCE_VAR)),
-        ),
-        tail,
-    );
+    let mut slots = Vec::with_capacity(3);
+    slots.push(ComponentPattern::Variable(String::from_str(PRINCIPAL_VAR)));
+    slots.push(ComponentPattern::Constant(action));
+    slots.push(ComponentPattern::Variable(String::from_str(RESOURCE_VAR)));
+    let iter = slots.into_iter();
+    proof! { vstd::std_specs::iter::axiom_from_iterator_ensures(iter); }
+    let head = Head::new(iter);
+    let rule = Rule::new(RuleMode::Forbid, head, tail);
     pack_policy_rule(rule, diagnostic)
 }

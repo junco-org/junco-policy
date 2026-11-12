@@ -6,6 +6,7 @@ use super::encoding::*;
 use super::semantics::violated_by;
 use crate::verify::finite_states::lemma_powerset_finite;
 use alloc::boxed::Box;
+use history_syntax::MAX_ARITY;
 use history_syntax::syntax::{Component, RuleMode};
 use junco_core::kernel::verify as model;
 use junco_core::verify::history_specs as language;
@@ -134,7 +135,9 @@ pub open spec fn n_covers(d: NDomains, p: Seq<NRule>, rule: NRule) -> bool {
 /// `split` as well as `paper_split`).
 pub open spec fn stmt_policy_reduction() -> bool {
     forall|d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>|
-        #[trigger] split_ok(d, head_constraint(rule.head), head_pairs(p), cases)
+        rule.head.len() == d.len()
+            && (forall|i: int| 0 <= i < p.len() ==> #[trigger] p[i].head.len() == d.len())
+            && #[trigger] split_ok(d, head_constraint(rule.head), head_pairs(p), cases)
             ==> (n_covers(d, p, rule) <==> forall|g1: Constraint| #[trigger] cases.contains(g1)
                 ==> included_under(d, g1, denial(rule), firing_denials(d, p, g1)))
 }
@@ -142,7 +145,7 @@ pub open spec fn stmt_policy_reduction() -> bool {
 /// `R` never denies iff `ρ_R ⊑_{Γ_R} ∅`; `R` denies every matching candidate and history iff
 /// `Univ ⊑_{Γ_R} ρ_R` (appendix `app:policy-reduction`; the vacuity checks in `analyzer.rs`).
 pub open spec fn stmt_vacuity_reductions() -> bool {
-    forall|d: NDomains, rule: NRule| {
+    forall|d: NDomains, rule: NRule| rule.head.len() == d.len() ==> {
         &&& (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) ==> !#[trigger] n_rule_denies(rule, theta, w))
             <==> included_under(d, head_constraint(rule.head), denial(rule), Regex::Empty)
         &&& (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) && n_head_matches(rule.head, theta)
@@ -171,23 +174,40 @@ pub open spec fn head_value(h: NHead, c: Component) -> nat {
     match n_head_field(h, c) { Some(v) => v, None => 0 }
 }
 
-/// `Γ_R` has exactly the equalities `x_c = v` of the head's constants (at most three).
+/// A finite coordinate-indexed bound on a head's constant pairs.
+pub open spec fn head_coordinate_pairs(h: NHead) -> Set<(Component, nat)> {
+    Seq::new(h.len(), |i: int| {
+        let c = Component(i as u8);
+        (c, head_value(h, c))
+    }).to_set()
+}
+
+pub proof fn lemma_head_coordinate_pairs(h: NHead, c: Component, v: nat)
+    requires n_head_field(h, c) == Some(v),
+    ensures head_coordinate_pairs(h).contains((c, v)),
+{
+    let pairs = Seq::new(h.len(), |i: int| {
+        let field = Component(i as u8);
+        (field, head_value(h, field))
+    });
+    assert(c.0 < h.len());
+    assert(pairs[c.0 as int] == (c, v));
+    assert(pairs.contains((c, v)));
+}
+
+/// `Γ_R` has exactly the equalities of the head's constant coordinates.
 pub proof fn lemma_head_constraint(h: NHead)
     ensures
         forall|l: Literal| #[trigger] head_constraint(h).contains(l)
             <==> (l.equal && n_head_field(h, l.component) == Some(l.value)),
 {
-    let bound = ISet::<Literal>::empty().insert(eq_literal(Component::Principal, head_value(h, Component::Principal)))
-        .insert(eq_literal(Component::Action, head_value(h, Component::Action)))
-        .insert(eq_literal(Component::Resource, head_value(h, Component::Resource)));
+    let make = |p: (Component, nat)| eq_literal(p.0, p.1);
+    let bound = head_coordinate_pairs(h).to_iset().map(make);
+    head_coordinate_pairs(h).to_iset().lemma_map_finite(make);
     let f = |l: Literal| l.equal && n_head_field(h, l.component) == Some(l.value);
     assert forall|l: Literal| f(l) implies bound.contains(l) by {
-        assert(l == eq_literal(l.component, head_value(h, l.component)));
-        match l.component {
-            Component::Principal => {},
-            Component::Action => {},
-            Component::Resource => {},
-        }
+        lemma_head_coordinate_pairs(h, l.component, l.value);
+        assert(l == make((l.component, l.value)));
     }
     lemma_set_new_bounded(f, bound);
     assert(head_constraint(h) == Set::new(f).unwrap());
@@ -201,9 +221,7 @@ pub open spec fn head_pairs_bound(p: Seq<NRule>) -> ISet<(Component, nat)>
         ISet::empty()
     } else {
         let h = p.last().head;
-        head_pairs_bound(p.drop_last()).insert((Component::Principal, head_value(h, Component::Principal)))
-            .insert((Component::Action, head_value(h, Component::Action)))
-            .insert((Component::Resource, head_value(h, Component::Resource)))
+        head_pairs_bound(p.drop_last()).union(head_coordinate_pairs(h).to_iset())
     }
 }
 
@@ -214,6 +232,7 @@ pub proof fn lemma_head_pairs_bound(p: Seq<NRule>)
             ==> #[trigger] head_pairs_bound(p).contains(pair),
     decreases p.len(),
 {
+    broadcast use vstd::iset::lemma_iset_union_finite, vstd::set::lemma_to_iset_finite;
     if p.len() > 0 {
         let q = p.drop_last();
         lemma_head_pairs_bound(q);
@@ -226,12 +245,8 @@ pub proof fn lemma_head_pairs_bound(p: Seq<NRule>)
                 assert(n_head_field(q[i].head, pair.0) == Some(pair.1));
                 assert(head_pairs_bound(q).contains(pair));
             } else {
-                assert(pair == (pair.0, head_value(h, pair.0)));
-                match pair.0 {
-                    Component::Principal => {},
-                    Component::Action => {},
-                    Component::Resource => {},
-                }
+                assert(n_head_field(h, pair.0) == Some(pair.1));
+                lemma_head_coordinate_pairs(h, pair.0, pair.1);
             }
         }
     }
@@ -462,6 +477,7 @@ pub proof fn theorem_paper_split_ok()
 
 /// `θ ⊨ Γ_R` iff the head matches `θ`.
 pub proof fn lemma_head_sat(h: NHead, theta: Subst)
+    requires h.len() == theta.len(), h.len() <= MAX_ARITY,
     ensures sat_by(theta, head_constraint(h)) == n_head_matches(h, theta),
 {
     lemma_head_constraint(h);
@@ -471,9 +487,14 @@ pub proof fn lemma_head_sat(h: NHead, theta: Subst)
         }
     }
     if sat_by(theta, head_constraint(h)) {
-        assert forall|c: Component| #[trigger] n_head_field(h, c) matches Some(v) ==> language::field_value(theta, c) == v by {
-            if let Some(v) = n_head_field(h, c) {
+        assert forall|i: int| #![trigger h[i]] 0 <= i < h.len() implies
+            (h[i] matches Some(v) ==> theta[i] == v) by {
+            let c = Component(i as u8);
+            assert(c.0 as int == i);
+            if let Some(v) = h[i] {
+                assert(n_head_field(h, c) == Some(v));
                 assert(head_constraint(h).contains(eq_literal(c, v)));
+                assert(literal_holds(theta, eq_literal(c, v)));
             }
         }
     }
@@ -487,6 +508,7 @@ pub proof fn lemma_denial_lang(rule: NRule, theta: Subst, w: Seq<EventView>)
 
 /// `R` denies iff `θ ⊨ Γ_R` and `w ∈ L_θ(ρ_R)`.
 pub proof fn lemma_rule_denies_iff(rule: NRule, theta: Subst, w: Seq<EventView>)
+    requires rule.head.len() == theta.len(), rule.head.len() <= MAX_ARITY,
     ensures n_rule_denies(rule, theta, w) == (sat_by(theta, head_constraint(rule.head)) && n_lang(theta, denial(rule), w)),
 {
     lemma_head_sat(rule.head, theta);
@@ -523,6 +545,8 @@ pub proof fn lemma_firing_lang(d: NDomains, p: Seq<NRule>, g1: Constraint, theta
 
 pub proof fn lemma_policy_reduction(d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>)
     requires split_ok(d, head_constraint(rule.head), head_pairs(p), cases),
+        rule.head.len() == d.len(),
+        forall|i: int| 0 <= i < p.len() ==> #[trigger] p[i].head.len() == d.len(),
     ensures
         n_covers(d, p, rule) <==> forall|g1: Constraint| #[trigger] cases.contains(g1)
             ==> included_under(d, g1, denial(rule), firing_denials(d, p, g1)),
@@ -574,7 +598,9 @@ pub proof fn theorem_policy_reduction()
     ensures stmt_policy_reduction(),
 {
     assert forall|d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>|
-        #[trigger] split_ok(d, head_constraint(rule.head), head_pairs(p), cases)
+        rule.head.len() == d.len()
+        && (forall|i: int| 0 <= i < p.len() ==> #[trigger] p[i].head.len() == d.len())
+        && #[trigger] split_ok(d, head_constraint(rule.head), head_pairs(p), cases)
         implies (n_covers(d, p, rule) <==> forall|g1: Constraint| #[trigger] cases.contains(g1)
             ==> included_under(d, g1, denial(rule), firing_denials(d, p, g1))) by {
         lemma_policy_reduction(d, p, rule, cases);
@@ -582,6 +608,7 @@ pub proof fn theorem_policy_reduction()
 }
 
 pub proof fn lemma_vacuity(d: NDomains, rule: NRule)
+    requires rule.head.len() == d.len(),
     ensures
         (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) ==> !#[trigger] n_rule_denies(rule, theta, w))
             <==> included_under(d, head_constraint(rule.head), denial(rule), Regex::Empty),
@@ -629,15 +656,17 @@ pub proof fn theorem_vacuity_reductions()
 {
     assert forall|d: NDomains, rule: NRule|
         #![trigger included_under(d, head_constraint(rule.head), denial(rule), Regex::Empty)]
-        (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) ==> !#[trigger] n_rule_denies(rule, theta, w))
-            <==> included_under(d, head_constraint(rule.head), denial(rule), Regex::Empty) by {
+        rule.head.len() == d.len() implies (
+            (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) ==> !#[trigger] n_rule_denies(rule, theta, w))
+                <==> included_under(d, head_constraint(rule.head), denial(rule), Regex::Empty)) by {
         lemma_vacuity(d, rule);
     }
     assert forall|d: NDomains, rule: NRule|
         #![trigger included_under(d, head_constraint(rule.head), Regex::All, denial(rule))]
-        (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) && n_head_matches(rule.head, theta)
-                ==> #[trigger] n_rule_denies(rule, theta, w))
-            <==> included_under(d, head_constraint(rule.head), Regex::All, denial(rule)) by {
+        rule.head.len() == d.len() implies (
+            (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) && n_head_matches(rule.head, theta)
+                    ==> #[trigger] n_rule_denies(rule, theta, w))
+                <==> included_under(d, head_constraint(rule.head), Regex::All, denial(rule))) by {
         lemma_vacuity(d, rule);
     }
 }
