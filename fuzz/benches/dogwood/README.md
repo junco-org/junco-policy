@@ -11,6 +11,8 @@ cargo +1.98.1 bench --manifest-path fuzz/Cargo.toml --bench other -- 'dogwood_fu
 
 `dogwood_examples`: Dogwood alone replays 52 default-feature doc examples. Preflight matches the CLI's verdict/rule/error stream against `expected.out`; throughput counts all input events. Dogwood has no benchmark suite at the pinned commit, so these are documentation workloads, not upstream benchmarks.
 
+`deny_scaling`: one denied decision over committed histories of 2^4 ..= 2^16 granted events (the `lock_scaling` trace and seed). Per length the first candidate Junco denies, in order Edit, Remove, Release × agent0..2 × src/file0..3.txt, is decided by all three engines; preflight asserts each denies it. Junco decides warm with a retained policy; Dogwood decides on a fresh authorizer with the history ingested outside timing; VeriMon is one long-lived process per length with the history streamed before timing, so the timed region is a single request time point.
+
 Junco retains its compiled policy/store with fresh histories; Dogwood re-lowers and rebuilds each authorizer outside timing because it consumes the policy set and has no reset. Timed routines include ingestion and teardown. Events are prebuilt: a request decides; only grants add a response visible to temporal predicates. Timestamps advance by one second, inside the 24h window. No warm Dogwood single-decision probe exists: every call appends; `../lock_policy.rs` covers junco's warm decisions.
 
 | Junco rule | Dogwood `@id` |

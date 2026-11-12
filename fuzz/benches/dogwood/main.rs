@@ -28,6 +28,11 @@
 //! Dogwood has no benchmark suite at commit `4ec5e2c01b44ff3882a231ae5d315b330b38fa25`;
 //! the examples group replays its doc examples instead. There is no warm single-decision
 //! Dogwood probe: every `is_authorized` appends. `../lock_policy.rs` covers junco's warm probe.
+//!
+//! `deny_scaling` times one denied decision over committed histories of 2^4 ..= 2^16 granted
+//! events (the `lock_scaling` trace): Junco warm with a retained policy, Dogwood over a freshly
+//! ingested authorizer (ingestion untimed), VeriMon as one long-lived process per length with the
+//! history streamed before timing, so the timed region is one request time point.
 
 use std::env;
 use std::fmt::Write as _;
@@ -49,8 +54,8 @@ use dogwood_language::{
 use history_store::{History, Store};
 use junco_policy::{Action, LockEvent, LockPolicy};
 use lock_policy_harness::{
-    Agent, BYTES_PER_EVENT, BYTES_PER_TRACE, DETERMINISTIC_SEED, PooledPath, SEEDED_TRACE_COUNT,
-    check, entropy, granted_history, validate_trace,
+    Agent, BYTES_PER_EVENT, BYTES_PER_TRACE, DETERMINISTIC_SEED, MAX_AGENT_NUMBER, MAX_FILE_NUMBER,
+    PooledPath, SEEDED_TRACE_COUNT, check, entropy, granted_history, validate_trace,
 };
 
 /// Four lock actions over agent principals and path resources.
@@ -807,9 +812,182 @@ fn examples(criterion: &mut Criterion) {
     group.finish();
 }
 
+/// First Edit/Remove/Release candidate the lock policy denies over `prefix`, in a fixed order
+/// over actions, agents and paths. `Read` has no forbid rule and is never denied.
+fn denied_candidate(
+    policy: &mut LockPolicy<Agent, PooledPath>,
+    prefix: &History<LockEvent<Agent, PooledPath>>,
+) -> Option<LockEvent<Agent, PooledPath>> {
+    [Action::Edit, Action::Remove, Action::Release]
+        .into_iter()
+        .flat_map(|action| {
+            (0..MAX_AGENT_NUMBER).flat_map(move |agent| {
+                (0..MAX_FILE_NUMBER)
+                    .map(move |path| LockEvent::new(Agent(agent), action, PooledPath(path)))
+            })
+        })
+        .find(|candidate| !check(policy, prefix, candidate).expect("decision"))
+}
+
+/// One request time point whose denial is the sentinel; the empty `@{tp + 1}` closes it so
+/// VeriMon emits the verdict. Only valid once the request is known to be denied.
+fn verimon_request(tp: usize, event: &LockEvent<Agent, PooledPath>) -> VerimonLog {
+    VerimonLog {
+        text: format!(
+            "@{tp} {}_req(\"{}\",\"{}\")\n@{}\n",
+            predicate(event.action),
+            event.principal,
+            event.resource,
+            tp + 1
+        ),
+        denied: Vec::new(),
+        sentinel: tp,
+    }
+}
+
+fn deny(criterion: &mut Criterion) {
+    // Same lengths, seed and prefixes as `../lock-policy/main.rs`, so junco points match its panel.
+    const LENGTHS: [usize; 13] = [
+        16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536,
+    ];
+    const SEED: u64 = 0x9e37_79b9_7f4a_7c15;
+    const DOGWOOD_MAX_LENGTH: usize = 65536;
+    let longest = LENGTHS[LENGTHS.len() - 1];
+    let history = granted_history(&entropy(SEED, longest * BYTES_PER_EVENT), longest)
+        .expect("benchmark history generation failed");
+    let store = history.store();
+    let dogwood = Dogwood::lock_policy();
+    let mut group = criterion.benchmark_group("deny_scaling");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(300));
+    group.measurement_time(Duration::from_secs(1));
+
+    for length in LENGTHS {
+        let events = &history.as_slice()[..length];
+        let prefix = History::from_events(Arc::clone(store), events.iter().copied())
+            .expect("benchmark prefix construction failed");
+        let mut policy = LockPolicy::new(Arc::clone(store)).expect("lock policy compiles");
+        let candidate = denied_candidate(&mut policy, &prefix)
+            .unwrap_or_else(|| panic!("no denied candidate at length {length}"));
+        eprintln!("deny {length}: {candidate:?}");
+
+        // Responses only, one second apart: 65,536 s stays inside the policy's `within 24h`.
+        let responses: Vec<Event> = events
+            .iter()
+            .enumerate()
+            .map(|(index, event)| dogwood_event(event, "response", index as i64))
+            .collect();
+        let request = dogwood_event(&candidate, "request", length as i64);
+        let ingested = || {
+            let mut authorizer = dogwood.authorizer();
+            for response in &responses {
+                assert!(authorizer.is_authorized(response).is_none());
+            }
+            authorizer
+        };
+        if length <= DOGWOOD_MAX_LENGTH {
+            assert!(
+                !ingested()
+                    .is_authorized(&request)
+                    .expect("decides")
+                    .allowed(),
+                "dogwood grants {candidate:?} at length {length}"
+            );
+        }
+
+        // Stream the commits once; commits are never requests, so nothing precedes the sentinel.
+        let mut verimon = Verimon::spawn();
+        let mut text = String::new();
+        for (index, event) in events.iter().enumerate() {
+            writeln!(
+                text,
+                "@{} {}(\"{}\",\"{}\")",
+                VERIMON_FIRST_TP + index,
+                predicate(event.action),
+                event.principal,
+                event.resource
+            )
+            .expect("write to string");
+        }
+        let sentinel = VERIMON_FIRST_TP + length;
+        write!(
+            text,
+            "@{sentinel} edit_req(\"sentinel_other\",\"sentinel\")\n@{}\n",
+            sentinel + 1
+        )
+        .expect("write to string");
+        let ingest = VerimonLog {
+            text,
+            denied: Vec::new(),
+            sentinel,
+        };
+        let (_, violated) = verimon.run(&ingest);
+        assert!(
+            violated.is_empty(),
+            "verimon violations during ingest at length {length}: {violated:?}"
+        );
+        // Preflight with a guaranteed sentinel so a VeriMon grant cannot hang the reader.
+        let mut tp = sentinel + 2;
+        let preflight = VerimonLog {
+            text: format!(
+                "@{tp} {}_req(\"{}\",\"{}\")\n@{} edit_req(\"sentinel_other\",\"sentinel\")\n@{}\n",
+                predicate(candidate.action),
+                candidate.principal,
+                candidate.resource,
+                tp + 1,
+                tp + 2
+            ),
+            denied: Vec::new(),
+            sentinel: tp + 1,
+        };
+        assert_eq!(
+            verimon.run(&preflight).1,
+            vec![tp],
+            "verimon grants {candidate:?} at length {length}"
+        );
+        tp += 3;
+
+        group.bench_function(BenchmarkId::new("junco", length), |bencher| {
+            bencher.iter(|| {
+                check(&mut policy, black_box(&prefix), black_box(&candidate)).expect("decision")
+            })
+        });
+        if length <= DOGWOOD_MAX_LENGTH {
+            group.bench_function(BenchmarkId::new("dogwood", length), |bencher| {
+                bencher.iter_batched(
+                    ingested,
+                    |mut authorizer| {
+                        assert!(
+                            !authorizer
+                                .is_authorized(&request)
+                                .expect("decides")
+                                .allowed()
+                        )
+                    },
+                    BatchSize::PerIteration,
+                )
+            });
+        }
+        group.bench_function(BenchmarkId::new("verimon", length), |bencher| {
+            bencher.iter_custom(|iters| {
+                let mut total = Duration::ZERO;
+                for _ in 0..iters {
+                    let (elapsed, violated) = verimon.run(&verimon_request(tp, &candidate));
+                    assert!(violated.is_empty());
+                    total += elapsed;
+                    tp += 2;
+                }
+                total
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().plotting_backend(PlottingBackend::Plotters);
-    targets = replay, fuzz, examples
+    targets = replay, fuzz, examples, deny
 }
 criterion_main!(benches);
