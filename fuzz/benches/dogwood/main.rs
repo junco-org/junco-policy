@@ -8,12 +8,12 @@
 //! Temporal predicates see responses only, so denied requests cannot change lock state.
 //! One-second timestamps keep the largest stream (2,048 events) inside `within 24h`.
 //!
-//! VeriMon (`jshs/monpoly` commit `025a142321e4cd9174164568e38c399ec336a076`,
-//! `-verified`) runs as a child process per iteration. A prelude sentinel proves readiness and a
-//! trailing sentinel marks completion. Timing covers streaming the log and reading verdicts, not
-//! process start-up, formula parsing, or exit. Each request time point decides; a commit time point
-//! follows only when granted. The three MFOTL disjuncts encode `owned_by_other`, `stale_view`, and
-//! `read_by_other`.
+//! VeriMon (`jshs/monpoly` commit `025a142321e4cd9174164568e38c399ec336a076` plus
+//! `verimon/timed.patch`, `-verified`) runs as a child process per iteration. A prelude sentinel
+//! proves readiness and a trailing sentinel marks completion. Timing covers streaming the log and
+//! reading verdicts, not process start-up, formula parsing, or exit. Each request time point
+//! decides; a commit time point follows only when granted. The three MFOTL disjuncts encode
+//! `owned_by_other`, `stale_view`, and `read_by_other`.
 //!
 //! | Junco rule | Dogwood `@id` |
 //! | --- | --- |
@@ -33,12 +33,17 @@
 //! events (the `lock_scaling` trace): Junco warm with a retained policy, Dogwood over a freshly
 //! ingested authorizer (ingestion untimed), VeriMon as one long-lived process per length with the
 //! history streamed before timing, so the timed region is one request time point.
+//!
+//! `deny_cold` decides the same candidates cold: Junco folds a never-seen clone of the prefix,
+//! Dogwood decides as above, and a fresh `-timed` VeriMon process parses the log untimed and
+//! reports the kernel's time over every time point, so each engine pays the whole history.
 
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
 use std::hint::black_box;
 use std::io::{BufRead, BufReader, Write as IoWrite};
+use std::path::Path;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -322,6 +327,69 @@ fn verimon_log<'a>(
     }
 }
 
+/// `VERIMON`, falling back to `monpoly` on `PATH`.
+fn verimon_binary() -> std::ffi::OsString {
+    env::var_os("VERIMON").unwrap_or_else(|| "monpoly".into())
+}
+
+/// The time point of a VeriMon verdict line, if `line` is one.
+fn verdict_time_point(line: &str) -> Option<usize> {
+    let (_, suffix) = line.split_once("(time point ")?;
+    Some(
+        suffix
+            .split_once(')')
+            .expect("VeriMon time point terminator")
+            .0
+            .parse()
+            .expect("VeriMon numeric time point"),
+    )
+}
+
+/// Cold VeriMon: a fresh `-timed` process (`verimon/timed.patch`) parses `log` untimed, then
+/// reports the time the verified kernel spent stepping every time point. Returns that time and
+/// the violated time points.
+fn verimon_cold(log: &Path) -> (Duration, Vec<usize>) {
+    let output = Command::new(verimon_binary())
+        .args([
+            "-verified",
+            "-timed",
+            "-nonewlastts",
+            "-sig",
+            VERIMON_SIG,
+            "-formula",
+            VERIMON_FORMULA,
+            "-log",
+        ])
+        .arg(log)
+        .stderr(Stdio::inherit())
+        .output()
+        .expect("run VeriMon");
+    assert!(
+        output.status.success(),
+        "VeriMon failed on {}",
+        log.display()
+    );
+    let stdout = String::from_utf8(output.stdout).expect("VeriMon output is UTF-8");
+    let mut elapsed = None;
+    let mut violated = Vec::new();
+    for line in stdout.lines() {
+        if let Some(ns) = line
+            .strip_prefix("# monitor time: ")
+            .and_then(|rest| rest.strip_suffix(" ns"))
+        {
+            elapsed = Some(Duration::from_nanos(
+                ns.parse().expect("VeriMon nanoseconds"),
+            ));
+        } else if let Some(time_point) = verdict_time_point(line) {
+            violated.push(time_point);
+        }
+    }
+    (
+        elapsed.expect("VeriMon -timed report; build it with verimon/timed.patch applied"),
+        violated,
+    )
+}
+
 struct Verimon {
     child: Child,
     stdout: BufReader<ChildStdout>,
@@ -330,8 +398,7 @@ struct Verimon {
 
 impl Verimon {
     fn spawn() -> Self {
-        let binary = env::var_os("VERIMON").unwrap_or_else(|| "monpoly".into());
-        let mut child = Command::new(binary)
+        let mut child = Command::new(verimon_binary())
             .args([
                 "-verified",
                 "-sig",
@@ -376,15 +443,9 @@ impl Verimon {
             {
                 panic!("VeriMon exited before time point {sentinel}; see its stderr above");
             }
-            let Some((_, suffix)) = self.line.split_once("(time point ") else {
+            let Some(time_point) = verdict_time_point(&self.line) else {
                 continue;
             };
-            let time_point = suffix
-                .split_once(')')
-                .expect("VeriMon time point terminator")
-                .0
-                .parse()
-                .expect("VeriMon numeric time point");
             if time_point == sentinel {
                 break;
             }
@@ -845,15 +906,44 @@ fn verimon_request(tp: usize, event: &LockEvent<Agent, PooledPath>) -> VerimonLo
     }
 }
 
+/// Same lengths, seed and prefixes as `../lock-policy/main.rs`, so junco points match its panel.
+const DENY_LENGTHS: [usize; 13] = [
+    16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536,
+];
+const DENY_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
+
+/// Dogwood's view of `events` as responses one second apart (65,536 s stays inside the policy's
+/// `within 24h`) and of `candidate` as the request after them.
+fn dogwood_trace(
+    events: &[LockEvent<Agent, PooledPath>],
+    candidate: &LockEvent<Agent, PooledPath>,
+) -> (Vec<Event>, Event) {
+    let responses = events
+        .iter()
+        .enumerate()
+        .map(|(index, event)| dogwood_event(event, "response", index as i64))
+        .collect();
+    (
+        responses,
+        dogwood_event(candidate, "request", events.len() as i64),
+    )
+}
+
+/// A fresh authorizer with `responses` ingested, built outside timing.
+fn ingested<'a>(dogwood: &'a Dogwood, responses: &'a [Event]) -> impl Fn() -> Authorizer + 'a {
+    move || {
+        let mut authorizer = dogwood.authorizer();
+        for response in responses {
+            assert!(authorizer.is_authorized(response).is_none());
+        }
+        authorizer
+    }
+}
+
 fn deny(criterion: &mut Criterion) {
-    // Same lengths, seed and prefixes as `../lock-policy/main.rs`, so junco points match its panel.
-    const LENGTHS: [usize; 13] = [
-        16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536,
-    ];
-    const SEED: u64 = 0x9e37_79b9_7f4a_7c15;
     const DOGWOOD_MAX_LENGTH: usize = 65536;
-    let longest = LENGTHS[LENGTHS.len() - 1];
-    let history = granted_history(&entropy(SEED, longest * BYTES_PER_EVENT), longest)
+    let longest = DENY_LENGTHS[DENY_LENGTHS.len() - 1];
+    let history = granted_history(&entropy(DENY_SEED, longest * BYTES_PER_EVENT), longest)
         .expect("benchmark history generation failed");
     let store = history.store();
     let dogwood = Dogwood::lock_policy();
@@ -863,7 +953,7 @@ fn deny(criterion: &mut Criterion) {
     group.warm_up_time(Duration::from_millis(300));
     group.measurement_time(Duration::from_secs(1));
 
-    for length in LENGTHS {
+    for length in DENY_LENGTHS {
         let events = &history.as_slice()[..length];
         let prefix = History::from_events(Arc::clone(store), events.iter().copied())
             .expect("benchmark prefix construction failed");
@@ -872,20 +962,8 @@ fn deny(criterion: &mut Criterion) {
             .unwrap_or_else(|| panic!("no denied candidate at length {length}"));
         eprintln!("deny {length}: {candidate:?}");
 
-        // Responses only, one second apart: 65,536 s stays inside the policy's `within 24h`.
-        let responses: Vec<Event> = events
-            .iter()
-            .enumerate()
-            .map(|(index, event)| dogwood_event(event, "response", index as i64))
-            .collect();
-        let request = dogwood_event(&candidate, "request", length as i64);
-        let ingested = || {
-            let mut authorizer = dogwood.authorizer();
-            for response in &responses {
-                assert!(authorizer.is_authorized(response).is_none());
-            }
-            authorizer
-        };
+        let (responses, request) = dogwood_trace(events, &candidate);
+        let ingested = ingested(&dogwood, &responses);
         if length <= DOGWOOD_MAX_LENGTH {
             assert!(
                 !ingested()
@@ -956,7 +1034,7 @@ fn deny(criterion: &mut Criterion) {
         if length <= DOGWOOD_MAX_LENGTH {
             group.bench_function(BenchmarkId::new("dogwood", length), |bencher| {
                 bencher.iter_batched(
-                    ingested,
+                    &ingested,
                     |mut authorizer| {
                         assert!(
                             !authorizer
@@ -985,9 +1063,113 @@ fn deny(criterion: &mut Criterion) {
     group.finish();
 }
 
+/// `deny_cold`: the `deny_scaling` candidates decided cold, every engine paying the whole history
+/// inside timing with parsing outside it. Junco folds a never-seen clone of the prefix with a
+/// retained compiled policy, Dogwood decides on a freshly ingested authorizer, and a fresh `-timed`
+/// VeriMon process (`verimon/timed.patch`) parses the log first and reports the kernel's time over
+/// all time points.
+fn deny_cold(criterion: &mut Criterion) {
+    let longest = DENY_LENGTHS[DENY_LENGTHS.len() - 1];
+    let history = granted_history(&entropy(DENY_SEED, longest * BYTES_PER_EVENT), longest)
+        .expect("benchmark history generation failed");
+    let store = history.store();
+    let dogwood = Dogwood::lock_policy();
+    let mut group = criterion.benchmark_group("deny_cold");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(300));
+    group.measurement_time(Duration::from_secs(1));
+
+    for length in DENY_LENGTHS {
+        let events = &history.as_slice()[..length];
+        let prefix = History::from_events(Arc::clone(store), events.iter().copied())
+            .expect("benchmark prefix construction failed");
+        let mut policy = LockPolicy::new(Arc::clone(store)).expect("lock policy compiles");
+        let candidate = denied_candidate(&mut policy, &prefix)
+            .unwrap_or_else(|| panic!("no denied candidate at length {length}"));
+        eprintln!("deny_cold {length}: {candidate:?}");
+
+        let (responses, request) = dogwood_trace(events, &candidate);
+        let ingested = ingested(&dogwood, &responses);
+        assert!(
+            !ingested()
+                .is_authorized(&request)
+                .expect("decides")
+                .allowed(),
+            "dogwood grants {candidate:?} at length {length}"
+        );
+
+        // Commits at time points 0..length, the request at `length`, an empty close so VeriMon
+        // emits its verdict; no sentinel, since the process ends after the log.
+        let mut text = String::new();
+        for (index, event) in events.iter().enumerate() {
+            writeln!(
+                text,
+                "@{index} {}(\"{}\",\"{}\")",
+                predicate(event.action),
+                event.principal,
+                event.resource
+            )
+            .expect("write to string");
+        }
+        write!(
+            text,
+            "@{length} {}_req(\"{}\",\"{}\")\n@{}\n",
+            predicate(candidate.action),
+            candidate.principal,
+            candidate.resource,
+            length + 1
+        )
+        .expect("write to string");
+        let log = env::temp_dir().join(format!("junco-deny-cold-{length}.log"));
+        fs::write(&log, text).expect("write VeriMon log");
+        assert_eq!(
+            verimon_cold(&log).1,
+            [length],
+            "verimon grants {candidate:?} at length {length}"
+        );
+
+        group.bench_function(BenchmarkId::new("junco", length), |bencher| {
+            bencher.iter_batched(
+                || prefix.try_clone().expect("history clone"),
+                |clone| {
+                    check(&mut policy, black_box(&clone), black_box(&candidate)).expect("decision")
+                },
+                BatchSize::PerIteration,
+            )
+        });
+        group.bench_function(BenchmarkId::new("dogwood", length), |bencher| {
+            bencher.iter_batched(
+                &ingested,
+                |mut authorizer| {
+                    assert!(
+                        !authorizer
+                            .is_authorized(&request)
+                            .expect("decides")
+                            .allowed()
+                    )
+                },
+                BatchSize::PerIteration,
+            )
+        });
+        group.bench_function(BenchmarkId::new("verimon", length), |bencher| {
+            bencher.iter_custom(|iters| {
+                (0..iters)
+                    .map(|_| {
+                        let (elapsed, violated) = verimon_cold(&log);
+                        assert_eq!(violated, [length]);
+                        elapsed
+                    })
+                    .sum()
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().plotting_backend(PlottingBackend::Plotters);
-    targets = replay, fuzz, examples, deny
+    targets = replay, fuzz, examples, deny, deny_cold
 }
 criterion_main!(benches);

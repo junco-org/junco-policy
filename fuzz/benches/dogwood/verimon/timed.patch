@@ -1,0 +1,109 @@
+From f8949b96d926687ec8671f163d14f9232a3a3476 Mon Sep 17 00:00:00 2001
+From: Lef Ioannidis <eioannidis@microsoft.com>
+Date: Thu, 12 Nov 2026 15:35:42 -0800
+Subject: [PATCH] Add -timed to the verified kernel: parse the whole log first,
+ then time and report the monitor steps alone
+
+---
+ src/algorithm_verified.ml  | 27 +++++++++++++++++++++++----
+ src/algorithm_verified.mli |  1 +
+ src/main.ml                |  1 +
+ 3 files changed, 25 insertions(+), 4 deletions(-)
+
+diff --git a/src/algorithm_verified.ml b/src/algorithm_verified.ml
+index 7a206769..e242dffe 100644
+--- a/src/algorithm_verified.ml
++++ b/src/algorithm_verified.ml
+@@ -1,4 +1,6 @@
+ let no_mw = ref false
++(* -timed: parse the whole log first, then time the verified steps alone and report them. *)
++let timed = ref false
+ 
+ module Monitor = struct
+   type t = {
+@@ -7,6 +9,7 @@ module Monitor = struct
+     mutable cur_ts: MFOTL.timestamp;
+     mutable cur_db: Verified_adapter.db;
+     mutable cur_state: Verified_adapter.state;
++    mutable pending: (MFOTL.timestamp * Verified_adapter.db) list; (* reversed; -timed only *)
+   }
+ 
+   let begin_tp ctxt ts =
+@@ -22,10 +25,8 @@ module Monitor = struct
+   let tuple ctxt s sl =
+     ctxt.cur_db <- Verified_adapter.insert_into_db s sl ctxt.cur_db
+ 
+-  let end_tp ctxt =
+-    let db = ctxt.cur_db in
+-    ctxt.cur_db <- Verified_adapter.empty_db;
+-    let (vs, new_state) = Verified_adapter.step ctxt.cur_ts db ctxt.cur_state in
++  let step ctxt ts db =
++    let (vs, new_state) = Verified_adapter.step ts db ctxt.cur_state in
+     ctxt.cur_state <- new_state;
+     if !Misc.verbose then
+       Printf.printf "At time point %d:\n%!" ctxt.cur_tp;
+@@ -36,6 +37,14 @@ module Monitor = struct
+       ) vs;
+     ctxt.cur_tp <- ctxt.cur_tp + 1
+ 
++  let end_tp ctxt =
++    let db = ctxt.cur_db in
++    ctxt.cur_db <- Verified_adapter.empty_db;
++    if !timed then
++      ctxt.pending <- (ctxt.cur_ts, db) :: ctxt.pending
++    else
++      step ctxt ctxt.cur_ts db
++
+   let command ctxt _name _params =
+     prerr_endline "ERROR: Commands are not supported by the verified kernel";
+     if not !Misc.ignore_parse_errors then exit 1
+@@ -45,6 +54,15 @@ module Monitor = struct
+       begin
+         begin_tp ctxt MFOTL.ts_max;
+         end_tp ctxt
++      end;
++    if !timed then
++      begin
++        let tps = List.rev ctxt.pending in
++        ctxt.pending <- [];
++        let start = Unix.gettimeofday () in
++        List.iter (fun (ts, db) -> step ctxt ts db) tps;
++        let elapsed = Unix.gettimeofday () -. start in
++        Printf.printf "# monitor time: %.0f ns\n%!" (elapsed *. 1e9)
+       end
+ 
+   let parse_error ctxt pos msg =
+@@ -74,6 +92,7 @@ let monitor_gen parse dbschema logfile fv f =
+         cur_ts = MFOTL.ts_invalid;
+         cur_db = Verified_adapter.empty_db;
+         cur_state = Verified_adapter.init cf;
++        pending = [];
+       } in
+       ignore (parse dbschema logfile ctxt)
+   | Verified.Monitor.Inl e -> failwith ("Error during verified type checking: " ^ e)
+diff --git a/src/algorithm_verified.mli b/src/algorithm_verified.mli
+index 460a6699..9085de5b 100644
+--- a/src/algorithm_verified.mli
++++ b/src/algorithm_verified.mli
+@@ -2,5 +2,6 @@ open Predicate
+ open MFOTL
+ 
+ val no_mw: bool ref
++val timed: bool ref
+ val monitor: Db.schema -> string -> var list -> formula -> unit
+ val monitor_string: Db.schema -> string -> var list -> formula -> unit
+diff --git a/src/main.ml b/src/main.ml
+index 49ba9123..54ae1497 100644
+--- a/src/main.ml
++++ b/src/main.ml
+@@ -213,6 +213,7 @@ let _ =
+     "-combine", Arg.Set_string Algorithm.combine_files, "\tComma separated partition files to combine";
+     "-verified", Arg.Set Misc.verified, "\tRun the Monpoly's verified kernel";
+     "-no_mw", Arg.Set Algorithm_verified.no_mw, "\tNo multi-way join (only with the verified kernel)";
++    "-timed", Arg.Set Algorithm_verified.timed, "\tParse the whole log first, then time the verified kernel alone and print the elapsed time";
+     "-unfold_let", Arg.Symbol (["no"; "full"; "smart"], set_unfold_let),
+       "\tWhether and how LET expressions in the formula should be unfolded (default 'no')";
+     "-strcache", Arg.Set Misc.str_cache, "\tUse string cache to reduce memory usage";
+-- 
+2.43.0
+
