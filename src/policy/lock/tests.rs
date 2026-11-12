@@ -251,6 +251,51 @@ fn retained_policy_matches_cold_decisions_across_history_updates() {
     }
 }
 
+#[test]
+fn truncation_refolds_the_claim_table() {
+    let store = store();
+    let mut policy = LockPolicy::new(store.clone()).unwrap();
+    let mut history = History::from_events(
+        store,
+        [on_x(Who::Me, Action::Read), on_x(Who::Other, Action::Edit)],
+    )
+    .unwrap();
+    let edit = on_x(Who::Me, Action::Edit);
+    let owned = policy.decide(&history, &edit).unwrap();
+    assert_eq!(owned, cold(&history, &edit));
+    assert!(
+        matches!(&owned, PolicyDecision::Deny { failed_precondition, .. }
+        if failed_precondition.starts_with("src/x is owned by other;"))
+    );
+
+    // Same id and length, new revision: a table that trusted its `consumed` index would still
+    // name self as the last reader.
+    history.truncate(1).unwrap();
+    history.push(on_x(Who::Other, Action::Read)).unwrap();
+    let read = policy.decide(&history, &edit).unwrap();
+    assert_eq!(read, cold(&history, &edit));
+    assert!(
+        matches!(&read, PolicyDecision::Deny { failed_precondition, .. }
+        if failed_precondition.starts_with("src/x was last read by other;"))
+    );
+}
+
+#[test]
+fn alternating_histories_refold_the_claim_table() {
+    let store = store();
+    let mut policy = LockPolicy::new(store.clone()).unwrap();
+    let owned = History::from_events(store.clone(), [on_x(Who::Other, Action::Edit)]).unwrap();
+    let read = History::from_events(
+        store,
+        [on_x(Who::Me, Action::Edit), on_x(Who::Other, Action::Read)],
+    )
+    .unwrap();
+    let edit = on_x(Who::Me, Action::Edit);
+    for history in [&owned, &read, &owned, &read] {
+        assert_eq!(policy.decide(history, &edit).unwrap(), cold(history, &edit));
+    }
+}
+
 /// Asserts the literal `src/x` outcomes for self after self's edit and other's read: self owns
 /// it, so release grants, but other's read claim blocks the edit. Runs twice so the second pass
 /// decides on warm progress cursors.

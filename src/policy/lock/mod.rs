@@ -10,8 +10,10 @@
 //! `edit` also blocks `edit` and `remove` until the acting principal reads the resource again;
 //! `release` does not restore freshness, and `remove` resets it. Owner denials precede freshness
 //! and reader denials. [`LockPolicy`] compiles this seven-rule table once and retains its
-//! evaluator caches across decisions.
+//! evaluator caches and a per-resource claim table, so denial text costs the events appended
+//! since the last denial.
 
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -191,27 +193,72 @@ where
     ]
 }
 
-/// Folds `history` to `resource`'s current owner and last reader, for diagnostics only — grant
-/// and deny are entirely trace-policy driven. Its arms MUST stay in lockstep with the languages.
+/// A resource's current owner and last reader, as the denial text names them.
+#[derive(Clone, Copy)]
+struct Claims<P> {
+    owner: Option<P>,
+    reader: Option<P>,
+}
+
+/// Per-resource claims folded from one history's committed prefix, resumed across denials.
 ///
-/// Principal and resource identities are rendered through the caller's `Display` labels here, off
-/// the grant path.
-fn lock_context<P, R>(history: &[LockEvent<P, R>], candidate: &LockEvent<P, R>) -> LockContext
+/// `(id, revision)` names an append-only prefix family (truncation bumps the revision, ids are
+/// never reused), so a matching key folds only `events[consumed..]`; anything else refolds
+/// from the start. The reset state is correct for every history, so no `Option` is needed.
+struct ClaimTable<P, R> {
+    key: (usize, u64),
+    consumed: usize,
+    claims: HashMap<R, Claims<P>>,
+}
+
+impl<P, R> ClaimTable<P, R>
 where
-    P: Copy + Display,
-    R: Copy + Eq + Display,
+    P: Copy + Debug + Eq + Hash,
+    R: Copy + Debug + Eq + Hash,
 {
-    let resource = candidate.resource;
-    let mut owner = None;
-    let mut reader = None;
-    for event in history.iter().filter(|event| event.resource == resource) {
-        match event.action {
-            Action::Read => reader = Some(event.principal),
-            Action::Edit => owner = Some(event.principal),
-            Action::Release => owner = None,
-            Action::Remove => (owner, reader) = (None, None),
+    fn new() -> Self {
+        Self {
+            key: (0, 0),
+            consumed: 0,
+            claims: HashMap::new(),
         }
     }
+
+    /// Catches up on `history` and returns `resource`'s claims, for diagnostics only — grant and
+    /// deny are entirely trace-policy driven. The arms MUST stay in lockstep with the languages.
+    fn claims(&mut self, history: &History<LockEvent<P, R>>, resource: R) -> Claims<P> {
+        let key = (history.id(), history.numeric().revision());
+        if self.key != key {
+            self.key = key;
+            self.consumed = 0;
+            self.claims.clear();
+        }
+        for event in &history.as_slice()[self.consumed..] {
+            let claims = self.claims.entry(event.resource).or_insert(Claims {
+                owner: None,
+                reader: None,
+            });
+            match event.action {
+                Action::Read => claims.reader = Some(event.principal),
+                Action::Edit => claims.owner = Some(event.principal),
+                Action::Release => claims.owner = None,
+                Action::Remove => (claims.owner, claims.reader) = (None, None),
+            }
+        }
+        self.consumed = history.len();
+        self.claims.get(&resource).copied().unwrap_or(Claims {
+            owner: None,
+            reader: None,
+        })
+    }
+}
+
+/// Renders the denial context from `claims`; identities go through the caller's `Display` labels
+/// here, off the grant path.
+fn lock_context<P: Display, R: Display>(
+    claims: Claims<P>,
+    candidate: &LockEvent<P, R>,
+) -> LockContext {
     let name = |claim: Option<P>| {
         claim.map_or_else(
             || "another principal".to_string(),
@@ -220,10 +267,10 @@ where
     };
     LockContext {
         principal: candidate.principal.to_string(),
-        resource: resource.to_string(),
+        resource: candidate.resource.to_string(),
         action: candidate.action,
-        owner: name(owner),
-        reader: name(reader),
+        owner: name(claims.owner),
+        reader: name(claims.reader),
     }
 }
 
@@ -237,6 +284,7 @@ where
     R: Copy + Debug + Eq + Hash,
 {
     compiled: CompiledPolicy<LockEvent<P, R>, LockContext>,
+    claims: ClaimTable<P, R>,
 }
 
 impl<P, R> LockPolicy<P, R>
@@ -248,6 +296,7 @@ where
     pub fn new(store: Arc<Store<LockEvent<P, R>>>) -> Result<Self, CompileError> {
         Ok(Self {
             compiled: CompiledPolicy::new(store, lock_rules())?,
+            claims: ClaimTable::new(),
         })
     }
 
@@ -257,8 +306,9 @@ where
         history: &History<LockEvent<P, R>>,
         candidate: &LockEvent<P, R>,
     ) -> Result<PolicyDecision, HistoryError> {
+        let claims = &mut self.claims;
         self.compiled.decide(history, candidate, || {
-            lock_context(history.as_slice(), candidate)
+            lock_context(claims.claims(history, candidate.resource), candidate)
         })
     }
 }
