@@ -1,5 +1,6 @@
-//! Layer 0: policy semantics over typed component values (paper §3.3, `bg.tex:101-126`;
-//! refinement, `inclusion.tex:7-20`; coverage, redundancy, vacuity, `appendix.tex:437-455`).
+//! Layer 0: policy semantics over typed component values (paper "Heads, tails, and
+//! policy decisions", `sec:rules`, Definition Rule status `def:status`; refinement, `sec:refinement`;
+//! coverage, redundancy, vacuity, appendix `app:policy-reduction`).
 //!
 //! The valuation `θ` of the paper is the candidate itself; histories are oldest first and never
 //! contain the candidate. Tail and test semantics are the existing `junco_core::verify::dsl`
@@ -16,7 +17,7 @@ use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
 
-/// The status of one rule for a candidate and a history (`bg.tex:113-121`).
+/// The status of one rule for a candidate and a history (Definition Rule status, `def:status`).
 pub enum Status { NotFired, Satisfied, Violated }
 
 /// `mode = require` and the history is outside the tail, or `mode = forbid` and it is inside.
@@ -42,7 +43,7 @@ pub open spec fn rule_denies<P: PartialEq, A: PartialEq, R: PartialEq>(
     rule_status(rule, candidate, history) is Violated
 }
 
-/// A policy denies iff some rule is violated (`bg.tex:123-126`).
+/// A policy denies iff some rule is violated (`sec:rules`).
 pub open spec fn policy_denies<P: PartialEq, A: PartialEq, R: PartialEq>(
     policy: Seq<RuleView<P, A, R>>, candidate: TEvent<P, A, R>, history: Seq<TEvent<P, A, R>>,
 ) -> bool {
@@ -58,7 +59,7 @@ pub open spec fn policy_permits<P: PartialEq, A: PartialEq, R: PartialEq>(
 // ----- component domains -----
 
 /// The values a component ranges over: all values of its type (`None`), or a declared finite set.
-/// The paper assumes every domain infinite (`bg.tex:14-18`); declared finite domains are an
+/// The paper assumes every domain infinite ("Product events and component tests", `sec:events`); declared finite domains are an
 /// implementation feature (`Domains::with_*`) outside the paper's theorems.
 pub struct DomainsView<P, A, R> {
     pub principal: Option<Set<P>>,
@@ -105,7 +106,8 @@ pub open spec fn infinite_type<T: PartialEq>() -> bool {
     forall|values: Set<T>| #[trigger] has_missing(values)
 }
 
-/// The paper's hypothesis (`bg.tex:14`, `inclusion.tex:198`, `inclusion.tex:258`).
+/// The paper's hypothesis (`sec:events`; assumed by Lemmas `lem:succ` and `lem:uniform` and
+/// Theorem Inclusion search correctness `thm:search`).
 pub open spec fn infinite_domains<P: PartialEq, A: PartialEq, R: PartialEq>(
     domains: DomainsView<P, A, R>,
 ) -> bool {
@@ -115,7 +117,7 @@ pub open spec fn infinite_domains<P: PartialEq, A: PartialEq, R: PartialEq>(
 // ----- well-formed rules -----
 
 /// Head variables have distinct names and every tail variable is the head variable of its own
-/// component (`bg.tex:111`, "a tail whose variables occur in h"; component-locality, `bg.tex:28`).
+/// component (`sec:rules`, "a tail whose variables occur in h"; component-locality, `sec:events`).
 pub open spec fn rule_wf<P, A, R>(rule: RuleView<P, A, R>) -> bool {
     tdsl::head_scoped(rule.head) && tdsl::regex_scoped(rule.tail, rule.head)
 }
@@ -124,7 +126,7 @@ pub open spec fn head_tails_wf<P, A, R>(head: HeadView<P, A, R>, left: RegexView
     tdsl::head_scoped(head) && tdsl::regex_scoped(left, head) && tdsl::regex_scoped(right, head)
 }
 
-// ----- policy questions (`inclusion.tex:7-20`, `appendix.tex:444-455`) -----
+// ----- policy questions (`sec:refinement`, appendix `app:policy-reduction`) -----
 
 /// `P ⊑ Q` over `domains`: every pair permitted by `P` is permitted by `Q`.
 pub open spec fn refines<P: PartialEq, A: PartialEq, R: PartialEq>(
@@ -171,13 +173,13 @@ pub open spec fn tails_included<P: PartialEq, A: PartialEq, R: PartialEq>(
 
 // ----- statements (no proofs in this phase) -----
 
-/// `P ⊑ Q` iff `P` covers every rule of `Q` (`appendix.tex:450`).
+/// `P ⊑ Q` iff `P` covers every rule of `Q` (appendix `app:policy-reduction`).
 pub open spec fn stmt_refines_iff_covers<P: PartialEq, A: PartialEq, R: PartialEq>() -> bool {
     forall|domains: DomainsView<P, A, R>, p: Seq<RuleView<P, A, R>>, q: Seq<RuleView<P, A, R>>|
         #[trigger] refines(domains, p, q) <==> forall|i: int| 0 <= i < q.len() ==> covers(domains, p, #[trigger] q[i])
 }
 
-/// Removing a covered rule changes no decision (`appendix.tex:452-453`): with `others` the policy
+/// Removing a covered rule changes no decision (appendix `app:policy-reduction`): with `others` the policy
 /// without the rule, the two policies deny the same pairs iff `others` covers the rule.
 pub open spec fn stmt_redundant_iff_covered<P: PartialEq, A: PartialEq, R: PartialEq>() -> bool {
     forall|domains: DomainsView<P, A, R>, others: Seq<RuleView<P, A, R>>, rule: RuleView<P, A, R>|

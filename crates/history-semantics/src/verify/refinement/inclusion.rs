@@ -1,5 +1,7 @@
-//! Layer 2: constraints, `Split`, constrained inclusion, and the policy reduction
-//! (`inclusion.tex:39-100`, Proposition B.1 `appendix.tex:434-481`), over numeric rules.
+//! Layer 2: constraints, `Split`, constrained inclusion, and the policy reduction (`sec:policy`,
+//! appendix `app:policy-reduction`, `app:mech-diff`), over numeric rules. The paper's
+//! Proposition `prop:policy` reduces refinement to one inclusion of denial expressions; the
+//! reduction proved here is the equivalent rule-by-rule form that the analyzer uses.
 use super::encoding::*;
 use super::semantics::violated_by;
 use crate::verify::finite_states::lemma_powerset_finite;
@@ -16,7 +18,7 @@ verus! {
 /// `x_c = value` (`equal`) or `x_c ≠ value`.
 pub struct Literal { pub component: Component, pub value: nat, pub equal: bool }
 
-/// A finite conjunction of literals (`inclusion.tex:44-45`).
+/// A finite conjunction of literals (Definition Constraints, `def:constraints`).
 pub type Constraint = Set<Literal>;
 
 pub open spec fn literal_holds(theta: Subst, l: Literal) -> bool {
@@ -42,7 +44,7 @@ pub open spec fn eq_literal(c: Component, v: nat) -> Literal { Literal { compone
 
 pub open spec fn ne_literal(c: Component, v: nat) -> Literal { Literal { component: c, value: v, equal: false } }
 
-/// `Γ` decides `(x_c, v)` (`inclusion.tex:52`).
+/// `Γ` decides `(x_c, v)` (Definition Constraints, `def:constraints`).
 pub open spec fn decides(d: NDomains, g: Constraint, c: Component, v: nat) -> bool {
     entails(d, g, set![eq_literal(c, v)]) || entails(d, g, set![ne_literal(c, v)])
 }
@@ -50,7 +52,7 @@ pub open spec fn decides(d: NDomains, g: Constraint, c: Component, v: nat) -> bo
 /// A set of pairs `(x_c, v)`.
 pub type Pairs = Set<(Component, nat)>;
 
-/// What every use of `Split(Γ; Π)` relies on (`inclusion.tex:53-58`): finitely many satisfiable
+/// What every use of `Split(Γ; Π)` relies on (Definition Splitting, `def:split`): finitely many satisfiable
 /// cases, each entailing `Γ` and deciding `Π`, that partition the admissible valuations of `Γ`.
 /// The paper's `Split` (`paper_split`) is one such family; the implementation's `split` emits an
 /// equivalent one with at most `n + 1` cases per register (`constraint.rs:236-281`).
@@ -80,7 +82,7 @@ pub open spec fn stmt_paper_split_ok() -> bool {
     forall|d: NDomains, g: Constraint, pi: Pairs| #[trigger] split_ok(d, g, pi, paper_split(d, g, pi))
 }
 
-// ----- constrained inclusion (Definition 5.1, `inclusion.tex:60-65`) -----
+// ----- constrained inclusion ("From policy refinement to constrained inclusion", `sec:policy`) -----
 
 /// `r ⊑_Γ s`.
 pub open spec fn included_under(d: NDomains, g: Constraint, r: Regex<model::Test>, s: Regex<model::Test>) -> bool {
@@ -99,7 +101,7 @@ pub open spec fn no_cex_shorter(d: NDomains, g: Constraint, r: Regex<model::Test
     forall|theta: Subst, w: Seq<EventView>| w.len() < n ==> !#[trigger] inclusion_cex(d, g, r, s, theta, w)
 }
 
-// ----- policy reduction (`inclusion.tex:74-100`, `appendix.tex:437-481`) -----
+// ----- policy reduction (Proposition Policy reduction `prop:policy`, appendix `app:policy-reduction`) -----
 
 /// Head constraint `Γ_R`.
 pub open spec fn head_constraint(h: NHead) -> Constraint {
@@ -111,7 +113,7 @@ pub open spec fn denial(rule: NRule) -> Regex<model::Test> {
     match rule.mode { RuleMode::Forbid => rule.tail, RuleMode::Require => Regex::Not(Box::new(rule.tail)) }
 }
 
-/// `Π` of Proposition B.1: `(x_c, v)` for each head constant `v` at component `c` in `P`.
+/// `Π` of the policy reduction (`app:mech-diff`): `(x_c, v)` for each head constant `v` at component `c` in `P`.
 pub open spec fn head_pairs(p: Seq<NRule>) -> Pairs {
     Set::new(|pair: (Component, nat)| exists|i: int| 0 <= i < p.len() && #[trigger] n_head_field(p[i].head, pair.0) == Some(pair.1))
         .unwrap_or(Set::empty())
@@ -128,7 +130,7 @@ pub open spec fn n_covers(d: NDomains, p: Seq<NRule>, rule: NRule) -> bool {
         && #[trigger] n_rule_denies(rule, theta, w) ==> n_policy_denies(p, theta, w)
 }
 
-/// Proposition B.1, for any family of cases with `split_ok` (so it covers the implementation's
+/// The policy reduction (`app:mech-diff`), for any family of cases with `split_ok` (so it covers the implementation's
 /// `split` as well as `paper_split`).
 pub open spec fn stmt_policy_reduction() -> bool {
     forall|d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>|
@@ -138,7 +140,7 @@ pub open spec fn stmt_policy_reduction() -> bool {
 }
 
 /// `R` never denies iff `ρ_R ⊑_{Γ_R} ∅`; `R` denies every matching candidate and history iff
-/// `Univ ⊑_{Γ_R} ρ_R` (`appendix.tex:454`, `analyzer.rs:366-383`).
+/// `Univ ⊑_{Γ_R} ρ_R` (appendix `app:policy-reduction`; the vacuity checks in `analyzer.rs`).
 pub open spec fn stmt_vacuity_reductions() -> bool {
     forall|d: NDomains, rule: NRule| {
         &&& (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) ==> !#[trigger] n_rule_denies(rule, theta, w))

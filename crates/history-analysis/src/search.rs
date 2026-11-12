@@ -176,7 +176,7 @@ impl Search<'_> {
             && refutation_ready(outcome,*old(self).universes,old(self).vocabulary@),
     {
         proof_decl! { let ghost initial = *self; let ghost start = self.start@; let ghost vocabulary = self.vocabulary@; let ghost universes = *self.universes; }
-        // Termination follows Lemma 4.4 for the implementation's model: one finite item set,
+        // Termination follows the finite item bound (Lemma Finitely many residuals, `lem:finite-states`, lifted to items) for the implementation's model: one finite item set,
         // fixed before the loop, contains every item the search can queue.
         proof_decl! { let ghost bound = choose|f: Set<paper_search::Item>| items_bound_ok(universes,start,f); }
         proof! {

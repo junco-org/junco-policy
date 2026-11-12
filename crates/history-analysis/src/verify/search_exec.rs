@@ -1900,7 +1900,7 @@ pub(crate) open spec fn items_bound_ok(u: Universes,start: paper::Item,f: Set<pa
 }
 
 /// The queue of a running search is a paper trace, whose nodes are distinct reachable items, so
-/// it never exceeds the finite item bound of Lemma 4.4 for the implementation's model.
+/// it never exceeds the finite item bound (Lemma Finitely many residuals, `lem:finite-states`, lifted to items) for the implementation's model.
 pub(crate) proof fn lemma_running_items_bound(s: Search<'_>,n: nat,start: paper::Item,
     v: [Set<nat>;3],f: Set<paper::Item>)
     requires running(s,n,start,v),items_bound_ok(*s.universes,start,f),

@@ -164,7 +164,8 @@ Ok(Some(accepted))  The head matches, and accepted equals source-tail
                    language membership over the raw committed history.
 ```
 
-For a matching head, `accepted` is true exactly when `pair_lang` holds. This equivalence
+For a matching head, `accepted` is true exactly when the history is in the tail's language
+under the typed rule semantics (`dsl::rule_evaluation`). This equivalence
 rules out both accepting a history outside the declared language and rejecting one
 inside it on a successful evaluation. The result keeps a head mismatch separate from
 a matching head whose tail rejects the history.
@@ -443,8 +444,9 @@ compared by identity, so inserted states are indexed by their parts. Inserted st
 removed, so counterexamples stay shortest.
 
 Each search compiles one graph with its own 16 MiB budget, through `CanonicalStore::with_budget`,
-where the runtime keeps `MAX_GRAPH_BYTES` (100 KiB) per rule. The classes of events and the search
-are unverified. Their tests replay
+where the runtime keeps `MAX_GRAPH_BYTES` (100 KiB) per rule. The search, its classes of events,
+and its pruning are verified against the policy-analysis specification (see `VERIFY.md`). In
+addition, the tests replay
 every counterexample through `TracePolicy`, and a differential test compares the verdicts on
 random tail pairs, including counterexample lengths, with brute force over every history up to
 a length bound.

@@ -1,4 +1,5 @@
-//! Layer 3: the symbolic search (`inclusion.tex:150-279`, `appendix.tex:483-523, 667-741`).
+//! Layer 3: the symbolic search (`sec:search-state`, `sec:search`; appendix `app:cases`,
+//! `app:search-proof`; differences from the paper's presentation in `app:mech-diff`).
 //!
 //! States are abstract expressions `Regex<model::Test>`; the implementation's states are graph
 //! ids, abstracted by `model::lift_regex` (see `implementation`). The search is specified by its
@@ -19,7 +20,7 @@ verus! {
 /// A search item `(Γ, q)`.
 pub struct Item { pub constraint: Constraint, pub state: Regex<model::Test> }
 
-/// `(θ, w) ∈ W(I)` (`inclusion.tex:156-159`).
+/// `(θ, w) ∈ W(I)` (`sec:search-state`).
 pub open spec fn witness(d: NDomains, item: Item, theta: Subst, w: Seq<EventView>) -> bool {
     n_theta_ok(d, theta) && n_history_in(d, w) && sat_by(theta, item.constraint) && n_lang(theta, item.state, w)
 }
@@ -38,7 +39,7 @@ pub open spec fn has_witness_of_length(d: NDomains, item: Item, n: nat) -> bool 
     exists|theta: Subst, w: Seq<EventView>| w.len() == n && #[trigger] witness(d, item, theta, w)
 }
 
-// ----- atoms, assignments, successor cases (`inclusion.tex:164-216`) -----
+// ----- atoms, assignments, successor cases (`def:atoms`, `def:realize`, `def:successors`, `alg:succ`) -----
 
 /// An atom assignment; its domain is the atom set.
 pub type Assignment = Map<model::Primitive, bool>;
@@ -66,7 +67,8 @@ pub struct Case { pub constraint: Constraint, pub alpha: Assignment, pub next: R
 
 pub open spec fn case_item(c: Case) -> Item { Item { constraint: c.constraint, state: c.next } }
 
-/// Lemma 5.3's conclusion for a set of cases of `item` (`inclusion.tex:197-209`).
+/// The conclusion of Lemmas `lem:succ` and `lem:uniform`, stated over successor cases
+/// (`app:mech-diff`), for a set of cases of `item`.
 pub open spec fn steps_ok(d: NDomains, item: Item, cases: Set<Case>) -> bool {
     &&& forall|c: Case| #[trigger] cases.contains(c) ==> {
         &&& satisfiable(d, c.constraint) && entails(d, c.constraint, item.constraint)
@@ -83,7 +85,8 @@ pub open spec fn steps_ok(d: NDomains, item: Item, cases: Set<Case>) -> bool {
         && #[trigger] realizes(theta, e, c1.alpha) && realizes(theta, e, c2.alpha) ==> c1 == c2
 }
 
-/// The paper's `Steps(Γ, q)` for an atom set and the successors `next(α)`.
+/// The paper's successors `succ(Γ, q)` as cases `(Γ', α, next(α))`, for an atom set and the
+/// successors `next(α)`.
 pub open spec fn paper_steps(d: NDomains, item: Item, atoms: Set<model::Primitive>,
     cases_split: Set<Constraint>, next: spec_fn(Assignment) -> Regex<model::Test>) -> ISet<Case> {
     ISet::new(|c: Case| cases_split.contains(c.constraint) && c.alpha.dom() == atoms && c.next == next(c.alpha)
@@ -96,22 +99,22 @@ pub open spec fn n_unrestricted(d: NDomains) -> bool {
 }
 
 /// The atoms determine `q`'s derivative: realizing the same assignment gives the same residual
-/// language (true for the atoms of `δ(q)`'s conditions by Theorem 4.1).
+/// language (true for the atoms of `δ(q)`'s conditions by Theorem Symbolic derivative correctness, `thm:sderiv`).
 pub open spec fn atoms_complete(q: Regex<model::Test>, atoms: Set<model::Primitive>) -> bool {
     forall|theta: Subst, e1: EventView, e2: EventView, w: Seq<EventView>|
         (forall|p: model::Primitive| atoms.contains(p) ==> #[trigger] model::primitive_holds(theta, p, e1) == model::primitive_holds(theta, p, e2))
             ==> (#[trigger] n_lang(theta, q, seq![e1] + w) == #[trigger] n_lang(theta, q, seq![e2] + w))
 }
 
-/// Component-locality of atoms (`bg.tex` §3): a variable atom compares a component only with the
+/// Component-locality of atoms (`sec:events`): a variable atom compares a component only with the
 /// candidate's value of the same component. The analyzer enforces it (`search.rs` `atom`).
 pub open spec fn atoms_local(atoms: Set<model::Primitive>) -> bool {
     forall|c: Component, c2: Component| #[trigger] atoms.contains(model::Primitive::Eq(c, model::GTerm::Variable(c2))) ==> c2 == c
 }
 
-/// Lemma 5.3 (exact successor cases), infinite domains: with `Γ` satisfiable, complete atoms,
-/// correct successors for every realizable assignment, and any `Split(Γ; Π_q)` family, the paper's
-/// `Steps` is finite and satisfies `steps_ok`.
+/// Lemmas `lem:succ` and `lem:uniform` (one statement over successor cases), infinite domains:
+/// with `Γ` satisfiable, complete atoms, correct successors for every realizable assignment, and
+/// any `Split(Γ; Π_q)` family, the successor cases are finite and satisfy `steps_ok`.
 pub open spec fn stmt_successor_cases() -> bool {
     forall|d: NDomains, item: Item, atoms: Set<model::Primitive>, cases_split: Set<Constraint>,
         next: spec_fn(Assignment) -> Regex<model::Test>|
@@ -140,7 +143,7 @@ pub open spec fn stmt_successor_cases_finite_domains() -> bool {
                 && steps_ok(d, item, Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next)).unwrap_or(Set::empty()))
 }
 
-// ----- the breadth-first search (Algorithm 5.4, `inclusion.tex:221-255`) -----
+// ----- the breadth-first search (Algorithm Inclusion search, `alg:search`) -----
 
 pub struct Node { pub item: Item, pub parent: Option<(nat, Assignment)>, pub depth: nat }
 
@@ -161,7 +164,7 @@ pub open spec fn may_discard(d: NDomains, nodes: Seq<Node>, j: Item, depth: nat)
     ||| exists|k: int| 0 <= k < nodes.len() && nodes[k].depth <= depth && #[trigger] witnesses_within(d, j, nodes[k].item)
 }
 
-/// Assignments along the parent chain of node `n`, oldest first (`inclusion.tex:224-229`).
+/// Assignments along the parent chain of node `n`, oldest first (`alg:search`).
 pub open spec fn chain(nodes: Seq<Node>, n: int, fuel: nat) -> Seq<Assignment>
     decreases fuel,
 {
@@ -220,7 +223,7 @@ pub open spec fn follows(d: NDomains, letters: Seq<Assignment>, theta: Subst, u:
         && forall|j: int| 0 <= j < u.len() ==> #[trigger] realizes(theta, u[j], letters[j])
 }
 
-/// What a returned outcome means for the query `r ⊑_{Γ₀} s` (`inclusion.tex:257-262`).
+/// What a returned outcome means for the query `r ⊑_{Γ₀} s` (Theorem Inclusion search correctness, `thm:search`).
 pub open spec fn outcome_ok(d: NDomains, g0: Constraint, r: Regex<model::Test>, s: Regex<model::Test>, outcome: Outcome) -> bool {
     match outcome {
         Outcome::Holds => included_under(d, g0, r, s),
@@ -243,7 +246,7 @@ pub open spec fn initial_ok(q0: Regex<model::Test>, r: Regex<model::Test>, s: Re
         ==> (#[trigger] n_lang(theta, q0, w) == (n_lang(theta, r, w) && !n_lang(theta, s, w)))
 }
 
-/// Theorem 5.5, soundness, completeness and minimality: every trace that returns satisfies
+/// Theorem Inclusion search correctness (`thm:search`), soundness, completeness and minimality: every trace that returns satisfies
 /// `outcome_ok`, with or without pruning. Infinite domains.
 pub open spec fn stmt_search_correct() -> bool {
     forall|d: NDomains, g0: Constraint, r: Regex<model::Test>, s: Regex<model::Test>, q0: Regex<model::Test>,
@@ -277,7 +280,7 @@ pub open spec fn reachable_item(cases_of: spec_fn(Item) -> Set<Case>, start: Ite
 /// Hypothesis of termination: finitely many items are reachable. It follows from finitely many
 /// reachable states (`finiteness::stmt_items_from_states`): constraints are `Γ₀` plus literals
 /// over the atoms of reachable states. For the paper's model normalizer the states are bounded by
-/// Lemma 4.2; for the implementation (after the finiteness fix, `SPEC.md` §9.16) by the same
+/// Lemma Finitely many residuals (`lem:finite-states`); for the implementation by the same
 /// lemma instantiated with `verify::finite_impl::m_impl` (`finiteness::theorem_impl_finitely_many_items`,
 /// with the implemented step abstracted by `finiteness::lemma_impl_successor_abstracts`).
 pub open spec fn items_within(cases_of: spec_fn(Item) -> Set<Case>, start: Item, f: Set<Item>) -> bool {
@@ -293,7 +296,7 @@ pub open spec fn traces_bounded(g0: Constraint, q0: Regex<model::Test>, cases_of
     forall|d: NDomains, t: Trace| #[trigger] trace_wf(d, g0, q0, cases_of, t) ==> t.nodes.len() <= bound
 }
 
-/// Theorem 5.5, termination, *conditional* on finitely many reachable items: no trace has more
+/// Theorem Inclusion search correctness (`thm:search`), termination, *conditional* on finitely many reachable items: no trace has more
 /// than `bound` nodes (nodes are distinct reachable items), so the search returns after at most
 /// `bound` expansions.
 pub open spec fn stmt_search_terminates() -> bool {

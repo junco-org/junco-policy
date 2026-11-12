@@ -1,4 +1,4 @@
-//! The finiteness model instantiated with the implementation's states (`SPEC.md` §6).
+//! The finiteness model instantiated with the implementation's states (see `finiteness::instantiation_ok`).
 //!
 //! States are lifted trees `Regex<model::Test>` in *hereditary normal form* ([`regex_nf`]): set
 //! operands are duplicate-free and not sets of the same kind, lists have at least two atoms,
