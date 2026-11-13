@@ -63,7 +63,7 @@ impl Event for Access {
 const X: u32 = 10;
 
 fn finite_actions() -> Domains<Access> {
-    Domains::infinite().with_domain(Component(1), ACTIONS.map(AccessComponent::Action))
+    Domains::infinite().with_domain(Component(1), ACTIONS.map(AccessComponent::Action).to_vec())
 }
 
 fn head() -> Head<Access> {
@@ -504,7 +504,9 @@ where
             };
             domains = domains.with_domain(
                 Component(coordinate as u8),
-                (0..count).map(|value| IndexedComponent { coordinate, value }),
+                (0..count)
+                    .map(|value| IndexedComponent { coordinate, value })
+                    .collect(),
             );
         }
         let different_axis = RegexExpr::test(TestExpr::atom(
@@ -567,7 +569,9 @@ fn overflowing_eight_coordinate_register_product_is_an_error() {
     for coordinate in 0..8 {
         domains = domains.with_domain(
             Component(coordinate as u8),
-            (0..256).map(|value| IndexedComponent { coordinate, value }),
+            (0..256)
+                .map(|value| IndexedComponent { coordinate, value })
+                .collect(),
         );
     }
     let head = Head::new(VARIABLES.map(ComponentPattern::variable));
@@ -634,8 +638,8 @@ fn constants_remain_coordinate_separated_when_equality_ignores_tags() {
     let constant = |coordinate, value| UntaggedEqualityComponent { coordinate, value };
     assert_eq!(constant(0, 7), constant(1, 7));
     let domains = Domains::<UntaggedEqualityEvent>::infinite()
-        .with_domain(Component(0), [constant(0, 7), constant(0, 9)])
-        .with_domain(Component(1), [constant(1, 7), constant(1, 9)]);
+        .with_domain(Component(0), [constant(0, 7), constant(0, 9)].to_vec())
+        .with_domain(Component(1), [constant(1, 7), constant(1, 9)].to_vec());
     let head =
         Head::new((0..2).map(|coordinate| ComponentPattern::constant(constant(coordinate, 7))));
     let tail = RegexExpr::test(TestExpr::and((0..2).map(|coordinate| {

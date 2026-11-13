@@ -2551,8 +2551,31 @@ pub(crate) mod frontend {
     use junco_core::verify::{encoding as enc, flatten as fl};
     use vstd::std_specs::cmp::PartialEqSpec;
 
+    pub(crate) mod domain_view {
+        use super::*;
+        verus! {
+            impl<E: Event> View for Domains<E> {
+                type V = semantics::DomainsView<E::Component>;
+                closed spec fn view(&self) -> Self::V {
+                    self.components@.map_values(|values: Option<Vec<E::Component>>| match values {
+                        None => None, Some(vs) => Some(vs@.to_set()),
+                    })
+                }
+            }
+
+            pub(crate) broadcast proof fn lemma_domains_view<E: Event>(d: Domains<E>)
+                ensures #[trigger] d@ == d.components@.map_values(
+                    |values: Option<Vec<E::Component>>| match values {
+                        None => None, Some(vs) => Some(vs@.to_set()),
+                    }),
+            {
+                reveal(<Domains<_> as View>::view);
+            }
+        }
+    }
+
     verus! {
-        broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas, vstd::set::group_set_lemmas};
+        broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas, vstd::set::group_set_lemmas, domain_view::lemma_domains_view};
 
         pub(crate) open spec fn value_field<E: Event>(v: E::Component) -> Component {
             Component(E::coordinate_spec(v) as u8)
@@ -2877,10 +2900,26 @@ pub(crate) mod frontend {
             lemma_domain_count_prefix(components, index + 1);
         }
 
+        pub(crate) proof fn lemma_domain_count_update<C>(components: Seq<Option<Vec<C>>>,
+            index: int, values: Vec<C>)
+            requires 0 <= index < components.len(),
+            ensures domain_values_count(components.update(index, Some(values)))
+                <= domain_values_count(components) + values@.len(),
+            decreases components.len(),
+        {
+            if index < components.len() - 1 {
+                lemma_domain_count_update(components.drop_last(), index, values);
+                assert(components.update(index, Some(values)).drop_last()
+                    =~= components.drop_last().update(index, Some(values)));
+            } else {
+                assert(components.update(index, Some(values)).drop_last() =~= components.drop_last());
+            }
+        }
+
         pub open(crate) spec fn domains_wf<E: Event>(domains: Domains<E>) -> bool {
             domains.components@.len() == arity::<E>()
     && forall|i: int| #![trigger domains.components@[i]] 0 <= i < arity::<E>() ==> match domains.components@[i] {
-        None => true, Some(vs) => forall|j: int| #![trigger vs@[j]] 0 <= j < vs@.len() ==> E::coordinate_spec(vs@[j]) == i,
+        None => true, Some(vs) => vs@.len() > 0 && forall|j: int| #![trigger vs@[j]] 0 <= j < vs@.len() ==> E::coordinate_spec(vs@[j]) == i,
                 }
         }
 
@@ -3006,12 +3045,7 @@ pub(crate) mod frontend {
             values.filter(|value: E::Component| E::coordinate_spec(value) == coordinate)
         }
 
-        impl<E: Event> View for Domains<E> {
-            type V = semantics::DomainsView<E::Component>;
-            open(crate) spec fn view(&self) -> Self::V {
-                self.components@.map_values(|values: Option<Vec<E::Component>>| match values { None => None, Some(vs) => Some(vs@.to_set()) })
-            }
-        }
+
 
         impl<E: Event> View for PolicyAnalyzer<E> {
             type V = analyzer::AnalyzerView<E::Component>;
@@ -3034,6 +3068,7 @@ pub(crate) mod frontend {
         /// Constant books and declared coordinate domains remain well formed across queries.
         pub open(crate) spec fn analyzer_state_wf<E: Event>(a: PolicyAnalyzer<E>) -> bool {
             constants_wf(a.constants) && universes_wf(a.constants, a.universes)
+                && (match a.owner { Some(owner) => owner.wf(), None => a.rules@.len() == 0 })
                 && forall|i: int| 0 <= i < a.rules@.len() ==> stored_rule_wf(a.constants, a.universes, a.rules@[i])
         }
 
@@ -3220,7 +3255,7 @@ pub(crate) mod frontend {
 
         pub(crate) proof fn lemma_empty_constructor_capacity<E: Event>(d: Domains<E>)
             requires forall|i: int| 0 <= i < d.components@.len() ==> d.components@[i] is None,
-            ensures constructor_capacity(d),
+            ensures constructor_capacity(d), domain_values_count(d.components@) == 0,
         {
             lemma_empty_domains_count(d.components@);
         }

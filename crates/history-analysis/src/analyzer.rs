@@ -43,7 +43,7 @@ use vstd::std_specs::cmp::PartialEqSpec;
 #[cfg(verus_keep_ghost)]
 verus! {
     broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas,
-        vstd::seq_lib::lemma_seq_contains_after_push};
+        vstd::seq_lib::lemma_seq_contains_after_push, domain_view::lemma_domains_view};
 }
 
 use crate::constraint::{
@@ -59,9 +59,24 @@ use crate::tables::Tables;
 const GRAPH_BYTES: usize = 16 * 1024 * 1024;
 
 verus! {
-/// Stable index of a rule in one analyzer. Query ids must belong to that analyzer.
+/// Stable rule index paired with a checked, non-recycled process owner identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RuleId(pub(crate) usize);
+pub struct RuleId(pub(crate) usize, pub(crate) u64);
+
+impl RuleId {
+    /// The id's process owner and registered index both belong to this analyzer.
+    pub closed spec fn belongs_to<E: Event>(&self, analyzer: &PolicyAnalyzer<E>) -> bool {
+        self.0 < analyzer.rules@.len() && match analyzer.owner {
+            Some(owner) => self.1 == owner.value(),
+            None => false,
+        }
+    }
+}
+
+/// Every selected id belongs to the analyzer, retaining arbitrary order and duplicates.
+pub open spec fn ids_belong_to<E: Event>(analyzer: &PolicyAnalyzer<E>, ids: Seq<RuleId>) -> bool {
+    forall|i: int| 0 <= i < ids.len() ==> #[trigger] ids[i].belongs_to(analyzer)
+}
 
 /// Lowered executable rule plus its original front-end provenance.
 pub(crate) struct StoredRule<E: Event> {
@@ -90,55 +105,125 @@ fn excluded(id: RuleId, exclude: Option<RuleId>) -> (result: bool)
 }
 }
 
-/// The values each event component can take.
+/// Declared coordinate domains; undeclared coordinates permit every correctly tagged value.
 ///
-/// By default every component is infinite: it has more values than any analysis mentions, so a
-/// counterexample may use a [fresh](Value::Fresh) value for it. Declare the values of a component
-/// whose type has only a few, such as an action enum; treated as infinite, it could yield
-/// counterexamples that need a value the type does not have.
+/// A declared domain must be nonempty. Analyzer verdicts apply only to candidates and histories
+/// inside these domains; the runtime monitor does not enforce this assumption.
 #[verus_verify]
 #[derive(Clone, Debug)]
 pub struct Domains<E: Event> {
     pub(crate) components: Vec<Option<Vec<E::Component>>>,
 }
 
+verus! {
 impl<E: Event> Domains<E> {
-    /// Every component infinite.
-    pub fn infinite() -> Self {
-        Self {
-            components: (0..E::Arity::value()).map(|_| None).collect(),
+    /// Declared domains have the event arity and contain only nonempty, correctly tagged sets.
+    pub closed spec fn wf(&self) -> bool {
+        domains_wf(*self)
+    }
+
+    /// Number of explicitly supplied values, counting repeated declarations conservatively.
+    pub closed spec fn declaration_size(&self) -> nat {
+        domain_values_count(self.components@)
+    }
+
+    /// Public arithmetic criterion sufficient for the checked constructor's constant-id space.
+    pub proof fn lemma_constructor_capacity(&self)
+        ensures crate::verify::constructor_capacity(*self) == (self.declaration_size() <= u32::MAX),
+    {
+        reveal(Domains::declaration_size);
+        lemma_constructor_contract::<E>();
+    }
+
+    /// Reveals the semantic facts of a well-formed native domain declaration.
+    pub proof fn lemma_wf(&self)
+        requires self.wf(),
+        ensures junco_core::spec::questions::domains_wf::<E>(self@),
+    {
+        reveal(Domains::wf);
+        assert forall|i: int| 0 <= i < self@.len() implies
+            match #[trigger] self@[i] {
+                None => true,
+                Some(values) => values.len() > 0 && forall|value: E::Component|
+                    #[trigger] values.contains(value) ==> E::coordinate_spec(value) == i,
+            } by {
+            if let Some(vs) = self.components@[i] {
+                assert(vs@.to_set().contains(vs@[0]));
+                assert(vs@.to_set().len() > 0);
+                assert forall|value: E::Component| vs@.to_set().contains(value)
+                    implies E::coordinate_spec(value) == i by {
+                    let j = choose|j: int| 0 <= j < vs@.len() && vs@[j] == value;
+                }
+            }
         }
     }
 
-    /// Declares all values of one coordinate, in declaration order.
+    /// Every coordinate is undeclared, so analysis makes no finite-domain assumption.
+    pub fn infinite() -> (result: Self)
+        ensures result.wf(),
+            result@ == Seq::new(arity::<E>(), |i: int| None),
+            constructor_capacity(result),
+            result.declaration_size() == 0,
+    {
+        reveal(Domains::wf);
+        reveal(Domains::declaration_size);
+        let count = E::Arity::value();
+        let mut components = Vec::with_capacity(count);
+        let mut index = 0;
+        while index < count
+            invariant index <= count, count == arity::<E>(),
+                components@.len() == index,
+                forall|i: int| 0 <= i < index ==> components@[i] is None,
+            decreases count - index,
+        {
+            components.push(None);
+            index += 1;
+        }
+        let result = Self { components };
+        proof {
+            assert(result@ =~= Seq::new(arity::<E>(), |i: int| None));
+            lemma_empty_constructor_capacity(result);
+        }
+        result
+    }
+
+    /// Declares the nonempty values of one coordinate, in declaration order.
     ///
     /// # Panics
-    /// Panics if the coordinate is outside this event's arity or a value belongs to another coordinate.
-    pub fn with_domain(
-        mut self,
-        component: Component,
-        values: impl IntoIterator<Item = E::Component>,
-    ) -> Self {
+    /// Panics for an empty domain, an out-of-range coordinate, or an ill-tagged value.
+    pub fn with_domain(self, component: Component, values: Vec<E::Component>) -> (result: Self)
+        requires self.wf(), E::obeys_projection_spec(),
+            component.0 < arity::<E>(), values@.len() > 0,
+            forall|j: int| 0 <= j < values@.len() ==> E::coordinate_spec(values@[j]) == component.0 as nat,
+        ensures result.wf(),
+            result@ == self@.update(component.0 as int, Some(values@.to_set())),
+            result.declaration_size() <= self.declaration_size() + values@.len(),
+            self.declaration_size() + values@.len() <= u32::MAX
+                ==> crate::verify::constructor_capacity(result),
+    {
+        reveal(Domains::wf);
+        reveal(Domains::declaration_size);
+        proof {
+            lemma_domain_count_update(self.components@, component.0 as int, values);
+            lemma_constructor_contract::<E>();
+        }
+        let mut domains = self;
         let index = component.index();
-        assert!(
-            index < self.components.len(),
-            "domain coordinate is outside event arity"
-        );
-        self.components[index] = Some(
-            values
-                .into_iter()
-                .map(|value| {
-                    assert_eq!(
-                        E::coordinate(value),
-                        index,
-                        "domain value belongs to another coordinate"
-                    );
-                    value
-                })
-                .collect(),
-        );
-        self
+        assert!(index < domains.components.len(), "domain coordinate is outside event arity");
+        assert!(!values.is_empty(), "declared domain must be nonempty");
+        let mut offset = 0;
+        while offset < values.len()
+            invariant offset <= values@.len(), E::obeys_projection_spec(),
+                forall|j: int| 0 <= j < values@.len() ==> E::coordinate_spec(values@[j]) == index,
+            decreases values@.len() - offset,
+        {
+            assert!(E::coordinate(values[offset]) == index, "domain value belongs to another coordinate");
+            offset += 1;
+        }
+        domains.components.set(index, Some(values));
+        domains
     }
+}
 }
 
 /// One component value of a counterexample.
@@ -147,9 +232,8 @@ impl<E: Event> Domains<E> {
 pub enum Value<T> {
     /// A constant of the analysed rules, or a declared value of a finite component.
     Constant(T),
-    /// A value of an infinite component that equals no constant of that component known to the
-    /// analyzer. Within one counterexample, equal numbers denote equal values and different
-    /// numbers different values.
+    /// A symbolic name outside the known constants of an undeclared coordinate. Within that
+    /// coordinate, equal names denote equal values and different names denote different values.
     Fresh(usize),
 }
 
@@ -363,6 +447,7 @@ pub struct PolicyAnalyzer<E: Event> {
     pub(crate) constants: Constants<E>,
     pub(crate) universes: Universes,
     pub(crate) rules: Vec<StoredRule<E>>,
+    pub(crate) owner: Option<history_store::typed::OwnerId>,
 }
 
 verus! {
@@ -371,9 +456,10 @@ impl<E: Event> PolicyAnalyzer<E> {
     // Each match keeps the declared domain's exact vector view.
     #[allow(clippy::manual_map)]
     pub fn new(domains: Domains<E>) -> (result: Self)
-        requires crate::verify::analyzer_obligations::<E>(), domains_wf(domains), constructor_capacity(domains),
-        ensures constructor_result(result, domains),
+        requires crate::verify::analyzer_obligations::<E>(), domains.wf(), constructor_capacity(domains),
+        ensures constructor_result(result, domains), result.wf(),
     {
+        reveal(Domains::wf);
         proof { lemma_constructor_contract::<E>(); }
         let ghost input = domains;
         let arity = E::Arity::value();
@@ -429,8 +515,12 @@ impl<E: Event> PolicyAnalyzer<E> {
             index += 1;
         }
         proof { assert(input.components@.take(index as int) =~= input.components@); }
-        let result = Self { constants, universes, rules: Vec::new() };
-        proof { lemma_declared_wf(result, input); lemma_constructor_domains(result, input); }
+        let result = Self { constants, universes, rules: Vec::new(), owner: None };
+        proof {
+            lemma_declared_wf(result, input);
+            lemma_constructor_domains(result, input);
+            result.lemma_native_wf();
+        }
         result
     }
 }
@@ -440,6 +530,7 @@ verus! {
 impl<E: Event> PolicyAnalyzer<E> {
 
     /// Validates and stores a rule. Indices remain stable when later rules add constants.
+    /// The first successful registration obtains a checked owner identity; exhaustion is an error.
     pub fn add_rule(&mut self, rule: &Rule<E>) -> (result: Result<RuleId, CompileError>)
         requires views::analyzer_obligations::<E>(), analyzer_state_wf(*old(self)),
             add_rule_capacity(*old(self), *rule),
@@ -447,8 +538,10 @@ impl<E: Event> PolicyAnalyzer<E> {
             final(self)@.domains == old(self)@.domains,
             result matches Ok(id) ==> final(self)@.rules == old(self)@.rules.push(encoding::rule_view(*rule))
                 && id@ == old(self)@.rules.len()
+                && id.belongs_to(final(self))
                 && history_semantics::verify::refinement::semantics::rule_wf(encoding::rule_view(*rule)),
             result is Err ==> final(self)@.rules == old(self)@.rules,
+            forall|id: RuleId| #[trigger] id.belongs_to(old(self)) ==> id.belongs_to(final(self)),
             junco_core::verify::history_specs::no_internal_compile_error(result),
     {
         let ghost before = *self;
@@ -466,7 +559,16 @@ impl<E: Event> PolicyAnalyzer<E> {
             }
             lemma_universes_frame(before.constants, self.constants, self.universes);
         }
-        let id = RuleId(self.rules.len());
+        let owner = match &self.owner {
+            Some(owner) => owner.id(),
+            None => {
+                let owner = history_store::typed::OwnerId::new()?;
+                let id = owner.id();
+                self.owner = Some(owner);
+                id
+            },
+        };
+        let id = RuleId(self.rules.len(), owner);
         self.rules.push(StoredRule { original: Ghost(*rule), flat: Ghost(flat),
             numeric, constants, constraint, mode: rule.mode });
         proof {
@@ -476,15 +578,18 @@ impl<E: Event> PolicyAnalyzer<E> {
     }
 
     /// Whether `by` covers every denial of the stored rule.
+    /// Every supplied id is checked at runtime; a foreign or unknown id returns `UnknownId`.
     pub fn covered(&self, rule: RuleId, by: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
-            rule@ < self@.rules.len(), valid_ids(*self, by@),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            result is Ok ==> rule.belongs_to(self) && ids_belong_to(self, by@),
             result matches Ok(v) ==> verdict::covered_ok(self@, rule@, rule_ids(by@), v@),
             result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
                 && !semantics::covers(self@.domains, verdict::rules_of(self@, rule_ids(by@)), self@.rules[rule@ as int]),
     {
+        self.check_id(rule)?;
+        self.check_ids(by)?;
         self.covered_with(rule, by, None)
     }
 
@@ -495,9 +600,9 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// coverage-query interpretation.
     pub fn redundant(&self, rule: RuleId, policy: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
-            rule@ < self@.rules.len(), valid_ids(*self, policy@),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            result is Ok ==> rule.belongs_to(self) && ids_belong_to(self, policy@),
             result matches Ok(v) ==> verdict::redundant_ok(self@, rule@, rule_ids(policy@), v@),
             result matches Ok(v) ==> removal::redundant_decisions_ok(self@, rule@, rule_ids(policy@), v@),
             result matches Ok(Inclusion::Holds) ==> removal::removal_preserves_decisions(self@, rule@, rule_ids(policy@)),
@@ -507,6 +612,8 @@ impl<E: Event> PolicyAnalyzer<E> {
                 && !semantics::covers(self@.domains,
                     verdict::rules_of(self@, verdict::without_rule(rule_ids(policy@), rule@)), self@.rules[rule@ as int]),
     {
+        self.check_id(rule)?;
+        self.check_ids(policy)?;
         let result = self.covered_with(rule, policy, Some(rule))?;
         proof {
             queries::lemma_selected_ids(*self, policy@, Some(rule));
@@ -531,24 +638,27 @@ impl<E: Event> PolicyAnalyzer<E> {
     pub fn at_least_as_strict(&self, stricter: &[RuleId], than: &[RuleId])
         -> (result: Result<Inclusion<E>, HistoryError>)
         requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
-            valid_ids(*self, stricter@), valid_ids(*self, than@),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            result is Ok ==> ids_belong_to(self, stricter@) && ids_belong_to(self, than@),
             result matches Ok(v) ==> verdict::at_least_as_strict_ok(self@, rule_ids(stricter@), rule_ids(than@), v@),
             result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
                 && !semantics::refines(self@.domains, verdict::rules_of(self@, rule_ids(stricter@)),
                     verdict::rules_of(self@, rule_ids(than@))),
     {
+        self.check_ids(stricter)?;
+        self.check_ids(than)?;
         let mut index = 0;
         while index < than.len()
             invariant index <= than@.len(), analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
                 valid_ids(*self, stricter@), valid_ids(*self, than@),
+                ids_belong_to(self, stricter@), ids_belong_to(self, than@),
                 verdict::unrestricted_components_infinite(self@.domains),
                 forall|j: int| 0 <= j < index ==> semantics::covers(self@.domains,
                     verdict::rules_of(self@, rule_ids(stricter@)), self@.rules[than@[j]@ as int]),
             decreases than@.len() - index,
         {
-            let inclusion = self.covered(than[index], stricter)?;
+            let inclusion = self.covered_with(than[index], stricter, None)?;
             match inclusion {
                 Inclusion::Holds => {},
                 _ => {
@@ -560,6 +670,41 @@ impl<E: Event> PolicyAnalyzer<E> {
         }
         proof { bridge::lemma_refinement_holds(self@, rule_ids(stricter@), rule_ids(than@)); }
         Ok(Inclusion::Holds)
+    }
+
+    fn check_id(&self, id: RuleId) -> (result: Result<(), HistoryError>)
+        ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            result is Ok ==> id.0 < self.rules@.len(),
+            (result is Ok) == id.belongs_to(self),
+            result is Err ==> result matches Err(HistoryError::UnknownId { .. }),
+    {
+        let owned = match &self.owner {
+            Some(owner) => owner.id() == id.1,
+            None => false,
+        };
+        if !owned || id.0 >= self.rules.len() {
+            return Err(HistoryError::UnknownId { domain: "analyzer rule", id: id.1 });
+        }
+        Ok(())
+    }
+
+    fn check_ids(&self, ids: &[RuleId]) -> (result: Result<(), HistoryError>)
+        ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            result is Ok ==> valid_ids(*self, ids@),
+            (result is Ok) == ids_belong_to(self, ids@),
+            result is Err ==> result matches Err(HistoryError::UnknownId { .. }),
+    {
+        let mut index = 0;
+        while index < ids.len()
+            invariant index <= ids@.len(),
+                forall|j: int| 0 <= j < index ==> ids@[j].0 < self.rules@.len(),
+                forall|j: int| 0 <= j < index ==> ids@[j].belongs_to(self),
+            decreases ids@.len() - index,
+        {
+            self.check_id(ids[index])?;
+            index += 1;
+        }
+        Ok(())
     }
 
     fn covered_with(&self, rule: RuleId, by: &[RuleId], exclude: Option<RuleId>)
@@ -1043,6 +1188,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             constants_frame(old(self).constants, final(self).constants),
             final(self).universes == old(self).universes,
             final(self).rules == old(self).rules,
+            final(self).owner == old(self).owner,
             analyzer_state_wf(*old(self)) ==> analyzer_state_wf(*final(self)),
             junco_core::verify::history_specs::no_invariant_failure(result),
             final(self).constants.values@.len() <= old(self).constants.values@.len() + source.head@.len() + source.tests@.len(),

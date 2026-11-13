@@ -39,6 +39,12 @@ impl<E: Event> PolicyAnalyzer<E> {
     pub closed spec fn wf(&self) -> bool {
         crate::verify::frontend::analyzer_state_wf(*self)
     }
+
+    /// Native proofs may reveal the implementation invariant without exposing its private fields.
+    pub(crate) proof fn lemma_native_wf(&self)
+        ensures self.wf() == crate::verify::frontend::analyzer_state_wf(*self),
+    {
+    }
 }
 
 

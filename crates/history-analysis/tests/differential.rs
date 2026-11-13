@@ -71,6 +71,48 @@ const CASES: usize = 150;
 const BUDGET: usize = 2_000;
 
 #[test]
+#[should_panic(expected = "declared domain must be nonempty")]
+fn empty_declared_domain_is_rejected() {
+    let _ = Domains::<Access>::infinite().with_domain(Component(1), Vec::new());
+}
+
+#[test]
+fn foreign_rule_ids_are_rejected_in_every_query_position() {
+    let setup = policy_setup();
+    let rule = Rule::new(RuleMode::Forbid, setup.head, RegexExpr::All);
+    let foreign = {
+        let mut original = PolicyAnalyzer::new(setup.domains.clone());
+        original.add_rule(&rule).unwrap()
+    };
+    // The old analyzer is gone, and the new rule has the same index and source.
+    // Neither fact permits recycling the old owner identity.
+    let mut analyzer = PolicyAnalyzer::new(setup.domains);
+    let local = analyzer.add_rule(&rule).unwrap();
+    assert_ne!(foreign, local);
+    for result in [
+        analyzer.covered(foreign, &[local]),
+        analyzer.covered(local, &[foreign]),
+        analyzer.redundant(foreign, &[local]),
+        analyzer.redundant(local, &[local, foreign, local]),
+        analyzer.at_least_as_strict(&[foreign], &[local]),
+        analyzer.at_least_as_strict(&[local], &[foreign]),
+        analyzer.at_least_as_strict(&[foreign], &[]),
+    ] {
+        assert!(matches!(
+            result,
+            Err(junco_core::HistoryError::UnknownId {
+                domain: "analyzer rule",
+                ..
+            })
+        ));
+    }
+    assert!(matches!(
+        analyzer.covered(local, &[local]).unwrap(),
+        Inclusion::Holds
+    ));
+}
+
+#[test]
 fn inclusion_agrees_with_brute_force() {
     let mut rng = Rng(0x6a75_6e63_6f00_0001);
     for _ in 0..CASES {
@@ -283,10 +325,12 @@ fn alice_bob_coverage_regression() {
             let mut setup = policy_setup();
             if !finite {
                 setup.domains = Domains::infinite()
-                    .with_domain(Component(1), ACTIONS.map(AccessComponent::Action))
+                    .with_domain(Component(1), ACTIONS.map(AccessComponent::Action).to_vec())
                     .with_domain(
                         Component(2),
-                        [MENTIONED, MENTIONED + 1].map(AccessComponent::Resource),
+                        [MENTIONED, MENTIONED + 1]
+                            .map(AccessComponent::Resource)
+                            .to_vec(),
                     );
                 setup.principal_domain = None;
             }
@@ -365,11 +409,16 @@ fn policy_setup() -> Setup {
             ComponentPattern::variable("r"),
         ]),
         domains: Domains::infinite()
-            .with_domain(Component(0), [1, 2, 3].map(AccessComponent::Principal))
-            .with_domain(Component(1), ACTIONS.map(AccessComponent::Action))
+            .with_domain(
+                Component(0),
+                [1, 2, 3].map(AccessComponent::Principal).to_vec(),
+            )
+            .with_domain(Component(1), ACTIONS.map(AccessComponent::Action).to_vec())
             .with_domain(
                 Component(2),
-                [MENTIONED, MENTIONED + 1].map(AccessComponent::Resource),
+                [MENTIONED, MENTIONED + 1]
+                    .map(AccessComponent::Resource)
+                    .to_vec(),
             ),
         principal_register: true,
         action_register: true,
@@ -708,18 +757,26 @@ impl Setup {
             Some(vec![11, 12]),
         ][rng.below(4)]
         .clone();
-        let mut domains =
-            Domains::infinite().with_domain(Component(1), ACTIONS.map(AccessComponent::Action));
+        let mut domains = Domains::infinite()
+            .with_domain(Component(1), ACTIONS.map(AccessComponent::Action).to_vec());
         if let Some(values) = &principal_domain {
             domains = domains.with_domain(
                 Component(0),
-                values.iter().copied().map(AccessComponent::Principal),
+                values
+                    .iter()
+                    .copied()
+                    .map(AccessComponent::Principal)
+                    .collect(),
             );
         }
         if let Some(values) = &resource_domain {
             domains = domains.with_domain(
                 Component(2),
-                values.iter().copied().map(AccessComponent::Resource),
+                values
+                    .iter()
+                    .copied()
+                    .map(AccessComponent::Resource)
+                    .collect(),
             );
         }
         let head = Head::new([
