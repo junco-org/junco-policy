@@ -817,19 +817,15 @@ impl RegexDerivative for RegexId {
                     assert(fder::dbound(store.graph(), this@, out@));
                     assert(derivative_vocab(store.graph(), this@, out@));
                 }
+                proof_decl! { let ghost before_insert = cache@; }
                 let slots = cache.as_mut_slice();
                 match slots.get_mut(index) {
                     Some(slot) => *slot = Some(out),
                     None => return Err(HistoryError::symbolic_invariant()),
                 }
                 proof! {
-                    assert(derivative_cache_wf(store.graph(), cache@)) by {
-                        reveal(derivative_cache_wf);
-                        assert forall|i: int| 0 <= i < cache@.len() implies match #[trigger] cache@[i] {
-                            Some(t) => derivative_correct(store.graph(), i as nat, t) && fder::dbound(store.graph(), i as nat, t@)
-                                && derivative_vocab(store.graph(), i as nat, t@), None => true,
-                        } by { if i == index { assert(cache@[i] == Some(out)); } }
-                    }
+                    assert(cache@ == before_insert.update(index as int, Some(out)));
+                    derivative_cache_insert(store.graph(), before_insert, index as int, out);
                 }
             }
         }
@@ -3317,6 +3313,24 @@ pub mod verify {
         forall|i: int| 0 <= i < cache.len() ==> match #[trigger] cache[i] {
             Some(out) => derivative_correct(g, i as nat, out) && fder::dbound(g, i as nat, out@)
                 && derivative_vocab(g, i as nat, out@), None => true,
+        }
+    }
+
+    /// Installing one proved derivative preserves the cache's semantic invariant.
+    pub proof fn derivative_cache_insert(g: model::Graph, cache: Seq<Option<TransitionId>>,
+        index: int, out: TransitionId)
+        requires derivative_cache_wf(g, cache), 0 <= index < cache.len(),
+            derivative_correct(g, index as nat, out), fder::dbound(g, index as nat, out@),
+            derivative_vocab(g, index as nat, out@),
+        ensures derivative_cache_wf(g, cache.update(index, Some(out))),
+    {
+        let after = cache.update(index, Some(out));
+        assert forall|i: int| 0 <= i < after.len() implies match #[trigger] after[i] {
+            Some(t) => derivative_correct(g, i as nat, t) && fder::dbound(g, i as nat, t@)
+                && derivative_vocab(g, i as nat, t@),
+            None => true,
+        } by {
+            if i != index { assert(after[i] == cache[i]); }
         }
     }
 
