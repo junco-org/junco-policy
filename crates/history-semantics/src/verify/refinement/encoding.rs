@@ -1,18 +1,14 @@
-//! Layer 1: typed rules and pairs as numeric ones.
+//! Real-event rules and pairs as numeric rules and words.
 //!
-//! The typed-to-numeric bridge is the existing verified front end, which the analyzer already
-//! calls (`PolicyAnalyzer::add_rule` and `tail_included`): `flatten_rule_parts` (`junco_core::verify::flatten`,
-//! `flattened`, `flattening_preserves_semantics`), `lower_flat` with the analyzer's encoder
-//! (`junco_core::verify::encoding`, `lowering`, `lemma_dsl_later_maps_preservation`), and the
-//! graph compiler (`crate::compile`, `lemma_flat_regex`, the `compile` contract). This layer only
-//! adds what those do not state: the numeric rule with its mode, the whole-candidate valuation
-//! the analyzer uses (the runtime uses head bindings, with 0 at unbound components), and
-//! renaming invariance for fresh values.
-use super::semantics::*;
+//! The bridge composes structural source flattening, codebook lowering, and the
+//! graph compiler's numeric language theorem. Typed denial is canonical R2
+//! violation over `E` and `Seq<E>`; only the numeric layer has its own denotation.
+use super::semantics::violated_by;
 use crate::compile::verify as numeric;
 use history_syntax::Event;
+use history_syntax::spec::events::{arity, event_view};
 use history_syntax::syntax::{Component, Rule, RuleMode};
-use history_syntax::verify::dsl::RuleView;
+use junco_core::spec::semantics::rule_violated;
 
 use junco_core::flat::verify as portable;
 use junco_core::flat::{FlatHead, FlatPair, FlatRule};
@@ -81,14 +77,7 @@ pub open spec fn n_theta_ok(d: NDomains, theta: Subst) -> bool {
 
 // ----- the verified front end -----
 
-/// The view of an executable rule.
-pub open spec fn rule_view<E: Event>(rule: Rule<E>) -> RuleView<E::Component> {
-    RuleView { mode: rule.mode, head: rule.head@, tail: rule.tail@ }
-}
-
-/// What the analyzer's front end establishes for an added rule: the verified `flatten_rule`
-/// (`flattening_client` gives `flattened`, hence `head_scoped` and `regex_scoped`) and
-/// `lower_flat` (`lowering` and `constants_in_domain` for the encoder's books).
+/// Structural source flattening, codebook lowering, and coverage of source constants.
 pub open spec fn front_end_ok<E: Event>(
     rule: Rule<E>, flat: FlatRule<E::Component>, template: FlatPair<u64>,
     maps: enc::Codebook<E::Component>, domain: enc::Domain<E::Component>,
@@ -129,33 +118,28 @@ pub open spec fn stmt_source_regex_local() -> bool {
                 == #[trigger] numeric::source_regex(template, template.root as nat, b, w))
 }
 
-/// Typed denial is numeric denial for a rule passed through the front end. Proof plan, from
-/// existing results: `enc::lemma_dsl_later_maps_preservation` (typed head and language equal the
-/// numeric flat ones), `numeric::lemma_flat_head` and `numeric::lemma_flat_regex` (flat language
-/// equals `source_regex` under the head bindings), `stmt_source_regex_local`, and `represents`.
-/// Like the runtime's typed guarantees, it is conditional on the encoder's books (`maps_wf`, which
-/// requires nonzero codes) and on the pair being encoded. Tails (`tail_included`) are the case
-/// `mode = Forbid`.
+/// Canonical real-event violation equals numeric denial after the verified front end.
+/// Encoding relates projections only at the implementation boundary; candidates and
+/// histories in the semantic conclusion are actual events.
 pub open spec fn stmt_front_end_denies<E: Event>() -> bool {
     forall|rule: Rule<E>, flat: FlatRule<E::Component>, template: FlatPair<u64>,
         maps: enc::Codebook<E::Component>, later: enc::Codebook<E::Component>,
         domain: enc::Domain<E::Component>, n: NRule,
-        candidate: Seq<E::Component>,
-        history: Seq<Seq<E::Component>>,
+        candidate: E, history: Seq<E>,
         request: Seq<u64>, word: Seq<Seq<u64>>, theta: Subst, w: Seq<EventView>|
         #![trigger front_end_ok(rule, flat, template, maps, domain), represents(n, rule.mode, template),
             enc::extends(maps, later, fl::component_equality::<E>()),
-            enc::event_encoded(later, fl::component_equality::<E>(), domain, candidate, request),
-            enc::word_encoded(later, fl::component_equality::<E>(), domain, history, word),
+            enc::event_encoded(later, fl::component_equality::<E>(), domain, event_view(candidate), request),
+            rule_violated(rule, candidate, history),
             enc::event_representation(request, theta), enc::word_representation(word, w)]
         front_end_ok(rule, flat, template, maps, domain) && represents(n, rule.mode, template)
-            && candidate.len() == rule.head@.len()
             && enc::extends(maps, later, fl::component_equality::<E>())
             && enc::maps_wf(later, fl::component_equality::<E>(), domain)
-            && enc::event_encoded(later, fl::component_equality::<E>(), domain, candidate, request)
-            && enc::word_encoded(later, fl::component_equality::<E>(), domain, history, word)
+            && enc::event_encoded(later, fl::component_equality::<E>(), domain, event_view(candidate), request)
+            && enc::word_encoded(later, fl::component_equality::<E>(), domain,
+                history.map(|i: int, e: E| event_view(e)), word)
             && enc::event_representation(request, theta) && enc::word_representation(word, w)
-            ==> (rule_denies(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w))
+            ==> (rule_violated(rule, candidate, history) == n_rule_denies(n, theta, w))
 }
 
 // ----- fresh values -----
@@ -386,19 +370,18 @@ pub proof fn lemma_front_end_denies<E: Event>(
     rule: Rule<E>, flat: FlatRule<E::Component>, template: FlatPair<u64>,
     maps: enc::Codebook<E::Component>, later: enc::Codebook<E::Component>,
     domain: enc::Domain<E::Component>, n: NRule,
-    candidate: Seq<E::Component>,
-    history: Seq<Seq<E::Component>>,
+    candidate: E, history: Seq<E>,
     request: Seq<u64>, word: Seq<Seq<u64>>, theta: Subst, w: Seq<EventView>,
 )
     requires
         front_end_ok(rule, flat, template, maps, domain), represents(n, rule.mode, template),
-        candidate.len() == rule.head@.len(),
         enc::extends(maps, later, fl::component_equality::<E>()),
         enc::maps_wf(later, fl::component_equality::<E>(), domain),
-        enc::event_encoded(later, fl::component_equality::<E>(), domain, candidate, request),
-        enc::word_encoded(later, fl::component_equality::<E>(), domain, history, word),
+        enc::event_encoded(later, fl::component_equality::<E>(), domain, event_view(candidate), request),
+        enc::word_encoded(later, fl::component_equality::<E>(), domain,
+            history.map(|i: int, e: E| event_view(e)), word),
         enc::event_representation(request, theta), enc::word_representation(word, w),
-    ensures rule_denies(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w),
+    ensures rule_violated(rule, candidate, history) == n_rule_denies(n, theta, w),
 {
     enc::lemma_dsl_later_maps_preservation::<E>(rule, flat, template, maps, later, domain,
         candidate, history, request, word);
@@ -423,8 +406,10 @@ pub proof fn lemma_front_end_denies<E: Event>(
             assert(n.head[i] == head_code(template.head@[i]));
         }
         assert(language::head_match(head, theta, bound));
+        let projected = history.map(|i: int, e: E| event_view(e));
         assert forall|i: int| 0 <= i < word.len() implies word[i].len() == request.len() by {
-            assert(enc::event_encoded(later, fl::component_equality::<E>(), domain, history[i], word[i]));
+            assert(enc::event_encoded(later, fl::component_equality::<E>(), domain, projected[i], word[i]));
+            assert(projected[i].len() == arity::<E>());
         }
         numeric::lemma_flat_regex(template, template.root as nat, request, theta, word, w, bound);
         assert forall|i: int| 0 <= i < head.len() && #[trigger] head[i] is Bind implies bound[i] == theta[i] by {}
@@ -445,22 +430,21 @@ pub proof fn theorem_front_end_denies<E: Event>()
     assert forall|rule: Rule<E>, flat: FlatRule<E::Component>, template: FlatPair<u64>,
         maps: enc::Codebook<E::Component>, later: enc::Codebook<E::Component>,
         domain: enc::Domain<E::Component>, n: NRule,
-        candidate: Seq<E::Component>,
-        history: Seq<Seq<E::Component>>,
+        candidate: E, history: Seq<E>,
         request: Seq<u64>, word: Seq<Seq<u64>>, theta: Subst, w: Seq<EventView>|
         #![trigger front_end_ok(rule, flat, template, maps, domain), represents(n, rule.mode, template),
             enc::extends(maps, later, fl::component_equality::<E>()),
-            enc::event_encoded(later, fl::component_equality::<E>(), domain, candidate, request),
-            enc::word_encoded(later, fl::component_equality::<E>(), domain, history, word),
+            enc::event_encoded(later, fl::component_equality::<E>(), domain, event_view(candidate), request),
+            rule_violated(rule, candidate, history),
             enc::event_representation(request, theta), enc::word_representation(word, w)]
         front_end_ok(rule, flat, template, maps, domain) && represents(n, rule.mode, template)
-            && candidate.len() == rule.head@.len()
             && enc::extends(maps, later, fl::component_equality::<E>())
             && enc::maps_wf(later, fl::component_equality::<E>(), domain)
-            && enc::event_encoded(later, fl::component_equality::<E>(), domain, candidate, request)
-            && enc::word_encoded(later, fl::component_equality::<E>(), domain, history, word)
+            && enc::event_encoded(later, fl::component_equality::<E>(), domain, event_view(candidate), request)
+            && enc::word_encoded(later, fl::component_equality::<E>(), domain,
+                history.map(|i: int, e: E| event_view(e)), word)
             && enc::event_representation(request, theta) && enc::word_representation(word, w)
-        implies (rule_denies(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w)) by {
+        implies (rule_violated(rule, candidate, history) == n_rule_denies(n, theta, w)) by {
         lemma_front_end_denies::<E>(rule, flat, template, maps, later, domain, n, candidate, history,
             request, word, theta, w);
     }
