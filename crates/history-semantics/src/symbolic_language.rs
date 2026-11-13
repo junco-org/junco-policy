@@ -12,6 +12,8 @@
 //! It preserves the shared precondition, a well-formed compiled pair, by owning the pair and
 //! rejecting identifiers that do not belong to its graph. Read callbacks receive the exact node
 //! view without changing the pair.
+//! Error guarantees are conditional on graph membership for reads and derivatives, and on a
+//! cached atom set with a correctly sized, zero-padded truth assignment for successors.
 
 use alloc::vec::Vec;
 use history_store::cache::EventClass;
@@ -78,8 +80,13 @@ impl SymbolicLanguage {
     /// Compiles a numeric tail into a fresh graph, as the runtime does, that may be charged
     /// `budget` bytes. Each of the graph's six arenas reserves `budget` bytes of address space,
     /// which is committed as it fills. `budget` must be a multiple of 16.
+    /// With a layout-valid arena budget, a source with in-range backward references and a valid
+    /// root cannot fail internally; this does not require a binding head for symbolic variables.
     #[verus_verify]
-    #[verus_spec(result => ensures result matches Ok(l) ==> language_wf(l)
+    #[verus_spec(result => ensures
+        numeric::source_dag_wf(*template) && compile_budget_valid(budget)
+            ==> language::no_internal_error(result),
+        result matches Ok(l) ==> language_wf(l)
         && finite_impl::regex_nf(model::lift_regex(graph(l), root(l)))
         && symbolic::regex_primitives(model::lift_regex(graph(l), root(l))).subset_of(numeric::source_primitives(*template))
         && forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta, theta.len())
@@ -114,6 +121,7 @@ impl SymbolicLanguage {
     #[verus_verify]
     #[verus_spec(result => requires language_wf(*old(self)),
         ensures *final(self) == *old(self),
+            residual@ < graph(*old(self)).regexes.len() ==> language::no_internal_error(result),
             result matches Ok(value) ==> residual@ < graph(*final(self)).regexes.len()
                 && value == language::nullable(abs(*final(self), residual)))]
     pub fn nullable(&mut self, residual: RegexId) -> Result<bool, HistoryError> {
@@ -135,6 +143,7 @@ impl SymbolicLanguage {
             && view@ == graph(*old(self)).regexes[residual@ as int]
             ==> call_requires(read, (view,)),
         ensures *final(self) == *old(self),
+            residual@ < graph(*old(self)).regexes.len() ==> language::no_internal_error(result),
             result matches Ok(value) ==> exists|view: RegexView<'_>|
                 residual@ < graph(*final(self)).regexes.len()
                 && view@ == graph(*final(self)).regexes[residual@ as int]
@@ -165,6 +174,7 @@ impl SymbolicLanguage {
         forall|view: TestView<'_>| test@ < graph(*old(self)).tests.len()
             && view@ == graph(*old(self)).tests[test@ as int] ==> call_requires(read, (view,)),
         ensures *final(self) == *old(self),
+            test@ < graph(*old(self)).tests.len() ==> language::no_internal_error(result),
             result matches Ok(value) ==> exists|view: TestView<'_>|
                 test@ < graph(*final(self)).tests.len()
                 && view@ == graph(*final(self)).tests[test@ as int]
@@ -189,17 +199,21 @@ impl SymbolicLanguage {
     #[verus_verify]
     #[verus_spec(result => requires language_wf(*old(self)),
         ensures language_wf(*final(self)), frame(*old(self), *final(self)),
+            residual@ < graph(*old(self)).regexes.len() ==> language::no_internal_error(result),
             forall|i: int| 0 <= i < derivatives(*old(self)).len() && derivatives(*old(self))[i] is Some
                 ==> i < derivatives(*final(self)).len() && derivatives(*final(self))[i] == derivatives(*old(self))[i],
             forall|t: TransitionId| has_atoms(*old(self), t) ==> has_atoms(*final(self), t)
                 && atom_ids(*final(self), t) == atom_ids(*old(self), t),
-            result matches Ok((t, prims)) ==> symbolic::derivative_correct(graph(*final(self)), residual@, t)
+            result matches Ok((t, prims)) ==> residual@ < graph(*old(self)).regexes.len()
+                && symbolic::derivative_correct(graph(*final(self)), residual@, t)
                 && fder::dbound(graph(*final(self)), residual@, t@)
                 && has_atoms(*final(self), t)
                 && reach::atoms_wf(graph(*final(self)), t@, atom_ids(*final(self), t))
                 && residual@ < derivatives(*final(self)).len()
                 && derivatives(*final(self))[residual@ as int] == Some(t)
                 && prims@.len() == atom_ids(*final(self), t).len()
+                && prims@.len() <= u32::MAX as nat + 1
+                && prims@.len() + 63 <= usize::MAX
                 && crate::verify::refinement::search::atoms_complete(abs(*final(self), residual), atom_primitives(*final(self), t))
                 && atom_primitives(*final(self), t) == prims@.map_values(|p: Primitive| p@).to_set()
                 && atom_primitives(*final(self), t).subset_of(residual_primitives(*final(self), residual))
@@ -211,6 +225,7 @@ impl SymbolicLanguage {
         residual: RegexId,
     ) -> Result<(TransitionId, Vec<Primitive>), HistoryError> {
         proof! { reveal(language_wf); reveal(graph); reveal(root); reveal(has_atoms); reveal(atom_ids); reveal(derivatives); }
+        proof! { self.pair.store.lemma_node_count_bounds(); }
         proof_decl! { let ghost entry = self.pair; }
         let (mut limits, mut world) = (Unmetered, ObservationWorld);
         let transition = {
@@ -253,6 +268,7 @@ impl SymbolicLanguage {
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant index <= ids@.len(), primitives@.len() == index,
                 reach::pair_wf(collected), reach::pair_frame(entry, collected),
+                residual@ < entry.store.graph().regexes.len(),
                 reach::has_atoms(collected, transition),
                 self.pair.caches == collected.caches, self.pair.root == collected.root,
                 *kernel.store == collected.store,
@@ -277,6 +293,8 @@ impl SymbolicLanguage {
             index += 1;
         }
         proof! {
+            self.pair.store.lemma_node_count_bounds();
+            reach::lemma_atom_count_bound(graph(*self), ids@);
             assert forall|i: int| 0 <= i < primitives@.len() implies
                 graph(*self).tests[ids@[i]@ as int] == model::TestNode::Atom(primitives@[i]@, true) by {
                 reveal_with_fuel(model::lift_test, 1);
@@ -296,6 +314,9 @@ impl SymbolicLanguage {
     #[verus_verify]
     #[verus_spec(result => requires language_wf(*old(self)),
         ensures language_wf(*final(self)), frame(*old(self), *final(self)),
+            has_atoms(*old(self), transition)
+                && symbolic::assignment_valid(atom_ids(*old(self), transition).len(), truth@)
+                ==> language::no_internal_error(result),
             derivatives(*final(self)) == derivatives(*old(self)),
             forall|t: TransitionId| has_atoms(*old(self), t) ==> has_atoms(*final(self), t)
                 && atom_ids(*final(self), t) == atom_ids(*old(self), t),
@@ -340,11 +361,26 @@ impl SymbolicLanguage {
 #[cfg(verus_keep_ghost)]
 pub mod verify {
     use super::*;
+    pub use crate::progress::verify::{lemma_assignment_set, lemma_zero_truth_words};
     use crate::verify::refinement::encoding as enc;
     use history_syntax::Component;
 
     verus! {
     broadcast use junco_core::kernel::verify::group_kernel_views;
+
+    /// Exact arena layout readiness, retaining the runtime's established default budget case.
+    pub open spec fn compile_budget_valid(budget: usize) -> bool {
+        budget == junco_core::limits::MAX_GRAPH_BYTES
+            || history_store::graph::verify::construction_layout(budget)
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    pub proof fn lemma_aligned_compile_budget(budget: usize)
+        requires budget as int % 16 == 0,
+        ensures compile_budget_valid(budget),
+    {
+        history_store::graph::verify::lemma_aligned_budget_layout(budget);
+    }
 
     pub open(crate) spec fn language_wf(l: SymbolicLanguage) -> bool { reach::pair_wf(l.pair) }
     pub open(crate) spec fn graph(l: SymbolicLanguage) -> model::Graph { l.pair.store.graph() }
@@ -370,6 +406,46 @@ pub mod verify {
 
     pub open spec fn residual_primitives(l: SymbolicLanguage, q: RegexId) -> Set<model::Primitive> {
         symbolic::regex_primitives(abs(l, q))
+    }
+
+    /// Primitive payloads that the analyzer can represent without an invariant error.
+    pub open spec fn primitives_search_safe(ps: Set<model::Primitive>) -> bool {
+        forall|p: model::Primitive| #[trigger] ps.contains(p) ==> match p {
+            model::Primitive::Eq(_, model::GTerm::Constant(code)) => code <= u32::MAX,
+            model::Primitive::Eq(field, model::GTerm::Variable(variable)) => field == variable,
+        }
+    }
+
+    pub open spec fn residual_search_safe(l: SymbolicLanguage, q: RegexId) -> bool {
+        primitives_search_safe(residual_primitives(l, q))
+    }
+
+    pub proof fn lemma_compiled_search_safe(template: FlatPair<u64>, l: SymbolicLanguage, q: RegexId)
+        requires q@ == root(l),
+            residual_primitives(l, q).subset_of(numeric::source_primitives(template)),
+            forall|i: int| #![trigger template.tests@[i]] 0 <= i < template.tests@.len()
+                ==> match template.tests@[i] {
+                    junco_core::flat::FlatTest::Atom { field, term, .. } => match term {
+                        junco_core::flat::FlatTerm::Constant(code) => code <= u32::MAX,
+                        junco_core::flat::FlatTerm::Variable(variable) => field == variable,
+                    },
+                    _ => true,
+                },
+        ensures residual_search_safe(l, q),
+    {
+        assert forall|p: model::Primitive| residual_primitives(l, q).contains(p)
+            implies match p {
+                model::Primitive::Eq(_, model::GTerm::Constant(code)) => code <= u32::MAX,
+                model::Primitive::Eq(field, model::GTerm::Variable(variable)) => field == variable,
+            } by {
+            numeric::lemma_source_primitive_prefix(template, template.tests@.len(), p);
+            let i = choose|i: int| #![trigger template.tests@[i]] 0 <= i < template.tests@.len()
+                && match template.tests@[i] {
+                    junco_core::flat::FlatTest::Atom { field, term, .. } =>
+                        p == model::Primitive::Eq(field, numeric::term_view(term)),
+                    _ => false,
+                };
+        }
     }
 
     pub open spec fn primitive_codes(ps: Set<model::Primitive>, c: Component) -> Set<nat> {

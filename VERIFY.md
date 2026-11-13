@@ -65,17 +65,23 @@ pinned Verus into `spec-check/vendor/` on first use (network access required).
 
 | Configuration (`cargo verus verify --locked ...`) | Result |
 |---|---|
-| `-p history-syntax --no-default-features` | pass; Verus prints no count when the crate's result is cached |
-| `-p history-syntax --features serde,std` | pass; no count when cached |
-| `-p junco-core --no-default-features` | 166 verified, 0 errors |
-| `-p junco-core --features runtime,std,serde` | 247 verified, 0 errors |
-| `-p history-store --no-default-features --features runtime` | 285 verified, 0 errors |
-| `-p history-store --features runtime,std` | 285 verified, 0 errors |
-| `-p history-semantics --no-default-features --features runtime` | 1575 verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache` | 1580 verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache --test public_specs` | 19 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime` | 483 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime,std` | 483 verified, 0 errors |
+| `-p history-syntax --no-default-features` | 55 verified, 0 errors |
+| `-p history-syntax --features serde,std` | 55 verified, 0 errors |
+| `-p junco-core --no-default-features` | 164 verified, 0 errors |
+| `-p junco-core --features runtime,std,serde` | 248 verified, 0 errors |
+| `-p history-store --no-default-features --features runtime` | 287 verified, 0 errors |
+| `-p history-store --features runtime,std` | 287 verified, 0 errors |
+| `-p history-semantics --no-default-features --features runtime` | 1609 verified, 0 errors |
+| `-p history-semantics --features runtime,std,cache` | 1614 verified, 0 errors |
+| `-p history-semantics --features runtime,std,cache --test public_specs` | 21 verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime` | 563 verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime,std` | 563 verified, 0 errors |
+
+These counts are from the pinned toolchain with `-- --num-threads 144 --triggers-mode silent`.
+The full gate also passes on the completed model/firing and typed-policy bridge snapshots.
+`cargo test --workspace` passes (196 tests across 24 suites). The differential suite includes
+444 policy queries and 900 tail queries; separate executable smoke runs cover Alice/Bob,
+constant-book growth between queries, duplicate removal, and arities 1 and 8.
 
 ## Paper results and their mechanized statements
 
@@ -96,7 +102,7 @@ Results marked † assume infinite component domains (`n_unrestricted`, see belo
 | Equation decomposition (`eq:decomposition`) | `stmt_decomposition` | `refinement/pruning.rs` |
 | Lemma Pruning soundness (`lem:prune`) | `stmt_prune_sound`, `stmt_checks_discard` | `refinement/pruning.rs` |
 | Lemma Simulation soundness (`lem:simulation`) | `stmt_sim_rules_sound`, `stmt_test_rules_sound` | `refinement/pruning.rs` |
-| Executable analyzer (Section 6) | the real `PolicyAnalyzer::tail_included` ensures `tail_included_ok`; its search loop terminates by `theorem_impl_search_bounded` | `refinement/analyzer.rs`, `refinement/implementation.rs`; `crates/history-analysis/src/analyzer.rs`, `crates/history-analysis/src/search.rs` |
+| Executable analyzer (Section 6) | `covered`, `redundant`, and `at_least_as_strict` ensure their typed `*_correct` contracts; `tail_included` retains `tail_included_ok`; errors exclude internal invariant failures and search terminates by the implemented finite-item bound | `refinement/analyzer.rs`, `refinement/inclusion.rs`; `crates/history-analysis/src/analyzer.rs`, `verify/{verdict,policy_bridge,policy_queries}.rs` |
 
 Each `stmt_X` above is proved by `theorem_X` in the same file. The remaining statements of the
 `refinement/` layer are auxiliary: `stmt_genericity` and `stmt_numeric_genericity` (renaming
@@ -151,14 +157,18 @@ All names are in `crates/history-semantics/src/verify/refinement/`.
   `decreases` measure of the real search loop (`Search::run` in
   `crates/history-analysis/src/search.rs`); `lemma_running_outcome` gives the same bound for
   every returned outcome.
-- **Executable analyzer.** The contract of `PolicyAnalyzer::tail_included` requires
-  `analyzer_obligations::<E>()` (the event type's projections are stable, and equality and hashing
-  of component values agree with their models) and `query_capacity` (constant ids fit `u32` and
-  per-state split and letter products fit `usize`; by `lemma_query_capacity_nonvacuous` this holds
-  whenever the number of known constants plus the two tails' sizes, plus 6, is at most 1000).
-  A returned counterexample uses numbered fresh values; its meaning quantifies over every
-  admissible choice of distinct values, and `stmt_choice_exists` shows a choice exists when
-  component types are infinite.
+- **Executable analyzer.** Queries require `analyzer_obligations::<E>()`: stable event projections
+  and equality/hashing consistent with their models. Stored-rule queries also require valid
+  `RuleId` indices. `add_rule_capacity` and `query_capacity` bound constant-id allocation for
+  registration and the borrowed tail query; stored-policy queries add no vocabulary-capacity
+  premise. Cartesian-product overflows are checked runtime errors.
+- **Nonvacuous counterexamples.** Policy queries additionally require
+  `unrestricted_components_infinite`: `infinite_type::<E::Component>()` if any coordinate has no
+  declared domain. No infinity premise is needed when all coordinates have declared finite
+  domains. `lemma_choice_exists_mixed` and reconstruction establish `cex_has_instance`; a
+  counterexample explicitly entails `!covers` or `!refines`, and every admissible instantiation
+  witnesses the failure. The standalone `*_correct` predicates retain the earlier vacuous
+  meaning on unrestricted types with too few fresh values.
 
 ## Differences between the paper and the mechanization
 
@@ -173,18 +183,22 @@ All names are in `crates/history-semantics/src/verify/refinement/`.
 3. **Exhaustion and errors.** The paper's search always answers. The mechanized search and the
    implementation may stop with `Exhausted` under a resource budget (the analyzer charges each
    search at most 16 MiB of graph), and the implementation may return an error (`Err`, e.g. on
-   an id overflow). `tail_included_ok` and `outcome_ok` claim nothing about `Exhausted`, and the
-   contract claims nothing about `Err`.
+   an id overflow). `*_correct`, `tail_included_ok`, and `outcome_ok` claim nothing about
+   `Exhausted`. Policy queries ensure `no_internal_error`; `tail_included` and `add_rule` ensure
+   `no_internal_compile_error`. Invalid-input and resource errors remain possible. The search's
+   existing success contract is unchanged; its additional error guarantee is conditional on
+   component-local primitives with constant codes fitting `u32`, proved for analyzer inputs.
 4. **Simulation rules.** The implemented syntactic simulation has more rules than the paper's
    figure (`fig:simulation`): recursive rules for conjunctions and disjunctions of tests on
    either side, `x ⊑ Star(b)` from `x ⊑ b`, and padding with several `All` factors.
    `sim_step` and `test_step` specify the implemented rules, and `stmt_sim_rules_sound` and
    `stmt_test_rules_sound` prove them sound.
-5. **Minimality** holds per inclusion query, as in the paper: `tail_included` returns a
-   counterexample of minimum length for its query (`shortest`). For questions that split into
-   one query per candidate case (`covered_ok`, `redundant_ok`, `at_least_as_strict_ok`), the
-   specification claims minimality only among candidates in the same case
-   (`shortest_in_case`, `same_profile`).
+5. **Minimality** holds for the executable `tail_included` query (`shortest`). Policy-query
+   contracts separate `*_correct` from `*_minimal`, with `*_ok` their conjunction. The latter
+   specifies a shortest witness within the returned candidate's case (`shortest_in_case`,
+   `same_profile`), not globally across split cases. The numeric composition also transfers
+   per-case minimum length. The executable policy queries ensure `*_correct` only:
+   typed `*_minimal` guarantees are not attached in this change.
 6. **Rule status and policy decisions.** Both are specified. For the analysis, `semantics.rs`
    defines `Status`, `rule_status` (`def:status`) and `policy_denies` (some rule is violated),
    over which `stmt_refines_iff_covers` and `stmt_redundant_iff_covered` are stated; the numeric
@@ -198,11 +212,13 @@ All names are in `crates/history-semantics/src/verify/refinement/`.
    numeric model (`pair_lang` in `crates/junco-core/src/verify/history_specs.rs`) and prove the
    tail-membership steps; the final case split from membership to `Violated`/`Satisfied` by the
    rule's mode is a definition (`violated_by`, `rule_violated`), not a separate theorem.
-7. **Only `tail_included` is executable.** The analyzer in this artifact implements the
-   tail-inclusion query; the other analysis questions (`covered`, `redundant`,
-   `at_least_as_strict`, `never_fires`, `always_fires`) are specified (`*_ok` in
-   `refinement/analyzer.rs`) and reduced to inclusion by the proved statements above, but have
-   no executable entry point here.
+7. **Executable policy queries.** `add_rule` stores validated rules with stable `RuleId` indices,
+   retaining verified encodings as the constant book grows. `covered`, `redundant`, and
+   `at_least_as_strict` return `Inclusion` and ensure `covered_correct`, `redundant_correct`, and
+   `at_least_as_strict_correct`, respectively, with explicit negated properties for
+   counterexamples under the stated nonvacuity hypothesis. `tail_included` remains available
+   without registration. `never_fires` and `always_fires` remain specification-only and are
+   outside this artifact's executable policy-query work.
 8. **Similarity and normalization.** `theorem_symbolic_derivative_correct` and
    `theorem_matcher_correct` are stated for the symbolic derivative before normalization.
    `theorem_similarity_preserves_language` proves that the similarity equations preserve
@@ -217,9 +233,12 @@ All names are in `crates/history-semantics/src/verify/refinement/`.
    constraint $\Gamma_R$ on the head constants of the covering policy and, for each case
    $\Gamma'$, checks the constrained inclusion of `R`'s denial tail in the union of the denial
    tails of the rules whose heads $\Gamma'$ entails (`stmt_policy_reduction`,
-   `firing_denials`). The two reductions are equivalent; the paper's appendix `app:mech-diff`
-   explains the correspondence. Accordingly the search starts from an arbitrary satisfiable
-   constraint $\Gamma_0$, and `tail_included` decides one such constrained inclusion.
+   `firing_denials`). `lemma_policy_search_composition` connects this reduction to the proved
+   `outcome_ok` search contracts: all cases `Holds` imply coverage; a refuted case supplies every
+   uncovered realization and explicit numeric noncoverage, including declared finite domains.
+   The executable firing test is exact on split cases, including different heads and both rule
+   modes. The typed-policy bridge transports these results to the entry-point contracts.
+   This avoids appending a candidate event; Proposition 5.2 itself remains outside scope.
 10. **Successors.** The paper defines successors semantically as the items reached by a
     candidate and an event (`def:successors`), computes them with Algorithm `alg:succ`, and
     states Lemmas `lem:succ` and `lem:uniform`. The mechanization states both lemmas as one

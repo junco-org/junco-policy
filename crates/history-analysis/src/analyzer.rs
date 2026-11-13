@@ -1,33 +1,37 @@
-//! Tail inclusion for every candidate matching a head.
+//! Policy coverage, redundancy, refinement, and tail inclusion through constrained search.
 
 use crate::native::NativeMap;
+#[cfg(verus_keep_ghost)]
+use crate::verify::constraint_wf;
 #[cfg(verus_keep_ghost)]
 use crate::verify::frontend::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::verdict::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::{self as views, search_exec as exec};
+#[cfg(verus_keep_ghost)]
+use crate::verify::{policy_bridge as bridge, policy_firing as firing, policy_queries as queries};
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use history_semantics::SymbolicLanguage;
 #[cfg(verus_keep_ghost)]
 use history_semantics::verify::refinement::{
-    analyzer as verdict, implementation, inclusion, search as paper,
+    analyzer as verdict, encoding, implementation, inclusion, search as paper, semantics,
 };
 #[cfg(verus_keep_ghost)]
 use history_semantics::{compile_verify as numeric, symbolic_language_verify as facade};
 #[cfg(verus_keep_ghost)]
-use history_syntax::Rule;
-#[cfg(verus_keep_ghost)]
 use history_syntax::event::specs::{EventSpec, arity};
-use history_syntax::{Arity, Component, Event, Head, MAX_ARITY, RegexExpr, RuleMode};
+use history_syntax::{Arity, Component, Event, Head, MAX_ARITY, RegexExpr, Rule, RuleMode};
 use junco_core::compile::validate_component;
-use junco_core::flat::{FlatHead, FlatPair};
+use junco_core::flat::{FlatHead, FlatPair, FlatRegex};
 use junco_core::flatten::flatten_rule_parts;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
 use junco_core::limits::Unmetered;
 use junco_core::observation::ObservationWorld;
+#[cfg(verus_keep_ghost)]
+use junco_core::observation::SmallVecSpecFns;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::{encoding as enc, flatten as fl};
 use junco_core::{CompileError, FlatEncoder, HistoryError, lower_flat};
@@ -37,10 +41,14 @@ use vstd::std_specs::cmp::PartialEqSpec;
 
 #[cfg(verus_keep_ghost)]
 verus! {
-    broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
+    broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas,
+        vstd::seq_lib::lemma_seq_contains_after_push};
 }
 
-use crate::constraint::{Class, ConstId, Constraint, Letter, RegisterConstraint, Universes};
+use crate::constraint::{
+    Atom, Class, ConstId, Constraint, Letter, Operand, Operands, RegisterConstraint, Universes,
+    split,
+};
 use crate::search::{SearchOutcome, search};
 use crate::tables::Tables;
 
@@ -48,6 +56,38 @@ use crate::tables::Tables;
 /// the runtime keeps `MAX_GRAPH_BYTES` per rule.
 #[verus_verify]
 const GRAPH_BYTES: usize = 16 * 1024 * 1024;
+
+verus! {
+/// Stable index of a rule in one analyzer. Query ids must belong to that analyzer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuleId(pub(crate) usize);
+
+/// Lowered executable rule plus its original front-end provenance.
+pub(crate) struct StoredRule<E: Event> {
+    #[allow(dead_code)] // Erased front-end provenance also binds the native event type.
+    pub original: Ghost<Rule<E>>,
+    #[allow(dead_code)]
+    pub flat: Ghost<junco_core::flat::FlatRule<E::Component>>,
+    pub numeric: FlatPair<u64>,
+    pub constants: Vec<Option<ConstId>>,
+    pub constraint: Option<Constraint>,
+    pub mode: RuleMode,
+}
+
+pub(crate) struct NumericDecision<E: Event> {
+    pub inclusion: Inclusion<E>,
+    #[cfg(verus_keep_ghost)]
+    pub outcome: Ghost<paper::Outcome>,
+}
+}
+
+verus! {
+fn excluded(id: RuleId, exclude: Option<RuleId>) -> (result: bool)
+    ensures result == excluded_id(id, exclude),
+{
+    match exclude { Some(other) => id.0 == other.0, None => false }
+}
+}
 
 /// The values each event component can take.
 ///
@@ -122,7 +162,8 @@ pub struct Components<E: Event> {
 
 /// A candidate and a history on which an inclusion fails.
 ///
-/// What failing means depends on the query; each query documents it. No shorter history fails.
+/// What failing means depends on the query; each query documents it. Tail-inclusion witnesses
+/// have minimum history length; policy-query correctness does not claim global minimality.
 #[verus_verify]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Counterexample<E: Event> {
@@ -250,6 +291,8 @@ pub(crate) struct BorrowedEncoder<'a, E: Event> {
     pub(crate) overflowed: bool,
     // Seeded with the existing book length, then incremented for every encoding attempt.
     pub(crate) calls: Ghost<nat>,
+    #[cfg(verus_keep_ghost)]
+    pub(crate) initial_values: Ghost<Seq<E::Component>>,
 }
 
 impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
@@ -261,6 +304,7 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
         constants_wf(*self.constants) && crate::verify::analyzer_obligations::<E>()
             && self.constants.values@.len() <= self.calls@
             && (self.overflowed ==> u32::MAX < self.calls@)
+            && self.initial_values@.is_prefix_of(self.constants.values@)
     }
     open(crate) spec fn obeys_encoding_spec(&self) -> bool {
         constants_wf(*self.constants) && crate::verify::analyzer_obligations::<E>()
@@ -269,7 +313,8 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
     #[verifier::prophetic]
     open(crate) spec fn restoration(&self) -> (enc::Codebook<E::Component>, bool) {
         let future = mut_ref_future(self.constants);
-        (crate::verify::constant_book(future), constants_wf(future))
+        (crate::verify::constant_book(future), constants_wf(future)
+            && self.initial_values@.is_prefix_of(future.values@))
     }
 
     fn encode(&mut self, field: Component, value: &E::Component)
@@ -307,12 +352,13 @@ pub(crate) enum Slot {
     Fresh(usize),
 }
 
-/// Static analysis of tail inclusion: for every candidate a head matches, whether every history
-/// in one tail is in another.
+/// Static analysis of stored rules and policies using one inclusion search per candidate case.
+/// Rules retain their individual heads and modes, and ids remain stable under store growth.
 #[verus_verify]
 pub struct PolicyAnalyzer<E: Event> {
     pub(crate) constants: Constants<E>,
     pub(crate) universes: Universes,
+    pub(crate) rules: Vec<StoredRule<E>>,
 }
 
 verus! {
@@ -379,7 +425,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             index += 1;
         }
         proof { assert(input.components@.take(index as int) =~= input.components@); }
-        let result = Self { constants, universes };
+        let result = Self { constants, universes, rules: Vec::new() };
         proof { lemma_declared_wf(result, input); lemma_constructor_domains(result, input); }
         result
     }
@@ -389,6 +435,463 @@ impl<E: Event> PolicyAnalyzer<E> {
 verus! {
 impl<E: Event> PolicyAnalyzer<E> {
 
+    /// Validates and stores a rule. Indices remain stable when later rules add constants.
+    pub fn add_rule(&mut self, rule: &Rule<E>) -> (result: Result<RuleId, CompileError>)
+        requires views::analyzer_obligations::<E>(), analyzer_state_wf(*old(self)),
+            add_rule_capacity(*old(self), *rule),
+        ensures analyzer_state_wf(*final(self)),
+            final(self)@.domains == old(self)@.domains,
+            result matches Ok(id) ==> final(self)@.rules == old(self)@.rules.push(encoding::rule_view(*rule))
+                && id@ == old(self)@.rules.len()
+                && history_semantics::verify::refinement::semantics::rule_wf(encoding::rule_view(*rule)),
+            result is Err ==> final(self)@.rules == old(self)@.rules,
+            junco_core::verify::history_specs::no_internal_compile_error(result),
+    {
+        let ghost before = *self;
+        let flat = flatten_rule_parts(rule.mode, &rule.head, &rule.tail, &mut Unmetered, &mut ObservationWorld)?;
+        proof { assert(encode_capacity(*self, flat.source)); }
+        let numeric_result = self.encode(&flat.source);
+        proof { lemma_universes_frame(before.constants, self.constants, self.universes); }
+        let numeric = numeric_result?;
+        let constants = Self::head_constants(&numeric.head);
+        let constraint = Constraint::head(&constants, &self.universes);
+        proof {
+            lemma_lowered_payload(self.constants, flat.source, numeric);
+            if let Some(g) = &constraint {
+                lemma_head_payload(self.constants, numeric.head@, constants@, *g);
+            }
+            lemma_universes_frame(before.constants, self.constants, self.universes);
+        }
+        let id = RuleId(self.rules.len());
+        self.rules.push(StoredRule { original: Ghost(*rule), flat: Ghost(flat),
+            numeric, constants, constraint, mode: rule.mode });
+        proof {
+            assert(self@.rules =~= before@.rules.push(encoding::rule_view(*rule)));
+        }
+        Ok(id)
+    }
+
+    /// Whether `by` covers every denial of the stored rule.
+    pub fn covered(&self, rule: RuleId, by: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
+        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+            rule@ < self@.rules.len(), valid_ids(*self, by@),
+            verdict::unrestricted_components_infinite(self@.domains),
+        ensures junco_core::verify::history_specs::no_internal_error(result),
+            result matches Ok(v) ==> verdict::covered_correct(self@, rule@, rule_ids(by@), v@),
+            result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
+                && !semantics::covers(self@.domains, verdict::rules_of(self@, rule_ids(by@)), self@.rules[rule@ as int]),
+    {
+        self.covered_with(rule, by, None)
+    }
+
+    /// Excludes every occurrence of `rule`, without allocating a filtered policy.
+    pub fn redundant(&self, rule: RuleId, policy: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
+        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+            rule@ < self@.rules.len(), valid_ids(*self, policy@),
+            verdict::unrestricted_components_infinite(self@.domains),
+        ensures junco_core::verify::history_specs::no_internal_error(result),
+            result matches Ok(v) ==> verdict::redundant_correct(self@, rule@, rule_ids(policy@), v@),
+            result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
+                && !semantics::covers(self@.domains,
+                    verdict::rules_of(self@, verdict::without_rule(rule_ids(policy@), rule@)), self@.rules[rule@ as int]),
+    {
+        let result = self.covered_with(rule, policy, Some(rule))?;
+        proof {
+            queries::lemma_selected_ids(*self, policy@, Some(rule));
+            assert(queries::selected_rule_ids(policy@, Some(rule)) == verdict::without_rule(rule_ids(policy@), rule@));
+            bridge::lemma_redundancy_result(self@, rule@, rule_ids(policy@), result@);
+        }
+        Ok(result)
+    }
+
+    /// Whether `stricter` denies everything denied by `than`.
+    pub fn at_least_as_strict(&self, stricter: &[RuleId], than: &[RuleId])
+        -> (result: Result<Inclusion<E>, HistoryError>)
+        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+            valid_ids(*self, stricter@), valid_ids(*self, than@),
+            verdict::unrestricted_components_infinite(self@.domains),
+        ensures junco_core::verify::history_specs::no_internal_error(result),
+            result matches Ok(v) ==> verdict::at_least_as_strict_correct(self@, rule_ids(stricter@), rule_ids(than@), v@),
+            result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
+                && !semantics::refines(self@.domains, verdict::rules_of(self@, rule_ids(stricter@)),
+                    verdict::rules_of(self@, rule_ids(than@))),
+    {
+        let mut index = 0;
+        while index < than.len()
+            invariant index <= than@.len(), analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+                valid_ids(*self, stricter@), valid_ids(*self, than@),
+                verdict::unrestricted_components_infinite(self@.domains),
+                forall|j: int| 0 <= j < index ==> semantics::covers(self@.domains,
+                    verdict::rules_of(self@, rule_ids(stricter@)), self@.rules[than@[j]@ as int]),
+            decreases than@.len() - index,
+        {
+            let inclusion = self.covered(than[index], stricter)?;
+            match inclusion {
+                Inclusion::Holds => {},
+                _ => {
+                    proof { bridge::lemma_refinement_result(self@, rule_ids(stricter@), rule_ids(than@), index as int, inclusion@); }
+                    return Ok(inclusion);
+                },
+            }
+            index += 1;
+        }
+        proof { bridge::lemma_refinement_holds(self@, rule_ids(stricter@), rule_ids(than@)); }
+        Ok(Inclusion::Holds)
+    }
+
+    fn covered_with(&self, rule: RuleId, by: &[RuleId], exclude: Option<RuleId>)
+        -> (result: Result<Inclusion<E>, HistoryError>)
+        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+            rule.0 < self.rules@.len(), valid_ids(*self, by@),
+            verdict::unrestricted_components_infinite(self@.domains),
+        ensures junco_core::verify::history_specs::no_internal_error(result),
+            result matches Ok(v) ==> verdict::covered_correct(self@, rule@, queries::selected_rule_ids(by@, exclude), v@),
+            result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
+                && !semantics::covers(self@.domains, verdict::rules_of(self@, queries::selected_rule_ids(by@, exclude)),
+                    self@.rules[rule@ as int]),
+    {
+        let analyzed = &self.rules[rule.0];
+        let ghost policy = queries::numeric_policy(*self, by@, exclude);
+        let ghost left = queries::stored_numeric(*analyzed);
+        proof {
+            queries::lemma_stored_policy(*self, by@, exclude);
+            views::table::lemma_structural_dag(analyzed.numeric);
+            views::policy_source::lemma_numeric_rule(analyzed.numeric, analyzed.mode);
+            assert(left.head =~= pins(analyzed.numeric.head@));
+        }
+        let constraint = match &analyzed.constraint {
+            Some(g) => g,
+            None => {
+                proof {
+                    assert(inclusion::n_covers(views::ndomains(self.universes), policy, left)) by {
+                        assert forall|theta: junco_core::verify::history_specs::Subst,
+                            word: Seq<junco_core::verify::history_specs::EventView>|
+                            encoding::n_theta_ok(views::ndomains(self.universes), theta)
+                            && encoding::n_history_in(views::ndomains(self.universes), word)
+                            && encoding::n_rule_denies(left, theta, word)
+                            implies encoding::n_policy_denies(policy, theta, word) by {
+                            inclusion::lemma_rule_denies_iff(left, theta, word);
+                        }
+                    }
+                    queries::lemma_covered_holds(*self, rule, by@, exclude);
+                }
+                return Ok(Inclusion::Holds);
+            },
+        };
+        let atoms = self.policy_head_atoms(by, exclude);
+        let operands = Operands::of(&atoms, self.universes.len());
+        proof { views::policy_operands::lemma_policy_operands(*self, by@, exclude, atoms@, operands); }
+        let cases = split(constraint, &operands, &self.universes)?;
+        let ghost family = views::constraint_views(cases@).map(|v: implementation::ConstraintView| implementation::constraint_of(v));
+        proof { firing::lemma_policy_split(*constraint, operands, self.universes, atoms@, cases@, policy); }
+        let mut index = 0;
+        while index < cases.len()
+            invariant index <= cases@.len(), analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+                rule.0 < self.rules@.len(), valid_ids(*self, by@),
+                verdict::unrestricted_components_infinite(self@.domains),
+                policy == queries::numeric_policy(*self, by@, exclude),
+                left == queries::stored_numeric(self.rules@[rule.0 as int]),
+                stored_rule_wf(self.constants, self.universes, *analyzed),
+                views::shape_wf(*constraint, operands, self.universes),
+                constraint_codes_wf(self.constants, constraint@),
+                implementation::constraint_of(constraint@) == inclusion::head_constraint(left.head),
+                forall|pair: (Component, nat)| inclusion::head_pairs(policy).contains(pair)
+                    ==> pair.0.0 < arity::<E>() && operands.register[pair.0.0 as int]
+                        && views::codes(operands.constants[pair.0.0 as int].view()).contains(pair.1),
+                forall|k: int, v: nat| 0 <= k < arity::<E>()
+                    && views::codes(operands.constants[k].view()).contains(v)
+                    ==> views::reconstruction::code_field(self.constants, Component(k as u8), v),
+                views::constraint_views(cases@) == views::split_views(*constraint, operands, self.universes),
+                inclusion::split_ok(views::ndomains(self.universes), inclusion::head_constraint(left.head),
+                    inclusion::head_pairs(policy), family),
+                family == views::constraint_views(cases@).map(|v: implementation::ConstraintView| implementation::constraint_of(v)),
+                forall|j: int| 0 <= j < cases@.len() ==> constraint_wf(cases@[j]),
+                forall|j: int| 0 <= j < index ==> inclusion::included_under(views::ndomains(self.universes),
+                    implementation::constraint_of(cases@[j]@), inclusion::denial(left),
+                    inclusion::firing_denials(views::ndomains(self.universes), policy, implementation::constraint_of(cases@[j]@))),
+            decreases cases@.len() - index,
+        {
+            let case = &cases[index];
+            proof {
+                assert(cases@.to_set().contains(*case));
+                assert(views::constraint_views(cases@).contains(case@));
+                assert(family.contains(implementation::constraint_of(case@)));
+            }
+            #[cfg(verus_keep_ghost)]
+            let difference = self.policy_difference(rule, by, exclude, case, constraint, &operands)?;
+            #[cfg(not(verus_keep_ghost))]
+            let difference = self.policy_difference(rule, by, exclude, case)?;
+            let ghost input = NumericInput { left: inclusion::denial(left),
+                right: inclusion::firing_denials(views::ndomains(self.universes), policy,
+                    implementation::constraint_of(case@)) };
+            #[cfg(verus_keep_ghost)]
+            let decision = self.decide(case.copy(), difference, Ghost(input))?;
+            #[cfg(not(verus_keep_ghost))]
+            let decision = self.decide(case.copy(), difference)?;
+            proof { queries::lemma_covered_decision(*self, rule, by@, exclude, input, case@, decision); }
+            match decision.inclusion {
+                Inclusion::Holds => {},
+                _ => return Ok(decision.inclusion),
+            }
+            index += 1;
+        }
+        proof {
+            inclusion::lemma_policy_reduction(views::ndomains(self.universes), policy, left, family);
+            queries::lemma_covered_holds(*self, rule, by@, exclude);
+        }
+        Ok(Inclusion::Holds)
+    }
+
+    fn policy_head_atoms(&self, by: &[RuleId], exclude: Option<RuleId>) -> (atoms: Vec<Atom>)
+        requires analyzer_state_wf(*self), valid_ids(*self, by@),
+        ensures head_atoms_ok(*self, by@, exclude, atoms@),
+    {
+        let mut atoms = Vec::new();
+        let mut component = 0;
+        while component < self.universes.len()
+            invariant component <= self.universes@.len(), analyzer_state_wf(*self), valid_ids(*self, by@),
+                views::atoms_wf(atoms@, arity::<E>()),
+                forall|j: int| 0 <= j < atoms@.len() ==> #[trigger] atoms@[j].component < component,
+                forall|j: int, k: int| 0 <= j < by@.len() && !excluded_id(by@[j], exclude) && 0 <= k < component
+                    ==> match #[trigger] self.rules@[by@[j].0 as int].constants@[k] {
+                        Some(v) => atoms@.contains(Atom { component: k as usize, operand: Operand::Constant(v) })
+                            && atoms@.contains(Atom { component: k as usize, operand: Operand::Register }), None => true,
+                    },
+                forall|j: int| 0 <= j < atoms@.len() ==> match #[trigger] atoms@[j].operand {
+                    Operand::Constant(v) => views::reconstruction::code_field(self.constants, Component(atoms@[j].component as u8), v as nat),
+                    _ => true,
+                },
+            decreases self.universes@.len() - component,
+        {
+            let mut registered = false;
+            let mut index = 0;
+            while index < by.len()
+                invariant index <= by@.len(), component < self.universes@.len(),
+                    analyzer_state_wf(*self), valid_ids(*self, by@), views::atoms_wf(atoms@, arity::<E>()),
+                    registered ==> atoms@.contains(Atom { component, operand: Operand::Register }),
+                    forall|j: int| 0 <= j < atoms@.len() ==> #[trigger] atoms@[j].component <= component,
+                    forall|j: int, k: int| 0 <= j < by@.len() && !excluded_id(by@[j], exclude)
+                        && 0 <= k <= component && (k < component || j < index)
+                        ==> match #[trigger] self.rules@[by@[j].0 as int].constants@[k] {
+                            Some(v) => atoms@.contains(Atom { component: k as usize, operand: Operand::Constant(v) })
+                                && atoms@.contains(Atom { component: k as usize, operand: Operand::Register }), None => true,
+                        },
+                    forall|j: int| 0 <= j < atoms@.len() ==> match #[trigger] atoms@[j].operand {
+                        Operand::Constant(v) => views::reconstruction::code_field(self.constants, Component(atoms@[j].component as u8), v as nat),
+                        _ => true,
+                    },
+                decreases by@.len() - index,
+            {
+                let id = by[index];
+                if !excluded(id, exclude) {
+                    let other = &self.rules[id.0];
+                    proof {
+                        assert(stored_rule_wf(self.constants, self.universes, *other));
+                        assert(other.constants@.len() == arity::<E>());
+                    }
+                    if let Some(value) = other.constants[component] {
+                        proof {
+                            assert(views::head_view(other.constants@)[component as int]
+                                == pins(other.numeric.head@)[component as int]);
+                            assert(views::option_code(other.constants@[component as int])
+                                == encoding_head_code(other.numeric.head@[component as int]));
+                            assert(other.numeric.head@[component as int] == FlatHead::Constant(value as u64));
+                            assert(views::reconstruction::code_field(self.constants, Component(component as u8), value as nat));
+                        }
+                        if !registered {
+                            let ghost previous = atoms@;
+                            atoms.push(Atom { component, operand: Operand::Register });
+                            proof {
+                                vstd::seq_lib::lemma_seq_contains_after_push(previous,
+                                    Atom { component, operand: Operand::Register },
+                                    Atom { component, operand: Operand::Register });
+                            }
+                            registered = true;
+                        }
+                        let ghost previous = atoms@;
+                        proof { assert(previous.contains(Atom { component, operand: Operand::Register })); }
+                        atoms.push(Atom { component, operand: Operand::Constant(value) });
+                        proof {
+                            vstd::seq_lib::lemma_seq_contains_after_push(previous,
+                                Atom { component, operand: Operand::Constant(value) },
+                                Atom { component, operand: Operand::Register });
+                        }
+                    }
+                }
+                index += 1;
+            }
+            component += 1;
+        }
+        atoms
+    }
+
+    /// Builds the difference against exactly the heads selected by one decided split case.
+    fn policy_difference(&self, rule: RuleId, by: &[RuleId], exclude: Option<RuleId>,
+        case: &Constraint,
+        #[cfg(verus_keep_ghost)] start: &Constraint,
+        #[cfg(verus_keep_ghost)] operands: &Operands) -> (result: Result<FlatPair<u64>, HistoryError>)
+        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+            rule.0 < self.rules@.len(), valid_ids(*self, by@),
+            views::shape_wf(*start, *operands, self.universes),
+            views::split_views(*start, *operands, self.universes).contains(case@),
+            constraint_wf(*case), constraint_codes_wf(self.constants, start@),
+            inclusion::satisfiable(views::ndomains(self.universes), implementation::constraint_of(case@)),
+            forall|pair: (Component, nat)| inclusion::head_pairs(queries::numeric_policy(*self, by@, exclude)).contains(pair)
+                ==> pair.0.0 < arity::<E>() && operands.register@[pair.0.0 as int]
+                    && views::codes(operands.constants@[pair.0.0 as int].view()).contains(pair.1),
+            forall|k: int, v: nat| 0 <= k < operands.constants@.len()
+                && views::codes(operands.constants@[k].view()).contains(v)
+                ==> views::reconstruction::code_field(self.constants, Component(k as u8), v),
+        ensures junco_core::verify::history_specs::no_internal_error(result),
+            result matches Ok(difference) ==> decision_ready(*self, NumericInput {
+                left: inclusion::denial(queries::stored_numeric(self.rules@[rule.0 as int])),
+                right: inclusion::firing_denials(views::ndomains(self.universes),
+                    queries::numeric_policy(*self, by@, exclude), implementation::constraint_of(case@)),
+            }, *case, difference),
+    {
+        let analyzed = &self.rules[rule.0];
+        let ghost left = queries::stored_numeric(*analyzed);
+        let mut tables = Tables::new(self.universes.len());
+        let ghost empty = tables@;
+        proof {
+            views::table::lemma_structural_dag(analyzed.numeric);
+            views::policy_source::lemma_numeric_rule(analyzed.numeric, analyzed.mode);
+        }
+        let denial = tables.denial(&analyzed.numeric, analyzed.mode)?;
+        proof {
+            lemma_append_payload(self.constants, empty, analyzed.numeric, tables@);
+            assert forall|theta: junco_core::verify::history_specs::Subst,
+                word: Seq<junco_core::verify::history_specs::EventView>|
+                junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
+                numeric::source_regex(tables@, denial as nat, theta, word)
+                    == encoding::n_lang(theta, inclusion::denial(left), word) by {
+                inclusion::lemma_denial_lang(left, theta, word);
+            }
+        }
+        let mut matching: Vec<u32> = Vec::new();
+        let mut index = 0;
+        while index < by.len()
+            invariant index <= by@.len(), analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+                valid_ids(*self, by@), rule.0 < self.rules@.len(), views::table::dag(tables@),
+                denial < tables.regexes@.len(), source_codes_wf(self.constants, tables@),
+                views::shape_wf(*start, *operands, self.universes),
+                views::split_views(*start, *operands, self.universes).contains(case@),
+                constraint_wf(*case), inclusion::satisfiable(views::ndomains(self.universes), implementation::constraint_of(case@)),
+                forall|pair: (Component, nat)| inclusion::head_pairs(queries::numeric_policy(*self, by@, exclude)).contains(pair)
+                    ==> pair.0.0 < arity::<E>() && operands.register@[pair.0.0 as int]
+                        && views::codes(operands.constants@[pair.0.0 as int].view()).contains(pair.1),
+                forall|j: int| 0 <= j < matching@.len() ==> matching@[j] < tables.regexes@.len(),
+                covering_prefix(*self, by@, exclude, index as int, *case, tables@, matching@),
+                forall|theta: junco_core::verify::history_specs::Subst, word: Seq<junco_core::verify::history_specs::EventView>|
+                    junco_core::verify::history_specs::event_wf(theta, theta.len())
+                    ==> numeric::source_regex(tables@, denial as nat, theta, word)
+                        == encoding::n_lang(theta, inclusion::denial(left), word),
+            decreases by@.len() - index,
+        {
+            let other = by[index];
+            let ghost before_tables = tables@;
+            let ghost before_roots = matching@;
+            let ghost mut added = None::<u32>;
+            if !excluded(other, exclude) {
+                proof {
+                    views::policy_operands::lemma_selected_head_ready(*self, by@, exclude,
+                        index as int, *start, *operands, case@);
+                }
+                let theirs = &self.rules[other.0];
+                proof {
+                    assert(stored_rule_wf(self.constants, self.universes, *theirs));
+                    assert(queries::stored_numeric(*theirs).head =~= pins(theirs.numeric.head@));
+                }
+                match &theirs.constraint {
+                    Some(head) => {
+                        proof {
+                            firing::lemma_head_firing_exact(views::ndomains(self.universes), case@, head@);
+                        }
+                        if case.entails(head) {
+                            let ghost previous = tables@;
+                            proof {
+                                views::table::lemma_structural_dag(theirs.numeric);
+                                views::policy_source::lemma_numeric_rule(theirs.numeric, theirs.mode);
+                            }
+                            let root = tables.denial(&theirs.numeric, theirs.mode)?;
+                            proof { lemma_append_payload(self.constants, previous, theirs.numeric, tables@); }
+                            proof {
+                                added = Some(root);
+                                assert(queries::stored_numeric(*theirs).head =~= pins(theirs.numeric.head@));
+                                assert forall|theta: junco_core::verify::history_specs::Subst,
+                                    word: Seq<junco_core::verify::history_specs::EventView>|
+                                    junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
+                                    numeric::source_regex(tables@, root as nat, theta, word)
+                                        == encoding::n_lang(theta, inclusion::denial(queries::stored_numeric(*theirs)), word) by {
+                                    inclusion::lemma_denial_lang(queries::stored_numeric(*theirs), theta, word);
+                                }
+                            }
+                            matching.push(root);
+                        }
+                    },
+                    None => {
+                        proof { firing::lemma_unsatisfiable_head_does_not_fire(views::ndomains(self.universes),
+                            implementation::constraint_of(case@), inclusion::head_constraint(queries::stored_numeric(*theirs).head)); }
+                    },
+                }
+            }
+            proof {
+                lemma_covering_step(*self, by@, exclude, index as int, *case, before_tables,
+                    before_roots, tables@, matching@, added);
+            }
+            index += 1;
+        }
+        let ghost roots = matching@;
+        let ghost before_union = tables@;
+        let covering = tables.push(FlatRegex::Union(matching))?;
+        proof { views::table::lemma_frame_languages(before_union, tables@); }
+        let ghost assembled = tables@;
+        proof {
+            assert(covering as nat == before_union.regexes@.len());
+            assert forall|j: int| 0 <= j < roots.len() implies roots[j] < covering by {}
+            match assembled.regexes@[covering as int] {
+                FlatRegex::Union(children) => { assert(children@ == roots); },
+                _ => { assert(false); },
+            }
+        }
+        let difference = tables.difference(denial, covering)?;
+        proof {
+            views::policy_operands::lemma_known_split_case_codes(*self, *start, *operands, case@);
+            assert forall|theta: junco_core::verify::history_specs::Subst, word: Seq<junco_core::verify::history_specs::EventView>|
+                junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
+                numeric::source_regex(assembled, covering as nat, theta, word)
+                    == encoding::n_lang(theta, inclusion::firing_denials(views::ndomains(self.universes),
+                        queries::numeric_policy(*self, by@, exclude), implementation::constraint_of(case@)), word) by {
+                queries::lemma_firing_prefix(*self, by@, exclude, *case, theta, word);
+                reveal_with_fuel(numeric::source_regex, 1);
+                assert forall|j: int| 0 <= j < roots.len() implies
+                    numeric::source_regex(assembled, roots[j] as nat, theta, word)
+                        == numeric::source_regex(before_union, roots[j] as nat, theta, word) by {}
+                let children = match assembled.regexes@[covering as int] {
+                    FlatRegex::Union(children) => children,
+                    _ => arbitrary(),
+                };
+                assert(children@ == roots);
+                if numeric::source_regex(assembled, covering as nat, theta, word) {
+                    let j = choose|j: int| 0 <= j < children@.len() && children@[j] < covering
+                        && numeric::source_regex(assembled, children@[j] as nat, theta, word);
+                    assert(numeric::source_regex(before_union, roots[j] as nat, theta, word));
+                }
+                if exists|j: int| 0 <= j < roots.len()
+                    && #[trigger] numeric::source_regex(before_union, roots[j] as nat, theta, word) {
+                    let j = choose|j: int| 0 <= j < roots.len()
+                        && numeric::source_regex(before_union, roots[j] as nat, theta, word);
+                    assert(numeric::source_regex(assembled, children@[j] as nat, theta, word));
+                    assert(numeric::source_regex(assembled, covering as nat, theta, word));
+                }
+                assert(numeric::source_regex(assembled, covering as nat, theta, word)
+                    == (exists|j: int| 0 <= j < roots.len()
+                        && #[trigger] numeric::source_regex(before_union, roots[j] as nat, theta, word)));
+            }
+        }
+        Ok(difference)
+    }
+
     /// Whether, for every candidate that `head` matches, every history in `left` is in `right`.
     ///
     /// Both tails may refer to the head's variables. A counterexample is a matching candidate and
@@ -396,6 +899,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     #[verus_spec(result => requires views::analyzer_obligations::<E>(),
         analyzer_state_wf(*old(self)), query_capacity(*old(self), *left, *right),
         ensures analyzer_state_wf(*final(self)),
+            junco_core::verify::history_specs::no_internal_compile_error(result),
             result matches Ok(v) ==> verdict::tail_included_ok(final(self)@, head@, left@, right@, v@))]
     pub fn tail_included(
         &mut self,
@@ -462,16 +966,24 @@ impl<E: Event> PolicyAnalyzer<E> {
                 }
                 let ghost assembled = tables@;
                 let difference = tables.difference(left_root, right_root)?;
+                let ghost numeric_input = NumericInput {
+                    left: views::policy_source::source_model(difference, difference.root as nat),
+                    right: junco_core::verify::history_specs::Regex::Empty,
+                };
                 proof {
                     assert(source_codes_wf(self.constants, difference));
                     assert(difference_source(input, difference));
-                    assert(decision_ready(*self, input, constraint, difference));
+                    views::policy_source::lemma_source_model(difference);
+                    assert(numeric_difference(numeric_input, difference));
+                    assert(difference_language(input, numeric_input.left));
+                    assert(decision_ready(*self, numeric_input, constraint, difference));
                 }
                 #[cfg(verus_keep_ghost)]
-                let decided = self.decide(constraint, difference, Ghost(input))?;
+                let decided = self.decide(constraint, difference, Ghost(numeric_input))?;
                 #[cfg(not(verus_keep_ghost))]
                 let decided = self.decide(constraint, difference)?;
-                decided
+                proof { lemma_tail_decision(*self, input, numeric_input, constraint@, decided); }
+                decided.inclusion
             }
             None => {
                 proof { lemma_no_candidates(*self, input); }
@@ -508,18 +1020,25 @@ impl<E: Event> PolicyAnalyzer<E> {
     fn encode(&mut self, source: &FlatPair<E::Component>) -> (result: Result<FlatPair<u64>, HistoryError>)
         requires constants_wf(old(self).constants), crate::verify::analyzer_obligations::<E>(), encode_capacity(*old(self), *source),
         ensures constants_wf(final(self).constants), enc::extends(crate::verify::constant_book(old(self).constants), crate::verify::constant_book(final(self).constants), fl::component_equality::<E>()),
+            constants_frame(old(self).constants, final(self).constants),
             final(self).universes == old(self).universes,
+            final(self).rules == old(self).rules,
+            analyzer_state_wf(*old(self)) ==> analyzer_state_wf(*final(self)),
+            junco_core::verify::history_specs::no_internal_error(result),
             final(self).constants.values@.len() <= old(self).constants.values@.len() + source.head@.len() + source.tests@.len(),
             result matches Ok(target) ==> enc::lowering(*source, target, crate::verify::constant_book(final(self).constants), fl::component_equality::<E>())
                 && junco_core::flat::verify::structural_wf(target) && numeric_head_wf(target.head@),
     {
         let ghost initial_count = self.constants.values@.len();
+        let ghost before = *self;
         proof { assert(initial_count == old(self).constants.values@.len()); }
         proof { lemma_constants_maps(self.constants); }
         let (result, overflowed, Ghost(maps), Ghost(count)) = {
             let mut encoder = BorrowedEncoder {
                 constants: &mut self.constants, overflowed: false,
                 calls: Ghost(initial_count),
+                #[cfg(verus_keep_ghost)]
+                initial_values: Ghost(before.constants.values@),
             };
             let result = lower_flat(source, &mut encoder, &mut Unmetered, &mut ObservationWorld);
             let ghost maps = encoder.maps();
@@ -545,6 +1064,10 @@ impl<E: Event> PolicyAnalyzer<E> {
         }
         proof {
             if let Ok(target) = &result { lemma_lowered_head_bound(self.constants, *source, *target); }
+            if analyzer_state_wf(before) {
+            lemma_universes_extended(before.constants, self.constants, self.universes);
+                lemma_store_extends(before.constants, self.constants, self.universes, self.rules@);
+            }
         }
         result
     }
@@ -558,14 +1081,22 @@ impl<E: Event> PolicyAnalyzer<E> {
         &self,
         constraint: Constraint,
         difference: FlatPair<u64>,
-        #[cfg(verus_keep_ghost)] Ghost(input): Ghost<TailInput<E>>,
-    ) -> (result: Result<Inclusion<E>, HistoryError>)
+        #[cfg(verus_keep_ghost)] Ghost(input): Ghost<NumericInput>,
+    ) -> (result: Result<NumericDecision<E>, HistoryError>)
         requires decision_ready(*self, input, constraint, difference),
-        ensures result matches Ok(v) ==> tail_verdict(*self, input, v),
+        ensures result matches Ok(v) ==> numeric_decision_ok(*self, input, constraint@, v),
+            junco_core::verify::history_specs::no_internal_error(result),
     {
+        proof {
+            assert(numeric::source_dag_wf(difference)) by { reveal(views::table::dag); }
+            facade::lemma_aligned_compile_budget(GRAPH_BYTES);
+        }
         let mut language = match SymbolicLanguage::compile(&difference, GRAPH_BYTES) {
             Ok(language) => language,
-            Err(HistoryError::GraphLimit { .. }) => return Ok(Inclusion::Exhausted),
+            Err(HistoryError::GraphLimit { .. }) => return Ok(NumericDecision {
+                inclusion: Inclusion::Exhausted,
+                #[cfg(verus_keep_ghost)]
+                outcome: Ghost(paper::Outcome::Exhausted) }),
             Err(error) => return Err(error),
         };
         let ghost original = language;
@@ -578,40 +1109,48 @@ impl<E: Event> PolicyAnalyzer<E> {
             assert forall|theta: junco_core::verify::history_specs::Subst, word: Seq<junco_core::verify::history_specs::EventView>|
                 junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
                     history_semantics::verify::refinement::encoding::n_lang(theta, start.state, word)
-                        == (numeric::source_regex(input.left_numeric, input.left_numeric.root as nat, theta, word)
-                            && !numeric::source_regex(input.right_numeric, input.right_numeric.root as nat, theta, word)) by {
+                        == (encoding::n_lang(theta, input.left, word)
+                            && !encoding::n_lang(theta, input.right, word)) by {
                 assert(model::regex_lang(facade::graph(language), theta, facade::root(language), word)
                     == numeric::source_regex(difference, difference.root as nat, theta, word));
                 reveal(model::regex_lang);
             }
-            assert(difference_language(input, start.state));
-            assert(tail_ready(*self, input, start.state));
+            assert(paper::initial_ok(start.state, input.left, input.right));
         }
         let outcome = match search(&mut language, &self.universes, constraint) {
             Ok(outcome) => outcome,
-            Err(HistoryError::GraphLimit { .. }) => return Ok(Inclusion::Exhausted),
+            Err(HistoryError::GraphLimit { .. }) => return Ok(NumericDecision {
+                inclusion: Inclusion::Exhausted,
+                #[cfg(verus_keep_ghost)]
+                outcome: Ghost(paper::Outcome::Exhausted) }),
             Err(error) => return Err(error),
         };
         proof {
             lemma_result_outcome(views::ndomains(self.universes), start, exec::outcome_view(outcome));
             lemma_refutation_input(*self, start, outcome, vocabulary);
+            lemma_outcome_difference(views::ndomains(self.universes), start,
+                input, exec::outcome_view(outcome));
         }
         match outcome {
             SearchOutcome::Holds => {
-                proof { lemma_holds(*self, input, start.state); }
-                Ok(Inclusion::Holds)
+                Ok(NumericDecision { inclusion: Inclusion::Holds,
+                    #[cfg(verus_keep_ghost)]
+                    outcome: Ghost(paper::Outcome::Holds) })
             }
             SearchOutcome::Refuted(refutation) => {
                 #[cfg(verus_keep_ghost)]
                 let counterexample = self.counterexample(&refutation.constraint, &refutation.letters, refutation.alphabets)?;
                 #[cfg(not(verus_keep_ghost))]
                 let counterexample = self.counterexample(&refutation.constraint, &refutation.letters)?;
+                let result = NumericDecision { inclusion: Inclusion::Counterexample(counterexample),
+                    #[cfg(verus_keep_ghost)]
+                    outcome: Ghost(exec::outcome_view(outcome)) };
                 proof {
                     reveal(exec::refutation_ready);
-                    lemma_counterexample(*self, input, start.state, refutation.constraint,
-                        refutation.letters@, refutation.alphabets@, counterexample);
+                    lemma_numeric_refutation(*self, input, constraint@, refutation.constraint,
+                        refutation.letters@, refutation.alphabets@, result);
                 }
-                Ok(Inclusion::Counterexample(counterexample))
+                Ok(result)
             }
         }
     }
@@ -630,7 +1169,8 @@ impl<E: Event> PolicyAnalyzer<E> {
         requires crate::verify::reconstruction::reconstruction_input(self.constants,
             self.universes, *constraint, letters@, alphabets@),
         ensures result matches Ok(c) ==> crate::verify::reconstruction::reconstructed(self.constants,
-            self.universes, *constraint, letters@, alphabets@, c))]
+            self.universes, *constraint, letters@, alphabets@, c),
+            junco_core::verify::history_specs::no_internal_error(result))]
     fn counterexample(
         &self,
         constraint: &Constraint,

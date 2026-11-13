@@ -1,4 +1,4 @@
-//! Numeric input provenance used by the executable tail-inclusion verdict.
+//! Numeric decision certificates, reconstruction provenance, and the tail-inclusion client.
 
 use super::frontend::*;
 use super::reconstruction::code_field;
@@ -6,7 +6,7 @@ use super::search_exec::{self as exec, root_vocabulary};
 use super::*;
 use super::{reconstruction as slots, typed_numeric as typed};
 use crate::analyzer::{Constants, PolicyAnalyzer};
-use crate::analyzer::{Counterexample, Inclusion};
+use crate::analyzer::{Counterexample, Inclusion, NumericDecision};
 use history_semantics::{
     SymbolicLanguage, compile_verify as numeric, symbolic_language_verify as facade,
     symbolic_verify as symbolic,
@@ -61,9 +61,12 @@ pub(crate) proof fn lemma_source_fields_bounded(source: FlatPair<u64>)
 }
 
 pub(crate) open spec fn source_codes_wf<E: Event>(c: Constants<E>, source: FlatPair<u64>) -> bool {
-    forall|i: int| #![trigger source.tests@[i]] 0 <= i < source.tests@.len()
+    &&& source.head@.len() == arity::<E>()
+    &&& source_fields_bounded(source)
+    &&& forall|i: int| #![trigger source.tests@[i]] 0 <= i < source.tests@.len()
         ==> match source.tests@[i] {
             FlatTest::Atom { field, term: FlatTerm::Constant(v), .. } => code_field(c, field, v as nat),
+            FlatTest::Atom { field, term: FlatTerm::Variable(variable), .. } => field == variable,
             _ => true,
         }
 }
@@ -107,6 +110,7 @@ pub(crate) proof fn lemma_lowered_payload<E: Event>(c: Constants<E>, source: Fla
     assert forall|i: int| #![trigger target.tests@[i]] 0 <= i < target.tests@.len()
         implies match target.tests@[i] {
             FlatTest::Atom { field, term: FlatTerm::Constant(v), .. } => code_field(c, field, v as nat),
+            FlatTest::Atom { field, term: FlatTerm::Variable(variable), .. } => field == variable,
             _ => true,
         } by {
         if let FlatTest::Atom { field, term: FlatTerm::Constant(v), .. } = target.tests@[i] {
@@ -115,7 +119,13 @@ pub(crate) proof fn lemma_lowered_payload<E: Event>(c: Constants<E>, source: Fla
                 _ => arbitrary(),
             };
             lemma_encoded_payload(c, field, value, v);
-        }
+        } else {
+            assert(junco_core::flat::verify::test_wf(source.head@, source.tests@[i], i as nat));
+            match (source.tests@[i], target.tests@[i]) {
+                (FlatTest::Atom { .. }, FlatTest::Atom { .. }) => {},
+                _ => {},
+            }
+    }
     }
     assert forall|i: int| #![trigger target.head@[i]] 0 <= i < target.head@.len() implies match target.head@[i] {
         FlatHead::Constant(v) => code_field(c, enc::field_at(i), v as nat), _ => true,
@@ -148,6 +158,7 @@ pub(crate) proof fn lemma_append_payload<E: Event>(c: Constants<E>, before: Flat
         test_fields_bounded(after.tests@[i], after.head@.len())
             && match after.tests@[i] {
                 FlatTest::Atom { field, term: FlatTerm::Constant(v), .. } => code_field(c, field, v as nat),
+                FlatTest::Atom { field, term: FlatTerm::Variable(variable), .. } => field == variable,
                 _ => true,
             } by {
         if i < before.tests@.len() { assert(after.tests@[i] == before.tests@[i]); }
@@ -164,6 +175,7 @@ pub(crate) proof fn lemma_append_payload<E: Event>(c: Constants<E>, before: Flat
 pub(crate) proof fn lemma_root_payload<E: Event>(a: PolicyAnalyzer<E>, l: SymbolicLanguage,
     source: FlatPair<u64>, g: implementation::ConstraintView)
     requires source_codes_wf(a.constants, source), universes_wf(a.constants, a.universes),
+        constants_wf(a.constants),
         constraint_codes_wf(a.constants, g),
         source_fields_bounded(source), source.head@.len() == a.universes@.len(),
         symbolic::regex_primitives(model::lift_regex(facade::graph(l), facade::root(l)))
@@ -171,6 +183,7 @@ pub(crate) proof fn lemma_root_payload<E: Event>(a: PolicyAnalyzer<E>, l: Symbol
     ensures g.len() == a.universes@.len(),
         root_vocabulary(l, a.universes, g).len() == arity::<E>(),
         search::atoms_bounded(symbolic::regex_primitives(model::lift_regex(facade::graph(l), facade::root(l))), a.universes@.len()),
+        facade::primitives_search_safe(symbolic::regex_primitives(model::lift_regex(facade::graph(l), facade::root(l)))),
         forall|field: Component, v: nat|
             field.0 < a.universes@.len() && root_vocabulary(l, a.universes, g)[component_index(field) as int].contains(v)
                 ==> code_field(a.constants, field, v),
@@ -182,6 +195,24 @@ pub(crate) proof fn lemma_root_payload<E: Event>(a: PolicyAnalyzer<E>, l: Symbol
         model::Primitive::Eq(c, model::GTerm::Constant(_)) => c.0 < a.universes@.len(),
         model::Primitive::Eq(c, model::GTerm::Variable(v)) => c.0 < a.universes@.len() && v.0 < a.universes@.len(),
     } by { assert(numeric::source_primitives(source).contains(p)); }
+    assert forall|p: model::Primitive| ps.contains(p) implies match p {
+        model::Primitive::Eq(_, model::GTerm::Constant(v)) => v <= u32::MAX,
+        model::Primitive::Eq(c, model::GTerm::Variable(v)) => c == v,
+    } by {
+        numeric::lemma_source_primitive_prefix(source, source.tests@.len(), p);
+        let i = choose|i: int| #![trigger source.tests@[i]] 0 <= i < source.tests@.len()
+            && match source.tests@[i] {
+                FlatTest::Atom { field, term, .. } => p == model::Primitive::Eq(field, numeric::term_view(term)),
+                _ => false,
+            };
+        match source.tests@[i] {
+            FlatTest::Atom { field, term: FlatTerm::Constant(v), .. } => {
+                assert(code_field(a.constants, field, v as nat));
+            },
+            FlatTest::Atom { field, term: FlatTerm::Variable(v), .. } => { assert(field == v); },
+            _ => {},
+        }
+    }
     assert forall|field: Component, v: nat|
         field.0 < a.universes@.len() && root_vocabulary(l, a.universes, g)[component_index(field) as int].contains(v)
         implies code_field(a.constants, field, v) by {
@@ -403,15 +434,94 @@ pub(crate) proof fn lemma_counterexample<E: Event>(a: PolicyAnalyzer<E>, i: Tail
 }
 
 verus! {
-pub(crate) open spec fn decision_ready<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, g: Constraint,
+/// The numeric languages compared by a search. They need not share a head or a mode.
+pub(crate) struct NumericInput {
+    pub left: language::Regex<model::Test>,
+    pub right: language::Regex<model::Test>,
+}
+
+
+pub(crate) open spec fn numeric_difference(i: NumericInput, p: FlatPair<u64>) -> bool {
+    forall|theta: Subst, w: Seq<EventView>| language::event_wf(theta, theta.len()) ==>
+        numeric::source_regex(p, p.root as nat, theta, w)
+            == (encoding::n_lang(theta, i.left, w) && !encoding::n_lang(theta, i.right, w))
+}
+
+pub(crate) open spec fn numeric_decision_ok<E: Event>(a: PolicyAnalyzer<E>, i: NumericInput,
+    g: implementation::ConstraintView, result: NumericDecision<E>) -> bool {
+    &&& search::outcome_ok(ndomains(a.universes), implementation::constraint_of(g),
+        i.left, i.right, result.outcome@)
+    &&& match result.inclusion {
+        Inclusion::Holds => result.outcome@ == search::Outcome::Holds,
+        Inclusion::Exhausted => result.outcome@ == search::Outcome::Exhausted,
+        Inclusion::Counterexample(c) => exists|refutation: Constraint, letters: Seq<Letter>,
+            alphabets: Seq<Set<model::Primitive>>|
+            result.outcome@ == search::Outcome::Refuted(implementation::constraint_of(refutation@),
+                exec::chain_assignments(letters, alphabets))
+            && slots::reconstructed(a.constants, a.universes, refutation, letters, alphabets, c),
+    }
+}
+
+pub(crate) proof fn lemma_numeric_refutation<E: Event>(a: PolicyAnalyzer<E>, i: NumericInput,
+    start: implementation::ConstraintView, g: Constraint, letters: Seq<Letter>,
+    alphabets: Seq<Set<model::Primitive>>, decision: NumericDecision<E>)
+    requires search::outcome_ok(ndomains(a.universes), implementation::constraint_of(start),
+            i.left, i.right, decision.outcome@),
+        decision.outcome@ == search::Outcome::Refuted(implementation::constraint_of(g@), exec::chain_assignments(letters, alphabets)),
+        decision.inclusion matches Inclusion::Counterexample(c)
+            && slots::reconstructed(a.constants, a.universes, g, letters, alphabets, c),
+    ensures numeric_decision_ok(a, i, start, decision),
+{
+    if let Inclusion::Counterexample(c) = decision.inclusion {
+        assert(exists|g1: Constraint, ls: Seq<Letter>, atoms: Seq<Set<model::Primitive>>|
+            decision.outcome@ == search::Outcome::Refuted(implementation::constraint_of(g1@), exec::chain_assignments(ls, atoms))
+            && slots::reconstructed(a.constants, a.universes, g1, ls, atoms, c)) by {
+            assert(slots::reconstructed(a.constants, a.universes, g, letters, alphabets, c));
+        }
+    }
+}
+
+pub(crate) proof fn lemma_outcome_difference(d: encoding::NDomains, start: search::Item,
+    i: NumericInput, outcome: search::Outcome)
+    requires search::initial_ok(start.state, i.left, i.right),
+        exec::search_result(d, start, outcome),
+    ensures search::outcome_ok(d, start.constraint, i.left, i.right, outcome),
+{
+    reveal(exec::search_result);
+}
+
+pub(crate) proof fn lemma_tail_decision<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>,
+    n: NumericInput, g: implementation::ConstraintView, decision: NumericDecision<E>)
+    requires tail_ready(a, i, n.left), n.right == language::Regex::Empty,
+        implementation::constraint_of(g) == inclusion::head_constraint(typed::template_head(i.left_numeric)),
+        numeric_decision_ok(a, n, g, decision),
+    ensures tail_verdict(a, i, decision.inclusion),
+{
+    match decision.inclusion {
+        Inclusion::Holds => lemma_holds(a, i, n.left),
+        Inclusion::Exhausted => {},
+        Inclusion::Counterexample(c) => {
+            let (refutation, letters, alphabets) = choose|refutation: Constraint, letters: Seq<Letter>,
+                alphabets: Seq<Set<model::Primitive>>|
+                decision.outcome@ == search::Outcome::Refuted(implementation::constraint_of(refutation@),
+                    exec::chain_assignments(letters, alphabets))
+                && slots::reconstructed(a.constants, a.universes, refutation, letters, alphabets, c);
+            lemma_counterexample(a, i, n.left, refutation, letters, alphabets, c);
+        },
+    }
+}
+}
+
+verus! {
+pub(crate) open spec fn decision_ready<E: Event>(a: PolicyAnalyzer<E>, i: NumericInput, g: Constraint,
     difference: FlatPair<u64>) -> bool {
-    &&& analyzer_state_wf(a) && analyzer_obligations::<E>() && tail_input_wf(a.constants, i)
-    &&& source_codes_wf(a.constants, difference) && difference_source(i, difference)
+    &&& analyzer_state_wf(a) && analyzer_obligations::<E>()
+    &&& source_codes_wf(a.constants, difference) && numeric_difference(i, difference)
     &&& constraint_wf(g) && constraint_codes_wf(a.constants, g@)
     &&& source_fields_bounded(difference)
     &&& difference.head@.len() == arity::<E>()
     &&& g@.len() == a.universes@.len() && difference.head@.len() == a.universes@.len()
-    &&& implementation::constraint_of(g@) == inclusion::head_constraint(typed::template_head(i.left_numeric))
+    &&& table::dag(difference) && difference.root < difference.regexes@.len()
     &&& inclusion::satisfiable(ndomains(a.universes), implementation::constraint_of(g@))
 }
 
@@ -494,6 +604,103 @@ pub(crate) proof fn lemma_refutation_input<E: Event>(a: PolicyAnalyzer<E>, start
             exec::lemma_letter_payload(a.constants, vocabulary, a.universes, r.letters@[j]@, r.alphabets@[j]);
         }
         assert(inclusion::satisfiable(ndomains(a.universes), implementation::constraint_of(r.constraint@)));
+    }
+}
+}
+
+verus! {
+pub(crate) open spec fn excluded_id(id: crate::analyzer::RuleId, exclude: Option<crate::analyzer::RuleId>) -> bool {
+    match exclude { Some(other) => id.0 == other.0, None => false }
+}
+
+pub(crate) open spec fn head_atoms_ok<E: Event>(a: PolicyAnalyzer<E>, ids: Seq<crate::analyzer::RuleId>,
+    exclude: Option<crate::analyzer::RuleId>, atoms: Seq<crate::constraint::Atom>) -> bool {
+    &&& atoms_wf(atoms, arity::<E>())
+    &&& forall|j: int, k: int| 0 <= j < ids.len() && !excluded_id(ids[j], exclude) && 0 <= k < arity::<E>()
+        ==> match #[trigger] a.rules@[ids[j].0 as int].constants@[k] {
+            Some(v) => atoms.contains(crate::constraint::Atom { component: k as usize,
+                operand: crate::constraint::Operand::Constant(v) })
+                && atoms.contains(crate::constraint::Atom { component: k as usize,
+                    operand: crate::constraint::Operand::Register }), None => true,
+        }
+    &&& forall|j: int| 0 <= j < atoms.len() ==> match #[trigger] atoms[j].operand {
+        crate::constraint::Operand::Constant(v) => code_field(a.constants, Component(atoms[j].component as u8), v as nat),
+        _ => true,
+    }
+}
+
+pub(crate) open spec fn firing_prefix<E: Event>(a: PolicyAnalyzer<E>, ids: Seq<crate::analyzer::RuleId>,
+    exclude: Option<crate::analyzer::RuleId>, n: int, g: Constraint, theta: Subst, word: Seq<EventView>) -> bool {
+    exists|j: int| 0 <= j < n && !excluded_id(ids[j], exclude)
+        && inclusion::entails(ndomains(a.universes), implementation::constraint_of(g@),
+            inclusion::head_constraint(super::policy_queries::stored_numeric(a.rules@[ids[j].0 as int]).head))
+        && #[trigger] encoding::n_lang(theta,
+            inclusion::denial(super::policy_queries::stored_numeric(a.rules@[ids[j].0 as int])), word)
+}
+
+/// Meaning of the union roots already accumulated by the borrowed-policy loop.
+pub(crate) open spec fn covering_prefix<E: Event>(a: PolicyAnalyzer<E>, ids: Seq<crate::analyzer::RuleId>,
+    exclude: Option<crate::analyzer::RuleId>, n: int, g: Constraint, p: FlatPair<u64>, roots: Seq<u32>) -> bool {
+    forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta, theta.len()) ==>
+        ((exists|j: int| 0 <= j < roots.len() && #[trigger] numeric::source_regex(p, roots[j] as nat, theta, word))
+        == #[trigger] firing_prefix(a, ids, exclude, n, g, theta, word))
+}
+
+pub(crate) proof fn lemma_covering_step<E: Event>(a: PolicyAnalyzer<E>,
+    ids: Seq<crate::analyzer::RuleId>, exclude: Option<crate::analyzer::RuleId>, index: int, g: Constraint,
+    before: FlatPair<u64>, roots: Seq<u32>, after: FlatPair<u64>, next: Seq<u32>, added: Option<u32>)
+    requires 0 <= index < ids.len(), covering_prefix(a, ids, exclude, index, g, before, roots),
+        forall|j: int, theta: Subst, w: Seq<EventView>| 0 <= j < roots.len()
+            ==> numeric::source_regex(before, roots[j] as nat, theta, w)
+                == numeric::source_regex(after, roots[j] as nat, theta, w),
+        match added {
+            Some(root) => !excluded_id(ids[index], exclude)
+                && inclusion::entails(ndomains(a.universes), implementation::constraint_of(g@),
+                    inclusion::head_constraint(super::policy_queries::stored_numeric(a.rules@[ids[index].0 as int]).head))
+                && next == roots.push(root)
+                && forall|theta: Subst, w: Seq<EventView>| language::event_wf(theta, theta.len()) ==>
+                    numeric::source_regex(after, root as nat, theta, w)
+                        == encoding::n_lang(theta, inclusion::denial(super::policy_queries::stored_numeric(a.rules@[ids[index].0 as int])), w),
+            None => next == roots && (excluded_id(ids[index], exclude)
+                || !inclusion::entails(ndomains(a.universes), implementation::constraint_of(g@),
+                    inclusion::head_constraint(super::policy_queries::stored_numeric(a.rules@[ids[index].0 as int]).head))),
+        },
+    ensures covering_prefix(a, ids, exclude, index + 1, g, after, next),
+{
+    assert forall|theta: Subst, w: Seq<EventView>| language::event_wf(theta, theta.len()) implies
+        ((exists|j: int| 0 <= j < next.len() && #[trigger] numeric::source_regex(after, next[j] as nat, theta, w))
+            == #[trigger] firing_prefix(a, ids, exclude, index + 1, g, theta, w)) by {
+        let r = super::policy_queries::stored_numeric(a.rules@[ids[index].0 as int]);
+        let fires = !excluded_id(ids[index], exclude)
+            && inclusion::entails(ndomains(a.universes), implementation::constraint_of(g@), inclusion::head_constraint(r.head));
+        assert(firing_prefix(a, ids, exclude, index + 1, g, theta, w)
+            == (firing_prefix(a, ids, exclude, index, g, theta, w)
+                || (fires && encoding::n_lang(theta, inclusion::denial(r), w)))) by {
+            if firing_prefix(a, ids, exclude, index + 1, g, theta, w) {
+                let j = choose|j: int| 0 <= j < index + 1 && !excluded_id(ids[j], exclude)
+                    && inclusion::entails(ndomains(a.universes), implementation::constraint_of(g@),
+                        inclusion::head_constraint(super::policy_queries::stored_numeric(a.rules@[ids[j].0 as int]).head))
+                    && encoding::n_lang(theta, inclusion::denial(super::policy_queries::stored_numeric(a.rules@[ids[j].0 as int])), w);
+                if j < index { assert(firing_prefix(a, ids, exclude, index, g, theta, w)); }
+            }
+        }
+        if exists|j: int| 0 <= j < next.len() && #[trigger] numeric::source_regex(after, next[j] as nat, theta, w) {
+            let j = choose|j: int| 0 <= j < next.len() && numeric::source_regex(after, next[j] as nat, theta, w);
+            if j < roots.len() {
+                assert(numeric::source_regex(before, roots[j] as nat, theta, w));
+                assert(firing_prefix(a, ids, exclude, index, g, theta, w));
+            } else {
+                assert(added is Some && j == roots.len());
+            }
+        }
+        if firing_prefix(a, ids, exclude, index, g, theta, w) {
+            let j = choose|j: int| 0 <= j < roots.len() && numeric::source_regex(before, roots[j] as nat, theta, w);
+            assert(numeric::source_regex(after, next[j] as nat, theta, w));
+        }
+        if fires && encoding::n_lang(theta, inclusion::denial(r), w) {
+            assert(added is Some);
+            assert(numeric::source_regex(after, next[roots.len() as int] as nat, theta, w));
+        }
     }
 }
 }

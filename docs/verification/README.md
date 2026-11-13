@@ -1,8 +1,9 @@
 # Verus verification of the policy-refinement analysis
 
-This branch (`handoff/verus-proofs`, based on `main`) carries the completed machine-checked
-policy-inclusion analysis and its executable `PolicyAnalyzer::tail_included` implementation link.
-The work was done on an older base (`feat/inclusion-simulation`) and ported onto `main`; the
+The analyzer exposes stored-rule coverage, redundancy, and refinement queries, alongside
+`PolicyAnalyzer::tail_included`. This work is rebased onto `main`'s policy-defined arity
+(`1..=8`); `VERIFY.md` records the current contracts, hypotheses, and full verification counts.
+The prior search proofs were done on an older base (`feat/inclusion-simulation`) and ported onto `main`; the
 exact pre-port state is the local branch `wip/verus-refinement-snapshot` (1315 / 1319 verified,
 0 errors, on the old base).
 
@@ -145,7 +146,15 @@ a product-capacity precondition. Constraint-id and fresh-value exhaustion remain
 
 ## Implementation links
 
-- `history-analysis/src/analyzer.rs`: real `tail_included` ensures typed `tail_included_ok`.
+- `history-analysis/src/analyzer.rs`: `covered`, `redundant`, and `at_least_as_strict` ensure
+  their typed `*_correct` predicates, with every admissible counterexample instance witnessing
+  failure and explicit `!covers`/`!refines` under the unrestricted-component infinity premise.
+  `tail_included` retains `tail_included_ok`; all four queries exclude internal errors.
+- `history-analysis/src/verify/{policy_source,policy_bridge,policy_queries}.rs`: canonical
+  numeric rules, whole-policy typed/numeric transport, and executable query composition.
+- `history-analysis/src/verify/policy_firing.rs`: exact head firing on split cases.
+- `history-semantics/src/verify/refinement/inclusion.rs`:
+  `lemma_policy_search_composition` composes split-policy reduction with `outcome_ok`.
 - `history-analysis/src/verify/search_exec.rs`: actual result proof consumes the implementation bound.
 - `history-analysis/src/search.rs` (`Search::run`): the loop's `decreases` is the item bound of
   `finiteness::theorem_impl_items_bound` (Lemma 4.4 for `m_impl`), via `lemma_running_items_bound`;
