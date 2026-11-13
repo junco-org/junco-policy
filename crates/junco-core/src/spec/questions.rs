@@ -1091,4 +1091,274 @@ pub proof fn lemma_component3_u64_capacity<B: Copy + Debug + Eq + Hash, C: Copy 
     lemma_fresh_capacity_u64::<(u64, B, C)>(domains, known, 0, k, embed);
 }
 
+/// Every member of a finite union comes from one of its constituent sets, and conversely.
+pub proof fn lemma_constants_union_member<C>(sets: Seq<Set<C>>, value: C)
+    ensures constants_union(sets).contains(value) <==>
+        exists|i: int| 0 <= i < sets.len() && #[trigger] sets[i].contains(value),
+    decreases sets.len(),
+{
+    if sets.len() > 0 {
+        lemma_constants_union_member(sets.drop_last(), value);
+        if constants_union(sets.drop_last()).contains(value) {
+            let i = choose|i: int| 0 <= i < sets.drop_last().len()
+                && #[trigger] sets.drop_last()[i].contains(value);
+            assert(sets[i].contains(value));
+        }
+        if sets.last().contains(value) {
+            assert(sets[(sets.len() - 1) as int].contains(value));
+        }
+        if exists|i: int| 0 <= i < sets.len() && #[trigger] sets[i].contains(value) {
+            let i = choose|i: int| 0 <= i < sets.len() && #[trigger] sets[i].contains(value);
+            if i < sets.len() - 1 {
+                assert(sets.drop_last()[i].contains(value));
+            } else {
+                assert(sets.last().contains(value));
+            }
+        }
+    }
+}
+
+/// Every registered rule's literals belong to the policy's allowed excluded-constant context.
+pub proof fn lemma_knowable_rule<E: Event>(
+    domains: Domains<E::Component>, rules: Seq<Rule<E>>, j: int,
+)
+    requires 0 <= j < rules.len(), rules[j].head@.len() == arity::<E>(),
+    ensures forall|i: int| 0 <= i < arity::<E>()
+        ==> #[trigger] rule_constants(rules[j]@)[i].subset_of(knowable_constants::<E>(domains, rules)[i]),
+{
+    assert forall|i: int| 0 <= i < arity::<E>() implies
+        #[trigger] rule_constants(rules[j]@)[i].subset_of(knowable_constants::<E>(domains, rules)[i]) by {
+        let registered = rules.map_values(|rule: Rule<E>| {
+            let literals = rule_constants(rule@);
+            if 0 <= i < literals.len() { literals[i] } else { Set::empty() }
+        });
+        lemma_constants_union(registered, j);
+        assert(registered[j] == rule_constants(rules[j]@)[i]);
+    }
+}
+
+/// Both queried rules' literals belong to the head/two-tail allowed excluded-constant context.
+pub proof fn lemma_tail_knowable_rules<E: Event>(
+    domains: Domains<E::Component>, left: Rule<E>, right: Rule<E>,
+)
+    requires left.head@ == right.head@, left.head@.len() == arity::<E>(),
+    ensures forall|i: int| 0 <= i < arity::<E>()
+        ==> #[trigger] rule_constants(left@)[i].subset_of(
+                tail_knowable_constants::<E>(domains, left.head@, left.tail@, right.tail@)[i])
+            && #[trigger] rule_constants(right@)[i].subset_of(
+                tail_knowable_constants::<E>(domains, left.head@, left.tail@, right.tail@)[i]),
+{
+    assert forall|i: int| 0 <= i < arity::<E>() implies
+        #[trigger] rule_constants(left@)[i].subset_of(
+                tail_knowable_constants::<E>(domains, left.head@, left.tail@, right.tail@)[i])
+            && #[trigger] rule_constants(right@)[i].subset_of(
+                tail_knowable_constants::<E>(domains, left.head@, left.tail@, right.tail@)[i]) by {
+        assert(rule_constants(left@)[i]
+            == regex_constant_at(left.tail@, i).union(head_constants(left.head@)[i]));
+        assert(rule_constants(right@)[i]
+            == regex_constant_at(right.tail@, i).union(head_constants(left.head@)[i]));
+    }
+}
+
+/// Declared domain values are part of the policy's allowed excluded-constant context.
+pub proof fn lemma_knowable_domains<E: Event>(domains: Domains<E::Component>, rules: Seq<Rule<E>>)
+    requires domains.len() == arity::<E>(),
+    ensures forall|i: int| 0 <= i < arity::<E>() ==> match #[trigger] domains[i] {
+        None => true,
+        Some(values) => values.subset_of(knowable_constants::<E>(domains, rules)[i]),
+    },
+{
+}
+
+/// Declared domain values are also part of the head/two-tail allowed context.
+pub proof fn lemma_tail_knowable_domains<E: Event>(
+    domains: Domains<E::Component>, head: HeadView<E::Component>,
+    left: RegexView<E::Component>, right: RegexView<E::Component>,
+)
+    requires domains.len() == arity::<E>(),
+    ensures forall|i: int| 0 <= i < arity::<E>() ==> match #[trigger] domains[i] {
+        None => true,
+        Some(values) => values.subset_of(tail_knowable_constants::<E>(domains, head, left, right)[i]),
+    },
+{
+}
+
+/// Literals extracted from a well-formed test retain the coordinate at which they occur.
+pub proof fn lemma_test_constants_tagged<E: Event>(
+    test: TestView<E::Component>, head: HeadView<E::Component>, coordinate: int, value: E::Component,
+)
+    requires
+        super::semantics::test_wf::<E>(test, head),
+        0 <= coordinate < arity::<E>(),
+        test_constants(test, arity::<E>())[coordinate].contains(value),
+    ensures E::coordinate_spec(value) == coordinate,
+    decreases test,
+{
+    lemma_test_constants_index(test, arity::<E>(), coordinate);
+    match test {
+        TestView::True | TestView::False => {},
+        TestView::Atom { pattern, .. } => {
+            assert(coordinate == pattern.component);
+            match pattern.pattern {
+                PatternView::Constant(constant) => { assert(value == constant); },
+                PatternView::Variable(_) => {},
+            }
+        },
+        TestView::And(children) | TestView::Or(children) => {
+            let sets = Seq::new(children.len(), |i: int|
+                if 0 <= i < children.len() { test_constants(children[i], arity::<E>())[coordinate] }
+                else { Set::empty() });
+            lemma_constants_union_member(sets, value);
+            let i = choose|i: int| 0 <= i < sets.len() && #[trigger] sets[i].contains(value);
+            assert(super::semantics::test_wf::<E>(children[i], head));
+            lemma_test_constants_tagged::<E>(children[i], head, coordinate, value);
+        },
+    }
+}
+
+/// Literals extracted recursively from a well-formed regex retain their coordinate tags.
+pub proof fn lemma_regex_constants_tagged<E: Event>(
+    regex: RegexView<E::Component>, head: HeadView<E::Component>, coordinate: int, value: E::Component,
+)
+    requires
+        super::semantics::regex_wf::<E>(regex, head),
+        0 <= coordinate < arity::<E>(),
+        regex_constants(regex, arity::<E>())[coordinate].contains(value),
+    ensures E::coordinate_spec(value) == coordinate,
+    decreases regex,
+{
+    lemma_regex_constants_index(regex, arity::<E>(), coordinate);
+    match regex {
+        RegexView::Empty | RegexView::All | RegexView::Epsilon => {},
+        RegexView::Test(test) => lemma_test_constants_tagged::<E>(test, head, coordinate, value),
+        RegexView::Union(children) | RegexView::Concat(children) | RegexView::Intersect(children) => {
+            let sets = Seq::new(children.len(), |i: int|
+                if 0 <= i < children.len() { regex_constants(children[i], arity::<E>())[coordinate] }
+                else { Set::empty() });
+            lemma_constants_union_member(sets, value);
+            let i = choose|i: int| 0 <= i < sets.len() && #[trigger] sets[i].contains(value);
+            assert(super::semantics::regex_wf::<E>(children[i], head));
+            lemma_regex_constants_tagged::<E>(children[i], head, coordinate, value);
+        },
+        RegexView::Star(child) | RegexView::Not(child) => {
+            lemma_regex_constants_tagged::<E>(*child, head, coordinate, value);
+        },
+    }
+}
+
+/// Head-literal extraction preserves the tags guaranteed by R2 head well-formedness.
+pub proof fn lemma_head_constants_tagged<E: Event>(
+    head: HeadView<E::Component>, coordinate: int, value: E::Component,
+)
+    requires
+        super::semantics::head_wf::<E>(head),
+        0 <= coordinate < arity::<E>(),
+        head_constants(head)[coordinate].contains(value),
+    ensures E::coordinate_spec(value) == coordinate,
+{
+    match head[coordinate] {
+        PatternView::Constant(constant) => { assert(value == constant); },
+        PatternView::Variable(_) => {},
+    }
+}
+
+/// All source-rule literals are tagged at their own extraction coordinates.
+pub proof fn lemma_rule_constants_tagged<E: Event>(rule: Rule<E>)
+    requires super::semantics::rule_wf::<E>(rule),
+    ensures
+        rule_constants(rule@).len() == arity::<E>(),
+        forall|i: int, value: E::Component| 0 <= i < arity::<E>()
+            && #[trigger] rule_constants(rule@)[i].contains(value) ==> E::coordinate_spec(value) == i,
+{
+    assert forall|i: int, value: E::Component| 0 <= i < arity::<E>()
+        && #[trigger] rule_constants(rule@)[i].contains(value) implies E::coordinate_spec(value) == i by {
+        if regex_constants(rule.tail@, arity::<E>())[i].contains(value) {
+            lemma_regex_constants_tagged::<E>(rule.tail@, rule.head@, i, value);
+        } else {
+            lemma_head_constants_tagged::<E>(rule.head@, i, value);
+        }
+    }
+}
+
+/// The policy's allowed excluded-constant context is arity-correct and coordinate-tagged.
+pub proof fn lemma_knowable_constants_tagged<E: Event>(
+    domains: Domains<E::Component>, rules: Seq<Rule<E>>,
+)
+    requires
+        domains_wf::<E>(domains),
+        forall|j: int| 0 <= j < rules.len() ==> super::semantics::rule_wf::<E>(#[trigger] rules[j]),
+    ensures
+        knowable_constants::<E>(domains, rules).len() == arity::<E>(),
+        forall|i: int, value: E::Component| 0 <= i < arity::<E>()
+            && #[trigger] knowable_constants::<E>(domains, rules)[i].contains(value)
+            ==> E::coordinate_spec(value) == i,
+{
+    assert forall|i: int, value: E::Component| 0 <= i < arity::<E>()
+        && #[trigger] knowable_constants::<E>(domains, rules)[i].contains(value)
+        implies E::coordinate_spec(value) == i by {
+        let declared = match domains[i] { Some(values) => values, None => Set::empty() };
+        if !declared.contains(value) {
+            let registered = rules.map_values(|rule: Rule<E>| {
+                let literals = rule_constants(rule@);
+                if 0 <= i < literals.len() { literals[i] } else { Set::empty() }
+            });
+            lemma_constants_union_member(registered, value);
+            let j = choose|j: int| 0 <= j < registered.len() && #[trigger] registered[j].contains(value);
+            lemma_rule_constants_tagged::<E>(rules[j]);
+            assert(rule_constants(rules[j]@)[i].contains(value));
+        }
+    }
+}
+
+/// The borrowed-head/two-tail allowed context is arity-correct and coordinate-tagged.
+pub proof fn lemma_tail_knowable_constants_tagged<E: Event>(
+    domains: Domains<E::Component>, head: HeadView<E::Component>,
+    left: RegexView<E::Component>, right: RegexView<E::Component>,
+)
+    requires
+        domains_wf::<E>(domains),
+        super::semantics::head_tails_wf::<E>(head, left, right),
+    ensures
+        tail_knowable_constants::<E>(domains, head, left, right).len() == arity::<E>(),
+        forall|i: int, value: E::Component| 0 <= i < arity::<E>()
+            && #[trigger] tail_knowable_constants::<E>(domains, head, left, right)[i].contains(value)
+            ==> E::coordinate_spec(value) == i,
+{
+    assert forall|i: int, value: E::Component| 0 <= i < arity::<E>()
+        && #[trigger] tail_knowable_constants::<E>(domains, head, left, right)[i].contains(value)
+        implies E::coordinate_spec(value) == i by {
+        let declared = match domains[i] { Some(values) => values, None => Set::empty() };
+        if !declared.contains(value) {
+            if head_constants(head)[i].contains(value) {
+                lemma_head_constants_tagged::<E>(head, i, value);
+            } else if regex_constants(left, arity::<E>())[i].contains(value) {
+                lemma_regex_constants_tagged::<E>(left, head, i, value);
+            } else {
+                lemma_regex_constants_tagged::<E>(right, head, i, value);
+            }
+        }
+    }
+}
+
+/// Any counterexample context bounded by a tagged allowed context inherits its arity and tags.
+pub proof fn lemma_known_within_tagged<E: Event>(
+    cex: Counterexample<E::Component>, allowed: Seq<Set<E::Component>>,
+)
+    requires
+        known_within(cex, allowed),
+        allowed.len() == arity::<E>(),
+        forall|i: int, value: E::Component| 0 <= i < arity::<E>()
+            && #[trigger] allowed[i].contains(value) ==> E::coordinate_spec(value) == i,
+    ensures
+        cex.known.len() == arity::<E>(),
+        forall|i: int, value: E::Component| 0 <= i < cex.known.len()
+            && #[trigger] cex.known[i].contains(value) ==> E::coordinate_spec(value) == i,
+{
+    assert forall|i: int, value: E::Component| 0 <= i < cex.known.len()
+        && #[trigger] cex.known[i].contains(value) implies E::coordinate_spec(value) == i by {
+        assert(cex.known[i].subset_of(allowed[i]));
+        assert(allowed[i].contains(value));
+    }
+}
+
 }
