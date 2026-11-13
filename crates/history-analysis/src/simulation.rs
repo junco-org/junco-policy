@@ -19,9 +19,11 @@
 //! that of `y`. Every premise relates a pair of smaller nodes, so recursion on pairs, memoised,
 //! decides the relation. It need not be transitive.
 
-use crate::native::NativeMap;
+use history_store::native::NativeMap;
 #[cfg(verus_keep_ghost)]
-use crate::native::representatives;
+verus! { broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws; }
+#[cfg(verus_keep_ghost)]
+use history_store::native::representatives;
 #[cfg(verus_keep_ghost)]
 use crate::verify::simulation_exec::*;
 use history_semantics::SymbolicLanguage;
@@ -73,7 +75,7 @@ impl Simulation {
     pub(crate) fn covered(&mut self, language: &mut SymbolicLanguage,
         xs: &[RegexId], ys: &[RegexId]) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), ids_valid(*old(language), xs@), ids_valid(*old(language), ys@),
+            ids_valid(*old(language), xs@), ids_valid(*old(language), ys@),
             model::strictly_increasing(model::regex_ids(ys@)),
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -93,7 +95,7 @@ impl Simulation {
             invariant index <= xs@.len(), *language == initial,
                 entry == *old(self), initial == *old(language),
                 bound == 2 * facade::graph(initial).regexes.len(),
-                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                facade::language_wf(*language), memo_wf(*self, *language),
                 ids_valid(*language, xs@), ids_valid(*language, ys@),
                 model::strictly_increasing(model::regex_ids(ys@)),
                 memo_grows(entry, *self, bound),
@@ -145,7 +147,7 @@ impl Simulation {
     pub(crate) fn le(&mut self, language: &mut SymbolicLanguage, x: RegexId, y: RegexId)
         -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), x@ < facade::graph(*old(language)).regexes.len(),
+            x@ < facade::graph(*old(language)).regexes.len(),
             y@ < facade::graph(*old(language)).regexes.len(),
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -178,7 +180,7 @@ impl Simulation {
     fn derive(&mut self, language: &mut SymbolicLanguage, x: RegexId, left: &Node,
         right: &Node, y: RegexId, nullable: bool) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), node_wf(*old(language), x, *left),
+            node_wf(*old(language), x, *left),
             node_wf(*old(language), y, *right),
             nullable == junco_core::verify::history_specs::nullable(facade::abs(*old(language), y)),
         ensures
@@ -321,7 +323,7 @@ impl Simulation {
     fn factors_le(&mut self, language: &mut SymbolicLanguage, x: RegexId, left: &Node,
         ys: &[RegexId], Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), node_wf(*old(language), x, *left),
+            node_wf(*old(language), x, *left),
             ids_valid(*old(language), ys@),
             forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
         ensures
@@ -391,7 +393,7 @@ impl Simulation {
             invariant front <= leading, leading <= extra, trailing <= extra,
                 entry == *old(self), initial == *old(language),
                 extra + xs@.len() == ys@.len(), *language == initial,
-                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                facade::language_wf(*language), memo_wf(*self, *language),
                 node_wf(*language, x, *left), ids_valid(*language, xs@), ids_valid(*language, ys@),
                 memo_grows(entry, *self, bound),
                 forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ <= x@,
@@ -434,7 +436,7 @@ impl Simulation {
     fn pointwise(&mut self, language: &mut SymbolicLanguage, xs: &[RegexId], ys: &[RegexId],
         Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), ids_valid(*old(language), xs@), ids_valid(*old(language), ys@), xs@.len() == ys@.len(),
+            ids_valid(*old(language), xs@), ids_valid(*old(language), ys@), xs@.len() == ys@.len(),
             forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + ys@[i]@ < bound,
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -449,7 +451,7 @@ impl Simulation {
         while index < xs.len()
             invariant index <= xs@.len(), *language == initial,
                 entry == *old(self), initial == *old(language),
-                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                facade::language_wf(*language), memo_wf(*self, *language),
                 ids_valid(*language, xs@), ids_valid(*language, ys@), xs@.len() == ys@.len(),
                 memo_grows(entry, *self, bound),
                 forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + ys@[i]@ < bound,
@@ -470,7 +472,7 @@ impl Simulation {
     fn each_below(&mut self, language: &mut SymbolicLanguage, xs: &[RegexId], y: RegexId,
         Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), ids_valid(*old(language), xs@), y@ < facade::graph(*old(language)).regexes.len(),
+            ids_valid(*old(language), xs@), y@ < facade::graph(*old(language)).regexes.len(),
             forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + y@ < bound,
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -485,7 +487,7 @@ impl Simulation {
         while index < xs.len()
             invariant index <= xs@.len(), *language == initial,
                 entry == *old(self), initial == *old(language),
-                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                facade::language_wf(*language), memo_wf(*self, *language),
                 ids_valid(*language, xs@), y@ < facade::graph(*language).regexes.len(),
                 memo_grows(entry, *self, bound),
                 forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + y@ < bound,
@@ -506,7 +508,7 @@ impl Simulation {
     fn below_each(&mut self, language: &mut SymbolicLanguage, x: RegexId, ys: &[RegexId],
         Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), x@ < facade::graph(*old(language)).regexes.len(), ids_valid(*old(language), ys@),
+            x@ < facade::graph(*old(language)).regexes.len(), ids_valid(*old(language), ys@),
             forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -521,7 +523,7 @@ impl Simulation {
         while index < ys.len()
             invariant index <= ys@.len(), *language == initial,
                 entry == *old(self), initial == *old(language),
-                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                facade::language_wf(*language), memo_wf(*self, *language),
                 x@ < facade::graph(*language).regexes.len(), ids_valid(*language, ys@),
                 memo_grows(entry, *self, bound),
                 forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
@@ -542,7 +544,7 @@ impl Simulation {
     fn some_below(&mut self, language: &mut SymbolicLanguage, xs: &[RegexId], y: RegexId,
         Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), ids_valid(*old(language), xs@), y@ < facade::graph(*old(language)).regexes.len(),
+            ids_valid(*old(language), xs@), y@ < facade::graph(*old(language)).regexes.len(),
             forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + y@ < bound,
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -557,7 +559,7 @@ impl Simulation {
         while index < xs.len()
             invariant index <= xs@.len(), *language == initial,
                 entry == *old(self), initial == *old(language),
-                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                facade::language_wf(*language), memo_wf(*self, *language),
                 ids_valid(*language, xs@), y@ < facade::graph(*language).regexes.len(),
                 memo_grows(entry, *self, bound),
                 forall|i: int| 0 <= i < xs@.len() ==> xs@[i]@ + y@ < bound,
@@ -578,7 +580,7 @@ impl Simulation {
     fn below_some(&mut self, language: &mut SymbolicLanguage, x: RegexId, ys: &[RegexId],
         Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), x@ < facade::graph(*old(language)).regexes.len(), ids_valid(*old(language), ys@),
+            x@ < facade::graph(*old(language)).regexes.len(), ids_valid(*old(language), ys@),
             forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -593,7 +595,7 @@ impl Simulation {
         while index < ys.len()
             invariant index <= ys@.len(), *language == initial,
                 entry == *old(self), initial == *old(language),
-                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                facade::language_wf(*language), memo_wf(*self, *language),
                 x@ < facade::graph(*language).regexes.len(), ids_valid(*language, ys@),
                 memo_grows(entry, *self, bound),
                 forall|i: int| 0 <= i < ys@.len() ==> x@ + ys@[i]@ < bound,
@@ -615,7 +617,7 @@ impl Simulation {
     fn test_le(&mut self, language: &mut SymbolicLanguage, phi: TestId, psi: TestId)
         -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), phi@ < facade::graph(*old(language)).tests.len(),
+            phi@ < facade::graph(*old(language)).tests.len(),
             psi@ < facade::graph(*old(language)).tests.len(),
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -648,7 +650,7 @@ impl Simulation {
     fn derive_test(&mut self, language: &mut SymbolicLanguage, phi: TestId, left: &TestNode,
         right: &TestNode, psi: TestId) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), test_node_wf(*old(language), phi, *left),
+            test_node_wf(*old(language), phi, *left),
             test_node_wf(*old(language), psi, *right),
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -739,7 +741,7 @@ impl Simulation {
     fn each_test_below(&mut self, language: &mut SymbolicLanguage, phis: &[TestId], psi: TestId,
         Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), test_ids_valid(*old(language), phis@), psi@ < facade::graph(*old(language)).tests.len(),
+            test_ids_valid(*old(language), phis@), psi@ < facade::graph(*old(language)).tests.len(),
             forall|i: int| 0 <= i < phis@.len() ==> phis@[i]@ + psi@ < bound,
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -754,7 +756,7 @@ impl Simulation {
         while index < phis.len()
             invariant index <= phis@.len(), *language == initial,
                 entry == *old(self), initial == *old(language),
-                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                facade::language_wf(*language), memo_wf(*self, *language),
                 test_ids_valid(*language, phis@), psi@ < facade::graph(*language).tests.len(), tests_grow(entry, *self, bound),
                 forall|i: int| 0 <= i < phis@.len() ==> phis@[i]@ + psi@ < bound,
                 forall|i: int| 0 <= i < index ==> test_le(*language, phis@[i], psi),
@@ -774,7 +776,7 @@ impl Simulation {
     fn below_each_test(&mut self, language: &mut SymbolicLanguage, phi: TestId, psis: &[TestId],
         Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), phi@ < facade::graph(*old(language)).tests.len(), test_ids_valid(*old(language), psis@),
+            phi@ < facade::graph(*old(language)).tests.len(), test_ids_valid(*old(language), psis@),
             forall|i: int| 0 <= i < psis@.len() ==> phi@ + psis@[i]@ < bound,
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -789,7 +791,7 @@ impl Simulation {
         while index < psis.len()
             invariant index <= psis@.len(), *language == initial,
                 entry == *old(self), initial == *old(language),
-                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                facade::language_wf(*language), memo_wf(*self, *language),
                 phi@ < facade::graph(*language).tests.len(), test_ids_valid(*language, psis@), tests_grow(entry, *self, bound),
                 forall|i: int| 0 <= i < psis@.len() ==> phi@ + psis@[i]@ < bound,
                 forall|i: int| 0 <= i < index ==> test_le(*language, phi, psis@[i]),
@@ -809,7 +811,7 @@ impl Simulation {
     fn some_test_below(&mut self, language: &mut SymbolicLanguage, phis: &[TestId], psi: TestId,
         Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), test_ids_valid(*old(language), phis@), psi@ < facade::graph(*old(language)).tests.len(),
+            test_ids_valid(*old(language), phis@), psi@ < facade::graph(*old(language)).tests.len(),
             forall|i: int| 0 <= i < phis@.len() ==> phis@[i]@ + psi@ < bound,
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -824,7 +826,7 @@ impl Simulation {
         while index < phis.len()
             invariant index <= phis@.len(), *language == initial,
                 entry == *old(self), initial == *old(language),
-                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                facade::language_wf(*language), memo_wf(*self, *language),
                 test_ids_valid(*language, phis@), psi@ < facade::graph(*language).tests.len(), tests_grow(entry, *self, bound),
                 forall|i: int| 0 <= i < phis@.len() ==> phis@[i]@ + psi@ < bound,
 
@@ -844,7 +846,7 @@ impl Simulation {
     fn below_some_test(&mut self, language: &mut SymbolicLanguage, phi: TestId, psis: &[TestId],
         Ghost(bound): Ghost<nat>) -> (result: Result<bool, HistoryError>)
         requires facade::language_wf(*old(language)), memo_wf(*old(self), *old(language)),
-            memo_obligations(), phi@ < facade::graph(*old(language)).tests.len(), test_ids_valid(*old(language), psis@),
+            phi@ < facade::graph(*old(language)).tests.len(), test_ids_valid(*old(language), psis@),
             forall|i: int| 0 <= i < psis@.len() ==> phi@ + psis@[i]@ < bound,
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
@@ -859,7 +861,7 @@ impl Simulation {
         while index < psis.len()
             invariant index <= psis@.len(), *language == initial,
                 entry == *old(self), initial == *old(language),
-                facade::language_wf(*language), memo_wf(*self, *language), memo_obligations(),
+                facade::language_wf(*language), memo_wf(*self, *language),
                 phi@ < facade::graph(*language).tests.len(), test_ids_valid(*language, psis@), tests_grow(entry, *self, bound),
                 forall|i: int| 0 <= i < psis@.len() ==> phi@ + psis@[i]@ < bound,
 

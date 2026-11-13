@@ -50,8 +50,6 @@ mod analyzer;
 #[cfg(feature = "runtime")]
 mod constraint;
 #[cfg(feature = "runtime")]
-mod native;
-#[cfg(feature = "runtime")]
 mod prune;
 #[cfg(feature = "runtime")]
 mod search;
@@ -69,10 +67,6 @@ pub mod verify;
 #[cfg(all(verus_keep_ghost, feature = "runtime"))]
 pub mod spec;
 
-#[cfg(all(verus_keep_ghost, feature = "runtime"))]
-pub use native::{
-    hash_coherent as native_hash_coherent, key_obligations as native_key_obligations,
-};
 
 #[cfg(feature = "runtime")]
 pub use analyzer::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, RuleId, Value};

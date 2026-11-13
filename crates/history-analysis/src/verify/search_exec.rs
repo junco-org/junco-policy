@@ -1,7 +1,7 @@
 //! Executable search trace, retained cases, and finite-state resource bounds.
 
 use crate::constraint::{Atom, ConstraintId, ConstraintTable, Letter, Universes};
-use crate::native::{key_obligations, members};
+use history_store::native::members;
 use crate::search::{Item, Search};
 use crate::verify::{atom_set, atoms_wf, ndomains, table_wf};
 use history_semantics::symbolic_verify as symbolic;
@@ -17,12 +17,8 @@ use vstd::prelude::*;
 
 verus! {
 broadcast use model::group_kernel_views;
+broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws;
 
-pub(crate) open spec fn search_obligations() -> bool {
-    key_obligations::<(ConstraintId, RegexId)>() && key_obligations::<crate::constraint::Constraint>()
-        && crate::verify::simulation_exec::memo_obligations()
-        && crate::verify::prune_exec::parts_key_obligations()
-}
 
 pub(crate) open spec fn truth_bits(atoms: Seq<Atom>, letter: Letter, words: Seq<u64>) -> bool {
     words.len() == (atoms.len() + 63) / 64

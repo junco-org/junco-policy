@@ -8,7 +8,7 @@
 
 #[cfg(verus_keep_ghost)]
 use self::equality::{constraint_key, register_key};
-use crate::native::NativeMap;
+use history_store::native::NativeMap;
 #[cfg(verus_keep_ghost)]
 use crate::verify::constraint_unique::*;
 #[cfg(verus_keep_ghost)]
@@ -331,6 +331,17 @@ impl Constraint {
 /// Index of an interned constraint.
 pub(crate) type ConstraintId = u32;
 
+/// Decision 4's exact internal-key introduction; not an axiom for user component types.
+/// Constraint's verified equality compares every ordered register key; derived Hash hashes it.
+#[inline(always)]
+fn native_constraint_key_laws() {}
+
+#[cfg(verus_keep_ghost)]
+verus! {
+    assume_specification[native_constraint_key_laws]()
+        ensures junco_core::spec::hypotheses::key_laws::<Constraint>();
+}
+
 /// Interned constraints, local to one search.
 #[verus_verify]
 pub(crate) struct ConstraintTable {
@@ -342,6 +353,7 @@ pub(crate) struct ConstraintTable {
 impl ConstraintTable {
     #[verus_spec(result => ensures table_wf(result), result@.len() == 0)]
     pub(crate) fn new() -> Self {
+        native_constraint_key_laws();
         Self {
             constraints: Vec::new(),
             ids: NativeMap::new(),
@@ -349,7 +361,6 @@ impl ConstraintTable {
     }
 
     #[verus_spec(result => requires table_wf(*old(self)), constraint_wf(constraint),
-        crate::native::key_obligations::<Constraint>(),
         ensures table_wf(*final(self)),
             junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(id) ==> id < final(self).constraints@.len()

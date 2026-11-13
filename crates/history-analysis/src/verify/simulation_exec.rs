@@ -1,6 +1,6 @@
 //! Semantic invariants for the executable simulation memo.
 
-use crate::native::{key_obligations, representatives};
+use history_store::native::representatives;
 use crate::simulation::{Node, Simulation, TestNode};
 use history_semantics::verify::refinement::pruning as paper;
 use history_semantics::{
@@ -15,10 +15,8 @@ use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
 broadcast use junco_core::kernel::verify::group_kernel_views;
+broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws;
 
-pub(crate) open spec fn memo_obligations() -> bool {
-    key_obligations::<(RegexId, RegexId)>() && key_obligations::<(TestId, TestId)>()
-}
 
 pub(crate) open spec fn semantic_le() -> spec_fn(Regex<model::Test>, Regex<model::Test>) -> bool {
     |x: Regex<model::Test>, y: Regex<model::Test>| paper::lang_le(x, y)

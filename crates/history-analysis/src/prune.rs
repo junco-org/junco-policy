@@ -3,7 +3,9 @@
 //! Required parts are compared by identity; excluded pieces are compared by simulation.
 //! Inserted states are never removed, preserving breadth-first counterexample order.
 
-use crate::native::NativeGroups;
+use history_store::native::NativeGroups;
+#[cfg(verus_keep_ghost)]
+verus! { broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws; }
 #[cfg(verus_keep_ghost)]
 use crate::verify::{prune_exec::*, simulation_exec::*, table_wf};
 use alloc::boxed::Box;
@@ -183,7 +185,7 @@ impl Decomposition {
 
     #[verus_spec(result => requires facade::language_wf(*old(language)),
         decomposition_valid(facade::graph(*old(language)),*self),
-        memo_wf(*old(simulation),*old(language)),memo_obligations(),
+        memo_wf(*old(simulation),*old(language)),
         ensures *final(language) == *old(language),memo_wf(*final(simulation),*final(language)),
             junco_core::verify::history_specs::no_invariant_failure(result),
             result == Ok(true) ==> forall|q: Regex<model::Test>|
@@ -200,7 +202,7 @@ impl Decomposition {
         #[cfg_attr(verus_keep_ghost,verus_spec(invariant
             *language == *old(language),facade::language_wf(*language),
             decomposition_valid(facade::graph(*language),*self),
-            memo_wf(*simulation,*language),memo_obligations(),index <= self.parts.view().len(),
+            memo_wf(*simulation,*language),index <= self.parts.view().len(),
             decreases self.parts.view().len()-index))]
         while index < self.parts.len() {
             let parts: &[RegexId] = &self.parts;
@@ -458,8 +460,8 @@ impl Antichain {
         constraint < constraints@.len(),entries_valid(*self,facade::graph(*old(language)),*constraints),
         forall|i: int| 0 <= i < constraints@.len()
             ==> constraints@[i].len() == constraints@[constraint as int].len(),
-        decomposition_valid(facade::graph(*old(language)),*state),parts_key_obligations(),
-        memo_wf(*old(simulation),*old(language)),memo_obligations(),
+        decomposition_valid(facade::graph(*old(language)),*state),
+        memo_wf(*old(simulation),*old(language)),
         ensures *final(language) == *old(language),memo_wf(*final(simulation),*final(language)),
             junco_core::verify::history_specs::no_invariant_failure(result),
             result == Ok(true) ==> raw_subsumes(*self,facade::graph(*final(language)),*constraints,
@@ -488,8 +490,8 @@ impl Antichain {
             #[cfg_attr(verus_keep_ghost,verus_spec(invariant
                 *language == *old(language),facade::language_wf(*language),table_wf(*constraints),
                 entries_valid(*self,facade::graph(*language),*constraints),
-                decomposition_valid(facade::graph(*language),*state),parts_key_obligations(),
-                memo_wf(*simulation,*language),memo_obligations(),
+                decomposition_valid(facade::graph(*language),*state),
+                memo_wf(*simulation,*language),
                 mask <= limit, parts.view().len() <= ENUMERATED_PARTS,
                 constraint < constraints@.len(),parts.view() == state.parts.view(),
                 c@ == constraints@[constraint as int], crate::verify::constraint_wf(*c),
@@ -538,9 +540,9 @@ impl Antichain {
     #[verus_spec(result => requires facade::language_wf(*old(language)),table_wf(*constraints),
         crate::verify::constraint_wf(*constraint),entries_valid(*self,facade::graph(*old(language)),*constraints),
         forall|i: int| 0 <= i < constraints@.len() ==> constraints@[i].len() == constraint@.len(),
-        decomposition_valid(facade::graph(*old(language)),*state),parts_key_obligations(),
+        decomposition_valid(facade::graph(*old(language)),*state),
         parts.view().to_set().subset_of(state.parts.view().to_set()),valid(facade::graph(*old(language)),parts.view()),
-        memo_wf(*old(simulation),*old(language)),memo_obligations(),
+        memo_wf(*old(simulation),*old(language)),
         ensures *final(language) == *old(language),memo_wf(*final(simulation),*final(language)),
             junco_core::verify::history_specs::no_invariant_failure(result),
             result == Ok(true) ==> raw_subsumes(*self,facade::graph(*final(language)),*constraints,constraint@,*state))]
@@ -558,8 +560,8 @@ impl Antichain {
         };
         proof_decl! {
             let ghost key = choose|key: SmallVec<[RegexId;4]>|
-                crate::native::groups(self.groups).dom().contains(key)
-                && parts.eq_spec(&key) && entries@ == crate::native::groups(self.groups)[key];
+                history_store::native::groups(self.groups).dom().contains(key)
+                && parts.eq_spec(&key) && entries@ == history_store::native::groups(self.groups)[key];
         }
         proof! { assert(key.view() == parts.view()); }
         let mut index = 0;
@@ -568,11 +570,11 @@ impl Antichain {
             table_wf(*constraints),crate::verify::constraint_wf(*constraint),
             forall|i: int| 0 <= i < constraints@.len() ==> constraints@[i].len() == constraint@.len(),
             entries_valid(*self,facade::graph(*language),*constraints),
-            decomposition_valid(facade::graph(*language),*state),parts_key_obligations(),
+            decomposition_valid(facade::graph(*language),*state),
             parts.view().to_set().subset_of(state.parts.view().to_set()),key.view() == parts.view(),
-            crate::native::groups(self.groups).dom().contains(key),
-            entries@ == crate::native::groups(self.groups)[key],
-            memo_wf(*simulation,*language),memo_obligations(),
+            history_store::native::groups(self.groups).dom().contains(key),
+            entries@ == history_store::native::groups(self.groups)[key],
+            memo_wf(*simulation,*language),
             decreases entries@.len()-index))]
         while index < entries.len() {
             let entry = &entries[index];
@@ -605,7 +607,7 @@ impl Antichain {
         Ok(false)
     }
 
-    #[verus_spec(result => requires parts_key_obligations(),
+    #[verus_spec(result =>
         ensures forall|g: model::Graph,table: ConstraintTable,nodes: Seq<paper_search::Node>,node: paper_search::Node|
             antichain_wf(*old(self),g,table,nodes) && constraint < table@.len()
             && node.item.constraint == implementation::constraint_of(table@[constraint as int])
@@ -636,13 +638,13 @@ impl Antichain {
                 && node.item.constraint == implementation::constraint_of(table@[constraint as int])
                 && decomposition_of(g,node.item.state,old_state) implies antichain_wf(*self,g,table,nodes.push(node)) by {
                 assert forall|key: SmallVec<[RegexId;4]>,i: int|
-                    crate::native::groups(self.groups).dom().contains(key)
-                    && 0 <= i < crate::native::groups(self.groups)[key].len() implies
-                    indexed_entry(g,table,key,crate::native::groups(self.groups)[key][i],nodes.push(node)) by {
-                    if crate::native::groups(before.groups).dom().contains(key)
-                        && (!old_state.parts.eq_spec(&key) || i < crate::native::groups(before.groups)[key].len()) {
+                    history_store::native::groups(self.groups).dom().contains(key)
+                    && 0 <= i < history_store::native::groups(self.groups)[key].len() implies
+                    indexed_entry(g,table,key,history_store::native::groups(self.groups)[key][i],nodes.push(node)) by {
+                    if history_store::native::groups(before.groups).dom().contains(key)
+                        && (!old_state.parts.eq_spec(&key) || i < history_store::native::groups(before.groups)[key].len()) {
                         let k = choose|k: int| 0 <= k < nodes.len() && entry_matches(g,table,key,
-                            crate::native::groups(before.groups)[key][i],nodes[k].item);
+                            history_store::native::groups(before.groups)[key][i],nodes[k].item);
                         assert(nodes.push(node)[k] == nodes[k]);
                     } else {
                         assert(key.view() == old_state.parts.view());

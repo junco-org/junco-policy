@@ -1,7 +1,7 @@
 //! Required/excluded decomposition and antichain domination contracts.
 
 use crate::constraint::ConstraintTable;
-use crate::native::{groups, key_obligations};
+use history_store::native::groups;
 use crate::prune::{Antichain, Decomposition, Entry, Root};
 use crate::verify::simulation_exec::semantic_le;
 use alloc::boxed::Box;
@@ -17,14 +17,9 @@ use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
 broadcast use model::group_kernel_views;
+broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws;
 
 
-/// Native equality and hashing must identify the same ordered parts represented by the view.
-pub open spec fn parts_key_obligations() -> bool {
-    key_obligations::<SmallVec<[RegexId; 4]>>()
-        && forall|a: SmallVec<[RegexId; 4]>, b: SmallVec<[RegexId; 4]>|
-            #[trigger] a.eq_spec(&b) ==> a.view() == b.view()
-}
 
 pub(crate) open spec fn valid(g: model::Graph, ids: Seq<RegexId>) -> bool {
     forall|i: int| 0 <= i < ids.len() ==> ids[i]@ < g.regexes.len()

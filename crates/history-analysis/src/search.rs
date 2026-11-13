@@ -10,7 +10,9 @@
 //! Cartesian-product overflow propagates as `HistoryError::IndexOverflow`; it never becomes a
 //! successful inclusion verdict or a capacity precondition on the query.
 
-use crate::native::NativeSet;
+use history_store::native::NativeSet;
+#[cfg(verus_keep_ghost)]
+verus! { broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws; }
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use history_semantics::SymbolicLanguage;
@@ -75,7 +77,7 @@ pub(crate) struct Refutation {
 /// excluded when the initial language's primitives use representable constant IDs and compare
 /// variables only with their own coordinate; the same property is preserved for queued residuals.
 #[verus_verify]
-#[verus_spec(result => requires facade::language_wf(*old(language)),search_obligations(),
+#[verus_spec(result => requires facade::language_wf(*old(language)),
     crate::verify::constraint_wf(constraint),
     history_semantics::verify::refinement::inclusion::satisfiable(crate::verify::ndomains(*universes),implementation::constraint_of(constraint@)),
     history_semantics::verify::finite_impl::regex_nf(model::lift_regex(facade::graph(*old(language)),facade::root(*old(language)))),
@@ -181,7 +183,7 @@ impl Search<'_> {
     verus! {
     #[verifier::rlimit(30)]
     fn run(&mut self) -> (result: Result<SearchOutcome, HistoryError>)
-        requires running(*old(self),0,old(self).start@,old(self).vocabulary@),search_obligations(),
+        requires running(*old(self),0,old(self).start@,old(self).vocabulary@),
         ensures facade::primitives_search_safe(symbolic::regex_primitives(old(self).start@.state))
                 ==> junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(outcome) ==> search_result(crate::verify::ndomains(*old(self).universes),old(self).start@,outcome_view(outcome))
@@ -202,7 +204,7 @@ impl Search<'_> {
         let mut next = 0;
         while next < self.items.len()
             invariant
-                running(*self,next as nat,start,vocabulary),search_obligations(),
+                running(*self,next as nat,start,vocabulary),
                 self.start@ == start,self.vocabulary@ == vocabulary,
                 *self.universes == universes,
                 start == initial.start@,vocabulary == initial.vocabulary@,universes == *initial.universes,
@@ -269,7 +271,7 @@ impl Search<'_> {
     #[allow(clippy::question_mark)]
     fn expand(&mut self, index: usize) -> (result: Result<(), HistoryError>)
         requires running(*old(self),index as nat,old(self).start@,old(self).vocabulary@),
-            search_obligations(),index < old(self).items@.len(),
+            index < old(self).items@.len(),
             !paper_search::nullable_state(trace(*old(self),index as nat).nodes[index as int].item.state),
         ensures facade::primitives_search_safe(symbolic::regex_primitives(old(self).start@.state))
                 ==> junco_core::verify::history_specs::no_invariant_failure(result),
@@ -350,7 +352,7 @@ impl Search<'_> {
         let mut group = 0;
         while group < count
             invariant
-            expansion_state(*self,index as nat,records),search_obligations(),
+            expansion_state(*self,index as nat,records),
             self.start@ == start,self.vocabulary@ == vocabulary,
             *self.universes == universes,
             start == old(self).start@,vocabulary == old(self).vocabulary@,universes == *old(self).universes,
@@ -405,7 +407,7 @@ impl Search<'_> {
             let mut letter_index = 0;
             while letter_index < letter_count
                 invariant
-                expansion_state(*self,index as nat,records),search_obligations(),
+                expansion_state(*self,index as nat,records),
                 self.start@ == start,self.vocabulary@ == vocabulary,
                 *self.universes == universes,
                 start == old(self).start@,vocabulary == old(self).vocabulary@,universes == *old(self).universes,
@@ -549,7 +551,7 @@ impl Search<'_> {
     /// Queues a state unless its residual is `∅` or dead, the same state was seen before, or
     /// an inserted state subsumes it.
     #[verus_verify]
-    #[verus_spec(result => requires state_wf(*old(self)), search_obligations(),
+    #[verus_spec(result => requires state_wf(*old(self)),
         constraint < old(self).constraints@.len(), residual@ < facade::graph(*old(self).language).regexes.len(),
         match parent { None => old(self).items@.len() == 0, Some((p,_)) => p < old(self).items@.len() },
         seen_depth_bounded(*old(self), insertion_depth(old(self).items@,parent)),
@@ -618,8 +620,8 @@ impl Search<'_> {
             return Ok(());
         }
         proof! {
-            assert(!crate::native::members(entry.seen).contains((constraint,residual))) by {
-                if crate::native::members(entry.seen).contains((constraint,residual)) {
+            assert(!history_store::native::members(entry.seen).contains((constraint,residual))) by {
+                if history_store::native::members(entry.seen).contains((constraint,residual)) {
                     assert((constraint,residual).eq_spec(&(constraint,residual)));
                 }
             }
@@ -663,7 +665,7 @@ impl Search<'_> {
         proof! {
             assert forall|j: int| 0 <= j < entry.items@.len() implies
                 (entry.items@[j].constraint,entry.items@[j].residual) != (constraint,residual) by {
-                assert(crate::native::members(entry.seen).contains(
+                assert(history_store::native::members(entry.seen).contains(
                     (entry.items@[j].constraint,entry.items@[j].residual)));
             }
             let item = Item { constraint,residual,parent };
