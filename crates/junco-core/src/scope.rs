@@ -1,6 +1,6 @@
 //! Rule-local variable validation over indexed event coordinates.
 
-use crate::error::CompileError;
+use crate::errors::CompileError;
 #[cfg(verus_keep_ghost)]
 use crate::verify::history_specs::no_invariant_compile_failure;
 use alloc::borrow::ToOwned;

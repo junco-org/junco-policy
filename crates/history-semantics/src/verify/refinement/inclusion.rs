@@ -596,7 +596,7 @@ pub proof fn lemma_firing_lang(d: NDomains, p: Seq<NRule>, g1: Constraint, theta
     let ms = firing.map(|i: int, r: NRule| denial(r));
     assert(firing_denials(d, p, g1) == Regex::Union(ms));
     if n_lang(theta, firing_denials(d, p, g1), w) {
-        let i = choose|i: int| 0 <= i < ms.len() && language::lang(model::gsem(theta), ms[i], w);
+        let i = choose|i: int| 0 <= i < ms.len() && language::numeric_lang(model::gsem(theta), ms[i], w);
         let r = firing[i];
         assert(entails(d, g1, head_constraint(r.head)));
         assert(firing.contains(r));
@@ -609,7 +609,7 @@ pub proof fn lemma_firing_lang(d: NDomains, p: Seq<NRule>, g1: Constraint, theta
         assert(firing.contains(p[j]));
         let i = choose|i: int| 0 <= i < firing.len() && firing[i] == p[j];
         assert(ms[i] == denial(p[j]));
-        assert(language::lang(model::gsem(theta), ms[i], w));
+        assert(language::numeric_lang(model::gsem(theta), ms[i], w));
         language::lemma_lang_union(model::gsem(theta), ms, w);
     }
 }

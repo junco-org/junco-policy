@@ -563,11 +563,11 @@ proof fn lemma_flat_source_regex<E: Event>(source: FlatPair<E::Component>, targe
         constants_wf(c), views::analyzer_obligations::<E>(), fixes_book::<E>(c, coding),
         flat_event_encoded::<E>(coding, request, theta),
         enc::pointwise(word, w, |e: Seq<E::Component>, n: EventView| flat_event_encoded::<E>(coding, e, n)),
-    ensures portable::lang(source.tests@, source.regexes@, id, request, word, fl::component_equality::<E>())
+    ensures portable::flat_lang(source.tests@, source.regexes@, id, request, word, fl::component_equality::<E>())
         == numeric::source_regex(target, id, theta, w),
     decreases id,
 {
-    reveal_with_fuel(portable::lang, 1);
+    reveal_with_fuel(portable::flat_lang, 1);
     reveal_with_fuel(numeric::source_regex, 1);
     assert(portable::regex_wf(source.regexes@[id as int], id, source.tests@.len()));
     assert(enc::regex_same(source.regexes@[id as int], target.regexes@[id as int]));
@@ -580,16 +580,16 @@ proof fn lemma_flat_source_regex<E: Event>(source: FlatPair<E::Component>, targe
         },
         FlatRegex::Union(children) | FlatRegex::Intersect(children) => {
             assert forall|i: int| 0 <= i < children@.len() implies
-                portable::lang(source.tests@, source.regexes@, children@[i] as nat, request, word, fl::component_equality::<E>())
+                portable::flat_lang(source.tests@, source.regexes@, children@[i] as nat, request, word, fl::component_equality::<E>())
                     == numeric::source_regex(target, children@[i] as nat, theta, w) by {
                 lemma_flat_source_regex::<E>(source, target, children@[i] as nat, c, coding, request, theta, word, w);
             }
         },
         FlatRegex::Complement(child) => { lemma_flat_source_regex::<E>(source, target, child as nat, c, coding, request, theta, word, w); },
         FlatRegex::Concat(children) => {
-            if portable::lang(source.tests@, source.regexes@, id, request, word, fl::component_equality::<E>()) {
+            if portable::flat_lang(source.tests@, source.regexes@, id, request, word, fl::component_equality::<E>()) {
                 let parts = choose|parts: Seq<Seq<Seq<E::Component>>>| parts.len() == children@.len() && word == parts.flatten()
-                    && forall|i: int| 0 <= i < children@.len() ==> portable::lang(source.tests@, source.regexes@, children@[i] as nat, request, parts[i], fl::component_equality::<E>());
+                    && forall|i: int| 0 <= i < children@.len() ==> portable::flat_lang(source.tests@, source.regexes@, children@[i] as nat, request, parts[i], fl::component_equality::<E>());
                 assert(enc::pointwise(w, word, rev));
                 enc::lemma_partition_lift(w, word, parts, rev);
                 let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && w == lifted.flatten()
@@ -607,15 +607,15 @@ proof fn lemma_flat_source_regex<E: Event>(source: FlatPair<E::Component>, targe
                 let lifted = choose|lifted: Seq<Seq<Seq<E::Component>>>| lifted.len() == parts.len() && word == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rel);
                 assert forall|i: int| 0 <= i < children@.len() implies
-                    portable::lang(source.tests@, source.regexes@, children@[i] as nat, request, lifted[i], fl::component_equality::<E>()) by {
+                    portable::flat_lang(source.tests@, source.regexes@, children@[i] as nat, request, lifted[i], fl::component_equality::<E>()) by {
                     lemma_flat_source_regex::<E>(source, target, children@[i] as nat, c, coding, request, theta, lifted[i], parts[i]);
                 }
             }
         },
         FlatRegex::Star(child) => {
-            if portable::lang(source.tests@, source.regexes@, id, request, word, fl::component_equality::<E>()) {
+            if portable::flat_lang(source.tests@, source.regexes@, id, request, word, fl::component_equality::<E>()) {
                 let parts = choose|parts: Seq<Seq<Seq<E::Component>>>| word == parts.flatten()
-                    && forall|i: int| 0 <= i < parts.len() ==> portable::lang(source.tests@, source.regexes@, child as nat, request, parts[i], fl::component_equality::<E>());
+                    && forall|i: int| 0 <= i < parts.len() ==> portable::flat_lang(source.tests@, source.regexes@, child as nat, request, parts[i], fl::component_equality::<E>());
                 assert(enc::pointwise(w, word, rev));
                 enc::lemma_partition_lift(w, word, parts, rev);
                 let lifted = choose|lifted: Seq<Seq<EventView>>| w == lifted.flatten() && lifted.len() == parts.len()
@@ -632,7 +632,7 @@ proof fn lemma_flat_source_regex<E: Event>(source: FlatPair<E::Component>, targe
                 let lifted = choose|lifted: Seq<Seq<Seq<E::Component>>>| word == lifted.flatten() && lifted.len() == parts.len()
                     && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rel);
                 assert forall|i: int| 0 <= i < parts.len() implies
-                    portable::lang(source.tests@, source.regexes@, child as nat, request, lifted[i], fl::component_equality::<E>()) by {
+                    portable::flat_lang(source.tests@, source.regexes@, child as nat, request, lifted[i], fl::component_equality::<E>()) by {
                     lemma_flat_source_regex::<E>(source, target, child as nat, c, coding, request, theta, lifted[i], parts[i]);
                 }
             }

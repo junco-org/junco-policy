@@ -16,7 +16,7 @@ use history_syntax::Event;
 #[cfg(verus_keep_ghost)]
 use history_syntax::spec::events::RuleView;
 use history_syntax::syntax::{Rule, RuleMode};
-use junco_core::error::{CompileError, HistoryError};
+use junco_core::errors::{CompileError, HistoryError};
 use junco_core::event::{Grant, Request};
 use junco_core::limits::{Limits, Unmetered};
 use junco_core::observation::ObservationWorld;

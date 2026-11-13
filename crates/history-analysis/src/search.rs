@@ -280,7 +280,7 @@ impl Search<'_> {
             && final(self).start@ == old(self).start@ && final(self).vocabulary@ == old(self).vocabulary@
             && *final(self).universes == *old(self).universes,
     {
-        hide(junco_core::verify::history_specs::lang);
+        hide(junco_core::verify::history_specs::numeric_lang);
         hide(model::lift_regex);hide(model::lift_test);hide(symbolic::regex_primitives);
         hide(paper_search::successor_ok);
         hide(paper_search::steps_ok);hide(paper_search::trace_steps_ok);

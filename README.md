@@ -145,7 +145,7 @@ The candidate supplies bindings. It is not added to the history being checked.
 
 $\mathcal{L}_{\theta}(R)$ is the set of complete histories accepted by $R$ after
 substituting those bindings. The
-[`lang` definition](crates/junco-core/src/verify/history_specs.rs#L91-L105) gives each
+[`numeric_lang` definition](crates/junco-core/src/verify/history_specs.rs#L91-L105) gives each
 operator its meaning:
 
 - `Empty` accepts no history. `Epsilon` accepts only the empty history.
@@ -157,7 +157,7 @@ operator its meaning:
 
 These distinctions matter: `All` is not a one-event wildcard, and `Test(true)` does
 not accept an empty history. Verus checks that empty-history distinction in
-[`epsilon_versus_test_true_on_empty_history`](crates/history-semantics/src/verify/history_examples.rs#L54-L62).
+[`epsilon_versus_test_true_on_empty_history`](crates/history-semantics/src/verify/history_examples.rs#L55-L63).
 
 ### A prior edit, expressed as a language
 
@@ -175,7 +175,7 @@ The rule therefore requires an earlier edit by the releasing principal on the sa
 resource. An empty history cannot satisfy it. An edit by another principal or on a
 different resource cannot serve as the witness.
 
-[`prior_edit_grants_matching_release`](crates/history-semantics/src/verify/history_examples.rs#L80-L102)
+[`prior_edit_grants_matching_release`](crates/history-semantics/src/verify/history_examples.rs#L81-L104)
 proves that a singleton matching-edit history satisfies `pair_lang` for the release
 candidate. That proof example assigns numeric action 2 to edit and 3 to release.
 This is an illustrative Require rule; the ownership-lock policy above has its own
@@ -183,11 +183,13 @@ seven-rule definition.
 
 ### From the specification to runtime answers
 
-The proof covers the running compiled-rule implementation. The
-[`public_compiled_decision`](crates/history-semantics/src/verify/typed_decision.rs#L121)
+The proof covers the running monitor. [`Validator::permits`](crates/history-semantics/src/validator.rs#L252)
+and [`CompiledRule::accepts_history`](crates/history-semantics/src/compiled_rule.rs#L524) are the
+public decision methods; the
+[`public_compiled_decision`](crates/history-semantics/src/verify/typed_decision.rs#L122)
 verification endpoint calls the actual `CompiledRule::new` constructor and
-`accepts_history` method. Given a well-formed store and history, and the native-type
-obligations below, its successful result has this meaning:
+`accepts_history` method. Given a well-formed store and history, and the event hypotheses
+below (`event_obligations`, R4), its successful result has this meaning:
 
 ```text
 Ok(None)            The candidate does not match the head.
@@ -202,9 +204,12 @@ inside it on a successful evaluation. The result keeps a head mismatch separate 
 a matching head whose tail rejects the history.
 
 Checked `CompiledPolicy` and `Validator` bodies skip nonmatching heads and select the
-first violating Require or Forbid rule. Their constructors preserve source order;
-policy construction also preserves each source's diagnostic pairing. The
-[composition clients](crates/history-semantics/src/verify/typed_decision.rs#L186)
+first violating Require or Forbid rule: `Validator::check` ensures R5 `check_step` and
+`check_frame` ([`crates/history-semantics/src/spec/monitor.rs`](crates/history-semantics/src/spec/monitor.rs)),
+and every reachable validator state is trace safe
+([`theorem_trace_safe`](crates/history-semantics/tests/reviewer.rs)). Their constructors
+preserve source order; policy construction also preserves each source's diagnostic pairing. The
+[composition clients](crates/history-semantics/src/verify/typed_decision.rs#L187)
 call the real constructors and decisions. A validator grant appends the exact request
 event and returns its metadata; denial and error preserve committed history.
 Only a selected policy denial calls context and diagnostic, once each, through a
@@ -213,7 +218,7 @@ native invocation leaf. Grants and errors call neither.
 The body proofs cover DSL structure and lowering, constant encoding as codebooks grow,
 numeric compilation and evaluation, raw-to-numeric history correspondence, and cached
 lifecycle and publication receipts. The
-[`retained_history_lifecycle` and `compiled_cached_decision` endpoints](crates/history-semantics/src/verify/typed_decision.rs#L137)
+[`retained_history_lifecycle` and `compiled_cached_decision` endpoints](crates/history-semantics/src/verify/typed_decision.rs#L138)
 exercise retained evaluation across append, rollback, replacement, truncation and a
 fresh-owner fork, and the same production method used by cached clients.
 
@@ -226,7 +231,7 @@ native signatures and trust boundaries are unchanged.
 Coordinate, history-key and store-ID issuance use checked successor, key-absence and
 map-insertion proofs over authorities retained in the process mutexes. Persistent
 receipts distinguish byte and typed issuers and independent typed registries.
-[Independent store construction](crates/history-store/src/typed.rs#L1063) derives both
+[Independent store construction](crates/history-store/src/typed.rs#L1089) derives both
 registry and scalar owner inequality; the
 [foreign rollback client](crates/history-store/src/history.rs#L1112) takes an actual
 source checkpoint and proves `WrongCheckpointOwner` without changing the target.
@@ -236,9 +241,9 @@ do not remove issued IDs.
 The theorem is conditional on stable `Event` projections and component equality and
 hashing that agree with their models. Modeled equality must be reflexive, symmetric
 and transitive; equal native keys must hash coherently. These obligations are explicit
-in [`native_obligations`](crates/history-store/src/typed.rs#L1135-L1138) and
-[`key_obligations`](crates/history-store/src/typed/map.rs#L21-L30), not universal proofs
-about arbitrary user types. Native field projections, callback invocation, const/static
+in [`event_obligations` and `key_laws`](crates/junco-core/src/spec/hypotheses.rs) (R4), not
+universal proofs about arbitrary user types; `hash_coherent` is the single hashing hypothesis
+(see `VERIFY.md`, Hypotheses). Native field projections, callback invocation, const/static
 installation and reference identity, mutex/Arc/record adapters, container operations
 and reservations remain proof boundaries. Callbacks may panic or diverge; no purity
 or determinism is assumed. Caching remains trusted. Checked byte-record callbacks
@@ -251,7 +256,10 @@ Public ghost APIs expose source decisions, readiness introductions and result fa
 without revealing writable graphs or native maps. The
 [`public_specs` integration target](crates/history-semantics/tests/public_specs.rs)
 uses only public imports to consume these contracts, including exact iterator-backed
-histories, owner checks, diagnostic ordering and lifecycle receipts.
+histories, owner checks, diagnostic ordering and lifecycle receipts. The two
+[`reviewer`](crates/history-semantics/tests/reviewer.rs) targets
+([analysis](crates/history-analysis/tests/reviewer.rs)) state the monitor theorem and the
+analyzer's A1–A6 over public items only; `VERIFY.md` is their guide.
 
 Under the native event laws, production compilation and valid decisions exclude
 `HistoryError::Invariant`. Scoped sources also exclude unbound-variable,
@@ -625,24 +633,32 @@ implementations, including no_std + alloc support. Store `std` selects native lo
 Semantics `cache` enables optional precompilation. Neither feature implies `runtime`.
 Core `serde` enables portable source serialization. The root `junco-policy` package selects
 core/Syntax `std`, Store `runtime,std` and Semantics `runtime,std,cache`.
-Semantics `test-util` is a dev-only integration probe feature.
-Analysis has no features; it is no_std + alloc and outside the Verus job. It uses Semantics
-`runtime` through `SymbolicLanguage`, a native facade like `TracePolicy` that owns a compiled
-pair and calls only verified graph operations.
+`test-util` is a root feature for the integration probes and counters (`cargo test --features
+junco-policy/test-util`, as CI runs it).
+Analysis has no features beyond `runtime`/`std`; it is no_std + alloc and verified in its own
+configurations. It uses Semantics `runtime` through `SymbolicLanguage`, a native facade like
+`TracePolicy` that owns a compiled pair and calls only verified graph operations.
 
 ## Reproduce the verification
 
 The pinned toolchain is Rust `1.98.1`, Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0` and
-`vstd = 0.0.0-2026-10-04-0306`. With `verus` and `cargo-verus` on `PATH`, and
-`VERUS_Z3_PATH` pointing to that Z3 binary, run the core and cached-runtime gates:
+`vstd = 0.0.0-2026-10-04-0306`. `scripts/verify-all.sh` checks the toolchain and runs all
+thirteen configurations (`--list` prints them; `--download DIR` fetches the pinned Verus and
+Z3). With `verus` and `cargo-verus` on `PATH`, and `VERUS_Z3_PATH` pointing to that Z3 binary,
+the core, cached-runtime and reviewer gates are:
 
 ```sh
 cargo verus verify --locked -p junco-core --features runtime,std,serde
 cargo verus verify --locked -p history-semantics --features runtime,std,cache
 cargo verus verify --locked -p history-semantics --features runtime,std,cache --test public_specs
+cargo verus verify --locked -p history-semantics --features runtime,std,cache --test reviewer
+cargo verus verify --locked -p history-analysis --no-default-features --features runtime,std
+cargo verus verify --locked -p history-analysis --no-default-features --features runtime,std --test reviewer
 ```
 
-The [CI workflow](.github/workflows/ci.yml#L86-L150) contains the toolchain setup and
+`VERIFY.md` lists the expected counts, the six reviewer interface files (R1–R6) and the
+hypotheses; `TRUST.md` is the generated trusted-base inventory. The
+[CI workflow](.github/workflows/ci.yml#L86-L152) contains the toolchain setup and
 full library feature matrix. Verified helper dependencies are pinned to
 [bumpus](https://github.com/elefthei/bumpus) (`verus-bumpalo`) commit
 `888a6983370524cf1686d82e5814dd17a2dd14e5` and

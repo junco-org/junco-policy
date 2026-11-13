@@ -14,7 +14,7 @@ use history_syntax::spec::events::{arity, event_view, projection_laws};
 use history_syntax::syntax::Component;
 use history_syntax::{Arity, Event, MAX_ARITY};
 use junco_core::compile::{FlatEncoder, lower_flat, validate_component};
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use junco_core::flat::FlatPair;
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;

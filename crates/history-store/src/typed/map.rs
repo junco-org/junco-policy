@@ -7,7 +7,7 @@
 
 use core::hash::Hash;
 use hashbrown::HashMap;
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;

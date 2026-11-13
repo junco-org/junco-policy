@@ -699,7 +699,7 @@ pub proof fn lemma_successor_cases_common(d: NDomains, item: Item,
     ensures paper_steps(d, item, atoms, cases_split, next).finite(),
         steps_ok(d, item, finite_of(paper_steps(d, item, atoms, cases_split, next))),
 {
-    hide(language::lang);
+    hide(language::numeric_lang);
     hide(successor_ok);
     hide(realizes);
     hide(n_theta_ok);
@@ -750,7 +750,7 @@ pub proof fn lemma_successor_cases_common(d: NDomains, item: Item,
 pub proof fn theorem_successor_cases()
     ensures stmt_successor_cases(),
 {
-    hide(language::lang);
+    hide(language::numeric_lang);
     hide(successor_ok);
     hide(atoms_complete);
     hide(steps_ok);
@@ -825,7 +825,7 @@ pub proof fn lemma_node_realizable(d: NDomains, g0: Constraint, q0: Regex<model:
                 chain(t.nodes, j, t.nodes[j].depth), theta, u),
     decreases j,
 {
-    hide(language::lang);
+    hide(language::numeric_lang);
     hide(realizes);
     hide(successor_ok);
     hide(follows);
@@ -880,7 +880,7 @@ pub proof fn lemma_node_language(d: NDomains, g0: Constraint, q0: Regex<model::T
     ensures n_lang(theta, t.nodes[j].item.state, w) == n_lang(theta, q0, u + w),
     decreases j,
 {
-    hide(language::lang);
+    hide(language::numeric_lang);
     hide(realizes);
     hide(successor_ok);
     hide(follows);
@@ -933,7 +933,7 @@ pub proof fn lemma_node_semantics(d: NDomains, g0: Constraint, q0: Regex<model::
             && #[trigger] follows(d, chain(t.nodes, j, t.nodes[j].depth), theta, u)
             ==> #[trigger] n_lang(theta, t.nodes[j].item.state, w) == n_lang(theta, q0, u + w),
 {
-    hide(language::lang);
+    hide(language::numeric_lang);
     hide(follows);
     hide(n_theta_ok);
     hide(sat_by);
@@ -958,7 +958,7 @@ pub proof fn lemma_no_witness_below(d: NDomains, g0: Constraint, q0: Regex<model
     ensures false,
     decreases w.len(),
 {
-    hide(language::lang);
+    hide(language::numeric_lang);
     hide(successor_ok);
     hide(realizes);
     hide(n_theta_ok);
@@ -1003,7 +1003,7 @@ pub proof fn lemma_no_witness_below(d: NDomains, g0: Constraint, q0: Regex<model
         } else {
             assert(may_discard(d, t.nodes, case_item(c), t.nodes[j].depth + 1));
             if c.next == Regex::<model::Test>::Empty {
-                reveal(language::lang);
+                reveal(language::numeric_lang);
             } else if no_witness(d, case_item(c)) {
                 assert(!witness(d, case_item(c), theta, tail));
             } else {
@@ -1029,7 +1029,7 @@ pub proof fn lemma_search_correct(d: NDomains, g0: Constraint, r: Regex<model::T
         trace_wf(d, g0, q0, cases_of, t), trace_outcome(t, outcome),
     ensures outcome_ok(d, g0, r, s, outcome),
 {
-    hide(language::lang);
+    hide(language::numeric_lang);
     match outcome {
         Outcome::Exhausted => {},
         Outcome::Holds => {
@@ -1043,7 +1043,7 @@ pub proof fn lemma_search_correct(d: NDomains, g0: Constraint, r: Regex<model::T
                         lemma_no_witness_below(d, g0, q0, cases_of, t, 0, theta, w);
                     } else {
                         assert(may_discard(d, t.nodes, root, 0));
-                        if q0 == Regex::<model::Test>::Empty { reveal(language::lang); }
+                        if q0 == Regex::<model::Test>::Empty { reveal(language::numeric_lang); }
                         else { assert(no_witness(d, root)); }
                     }
                 }

@@ -4,7 +4,7 @@
 use crate::graph::allocation;
 use alloc::vec::Vec;
 use core::num::NonZeroUsize;
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use junco_core::kernel::{AtomSet, RegexId, TransitionId};
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;

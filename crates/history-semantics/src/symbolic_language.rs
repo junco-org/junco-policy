@@ -18,7 +18,7 @@
 use alloc::vec::Vec;
 use history_store::cache::EventClass;
 use history_store::graph::RuntimeKernel;
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use junco_core::flat::FlatPair;
 use junco_core::kernel::{
     KernelStore, Primitive, RegexId, RegexView, TestId, TestView, TransitionId,
@@ -862,8 +862,8 @@ pub mod verify {
             theta.len() <= history_syntax::MAX_ARITY
             && (forall|p: model::Primitive| atom_primitives(l, t).contains(p)
                 ==> model::primitive_holds(theta, p, e1) == model::primitive_holds(theta, p, e2))
-            implies language::lang(model::gsem(theta), abs(l, q), seq![e1] + w)
-                == language::lang(model::gsem(theta), abs(l, q), seq![e2] + w) by {
+            implies language::numeric_lang(model::gsem(theta), abs(l, q), seq![e1] + w)
+                == language::numeric_lang(model::gsem(theta), abs(l, q), seq![e2] + w) by {
             theta.lemma_cardinality_of_set();
             theta.to_set_ensures();
             let values = theta.to_set();

@@ -1,6 +1,6 @@
 //! Structural and semantic clients of the actual iterative owned-source lowering.
 
-use crate::error::CompileError;
+use crate::errors::CompileError;
 use crate::flat::verify as flat;
 use crate::flat::{FlatHead, FlatRegex, FlatRule, FlatTerm, FlatTest};
 use crate::flatten::Work;
@@ -842,11 +842,11 @@ pub proof fn lemma_regex_semantics<E: Event>(tests: Seq<FlatTest<E::Component>>,
     requires regex_represents::<E>(tests, regexes, id, source, head),
         candidate.len() == head.len(),
         forall|i: int| 0 <= i < word.len() ==> word[i].len() == candidate.len(),
-    ensures flat::lang(tests, regexes, id, candidate, word, component_equality::<E>())
+    ensures flat::flat_lang(tests, regexes, id, candidate, word, component_equality::<E>())
         == dsl::lang(source, head, candidate, word),
     decreases source,
 {
-    reveal_with_fuel(flat::lang, 2);
+    reveal_with_fuel(flat::flat_lang, 2);
     reveal_with_fuel(dsl::lang, 2);
     lemma_regex_operands(regexes[id as int]);
     reveal_with_fuel(regex_represents, 2);
@@ -862,12 +862,12 @@ pub proof fn lemma_regex_semantics<E: Event>(tests: Seq<FlatTest<E::Component>>,
             if dsl::lang(source, head, candidate, word) {
                 let i = choose|i: int| 0 <= i < children.len() && dsl::lang(children[i], head, candidate, word);
                 lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, word);
-                assert(flat::lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>()));
-                assert(flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()));
+                assert(flat::flat_lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>()));
+                assert(flat::flat_lang(tests, regexes, id, candidate, word, component_equality::<E>()));
             }
-            if flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
+            if flat::flat_lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
                 let i = choose|i: int| 0 <= i < ids.len()
-                    && flat::lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>());
+                    && flat::flat_lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>());
                 lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, word);
                 assert(dsl::lang(children[i], head, candidate, word));
                 assert(dsl::lang(source, head, candidate, word));
@@ -877,15 +877,15 @@ pub proof fn lemma_regex_semantics<E: Event>(tests: Seq<FlatTest<E::Component>>,
             let ids = regex_operands(regexes[id as int]);
             if dsl::lang(source, head, candidate, word) {
                 assert forall|i: int| 0 <= i < ids.len() implies
-                    flat::lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>()) by {
+                    flat::flat_lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>()) by {
                     assert(dsl::lang(children[i], head, candidate, word));
                     lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, word);
                 }
-                assert(flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()));
+                assert(flat::flat_lang(tests, regexes, id, candidate, word, component_equality::<E>()));
             }
-            if flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
+            if flat::flat_lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
                 assert forall|i: int| 0 <= i < children.len() implies dsl::lang(children[i], head, candidate, word) by {
-                    assert(flat::lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>()));
+                    assert(flat::flat_lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>()));
                     lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, word);
                 }
                 assert(dsl::lang(source, head, candidate, word));
@@ -902,15 +902,15 @@ pub proof fn lemma_regex_semantics<E: Event>(tests: Seq<FlatTest<E::Component>>,
                     && word == parts.flatten() && forall|i: int| 0 <= i < children.len() ==> dsl::lang(children[i], head, candidate, parts[i]);
                 lemma_partition_arity(parts, candidate.len());
                 assert forall|i: int| 0 <= i < children.len() implies
-                    flat::lang(tests, regexes, ids[i] as nat, candidate, parts[i], component_equality::<E>()) by {
+                    flat::flat_lang(tests, regexes, ids[i] as nat, candidate, parts[i], component_equality::<E>()) by {
                     lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, parts[i]);
                 }
-                assert(flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()));
+                assert(flat::flat_lang(tests, regexes, id, candidate, word, component_equality::<E>()));
             }
-            if flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
+            if flat::flat_lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
                 let parts = choose|parts: Seq<Seq<Seq<E::Component>>>| parts.len() == ids.len()
                     && word == parts.flatten() && forall|i: int| 0 <= i < ids.len() ==>
-                        flat::lang(tests, regexes, ids[i] as nat, candidate, parts[i], component_equality::<E>());
+                        flat::flat_lang(tests, regexes, ids[i] as nat, candidate, parts[i], component_equality::<E>());
                 lemma_partition_arity(parts, candidate.len());
                 assert forall|i: int| 0 <= i < children.len() implies dsl::lang(children[i], head, candidate, parts[i]) by {
                     lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, parts[i]);
@@ -925,15 +925,15 @@ pub proof fn lemma_regex_semantics<E: Event>(tests: Seq<FlatTest<E::Component>>,
                     && forall|i: int| 0 <= i < parts.len() ==> dsl::lang(*child, head, candidate, parts[i]);
                 lemma_partition_arity(parts, candidate.len());
                 assert forall|i: int| 0 <= i < parts.len() implies
-                    flat::lang(tests, regexes, child_id as nat, candidate, parts[i], component_equality::<E>()) by {
+                    flat::flat_lang(tests, regexes, child_id as nat, candidate, parts[i], component_equality::<E>()) by {
                     lemma_regex_semantics::<E>(tests, regexes, child_id as nat, *child, head, candidate, parts[i]);
                 }
-                assert(flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()));
+                assert(flat::flat_lang(tests, regexes, id, candidate, word, component_equality::<E>()));
             }
-            if flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
+            if flat::flat_lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
                 let parts = choose|parts: Seq<Seq<Seq<E::Component>>>| word == parts.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==>
-                        flat::lang(tests, regexes, child_id as nat, candidate, parts[i], component_equality::<E>());
+                        flat::flat_lang(tests, regexes, child_id as nat, candidate, parts[i], component_equality::<E>());
                 lemma_partition_arity(parts, candidate.len());
                 assert forall|i: int| 0 <= i < parts.len() implies dsl::lang(*child, head, candidate, parts[i]) by {
                     lemma_regex_semantics::<E>(tests, regexes, child_id as nat, *child, head, candidate, parts[i]);
@@ -953,7 +953,7 @@ pub proof fn flattening_preserves_semantics<E: Event>(rule: Rule<E>, lowered: Fl
     ensures
         flat::head_matches(lowered.source.head@, candidate, component_equality::<E>())
             == dsl::head_matches(rule.head@, candidate),
-        flat::lang(lowered.source.tests@, lowered.source.regexes@, lowered.source.root as nat,
+        flat::flat_lang(lowered.source.tests@, lowered.source.regexes@, lowered.source.root as nat,
             candidate, history, component_equality::<E>())
             == dsl::lang(rule.tail@, rule.head@, candidate, history),
 {
@@ -976,7 +976,7 @@ pub fn flattening_client<E: Event, L: Limits>(rule: &Rule<E>, limits: &mut L, wo
         dsl::head_scoped(rule.head@) && dsl::regex_scoped(rule.tail@, rule.head@)
         && flat::head_matches(lowered.source.head@, candidate, component_equality::<E>())
             == dsl::head_matches(rule.head@, candidate)
-        && flat::lang(lowered.source.tests@, lowered.source.regexes@, lowered.source.root as nat,
+        && flat::flat_lang(lowered.source.tests@, lowered.source.regexes@, lowered.source.root as nat,
             candidate, history, component_equality::<E>())
             == dsl::lang(rule.tail@, rule.head@, candidate, history),
 {
@@ -1028,7 +1028,7 @@ pub fn constant_head_client<E: Event, L: Limits>(head: Head<E>, limits: &mut L, 
     ensures crate::verify::history_specs::no_invariant_compile_failure(result),
         !(result matches Err(CompileError::VariableComponentConflict { .. })),
         !(result matches Err(CompileError::UnboundVariable { .. })),
-        !(result matches Err(CompileError::Runtime(crate::error::HistoryError::InvalidPolicy { .. }))),
+        !(result matches Err(CompileError::Runtime(crate::errors::HistoryError::InvalidPolicy { .. }))),
 {
     let source = Rule::new(RuleMode::Require, head, RegexExpr::all());
     let result = crate::flatten::flatten_rule(&source, limits, world);

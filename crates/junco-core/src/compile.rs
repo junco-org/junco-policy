@@ -1,6 +1,6 @@
 //! Constant encoding preserves portable DAG topology; graph compilation is separate.
 
-use crate::error::HistoryError;
+use crate::errors::HistoryError;
 use crate::flat::{FlatBuilder, FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
 use crate::limits::Limits;
 use crate::observation::ObservationWorld;

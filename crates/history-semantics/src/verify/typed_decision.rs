@@ -22,7 +22,7 @@ use history_store::typed::{Store, borrow_store, share_store, verify as books};
 use history_syntax::Event;
 use history_syntax::syntax::Rule;
 use history_syntax::{Head, RegexExpr, RuleMode};
-use junco_core::error::{CompileError, HistoryError};
+use junco_core::errors::{CompileError, HistoryError};
 use junco_core::event::Request;
 use junco_core::flat::FlatPair;
 use junco_core::kernel::verify as graph;

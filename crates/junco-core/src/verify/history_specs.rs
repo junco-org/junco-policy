@@ -13,12 +13,12 @@ use vstd::std_specs::iter::IteratorSpec;
 verus! {
 
 /// Resource failures and policy rejection remain distinct from impossible internal failures.
-pub open spec fn no_invariant_failure<T>(result: Result<T, crate::error::HistoryError>) -> bool {
-    !(result matches Err(crate::error::HistoryError::Invariant { .. }))
+pub open spec fn no_invariant_failure<T>(result: Result<T, crate::errors::HistoryError>) -> bool {
+    !(result matches Err(crate::errors::HistoryError::Invariant { .. }))
 }
 
-pub open spec fn no_invariant_compile_failure<T>(result: Result<T, crate::error::CompileError>) -> bool {
-    !(result matches Err(crate::error::CompileError::Runtime(crate::error::HistoryError::Invariant { .. })))
+pub open spec fn no_invariant_compile_failure<T>(result: Result<T, crate::errors::CompileError>) -> bool {
+    !(result matches Err(crate::errors::CompileError::Runtime(crate::errors::HistoryError::Invariant { .. })))
 }
 
 
@@ -88,19 +88,19 @@ pub open spec fn nullable<L>(r: Regex<L>) -> bool decreases r {
     }
 }
 
-pub open spec fn lang<L>(sem: spec_fn(L, EventView) -> bool, r: Regex<L>, w: Seq<EventView>) -> bool decreases r {
+pub open spec fn numeric_lang<L>(sem: spec_fn(L, EventView) -> bool, r: Regex<L>, w: Seq<EventView>) -> bool decreases r {
     match r {
         Regex::Empty => false,
         Regex::All => true,
         Regex::Epsilon => w.len() == 0,
         Regex::Test(l) => w.len() == 1 && sem(l, w[0]),
-        Regex::Union(cs) => exists|i: int| 0 <= i < cs.len() && lang(sem, cs[i], w),
-        Regex::Intersect(cs) => forall|i: int| 0 <= i < cs.len() ==> lang(sem, cs[i], w),
-        Regex::Not(c) => !lang(sem, *c, w),
+        Regex::Union(cs) => exists|i: int| 0 <= i < cs.len() && numeric_lang(sem, cs[i], w),
+        Regex::Intersect(cs) => forall|i: int| 0 <= i < cs.len() ==> numeric_lang(sem, cs[i], w),
+        Regex::Not(c) => !numeric_lang(sem, *c, w),
         Regex::Concat(cs) => exists|parts: Seq<Seq<EventView>>| parts.len() == cs.len() && w == parts.flatten()
-            && forall|i: int| 0 <= i < cs.len() ==> lang(sem, cs[i], parts[i]),
+            && forall|i: int| 0 <= i < cs.len() ==> numeric_lang(sem, cs[i], parts[i]),
         Regex::Star(c) => exists|parts: Seq<Seq<EventView>>| w == parts.flatten()
-            && forall|i: int| 0 <= i < parts.len() ==> lang(sem, *c, parts[i]),
+            && forall|i: int| 0 <= i < parts.len() ==> numeric_lang(sem, *c, parts[i]),
     }
 }
 
@@ -171,59 +171,59 @@ pub proof fn lemma_flatten_empty(parts: Seq<Seq<EventView>>)
 
 pub proof fn lemma_concat_uncons<L>(sem: spec_fn(L, EventView) -> bool, cs: Seq<Regex<L>>, w: Seq<EventView>)
     requires cs.len() > 0,
-    ensures lang(sem, Regex::Concat(cs), w) <==> exists|a: Seq<EventView>, b: Seq<EventView>|
-        w == a + b && lang(sem, cs[0], a) && lang(sem, Regex::Concat(cs.drop_first()), b),
+    ensures numeric_lang(sem, Regex::Concat(cs), w) <==> exists|a: Seq<EventView>, b: Seq<EventView>|
+        w == a + b && numeric_lang(sem, cs[0], a) && numeric_lang(sem, Regex::Concat(cs.drop_first()), b),
 {
-    if lang(sem, Regex::Concat(cs), w) {
+    if numeric_lang(sem, Regex::Concat(cs), w) {
         let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == cs.len() && w == parts.flatten()
-            && forall|i: int| 0 <= i < cs.len() ==> lang(sem, cs[i], parts[i]);
+            && forall|i: int| 0 <= i < cs.len() ==> numeric_lang(sem, cs[i], parts[i]);
         let a = parts[0];
         let tail = parts.drop_first();
         let b = tail.flatten();
-        assert forall|i: int| 0 <= i < cs.drop_first().len() implies lang(sem, cs.drop_first()[i], tail[i]) by {
+        assert forall|i: int| 0 <= i < cs.drop_first().len() implies numeric_lang(sem, cs.drop_first()[i], tail[i]) by {
             assert(cs.drop_first()[i] == cs[i + 1]);
             assert(tail[i] == parts[i + 1]);
         }
-        assert(lang(sem, Regex::Concat(cs.drop_first()), b));
+        assert(numeric_lang(sem, Regex::Concat(cs.drop_first()), b));
         assert(w == a + b);
     }
-    if exists|a: Seq<EventView>, b: Seq<EventView>| w == a + b && lang(sem, cs[0], a) && lang(sem, Regex::Concat(cs.drop_first()), b) {
-        let (a, b) = choose|a: Seq<EventView>, b: Seq<EventView>| w == a + b && lang(sem, cs[0], a) && lang(sem, Regex::Concat(cs.drop_first()), b);
+    if exists|a: Seq<EventView>, b: Seq<EventView>| w == a + b && numeric_lang(sem, cs[0], a) && numeric_lang(sem, Regex::Concat(cs.drop_first()), b) {
+        let (a, b) = choose|a: Seq<EventView>, b: Seq<EventView>| w == a + b && numeric_lang(sem, cs[0], a) && numeric_lang(sem, Regex::Concat(cs.drop_first()), b);
         let tail = choose|tail: Seq<Seq<EventView>>| tail.len() == cs.drop_first().len() && b == tail.flatten()
-            && forall|i: int| 0 <= i < cs.drop_first().len() ==> lang(sem, cs.drop_first()[i], tail[i]);
+            && forall|i: int| 0 <= i < cs.drop_first().len() ==> numeric_lang(sem, cs.drop_first()[i], tail[i]);
         let parts = seq![a] + tail;
         assert(parts.drop_first() =~= tail);
         assert(parts.flatten() == w);
-        assert forall|i: int| 0 <= i < cs.len() implies lang(sem, cs[i], parts[i]) by {
+        assert forall|i: int| 0 <= i < cs.len() implies numeric_lang(sem, cs[i], parts[i]) by {
             if i > 0 { assert(cs[i] == cs.drop_first()[i - 1]); assert(parts[i] == tail[i - 1]); }
         }
-        assert(lang(sem, Regex::Concat(cs), w));
+        assert(numeric_lang(sem, Regex::Concat(cs), w));
     }
 }
 
 pub proof fn lemma_nullable_iff_nil<L>(sem: spec_fn(L, EventView) -> bool, r: Regex<L>)
-    ensures nullable(r) <==> lang(sem, r, Seq::empty()),
+    ensures nullable(r) <==> numeric_lang(sem, r, Seq::empty()),
     decreases r,
 {
     match r {
         Regex::Union(cs) => {
-            assert forall|i: int| 0 <= i < cs.len() implies nullable(cs[i]) == lang(sem, cs[i], Seq::empty()) by {
+            assert forall|i: int| 0 <= i < cs.len() implies nullable(cs[i]) == numeric_lang(sem, cs[i], Seq::empty()) by {
                 lemma_nullable_iff_nil(sem, cs[i]);
             }
         },
         Regex::Intersect(cs) => {
-            assert forall|i: int| 0 <= i < cs.len() implies nullable(cs[i]) == lang(sem, cs[i], Seq::empty()) by {
+            assert forall|i: int| 0 <= i < cs.len() implies nullable(cs[i]) == numeric_lang(sem, cs[i], Seq::empty()) by {
                 lemma_nullable_iff_nil(sem, cs[i]);
             }
         },
         Regex::Not(c) => lemma_nullable_iff_nil(sem, *c),
         Regex::Concat(cs) => {
-            assert forall|i: int| 0 <= i < cs.len() implies nullable(cs[i]) == lang(sem, cs[i], Seq::empty()) by {
+            assert forall|i: int| 0 <= i < cs.len() implies nullable(cs[i]) == numeric_lang(sem, cs[i], Seq::empty()) by {
                 lemma_nullable_iff_nil(sem, cs[i]);
             }
-            if lang(sem, r, Seq::empty()) {
+            if numeric_lang(sem, r, Seq::empty()) {
                 let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == cs.len() && Seq::<EventView>::empty() == parts.flatten()
-                    && forall|i: int| 0 <= i < cs.len() ==> lang(sem, cs[i], parts[i]);
+                    && forall|i: int| 0 <= i < cs.len() ==> numeric_lang(sem, cs[i], parts[i]);
                 lemma_flatten_empty(parts);
                 assert forall|i: int| 0 <= i < cs.len() implies nullable(cs[i]) by {
                     assert(parts[i] =~= Seq::<EventView>::empty());
@@ -233,17 +233,17 @@ pub proof fn lemma_nullable_iff_nil<L>(sem: spec_fn(L, EventView) -> bool, r: Re
                 let parts = Seq::new(cs.len(), |i: int| Seq::<EventView>::empty());
                 lemma_flatten_empty(parts);
                 assert(parts.flatten() =~= Seq::<EventView>::empty());
-                assert forall|i: int| 0 <= i < cs.len() implies lang(sem, cs[i], parts[i]) by {
+                assert forall|i: int| 0 <= i < cs.len() implies numeric_lang(sem, cs[i], parts[i]) by {
                     lemma_nullable_iff_nil(sem, cs[i]);
                     assert(nullable(cs[i]));
                     assert(parts[i] == Seq::<EventView>::empty());
                 }
-                assert(lang(sem, r, Seq::empty()));
+                assert(numeric_lang(sem, r, Seq::empty()));
             }
         },
         Regex::Star(c) => {
             let parts = Seq::<Seq<EventView>>::empty();
-            assert(lang(sem, r, parts.flatten()));
+            assert(numeric_lang(sem, r, parts.flatten()));
         },
         _ => {},
     }
@@ -251,8 +251,8 @@ pub proof fn lemma_nullable_iff_nil<L>(sem: spec_fn(L, EventView) -> bool, r: Re
 
 
 pub proof fn lemma_concat_prepend<L>(sem: spec_fn(L, EventView) -> bool, c: Regex<L>, cs: Seq<Regex<L>>, w: Seq<EventView>)
-    ensures lang(sem, Regex::Concat(seq![c] + cs), w) <==> exists|a: Seq<EventView>, b: Seq<EventView>|
-        w == a + b && lang(sem, c, a) && lang(sem, Regex::Concat(cs), b),
+    ensures numeric_lang(sem, Regex::Concat(seq![c] + cs), w) <==> exists|a: Seq<EventView>, b: Seq<EventView>|
+        w == a + b && numeric_lang(sem, c, a) && numeric_lang(sem, Regex::Concat(cs), b),
 {
     lemma_concat_uncons(sem, seq![c] + cs, w);
     assert((seq![c] + cs).drop_first() =~= cs);
@@ -280,14 +280,14 @@ pub proof fn lemma_cons_split(e: EventView, w: Seq<EventView>, a: Seq<EventView>
 
 pub proof fn lemma_star_parts_cons<L>(sem: spec_fn(L, EventView) -> bool, c: Regex<L>, parts: Seq<Seq<EventView>>, e: EventView, w: Seq<EventView>)
     requires parts.flatten() == seq![e] + w,
-        forall|i: int| 0 <= i < parts.len() ==> lang(sem, c, parts[i]),
-    ensures exists|a: Seq<EventView>, b: Seq<EventView>| w == a + b && lang(sem, c, seq![e] + a)
-        && lang(sem, Regex::Star(Box::new(c)), b),
+        forall|i: int| 0 <= i < parts.len() ==> numeric_lang(sem, c, parts[i]),
+    ensures exists|a: Seq<EventView>, b: Seq<EventView>| w == a + b && numeric_lang(sem, c, seq![e] + a)
+        && numeric_lang(sem, Regex::Star(Box::new(c)), b),
     decreases parts.len(),
 {
     assert(parts.len() > 0);
     let tail = parts.drop_first();
-    assert forall|i: int| 0 <= i < tail.len() implies lang(sem, c, tail[i]) by {
+    assert forall|i: int| 0 <= i < tail.len() implies numeric_lang(sem, c, tail[i]) by {
         assert(tail[i] == parts[i + 1]);
     }
     if parts[0].len() == 0 {
@@ -297,77 +297,77 @@ pub proof fn lemma_star_parts_cons<L>(sem: spec_fn(L, EventView) -> bool, c: Reg
         let a = parts[0].drop_first();
         let b = tail.flatten();
         lemma_cons_split(e, w, parts[0], b);
-        assert(lang(sem, Regex::Star(Box::new(c)), b));
-        assert(w == a + b && lang(sem, c, seq![e] + a) && lang(sem, Regex::Star(Box::new(c)), b));
+        assert(numeric_lang(sem, Regex::Star(Box::new(c)), b));
+        assert(w == a + b && numeric_lang(sem, c, seq![e] + a) && numeric_lang(sem, Regex::Star(Box::new(c)), b));
     }
 }
 
 pub proof fn lemma_star_cons<L>(sem: spec_fn(L, EventView) -> bool, c: Regex<L>, e: EventView, w: Seq<EventView>)
-    ensures lang(sem, Regex::Star(Box::new(c)), seq![e] + w) <==> exists|a: Seq<EventView>, b: Seq<EventView>|
-        w == a + b && lang(sem, c, seq![e] + a) && lang(sem, Regex::Star(Box::new(c)), b),
+    ensures numeric_lang(sem, Regex::Star(Box::new(c)), seq![e] + w) <==> exists|a: Seq<EventView>, b: Seq<EventView>|
+        w == a + b && numeric_lang(sem, c, seq![e] + a) && numeric_lang(sem, Regex::Star(Box::new(c)), b),
 {
-    if lang(sem, Regex::Star(Box::new(c)), seq![e] + w) {
+    if numeric_lang(sem, Regex::Star(Box::new(c)), seq![e] + w) {
         let parts = choose|parts: Seq<Seq<EventView>>| seq![e] + w == parts.flatten()
-            && forall|i: int| 0 <= i < parts.len() ==> lang(sem, c, parts[i]);
+            && forall|i: int| 0 <= i < parts.len() ==> numeric_lang(sem, c, parts[i]);
         lemma_star_parts_cons(sem, c, parts, e, w);
     }
-    if exists|a: Seq<EventView>, b: Seq<EventView>| w == a + b && lang(sem, c, seq![e] + a) && lang(sem, Regex::Star(Box::new(c)), b) {
-        let (a, b) = choose|a: Seq<EventView>, b: Seq<EventView>| w == a + b && lang(sem, c, seq![e] + a) && lang(sem, Regex::Star(Box::new(c)), b);
+    if exists|a: Seq<EventView>, b: Seq<EventView>| w == a + b && numeric_lang(sem, c, seq![e] + a) && numeric_lang(sem, Regex::Star(Box::new(c)), b) {
+        let (a, b) = choose|a: Seq<EventView>, b: Seq<EventView>| w == a + b && numeric_lang(sem, c, seq![e] + a) && numeric_lang(sem, Regex::Star(Box::new(c)), b);
         let tail = choose|tail: Seq<Seq<EventView>>| b == tail.flatten()
-            && forall|i: int| 0 <= i < tail.len() ==> lang(sem, c, tail[i]);
+            && forall|i: int| 0 <= i < tail.len() ==> numeric_lang(sem, c, tail[i]);
         let parts = seq![seq![e] + a] + tail;
         assert(parts.drop_first() =~= tail);
         assert(parts.flatten() =~= seq![e] + w);
-        assert forall|i: int| 0 <= i < parts.len() implies lang(sem, c, parts[i]) by {
+        assert forall|i: int| 0 <= i < parts.len() implies numeric_lang(sem, c, parts[i]) by {
             if i > 0 { assert(parts[i] == tail[i - 1]); }
         }
-        assert(lang(sem, Regex::Star(Box::new(c)), seq![e] + w));
+        assert(numeric_lang(sem, Regex::Star(Box::new(c)), seq![e] + w));
     }
 }
 
 pub proof fn lemma_lang_union<L>(sem: spec_fn(L, EventView) -> bool, cs: Seq<Regex<L>>, w: Seq<EventView>)
-    ensures lang(sem, Regex::Union(cs), w) == (exists|i: int| 0 <= i < cs.len() && lang(sem, cs[i], w)),
+    ensures numeric_lang(sem, Regex::Union(cs), w) == (exists|i: int| 0 <= i < cs.len() && numeric_lang(sem, cs[i], w)),
 {
-    reveal_with_fuel(lang, 2);
+    reveal_with_fuel(numeric_lang, 2);
     assert(Regex::Union(cs)->Union_0 == cs);
 }
 
 pub proof fn lemma_union_optional<L>(sem: spec_fn(L, EventView) -> bool, a: Regex<L>, b: Regex<L>, flag: bool, w: Seq<EventView>)
-    ensures lang(sem, Regex::Union(seq![a] + if flag { seq![b] } else { Seq::empty() }), w)
-        == (lang(sem, a, w) || (flag && lang(sem, b, w))),
+    ensures numeric_lang(sem, Regex::Union(seq![a] + if flag { seq![b] } else { Seq::empty() }), w)
+        == (numeric_lang(sem, a, w) || (flag && numeric_lang(sem, b, w))),
 {
     broadcast use vstd::seq::group_seq_lemmas;
-    reveal_with_fuel(lang, 2);
+    reveal_with_fuel(numeric_lang, 2);
     let cs = seq![a] + if flag { seq![b] } else { Seq::empty() };
     lemma_lang_union(sem, cs, w);
-    if lang(sem, Regex::Union(cs), w) {
-        let i = choose|i: int| 0 <= i < cs.len() && lang(sem, cs[i], w);
+    if numeric_lang(sem, Regex::Union(cs), w) {
+        let i = choose|i: int| 0 <= i < cs.len() && numeric_lang(sem, cs[i], w);
         assert(i == 0 || (flag && i == 1));
         if i == 0 { assert(cs[i] == a); } else { assert(cs[i] == b); }
     }
-    if lang(sem, a, w) {
+    if numeric_lang(sem, a, w) {
         assert(cs.len() >= 1);
         assert(cs[0] == a);
-        assert(0 <= 0int < cs.len() && lang(sem, cs[0], w));
-        assert(exists|i: int| 0 <= i < cs.len() && lang(sem, cs[i], w));
-        assert(lang(sem, Regex::Union(cs), w));
+        assert(0 <= 0int < cs.len() && numeric_lang(sem, cs[0], w));
+        assert(exists|i: int| 0 <= i < cs.len() && numeric_lang(sem, cs[i], w));
+        assert(numeric_lang(sem, Regex::Union(cs), w));
     }
-    if flag && lang(sem, b, w) {
+    if flag && numeric_lang(sem, b, w) {
         assert(cs.len() == 2);
         assert(cs[1] == b);
-        assert(exists|i: int| 0 <= i < cs.len() && lang(sem, cs[i], w));
-        assert(lang(sem, Regex::Union(cs), w));
+        assert(exists|i: int| 0 <= i < cs.len() && numeric_lang(sem, cs[i], w));
+        assert(numeric_lang(sem, Regex::Union(cs), w));
     }
 }
 
 pub proof fn lemma_lang_intersect<L>(sem: spec_fn(L, EventView) -> bool, cs: Seq<Regex<L>>, w: Seq<EventView>)
-    ensures lang(sem, Regex::Intersect(cs), w) == (forall|i: int| 0 <= i < cs.len() ==> lang(sem, cs[i], w)),
+    ensures numeric_lang(sem, Regex::Intersect(cs), w) == (forall|i: int| 0 <= i < cs.len() ==> numeric_lang(sem, cs[i], w)),
 {
-    reveal_with_fuel(lang, 2);
+    reveal_with_fuel(numeric_lang, 2);
     assert(Regex::Intersect(cs)->Intersect_0 == cs);
-    if lang(sem, Regex::Intersect(cs), w) {
-        assert forall|i: int| 0 <= i < cs.len() implies lang(sem, cs[i], w) by {
-            assert(lang(sem, Regex::Intersect(cs), w));
+    if numeric_lang(sem, Regex::Intersect(cs), w) {
+        assert forall|i: int| 0 <= i < cs.len() implies numeric_lang(sem, cs[i], w) by {
+            assert(numeric_lang(sem, Regex::Intersect(cs), w));
         }
     }
 }
@@ -375,14 +375,14 @@ pub proof fn lemma_lang_intersect<L>(sem: spec_fn(L, EventView) -> bool, cs: Seq
 pub proof fn lemma_derivative_concat<L>(sem: spec_fn(L, EventView) -> bool, e: EventView, bound: Regex<L>, cs: Seq<Regex<L>>, w: Seq<EventView>)
     requires
         forall|i: int| 0 <= i < cs.len() ==> is_smaller_than(cs[i], bound),
-        forall|i: int, v: Seq<EventView>| 0 <= i < cs.len() ==> lang(sem, derivative(sem, e, cs[i]), v) == lang(sem, cs[i], seq![e] + v),
-    ensures lang(sem, derivative_concat(sem, e, bound, cs), w) == lang(sem, Regex::Concat(cs), seq![e] + w),
+        forall|i: int, v: Seq<EventView>| 0 <= i < cs.len() ==> numeric_lang(sem, derivative(sem, e, cs[i]), v) == numeric_lang(sem, cs[i], seq![e] + v),
+    ensures numeric_lang(sem, derivative_concat(sem, e, bound, cs), w) == numeric_lang(sem, Regex::Concat(cs), seq![e] + w),
     decreases cs.len(),
 {
     if cs.len() == 0 {
-        if lang(sem, Regex::Concat(cs), seq![e] + w) {
+        if numeric_lang(sem, Regex::Concat(cs), seq![e] + w) {
             let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == cs.len() && seq![e] + w == parts.flatten()
-                && forall|i: int| 0 <= i < cs.len() ==> lang(sem, cs[i], parts[i]);
+                && forall|i: int| 0 <= i < cs.len() ==> numeric_lang(sem, cs[i], parts[i]);
             assert(parts =~= Seq::<Seq<EventView>>::empty());
         }
     } else {
@@ -391,7 +391,7 @@ pub proof fn lemma_derivative_concat<L>(sem: spec_fn(L, EventView) -> bool, e: E
         assert forall|i: int| 0 <= i < rest.len() implies is_smaller_than(rest[i], bound) by {
             assert(rest[i] == cs[i + 1]);
         }
-        assert forall|i: int, v: Seq<EventView>| 0 <= i < rest.len() implies lang(sem, derivative(sem, e, rest[i]), v) == lang(sem, rest[i], seq![e] + v) by {
+        assert forall|i: int, v: Seq<EventView>| 0 <= i < rest.len() implies numeric_lang(sem, derivative(sem, e, rest[i]), v) == numeric_lang(sem, rest[i], seq![e] + v) by {
             assert(rest[i] == cs[i + 1]);
         }
         lemma_derivative_concat(sem, e, bound, rest, w);
@@ -402,71 +402,71 @@ pub proof fn lemma_derivative_concat<L>(sem: spec_fn(L, EventView) -> bool, e: E
         lemma_union_optional(sem, left, dr, nullable(c), w);
         lemma_concat_prepend(sem, dc, rest, w);
         lemma_concat_uncons(sem, cs, seq![e] + w);
-        if lang(sem, derivative_concat(sem, e, bound, cs), w) {
-            if lang(sem, left, w) {
-                let (a, b) = choose|a: Seq<EventView>, b: Seq<EventView>| w == a + b && lang(sem, dc, a) && lang(sem, Regex::Concat(rest), b);
-                assert(lang(sem, c, seq![e] + a));
+        if numeric_lang(sem, derivative_concat(sem, e, bound, cs), w) {
+            if numeric_lang(sem, left, w) {
+                let (a, b) = choose|a: Seq<EventView>, b: Seq<EventView>| w == a + b && numeric_lang(sem, dc, a) && numeric_lang(sem, Regex::Concat(rest), b);
+                assert(numeric_lang(sem, c, seq![e] + a));
                 assert(seq![e] + w =~= (seq![e] + a) + b);
-                assert(exists|a0: Seq<EventView>, b0: Seq<EventView>| seq![e] + w == a0 + b0 && lang(sem, c, a0) && lang(sem, Regex::Concat(rest), b0));
+                assert(exists|a0: Seq<EventView>, b0: Seq<EventView>| seq![e] + w == a0 + b0 && numeric_lang(sem, c, a0) && numeric_lang(sem, Regex::Concat(rest), b0));
             } else {
-                assert(nullable(c) && lang(sem, dr, w));
+                assert(nullable(c) && numeric_lang(sem, dr, w));
                 let a = Seq::<EventView>::empty();
                 let b = seq![e] + w;
                 assert(a + b =~= b);
-                assert(lang(sem, c, a) && lang(sem, Regex::Concat(rest), b));
-                assert(exists|a0: Seq<EventView>, b0: Seq<EventView>| seq![e] + w == a0 + b0 && lang(sem, c, a0) && lang(sem, Regex::Concat(rest), b0));
+                assert(numeric_lang(sem, c, a) && numeric_lang(sem, Regex::Concat(rest), b));
+                assert(exists|a0: Seq<EventView>, b0: Seq<EventView>| seq![e] + w == a0 + b0 && numeric_lang(sem, c, a0) && numeric_lang(sem, Regex::Concat(rest), b0));
             }
-            assert(lang(sem, Regex::Concat(cs), seq![e] + w));
+            assert(numeric_lang(sem, Regex::Concat(cs), seq![e] + w));
         }
-        if lang(sem, Regex::Concat(cs), seq![e] + w) {
-            let (a, b) = choose|a: Seq<EventView>, b: Seq<EventView>| seq![e] + w == a + b && lang(sem, c, a) && lang(sem, Regex::Concat(rest), b);
+        if numeric_lang(sem, Regex::Concat(cs), seq![e] + w) {
+            let (a, b) = choose|a: Seq<EventView>, b: Seq<EventView>| seq![e] + w == a + b && numeric_lang(sem, c, a) && numeric_lang(sem, Regex::Concat(rest), b);
             if a.len() == 0 {
                 assert(a =~= Seq::<EventView>::empty());
                 assert(b =~= seq![e] + w);
                 assert(nullable(c));
-                assert(lang(sem, dr, w));
+                assert(numeric_lang(sem, dr, w));
             } else {
                 lemma_cons_split(e, w, a, b);
                 let v = a.drop_first();
-                assert(lang(sem, dc, v));
-                assert(exists|a0: Seq<EventView>, b0: Seq<EventView>| w == a0 + b0 && lang(sem, dc, a0) && lang(sem, Regex::Concat(rest), b0));
-                assert(lang(sem, left, w));
+                assert(numeric_lang(sem, dc, v));
+                assert(exists|a0: Seq<EventView>, b0: Seq<EventView>| w == a0 + b0 && numeric_lang(sem, dc, a0) && numeric_lang(sem, Regex::Concat(rest), b0));
+                assert(numeric_lang(sem, left, w));
             }
-            assert(lang(sem, derivative_concat(sem, e, bound, cs), w));
+            assert(numeric_lang(sem, derivative_concat(sem, e, bound, cs), w));
         }
     }
 }
 
 pub proof fn lemma_concat_singleton<L>(sem: spec_fn(L, EventView) -> bool, r: Regex<L>, w: Seq<EventView>)
-    ensures lang(sem, Regex::Concat(seq![r]), w) == lang(sem, r, w),
+    ensures numeric_lang(sem, Regex::Concat(seq![r]), w) == numeric_lang(sem, r, w),
 {
-    if lang(sem, Regex::Concat(seq![r]), w) {
+    if numeric_lang(sem, Regex::Concat(seq![r]), w) {
         let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == 1 && w == parts.flatten()
-            && forall|i: int| 0 <= i < 1 ==> lang(sem, seq![r][i], parts[i]);
+            && forall|i: int| 0 <= i < 1 ==> numeric_lang(sem, seq![r][i], parts[i]);
         parts.lemma_flatten_one_element();
-        assert(lang(sem, r, w));
+        assert(numeric_lang(sem, r, w));
     }
-    if lang(sem, r, w) {
+    if numeric_lang(sem, r, w) {
         let parts = seq![w];
         parts.lemma_flatten_one_element();
-        assert forall|i: int| 0 <= i < 1 implies lang(sem, seq![r][i], parts[i]) by { assert(i == 0); }
-        assert(lang(sem, Regex::Concat(seq![r]), w));
+        assert forall|i: int| 0 <= i < 1 implies numeric_lang(sem, seq![r][i], parts[i]) by { assert(i == 0); }
+        assert(numeric_lang(sem, Regex::Concat(seq![r]), w));
     }
 }
 
 pub proof fn lemma_concat_pair<L>(sem: spec_fn(L, EventView) -> bool, a: Regex<L>, b: Regex<L>, w: Seq<EventView>)
-    ensures lang(sem, Regex::Concat(seq![a, b]), w) <==> exists|u: Seq<EventView>, v: Seq<EventView>|
-        w == u + v && lang(sem, a, u) && lang(sem, b, v),
+    ensures numeric_lang(sem, Regex::Concat(seq![a, b]), w) <==> exists|u: Seq<EventView>, v: Seq<EventView>|
+        w == u + v && numeric_lang(sem, a, u) && numeric_lang(sem, b, v),
 {
     assert(seq![a, b] =~= seq![a] + seq![b]);
     lemma_concat_prepend(sem, a, seq![b], w);
-    assert forall|v: Seq<EventView>| lang(sem, Regex::Concat(seq![b]), v) == lang(sem, b, v) by {
+    assert forall|v: Seq<EventView>| numeric_lang(sem, Regex::Concat(seq![b]), v) == numeric_lang(sem, b, v) by {
         lemma_concat_singleton(sem, b, v);
     }
 }
 
 pub proof fn lemma_derivative_correct<L>(sem: spec_fn(L, EventView) -> bool, e: EventView, r: Regex<L>, w: Seq<EventView>)
-    ensures lang(sem, derivative(sem, e, r), w) <==> lang(sem, r, seq![e] + w),
+    ensures numeric_lang(sem, derivative(sem, e, r), w) <==> numeric_lang(sem, r, seq![e] + w),
     decreases r,
 {
     match r {
@@ -477,10 +477,10 @@ pub proof fn lemma_derivative_correct<L>(sem: spec_fn(L, EventView) -> bool, e: 
             assert(derivative(sem, e, r) == Regex::Union(ds));
             lemma_lang_union(sem, ds, w);
             lemma_lang_union(sem, cs, seq![e] + w);
-            assert forall|i: int| 0 <= i < cs.len() implies lang(sem, ds[i], w) == lang(sem, cs[i], seq![e] + w) by {
+            assert forall|i: int| 0 <= i < cs.len() implies numeric_lang(sem, ds[i], w) == numeric_lang(sem, cs[i], seq![e] + w) by {
                 lemma_derivative_correct(sem, e, cs[i], w);
             }
-            assert(lang(sem, derivative(sem, e, r), w) == lang(sem, r, seq![e] + w));
+            assert(numeric_lang(sem, derivative(sem, e, r), w) == numeric_lang(sem, r, seq![e] + w));
         },
         Regex::Intersect(cs) => {
             let ds = Seq::new(cs.len(), |i: int| if 0 <= i < cs.len() { derivative(sem, e, cs[i]) } else { Regex::Empty });
@@ -489,23 +489,23 @@ pub proof fn lemma_derivative_correct<L>(sem: spec_fn(L, EventView) -> bool, e: 
             assert(derivative(sem, e, r) == Regex::Intersect(ds));
             lemma_lang_intersect(sem, ds, w);
             lemma_lang_intersect(sem, cs, seq![e] + w);
-            assert forall|i: int| 0 <= i < cs.len() implies lang(sem, ds[i], w) == lang(sem, cs[i], seq![e] + w) by {
+            assert forall|i: int| 0 <= i < cs.len() implies numeric_lang(sem, ds[i], w) == numeric_lang(sem, cs[i], seq![e] + w) by {
                 lemma_derivative_correct(sem, e, cs[i], w);
             }
-            assert(lang(sem, derivative(sem, e, r), w) == lang(sem, r, seq![e] + w));
+            assert(numeric_lang(sem, derivative(sem, e, r), w) == numeric_lang(sem, r, seq![e] + w));
         },
         Regex::Not(c) => lemma_derivative_correct(sem, e, *c, w),
         Regex::Star(c) => {
             lemma_star_cons(sem, *c, e, w);
             lemma_concat_pair(sem, derivative(sem, e, *c), Regex::Star(c), w);
-            assert forall|a: Seq<EventView>| lang(sem, derivative(sem, e, *c), a) == lang(sem, *c, seq![e] + a) by {
+            assert forall|a: Seq<EventView>| numeric_lang(sem, derivative(sem, e, *c), a) == numeric_lang(sem, *c, seq![e] + a) by {
                 lemma_derivative_correct(sem, e, *c, a);
             }
-            assert(lang(sem, derivative(sem, e, r), w) == lang(sem, r, seq![e] + w));
+            assert(numeric_lang(sem, derivative(sem, e, r), w) == numeric_lang(sem, r, seq![e] + w));
         },
         Regex::Concat(cs) => {
             assert forall|i: int| 0 <= i < cs.len() implies is_smaller_than(cs[i], r) by { }
-            assert forall|i: int, v: Seq<EventView>| 0 <= i < cs.len() implies lang(sem, derivative(sem, e, cs[i]), v) == lang(sem, cs[i], seq![e] + v) by {
+            assert forall|i: int, v: Seq<EventView>| 0 <= i < cs.len() implies numeric_lang(sem, derivative(sem, e, cs[i]), v) == numeric_lang(sem, cs[i], seq![e] + v) by {
                 lemma_derivative_correct(sem, e, cs[i], v);
             }
             lemma_derivative_concat(sem, e, r, cs, w);
@@ -516,7 +516,7 @@ pub proof fn lemma_derivative_correct<L>(sem: spec_fn(L, EventView) -> bool, e: 
 }
 
 pub proof fn lemma_derive_word_correct<L>(sem: spec_fn(L, EventView) -> bool, prefix: Seq<EventView>, r: Regex<L>, suffix: Seq<EventView>)
-    ensures lang(sem, derive_word(sem, prefix, r), suffix) == lang(sem, r, prefix + suffix),
+    ensures numeric_lang(sem, derive_word(sem, prefix, r), suffix) == numeric_lang(sem, r, prefix + suffix),
     decreases prefix.len(),
 {
     if prefix.len() == 0 { assert(prefix + suffix =~= suffix); }
@@ -528,7 +528,7 @@ pub proof fn lemma_derive_word_correct<L>(sem: spec_fn(L, EventView) -> bool, pr
 }
 
 pub proof fn lemma_derive_word_nullable<L>(sem: spec_fn(L, EventView) -> bool, w: Seq<EventView>, r: Regex<L>)
-    ensures nullable(derive_word(sem, w, r)) == lang(sem, r, w),
+    ensures nullable(derive_word(sem, w, r)) == numeric_lang(sem, r, w),
 {
     lemma_nullable_iff_nil(sem, derive_word(sem, w, r));
     lemma_derive_word_correct(sem, w, r, Seq::empty());
@@ -545,52 +545,52 @@ pub proof fn lemma_interp_if<L>(sem: spec_fn(L, EventView) -> bool, e: EventView
 { }
 
 pub proof fn lemma_interp_union<L>(sem: spec_fn(L, EventView) -> bool, e: EventView, cs: Seq<Transition<L>>, w: Seq<EventView>)
-    ensures lang(sem, interp_transition(sem, e, Transition::Union(cs)), w)
-        == (exists|i: int| 0 <= i < cs.len() && lang(sem, interp_transition(sem, e, cs[i]), w)),
+    ensures numeric_lang(sem, interp_transition(sem, e, Transition::Union(cs)), w)
+        == (exists|i: int| 0 <= i < cs.len() && numeric_lang(sem, interp_transition(sem, e, cs[i]), w)),
 {
     let r = interp_transition(sem, e, Transition::Union(cs));
     assert(r is Union);
     assert((r->Union_0).len() == cs.len());
     lemma_lang_union(sem, r->Union_0, w);
     assert forall|i: int| 0 <= i < cs.len() implies (r->Union_0)[i] == interp_transition(sem, e, cs[i]) by { }
-    assert forall|i: int| 0 <= i < cs.len() implies lang(sem, (r->Union_0)[i], w) == lang(sem, interp_transition(sem, e, cs[i]), w) by {
+    assert forall|i: int| 0 <= i < cs.len() implies numeric_lang(sem, (r->Union_0)[i], w) == numeric_lang(sem, interp_transition(sem, e, cs[i]), w) by {
         assert((r->Union_0)[i] == interp_transition(sem, e, cs[i]));
     }
-    if lang(sem, r, w) {
-        let i = choose|i: int| 0 <= i < (r->Union_0).len() && lang(sem, (r->Union_0)[i], w);
-        assert(lang(sem, interp_transition(sem, e, cs[i]), w));
-        assert(exists|j: int| 0 <= j < cs.len() && lang(sem, interp_transition(sem, e, cs[j]), w));
+    if numeric_lang(sem, r, w) {
+        let i = choose|i: int| 0 <= i < (r->Union_0).len() && numeric_lang(sem, (r->Union_0)[i], w);
+        assert(numeric_lang(sem, interp_transition(sem, e, cs[i]), w));
+        assert(exists|j: int| 0 <= j < cs.len() && numeric_lang(sem, interp_transition(sem, e, cs[j]), w));
     }
-    if exists|i: int| 0 <= i < cs.len() && lang(sem, interp_transition(sem, e, cs[i]), w) {
-        let i = choose|i: int| 0 <= i < cs.len() && lang(sem, interp_transition(sem, e, cs[i]), w);
-        assert(lang(sem, (r->Union_0)[i], w));
-        assert(exists|j: int| 0 <= j < (r->Union_0).len() && lang(sem, (r->Union_0)[j], w));
-        assert(lang(sem, r, w));
+    if exists|i: int| 0 <= i < cs.len() && numeric_lang(sem, interp_transition(sem, e, cs[i]), w) {
+        let i = choose|i: int| 0 <= i < cs.len() && numeric_lang(sem, interp_transition(sem, e, cs[i]), w);
+        assert(numeric_lang(sem, (r->Union_0)[i], w));
+        assert(exists|j: int| 0 <= j < (r->Union_0).len() && numeric_lang(sem, (r->Union_0)[j], w));
+        assert(numeric_lang(sem, r, w));
     }
 }
 
 pub proof fn lemma_interp_intersect<L>(sem: spec_fn(L, EventView) -> bool, e: EventView, cs: Seq<Transition<L>>, w: Seq<EventView>)
-    ensures lang(sem, interp_transition(sem, e, Transition::Intersect(cs)), w)
-        == (forall|i: int| 0 <= i < cs.len() ==> lang(sem, interp_transition(sem, e, cs[i]), w)),
+    ensures numeric_lang(sem, interp_transition(sem, e, Transition::Intersect(cs)), w)
+        == (forall|i: int| 0 <= i < cs.len() ==> numeric_lang(sem, interp_transition(sem, e, cs[i]), w)),
 {
     let r = interp_transition(sem, e, Transition::Intersect(cs));
     assert(r is Intersect);
     assert((r->Intersect_0).len() == cs.len());
     lemma_lang_intersect(sem, r->Intersect_0, w);
     assert forall|i: int| 0 <= i < cs.len() implies (r->Intersect_0)[i] == interp_transition(sem, e, cs[i]) by { }
-    assert forall|i: int| 0 <= i < cs.len() implies lang(sem, (r->Intersect_0)[i], w) == lang(sem, interp_transition(sem, e, cs[i]), w) by {
+    assert forall|i: int| 0 <= i < cs.len() implies numeric_lang(sem, (r->Intersect_0)[i], w) == numeric_lang(sem, interp_transition(sem, e, cs[i]), w) by {
         assert((r->Intersect_0)[i] == interp_transition(sem, e, cs[i]));
     }
-    if lang(sem, r, w) {
-        assert forall|i: int| 0 <= i < cs.len() implies lang(sem, interp_transition(sem, e, cs[i]), w) by {
-            assert(lang(sem, (r->Intersect_0)[i], w));
+    if numeric_lang(sem, r, w) {
+        assert forall|i: int| 0 <= i < cs.len() implies numeric_lang(sem, interp_transition(sem, e, cs[i]), w) by {
+            assert(numeric_lang(sem, (r->Intersect_0)[i], w));
         }
     }
-    if forall|i: int| 0 <= i < cs.len() ==> lang(sem, interp_transition(sem, e, cs[i]), w) {
-        assert forall|i: int| 0 <= i < (r->Intersect_0).len() implies lang(sem, (r->Intersect_0)[i], w) by {
-            assert(lang(sem, interp_transition(sem, e, cs[i]), w));
+    if forall|i: int| 0 <= i < cs.len() ==> numeric_lang(sem, interp_transition(sem, e, cs[i]), w) {
+        assert forall|i: int| 0 <= i < (r->Intersect_0).len() implies numeric_lang(sem, (r->Intersect_0)[i], w) by {
+            assert(numeric_lang(sem, interp_transition(sem, e, cs[i]), w));
         }
-        assert(lang(sem, r, w));
+        assert(numeric_lang(sem, r, w));
     }
 }
 
@@ -700,7 +700,7 @@ pub open spec fn tail_wf(tail: Regex<SrcTest>, head: Head) -> bool
 
 pub open spec fn pair_lang(head: Head, tail: Regex<SrcTest>, request: EventView, history: Seq<EventView>) -> bool {
     exists|theta: Subst| head_match(head, request, theta)
-        && lang(|test: SrcTest, event: EventView| src_test_holds(theta, test, event), tail, history)
+        && numeric_lang(|test: SrcTest, event: EventView| src_test_holds(theta, test, event), tail, history)
 }
 
 pub proof fn lemma_head_match_unique_subst(head: Head, request: EventView, left: Subst, right: Subst)
@@ -717,16 +717,16 @@ pub proof fn lemma_pair_lang_substitutions(head: Head, tail: Regex<SrcTest>, req
     history: Seq<EventView>, theta: Subst)
     requires head_match(head, request, theta),
     ensures pair_lang(head, tail, request, history)
-        == lang(|test: SrcTest, event: EventView| src_test_holds(theta, test, event), tail, history),
+        == numeric_lang(|test: SrcTest, event: EventView| src_test_holds(theta, test, event), tail, history),
 {
     if pair_lang(head, tail, request, history) {
         let other = choose|other: Subst| head_match(head, request, other)
-            && lang(|test: SrcTest, event: EventView| src_test_holds(other, test, event), tail, history);
+            && numeric_lang(|test: SrcTest, event: EventView| src_test_holds(other, test, event), tail, history);
         lemma_head_match_unique_subst(head, request, theta, other);
     }
-    if lang(|test: SrcTest, event: EventView| src_test_holds(theta, test, event), tail, history) {
+    if numeric_lang(|test: SrcTest, event: EventView| src_test_holds(theta, test, event), tail, history) {
         assert(exists|other: Subst| head_match(head, request, other)
-            && lang(|test: SrcTest, event: EventView| src_test_holds(other, test, event), tail, history));
+            && numeric_lang(|test: SrcTest, event: EventView| src_test_holds(other, test, event), tail, history));
     }
 }
 
@@ -774,7 +774,7 @@ pub proof fn lemma_full_target_answer<L>(sem: spec_fn(L, EventView) -> bool,
     history: Seq<EventView>, root: Regex<L>, target: nat)
     requires target <= history.len(),
     ensures nullable(derive_word(sem, history.take(target as int), root))
-        == lang(sem, root, history.take(target as int)),
+        == numeric_lang(sem, root, history.take(target as int)),
 {
     lemma_derive_word_nullable(sem, history.take(target as int), root);
 }
