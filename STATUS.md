@@ -10,8 +10,8 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 | H3 | merged | [PR #15](https://github.com/junco-org/junco-policy/pull/15), merge commit `bedc0c955dd9eb24e224126a456d6c84a6092d55`; all seven CI checks passed on exact head `2a6f942428173122cb0e546a62182ea219e28747`. Public statements detailed below. |
 | H4 | in progress | Local gates passed; [PR #17](https://github.com/junco-org/junco-policy/pull/17), rebased head `55282cb` atop merged H3, awaits CI. Prior head passed every check. `stmt_search_correct` and its theorem require trace_steps_ok only for expanded nodes; public index uses the same statement. |
 | H6 | merged | [PR #14](https://github.com/junco-org/junco-policy/pull/14), merge commit `4151cb0a66058e9ecbc7e787b23438b40f319192`; all CI passed. Public statements detailed below. |
-| H5 | in progress | Monitor half passed: core **288**, store **289**, monitor **1624**, reviewer **9**, public_specs **19** verified, **0 errors**. Preserved as pushed commit `f898619` on `fix/audit-h5`. Analyzer half implemented; integrated proof gate running. Full workspace ghost-erased clippy/fmt passed, **200 tests passed**. Both runtime monitor and all-four-query analyzer smokes passed. UnknownId-as-check_step negative probe failed its postcondition as required (**0 verified, 1 error**); removed. |
-| H2 | not started | |
+| H5 | in progress | Local merge gate passed; [PR #19](https://github.com/junco-org/junco-policy/pull/19), head `52c61ae6a5f3057d9183e5b08d16965f8305d4a0`, awaits CI. Core **288**, store **289**, monitor cache/no-cache **1624/1619**, monitor reviewer **9**, public_specs **19**, analyzer **603**, analyzer reviewer **19** verified, **0 errors**. Full workspace ghost-erased fmt/clippy passed; **200 tests passed**. Runtime and negative-probe evidence below. |
+| H2 | in progress | Started from main `bedc0c9` on isolated `fix/audit-h2`; inspecting benchmark and validation paths before baseline timing. |
 | H7 | not started | |
 | H8 | not started | |
 | H9 | not started | |
@@ -52,7 +52,18 @@ H4 gates: monitor **1624**, public_specs **19**, analyzer **603**, analyzer revi
 
 Rebased H6 composition gate passed: analyzer **603**, reviewer **17**, **0 errors**; subsequently all seven CI checks passed and PR #14 merged.
 
-H5 runtime evidence: monitor permits/check granted `(3,7)`, committed it once, then permits/check denied `(9,7)` without appending; final history `[(3,7)]`. Analyzer registered two different constant-head rules; self-coverage and self-refinement returned `Holds`, redundancy and All ⊆ Empty returned real constant-only `(3,7), []` counterexamples. Throwaway examples removed. No item PR yet: analyzer proof acceptance is still pending.
+H5 runtime evidence: monitor permits/check granted `(3,7)`, committed it once, then permits/check denied `(9,7)` without appending; final history `[(3,7)]`. Analyzer registered two different constant-head rules; self-coverage and self-refinement returned `Holds`, redundancy and All ⊆ Empty returned real constant-only `(3,7), []` counterexamples. Negative probe claiming check_step for UnknownId failed its postcondition (**0 verified, 1 error**). All throwaway sources removed.
+
+H5 public statements for citation (local gate passed; not merged):
+- `resource_error` (`crates/junco-core/src/spec/semantics.rs`): exactly GraphBudget, GraphIndex, AllocationFailed, ArenaExhausted, IdExhausted, RevisionExhausted and Limit. `rule_constants_tagged<E>` (same file) requires each constant extracted for coordinate i to have `E::coordinate_spec(value) == i`.
+- `check_step` and `permits_result` (`crates/history-semantics/src/spec/monitor.rs`): their Err arm is `resource_error(error)`, preserving the grant/denial and exact-index meaning.
+- `Validator::check` and `Validator::permits` (`crates/history-semantics/src/validator.rs`): under existing well-formedness precondition and event_obligations, `result matches Err(error) ==> resource_error(error)`.
+- `ValidatorBuilder::add_rule` (same file): event_obligations, rule_wf, exact event arity and rule_constants_tagged imply `result is Ok || (result matches Err(CompileError::Runtime(error)) && resource_error(error))`; original success/frame clauses retained.
+- `PolicyAnalyzer::{covered,redundant,at_least_as_strict}` (`crates/history-analysis/src/analyzer.rs`): under existing requires and ids_owned for all query ids, `result matches Err(error) ==> resource_error(error)`. Invalid ids retain exact UnknownId classification.
+- `PolicyAnalyzer::add_rule` (same file): under existing capacity/wf/event requires, rule_wf + exact arity + rule_constants_tagged imply Ok or Runtime(resource_error); original success/frame clauses retained.
+- `PolicyAnalyzer::tail_included` (same file): under existing capacity/wf/event requires, head_tails_wf + exact arity + rule_constants_tagged for both source rules imply Ok or Runtime(resource_error). Success additionally implies head_coordinates_wf(head), retaining head_tails_wf and exact arity.
+- `theorem_monitor_resource_errors` (`crates/history-semantics/tests/reviewer.rs`): check_step/permits_result imply resource-only errors and exclude UnknownId. Executable `valid_rule_registration` consumes the builder guarantee.
+- Executable `resource_checked_registration` and `resource_checked_tail_inclusion` (`crates/history-analysis/tests/reviewer.rs`) consume valid-input classification; `analyzer_client` now consumes resource classification of the three owned-id queries.
 
 Toolchain: downloaded pinned Z3 cannot execute on host glibc 2.31. Existing `/ssd0/zkent/junco-proof-tools/compat-verus` and `z3-compat` pass the script's pinned version checks; these are used for verification.
 
