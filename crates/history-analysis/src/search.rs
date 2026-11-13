@@ -7,7 +7,9 @@
 //! state was seen before, or if an inserted state subsumes it (see [`crate::prune`]). The
 //! first expanded state whose residual accepts the empty history ends the search, and its parent
 //! chain yields a counterexample of minimum length.
-//! Cartesian-product overflow propagates as `HistoryError::GraphLimit`; it never becomes a
+//! Cartesian-product and index overflow propagate as `HistoryError::GraphIndex`; graph budget
+//! exhaustion as `HistoryError::GraphBudget`, which is constructed only by
+//! `CanonicalStore::projected`, whose contract is `charged + bytes > budget`. Neither becomes a
 //! successful inclusion verdict or a capacity precondition on the query.
 
 use crate::native::NativeSet;

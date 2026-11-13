@@ -583,7 +583,7 @@ impl<E: Event> CompiledRule<E> {
             assert(compiled_wf(*self));
         }
         let result = match first {
-            Err(HistoryError::GraphLimit { .. }) => {
+            Err(HistoryError::GraphBudget { .. } | HistoryError::GraphIndex) => {
                 // A failed replacement must not discard the old committed cursor cache.
                 let mut replacement = RuleRuntime::new(
                     self.store.numeric_store(),
@@ -847,7 +847,7 @@ mod tests {
                 &mut Unmetered,
                 &mut ObservationWorld
             ),
-            Err(HistoryError::GraphLimit { .. })
+            Err(HistoryError::GraphBudget { .. })
         ));
         assert!(matches!(
             compiled.accepts_history_with_limits(

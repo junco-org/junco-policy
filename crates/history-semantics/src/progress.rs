@@ -85,7 +85,7 @@ impl CompiledPair {
     #[verus_verify]
     #[verus_spec(result => ensures language::no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
-        result matches Err(error) ==> error is AllocationFailed || error is GraphLimit,
+        result matches Err(error) ==> error is AllocationFailed || error is GraphIndex,
         result matches Ok(bytes) ==> bytes as int ==
             growth * vstd::layout::size_of::<Option<AtomSet>>()
                 + count * vstd::layout::size_of::<TestId>())]
@@ -579,7 +579,7 @@ impl CompiledPair {
             result matches Ok(mask) ==> guard_wf(final(self).store.graph(), final(self).caches.atoms@, residual@ as int, Guard { transition, mask }),
     )]
     /// Atoms true in every truth word whose successor leaves `residual`: each of the 2^k words
-    /// is interpreted once and the leaving words are intersected. `GraphLimit` yields mask 0.
+    /// is interpreted once and the leaving words are intersected. A graph budget or index error yields mask 0.
     fn guard_mask<L: Limits>(
         &mut self,
         residual: RegexId,
@@ -642,7 +642,7 @@ impl CompiledPair {
             }
             let successor = match successor {
                 Ok(successor) => successor,
-                Err(HistoryError::GraphLimit { .. }) => {
+                Err(HistoryError::GraphBudget { .. } | HistoryError::GraphIndex) => {
                     mask = 0;
                     break;
                 }
@@ -1093,7 +1093,7 @@ impl CompiledPair {
     /// Eagerly builds derivatives, atom sets and successor classes for up to `PRECOMPILE_STATES`
     /// residual states reachable from `root`, depth-first, within the successor cache's capacity;
     /// anything beyond the budget is left to the lazy path. Errors leave the pair well-formed;
-    /// `GraphLimit` means the caller should discard it.
+    /// a graph budget or index error means the caller should discard it.
     pub(crate) fn precompile<L: Limits>(
         &mut self,
         limits: &mut L,

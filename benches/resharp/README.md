@@ -145,7 +145,7 @@ Groups are `popular/validate/<name>`. Patterns are exact matches, without an out
 Groups are `corpus/<name>`. Every supported row uses contains semantics. In the attempted upstream
 patterns below, `dictionary(n)` joins the first `n` lines of upstream's `regexes/length-15.txt` with `|`.
 Payloads for omitted workloads are not shipped. Eight workloads hit junco's existing graph limit:
-`Runtime(GraphLimit { limit: 102400 })` at `add_rule`, or `GraphLimit { limit: 102400 }` at `permits`.
+`Runtime(GraphBudget { limit: 102400 })` at `add_rule`, or `GraphBudget { limit: 102400 }` at `permits`.
 They are not registered; runtime limits are unchanged.
 
 | Name | Pattern | Haystack |
