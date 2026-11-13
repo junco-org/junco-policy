@@ -68,7 +68,7 @@ implementations with the `verus-spec-check` tool (network access on first use).
 | `-p history-semantics --features runtime,std,cache --test reviewer` | 7 verified, 0 errors |
 | `-p history-analysis --no-default-features --features runtime` | 603 verified, 0 errors |
 | `-p history-analysis --no-default-features --features runtime,std` | 603 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime,std --test reviewer` | 14 verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime,std --test reviewer` | 17 verified, 0 errors |
 
 The counts are from the pinned toolchain (`-- --num-threads N` only changes wall time). The
 `--test` rows count the theorems and clients of the test target itself; the library they build
@@ -89,9 +89,9 @@ refinement. Read them against the paper in this order:
 | R3 | `crates/junco-core/src/spec/questions.rs` | 44 | `in_domains`, `domains_wf`, `refines`, `covers`, `never_denies`, `always_denies`, `tails_included`; symbolic counterexamples `CexView`, `InclusionView`, `admissible`, `instantiates`, `cex_has_instance`, `every_instance`, `fresh_capacity`, `capacity_for`; minimality `same_profile`, `shortest`, `shortest_in_case`, `minimal_in_case`; the constant extractors | `def:policy-refinement`, `app:policy-reduction`, `thm:search` |
 | R4 | `crates/junco-core/src/spec/hypotheses.rs` | 4 | `hash_coherent` (the trust token), `eq_equivalence`, `key_laws`, `event_obligations` | hypotheses (below) |
 | R5 | `crates/history-semantics/src/spec/monitor.rs` | 6 | `ValidatorView`, `check_frame`, `check_step`, `permits_result`, `rollback_step`, `trace_safe` | `thm:matcher` at the level of `Validator` |
-| R6 | `crates/history-analysis/src/spec/analyzer.rs` | 22 | `AnalyzerView`, `analyzer_wf`, `known_with`, the capacities, `rules_of`, `without_rule`, `counterexample_spec`, `covered_spec`, `removal_preserves_decisions`, `redundant_spec`, `at_least_as_strict_spec`, `tail_included_spec`; A5 in prose in the header | A1–A6 |
+| R6 | `crates/history-analysis/src/spec/analyzer.rs` | 21 | `AnalyzerView`, `known_with`, the capacities including `undeclared_capacity`, `rules_of`, `without_rule`, `counterexample_spec`, `covered_spec`, `removal_preserves_decisions`, `redundant_spec`, `at_least_as_strict_spec`, `tail_included_spec`; A5 in prose in the header | A1–A6 |
 | P | `crates/history-semantics/src/verify/paper.rs` | one `stmt_*`/`theorem_*` per paper result | the paper index: table of paper label → mechanized statement → proof → file; `theorem_paper_index` proves every row | all |
-| T | `crates/history-semantics/tests/reviewer.rs`, `crates/history-analysis/tests/reviewer.rs` | 7 and 14 verified items | the end-to-end statements over public items only (below) | `thm:matcher`, A1–A6, S9 |
+| T | `crates/history-semantics/tests/reviewer.rs`, `crates/history-analysis/tests/reviewer.rs` | 7 and 17 verified items | the end-to-end statements over public items only (below) | `thm:matcher`, A1–A6, S9 |
 
 The theorems a reviewer reads:
 

@@ -618,7 +618,9 @@ impl<E: Event> PolicyAnalyzer<E> {
                 old(self)@.known, junco_core::spec::questions::rule_constants(rule@)),
             result matches Ok(id) ==> final(self)@.rules == old(self)@.rules.push(rule@)
                 && id.index() == old(self)@.rules.len() && id.owner() == final(self).owner()
-                && junco_core::spec::semantics::rule_wf(rule@),
+                && junco_core::spec::semantics::rule_wf(rule@)
+                && rule@.head.len() == arity::<E>()
+                && junco_core::verify::flatten::head_coordinates_wf::<E>(rule@.head),
             result is Err ==> final(self)@.rules == old(self)@.rules,
             junco_core::verify::history_specs::no_invariant_compile_failure(result),
     {
@@ -655,6 +657,17 @@ impl<E: Event> PolicyAnalyzer<E> {
             numeric, constants, constraint, mode: rule.mode });
         proof {
             assert(analyzer_view(*self).rules =~= analyzer_view(before).rules.push(rule@));
+            assert(junco_core::verify::encoding::constants_in_domain(flat.source,
+                junco_core::verify::flatten::component_domain::<E>()));
+            assert forall|i: int| 0 <= i < rule@.head.len() implies
+                match #[trigger] rule@.head[i] {
+                    history_syntax::spec::events::PatternView::Constant(value) => E::coordinate_spec(value) == i,
+                    _ => true,
+                } by {
+                assert(junco_core::verify::flatten::head_slot_represents(flat.source.head@[i], rule@.head[i]));
+                assert(junco_core::verify::encoding::head_in_domain(flat.source.head@[i],
+                    junco_core::verify::encoding::field_at(i), junco_core::verify::flatten::component_domain::<E>()));
+            }
             lemma_stored_known_frame(encoded, *self);
         }
         Ok(id)

@@ -194,6 +194,9 @@ fn monitor_client<E: Event, M>(head: Head<E>, request: Request<E, M>)
         let before = ValidatorView { rules: state@.rules, history: Seq::<E>::empty() };
         &&& state.wf()
         &&& state@.rules == seq![Rule { mode: RuleMode::Forbid, head, tail: RegexExpr::All }@]
+        &&& junco_core::spec::semantics::rule_wf(state@.rules[0])
+        &&& head@.len() == history_syntax::spec::events::arity::<E>()
+        &&& junco_core::verify::flatten::head_coordinates_wf::<E>(head@)
         &&& check_frame(before, state@, request, answer)
         &&& stmt_monitor_check(before, request, answer)
         &&& trace_safe(state@)

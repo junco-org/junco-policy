@@ -13,7 +13,7 @@ import from them. The flow is strictly downward: R1 → R2 → R3/R4 → R5/R6 �
 | R3 | `crates/junco-core/src/spec/questions.rs` | `DomainsView`, `in_domain`, `in_domains`, `domains_wf`; `refines`, `covers`, `never_denies`, `always_denies`, `forbid_all`, `tails_included`; `ValueView`, `CexView`, `InclusionView`, `admissible`, `instantiates`, `cex_has_instance`, `every_instance`, `fresh_capacity`, `capacity_for`; `same_profile`, `shortest`, `shortest_in_case`, `minimal_in_case`; the constant extractors `pattern_constant`, `test_constants`, `regex_constants`, `head_constants`, `rule_constants` | `def:policy-refinement`, `app:policy-reduction`, `thm:search` |
 | R4 | `crates/junco-core/src/spec/hypotheses.rs` | `hash_coherent`, `eq_equivalence`, `key_laws`, `event_obligations` | plan S4, decision 4 |
 | R5 | `crates/history-semantics/src/spec/monitor.rs` | `ValidatorView`, `check_frame`, `check_step`, `permits_result`, `rollback_step`, `trace_safe` | `thm:matcher` at the level of `Validator` |
-| R6 | `crates/history-analysis/src/spec/analyzer.rs` | `AnalyzerView`, `analyzer_wf`, `known_with`, `tail_constants`, capacities, `rules_of`/`without_rule`, `uncovered`/`tail_fails`, `counterexample_spec`, `covered_spec`, `removal_preserves_decisions`, `redundant_spec`, `at_least_as_strict_spec`, `tail_included_spec` | A1–A6 |
+| R6 | `crates/history-analysis/src/spec/analyzer.rs` | `AnalyzerView`, `known_with`, `tail_constants`, capacities, `rules_of`/`without_rule`, `uncovered`/`tail_fails`, `counterexample_spec`, `covered_spec`, `removal_preserves_decisions`, `redundant_spec`, `at_least_as_strict_spec`, `tail_included_spec` | A1–A6 |
 
 ## Conventions
 
@@ -34,6 +34,10 @@ import from them. The flow is strictly downward: R1 → R2 → R3/R4 → R5/R6 �
   requires `undeclared_capacity` only at undeclared coordinates; declared coordinates need no
   spare values. `theorem_counterexample_has_instance` and `theorem_declared_fresh_rejected`
   in `crates/history-analysis/tests/reviewer.rs` expose these two guarantees.
+- Successful `PolicyAnalyzer::add_rule` and `ValidatorBuilder::add_rule` promise `rule_wf`,
+  exact event arity and correctly tagged head constants (under the event hypotheses).
+  Both executable reviewer clients use these postconditions. The unused `analyzer_wf`
+  and `rule_constants_tagged` predicates have been removed; no separate view invariant is claimed.
 
 ## Reading order for a reviewer
 

@@ -20,12 +20,9 @@
 
 use crate::analyzer::RuleId;
 use history_syntax::Event;
-use history_syntax::event::specs::EventSpec;
 use history_syntax::spec::events::{HeadView, RegexView, RuleView, arity, event_view};
 use junco_core::spec::questions::*;
-use junco_core::spec::semantics::{
-    head_matches, history_view, lang, policy_denies, rule_violated, rule_wf,
-};
+use junco_core::spec::semantics::{head_matches, history_view, lang, policy_denies, rule_violated};
 use junco_core::verify::flatten::regex_cost;
 use vstd::prelude::*;
 
@@ -46,16 +43,6 @@ pub struct AnalyzerView<C> {
     pub known: Seq<Set<C>>,
 }
 
-/// Open consequences of the opaque `PolicyAnalyzer::wf`. (`known` is not required to be tagged:
-/// a failed `add_rule` may have interned ill-tagged constants; freshness tags the fresh values.)
-pub open spec fn analyzer_wf<E: Event>(a: AnalyzerView<E::Component>) -> bool {
-    &&& domains_wf::<E>(a.domains)
-    &&& a.known.len() == arity::<E>()
-    &&& forall|i: int| 0 <= i < a.rules.len() ==> rule_wf(#[trigger] a.rules[i])
-        && a.rules[i].head.len() == arity::<E>()
-        && forall|j: int| 0 <= j < a.known.len() ==> rule_constants(a.rules[i])[j].subset_of(a.known[j])
-}
-
 /// The number of known constants, summed over the coordinates.
 pub open spec fn known_count<C>(known: Seq<Set<C>>) -> nat
     decreases known.len(),
@@ -73,12 +60,6 @@ pub open spec fn tail_constants<C>(head: HeadView<C>, left: RegexView<C>, right:
     Seq::new(head.len(), |i: int| head_constants(head)[i]
         .union(regex_constants(left, head.len())[i])
         .union(regex_constants(right, head.len())[i]))
-}
-
-/// Every constant of the rule is tagged with the coordinate it occurs at.
-pub open spec fn rule_constants_tagged<E: Event>(rule: RuleView<E::Component>) -> bool {
-    forall|i: int, c: E::Component| 0 <= i < rule.head.len() && #[trigger] rule_constants(rule)[i].contains(c)
-        ==> E::coordinate_spec(c) == i
 }
 
 // ----- capacities, over the view (S6) -----
