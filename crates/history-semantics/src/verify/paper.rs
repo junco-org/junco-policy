@@ -226,9 +226,9 @@ pub proof fn theorem_lem_uniform()
     search::theorem_successor_cases();
 }
 
-/// Theorem Inclusion search correctness (`thm:search`): soundness, completeness and minimality of
-/// every returned outcome, and termination given finitely many reachable items, which finitely
-/// many reachable states provide.
+/// Inclusion search correctness and minimum counterexample length under complete successor
+/// cases for expanded trace nodes; termination given finitely many reachable items, which
+/// finitely many reachable states provide.
 pub open spec fn stmt_thm_search() -> bool {
     &&& search::stmt_search_correct()
     &&& search::stmt_search_terminates()
