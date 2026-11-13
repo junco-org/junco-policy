@@ -8,10 +8,10 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 |---|---|---|
 | H1 | merged | [PR #13](https://github.com/junco-org/junco-policy/pull/13), merge commit `bce1df8511fc56919724e18bdbf5e610c8252bdb`; every CI check passed. Public statements detailed below. |
 | H3 | merged | [PR #15](https://github.com/junco-org/junco-policy/pull/15), merge commit `bedc0c955dd9eb24e224126a456d6c84a6092d55`; all seven CI checks passed on exact head `2a6f942428173122cb0e546a62182ea219e28747`. Public statements detailed below. |
-| H4 | in progress | Local gates passed; [PR #17](https://github.com/junco-org/junco-policy/pull/17), rebased head `55282cb` atop merged H3, awaits CI. Prior head passed every check. `stmt_search_correct` and its theorem require trace_steps_ok only for expanded nodes; public index uses the same statement. |
+| H4 | merged | [PR #17](https://github.com/junco-org/junco-policy/pull/17), merge commit `184383710b2b0918b3567869d998185940a3454d`; all seven CI checks passed on exact head `55282cb79f2b4472ee5e1da37c0aa5b4e220bbd9`. Public statement detailed below. |
 | H6 | merged | [PR #14](https://github.com/junco-org/junco-policy/pull/14), merge commit `4151cb0a66058e9ecbc7e787b23438b40f319192`; all CI passed. Public statements detailed below. |
-| H5 | in progress | Local merge gate passed; [PR #19](https://github.com/junco-org/junco-policy/pull/19), head `52c61ae6a5f3057d9183e5b08d16965f8305d4a0`, awaits CI. Core **288**, store **289**, monitor cache/no-cache **1624/1619**, monitor reviewer **9**, public_specs **19**, analyzer **603**, analyzer reviewer **19** verified, **0 errors**. Full workspace ghost-erased fmt/clippy passed; **200 tests passed**. Runtime and negative-probe evidence below. |
-| H2 | in progress | Started from main `bedc0c9` on isolated `fix/audit-h2`; inspecting benchmark and validation paths before baseline timing. |
+| H5 | in progress | Local merge gate passed; [PR #19](https://github.com/junco-org/junco-policy/pull/19), rebased head `54fcf2f6bde42cd27046e09a9bab1133832f3732` atop merged H4, awaits CI. Core **288**, store **289**, monitor cache/no-cache **1624/1619**, monitor reviewer **9**, public_specs **19**, analyzer **603**, analyzer reviewer **19** verified, **0 errors**. Full workspace ghost-erased fmt/clippy passed; **200 tests passed**. Runtime and negative-probe evidence below. |
+| H2 | in progress | On isolated `fix/audit-h2`; complete unchanged baseline timing saved for all **100 instances**. Added unit domains and concrete validation of every returned counterexample outside measured intervals. Actual benchmark smoke passed all **100 instances**, validating **180 counterexamples**. Adapted unit probe passed: `fresh at a unit-typed coordinate: false`, concrete history `[a]` witnesses `a+ ⊄ epsilon`. Probe removed. After timing running; before/after values pending. |
 | H7 | not started | |
 | H8 | not started | |
 | H9 | not started | |
@@ -22,7 +22,7 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 | H14 | not started | |
 | H15 | not started | Deferred unless all other items complete. |
 
-Merged items: H1, PR #13, `bce1df8511fc56919724e18bdbf5e610c8252bdb`; H6, PR #14, `4151cb0a66058e9ecbc7e787b23438b40f319192`; H3, PR #15, `bedc0c955dd9eb24e224126a456d6c84a6092d55`.
+Merged items: H1, PR #13, `bce1df8511fc56919724e18bdbf5e610c8252bdb`; H6, PR #14, `4151cb0a66058e9ecbc7e787b23438b40f319192`; H3, PR #15, `bedc0c955dd9eb24e224126a456d6c84a6092d55`; H4, PR #17, `184383710b2b0918b3567869d998185940a3454d`.
 
 H1 public statements:
 - `counterexample_spec<E>` (`crates/history-analysis/src/spec/analyzer.rs`) now includes `forall i. 0 <= i < arity::<E>() && a.domains[i] is Some ==> fresh_used(cex,i) =~= ISet::empty()` and `undeclared_capacity::<E>(a,cex) ==> cex_has_instance::<E>(a.domains,a.known,cex)`; existing arity and every-instance validity clauses retained.
@@ -41,6 +41,10 @@ H3 changed public statements:
 - `Denial<E>::index` (`crates/history-semantics/src/validator.rs`) is the zero-based source index of the first violated rule.
 - `check_step<E,M>` (`crates/history-semantics/src/spec/monitor.rs`), denial arm: `least_violation(before.rules, request.event, before.history, denial.index as int) && denial.mode == before.rules[denial.index as int].mode`. Grant/error clauses and history frame retained.
 - `stmt_matcher` (`crates/history-semantics/src/verify/paper.rs`) and `stmt_monitor_check` (`crates/history-semantics/tests/reviewer.rs`) identify the same exact index; executable/public reviewer clients consume it.
+
+H4 changed public statement:
+- `stmt_search_correct` (`crates/history-semantics/src/verify/refinement/search.rs`) is now `forall d,g0,r,s,q0,cases_of,t,outcome. satisfiable(d,g0) && initial_ok(q0,r,s) && trace_steps_ok(d,cases_of,t) && trace_wf(d,g0,q0,cases_of,t) && trace_outcome(t,outcome) ==> outcome_ok(d,g0,r,s,outcome)`. No global steps_ok-for-every-Item premise remains.
+- `theorem_search_correct` (same file) proves this statement via lemma_search_correct; `stmt_thm_search` and `theorem_paper_index` (`crates/history-semantics/src/verify/paper.rs`) use it unchanged.
 
 Verification: H1 library merge gate `history-analysis --no-default-features --features runtime,std`: **603 verified, 0 errors**; reviewer: **17 verified, 0 errors**. Ghost-erased clippy passed (`--all-targets -- -D warnings`); package tests **27 passed**. Final package fmt passed after removing the throwaway smoke example. Runtime smoke observed counterexample candidate `[Constant(C0(3)), Constant(C1(7))]`, empty history, both coordinates declared; concrete `(3,7), []` refutes All ⊆ Empty. No ensures weakened; no trusted items added; no paper or benchmark edits.
 
