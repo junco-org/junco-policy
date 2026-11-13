@@ -15,6 +15,10 @@ publish = false
 name = "junco_policy"
 path = "src/lib.rs"
 
+[features]
+# Only the explicit instrumented progress-test command enables this; benchmarks do not.
+test-util = ["history-semantics/test-util"]
+
 [dependencies]
 junco-core = { path = "crates/junco-core", default-features = false, features = ["std"] }
 history-store = { path = "crates/history-store", default-features = false, features = ["runtime", "std"] }
@@ -23,7 +27,6 @@ history-syntax = { path = "crates/history-syntax", default-features = false, fea
 
 [dev-dependencies]
 criterion = "0.5"
-history-semantics = { path = "crates/history-semantics", default-features = false, features = ["test-util"] }
 history-analysis = { path = "crates/history-analysis", default-features = false, features = ["runtime"] }
 resharp = "=0.7.6"
 regex-syntax = "0.8"

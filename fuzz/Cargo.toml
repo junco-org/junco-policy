@@ -17,6 +17,10 @@ cargo-fuzz = true
 name = "lock_policy_harness"
 path = "src/lib.rs"
 
+[features]
+# Diagnostic work counters are opt-in and never enabled by the benchmark dependencies.
+work-probe = ["history-semantics/test-util"]
+
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = "1.4"
@@ -38,7 +42,10 @@ criterion = { version = "0.8", default-features = false, features = [
     "plotters",
 ] }
 dogwood-language = "1.1.0"
-history-semantics = { path = "../crates/history-semantics", default-features = false, features = ["test-util"] }
+
+[[example]]
+name = "replay_curve"
+required-features = ["work-probe"]
 
 [[bin]]
 name = "lock_policy"
