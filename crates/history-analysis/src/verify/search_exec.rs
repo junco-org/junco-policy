@@ -55,6 +55,66 @@ pub(crate) proof fn lemma_truth_set(before: Seq<u64>, after: Seq<u64>, index: na
     }
 }
 
+/// Zero words are a valid assignment of `count` atoms.
+pub(crate) proof fn lemma_assignment_zero(count: nat, words: Seq<u64>)
+    requires forall|i: int| 0 <= i < words.len() ==> words[i] == 0,
+        count + 63 <= usize::MAX, words.len() == (count + 63) / 64,
+    ensures symbolic::assignment_valid(count, words),
+{
+    if count % 64 != 0 {
+        assert(words.len() > 0);
+        assert(words.last() == 0u64);
+        let shift = (count % 64) as u32;
+        assert((0u64 >> shift) == 0u64) by(bit_vector);
+    }
+}
+
+/// Setting the bit of an atom keeps the words a valid assignment.
+pub(crate) proof fn lemma_assignment_set(count: nat, before: Seq<u64>, after: Seq<u64>, index: nat)
+    requires symbolic::assignment_valid(count, before), index < count,
+        after == before.update((index / 64) as int,
+            before[(index / 64) as int] | (1u64 << ((index % 64) as u32))),
+    ensures symbolic::assignment_valid(count, after),
+{
+    assert(index / 64 < before.len());
+    if count % 64 != 0 {
+        let last = before.len() as int - 1;
+        if index / 64 == last {
+            let value = before[last];
+            let bit = (index % 64) as u32;
+            let shift = (count % 64) as u32;
+            assert(bit < shift);
+            assert(((value | (1u64 << bit)) >> shift) == 0u64) by(bit_vector)
+                requires (value >> shift) == 0u64, bit < shift, shift < 64;
+        } else {
+            assert(after[last] == before[last]);
+        }
+    }
+}
+
+/// A strictly increasing sequence of test ids has at most `u32::MAX + 1` members.
+pub(crate) proof fn lemma_test_ids_count(ids: Seq<TestId>)
+    requires model::strictly_increasing(model::test_ids(ids)),
+    ensures ids.len() <= u32::MAX as nat + 1,
+{
+    if ids.len() > 0 {
+        let last = ids.len() as int - 1;
+        lemma_test_ids_rank(ids, last);
+        TestId::lemma_view(ids[last]);
+    }
+}
+
+proof fn lemma_test_ids_rank(ids: Seq<TestId>, i: int)
+    requires model::strictly_increasing(model::test_ids(ids)), 0 <= i < ids.len(),
+    ensures ids[i]@ >= i,
+    decreases i,
+{
+    if i > 0 {
+        lemma_test_ids_rank(ids, i - 1);
+        assert(model::test_ids(ids)[i - 1] < model::test_ids(ids)[i]);
+    }
+}
+
 pub(crate) proof fn lemma_truth_realizes(g: model::Graph, ids: Seq<TestId>, atoms: Seq<Atom>,
     letter: Letter, words: Seq<u64>)
     requires truth_bits(atoms, letter, words), ids.len() == atoms.len(),
@@ -1080,6 +1140,43 @@ pub(crate) open spec fn primitives_safe(ps: Set<model::Primitive>) -> bool {
     }
 }
 
+pub(crate) proof fn lemma_primitives_safe_subset(small: Set<model::Primitive>,big: Set<model::Primitive>)
+    requires primitives_safe(big),small.subset_of(big),
+    ensures primitives_safe(small),
+{}
+
+/// Safe primitives are atoms (`validate_atom` accepts them).
+pub(crate) proof fn lemma_safe_atom(p: junco_core::kernel::Primitive,ps: Set<model::Primitive>)
+    requires primitives_safe(ps),ps.contains(p@),
+    ensures atom_valid(p),
+{}
+
+/// A queued residual is a valid id whose primitives are among the root's.
+pub(crate) proof fn lemma_running_residual(s: Search<'_>,n: nat,start: paper::Item,v: [Set<nat>;3],j: int)
+    requires running(s,n,start,v),0 <= j < s.items@.len(),
+    ensures s.items@[j].residual@ < facade::graph(*old(s.language)).regexes.len(),
+        primitives_safe(symbolic::regex_primitives(s.start@.state))
+            ==> primitives_safe(facade::residual_primitives(*old(s.language),s.items@[j].residual)),
+{
+    lemma_running_evidence(s,n,start,v);
+    lemma_state_evidence(s);
+    reveal(vocabulary_wf);
+    if primitives_safe(symbolic::regex_primitives(s.start@.state)) {
+        lemma_primitives_safe_subset(facade::residual_primitives(*s.language,s.items@[j].residual),
+            symbolic::regex_primitives(s.start@.state));
+    }
+}
+
+/// The truth words of a derivative's atoms are a valid assignment of its atom ids.
+pub(crate) proof fn lemma_truth_ready(l: SymbolicLanguage,t: junco_core::kernel::TransitionId,
+    atoms: Seq<Atom>,words: Seq<u64>)
+    requires facade::language_wf(l),facade::has_atoms(l,t),facade::atom_ids(l,t).len() == atoms.len(),
+        atoms.len() + 63 <= usize::MAX ==> symbolic::assignment_valid(atoms.len(),words),
+    ensures symbolic::assignment_valid(facade::atom_ids(l,t).len(),words),
+{
+    facade::lemma_language_wf(l);
+}
+
 pub(crate) open spec fn queue_order(s: Search<'_>) -> bool {
     &&& forall|i: int,j: int| #![trigger s.items@[i],s.items@[j]] 0 <= i < j < s.items@.len()
         ==> depth(s.items@,i) <= depth(s.items@,j)
@@ -1197,6 +1294,7 @@ pub(crate) open spec fn vocabulary_wf(s: Search<'_>, v: [Set<nat>;3]) -> bool {
     &&& forall|j: int| #![trigger s.items@[j]] 0 <= j < s.items@.len() ==> {
         let q = s.items@[j].residual;
         finite_impl::regex_nf(facade::abs(*s.language,q))
+            && facade::residual_primitives(*s.language,q).subset_of(symbolic::regex_primitives(s.start@.state))
             && forall|c: history_syntax::syntax::Component|
                 facade::residual_codes(*s.language,q,c).subset_of(v[crate::verify::component_index(c) as int])
     }
@@ -1453,7 +1551,8 @@ pub(crate) open spec fn expansion_state(s: Search<'_>,index: nat,records: Seq<Em
 pub(crate) proof fn lemma_vocabulary_frame(a: Search<'_>,b: Search<'_>,v: [Set<nat>;3])
     requires vocabulary_wf(a,v),facade::language_wf(*a.language),facade::language_wf(*b.language),
         facade::frame(*a.language,*b.language),a.items@ == b.items@,a.constraints@ == b.constraints@,
-        *a.universes == *b.universes,ids_valid(facade::graph(*a.language),a.constraints@,a.items@),
+        *a.universes == *b.universes,a.start@ == b.start@,
+        ids_valid(facade::graph(*a.language),a.constraints@,a.items@),
     ensures vocabulary_wf(b,v),
 {
     reveal(vocabulary_wf);
@@ -1462,6 +1561,7 @@ pub(crate) proof fn lemma_vocabulary_frame(a: Search<'_>,b: Search<'_>,v: [Set<n
     assert forall|j: int| #![trigger b.items@[j]] 0 <= j < b.items@.len() implies {
         let q = b.items@[j].residual;
         finite_impl::regex_nf(facade::abs(*b.language,q))
+            && facade::residual_primitives(*b.language,q).subset_of(symbolic::regex_primitives(b.start@.state))
             && forall|c: history_syntax::syntax::Component| facade::residual_codes(*b.language,q,c)
                 .subset_of(v[crate::verify::component_index(c) as int])
     } by {

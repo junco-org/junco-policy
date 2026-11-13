@@ -1474,8 +1474,13 @@ impl CanonicalStore {
         Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
         Err(error) => error is GraphLimit || error is ArenaExhausted || error is AllocationFailed
             || error is Invariant,
-    }, verify::construction_layout(budget) ==> no_internal_error(result))]
+    }, verify::construction_layout(budget) ==> no_internal_error(result),
+        budget as int % 16 == 0 ==> no_internal_error(result))]
     pub fn with_budget(budget: usize) -> KernelResult<Self> {
+        proof! {
+            #[cfg(target_pointer_width = "64")]
+            verify::lemma_layout_multiple_16(budget);
+        }
         Self::from_storage(ArenaStorage::with_capacity(budget)?, budget)
     }
 
@@ -2567,6 +2572,16 @@ pub mod verify {
     pub(super) proof fn lemma_production_layout()
         ensures construction_layout(ARENA_CAPACITY),
     {
+        assert(ARENA_CAPACITY == 102400) by (compute);
+        lemma_layout_multiple_16(ARENA_CAPACITY);
+    }
+
+    /// Every multiple of 16 is a constructor-ready budget on the pinned 64-bit target: node
+    /// alignments are 8, identifier alignments 4.
+    #[cfg(target_pointer_width = "64")]
+    pub(super) proof fn lemma_layout_multiple_16(capacity: usize)
+        ensures capacity as int % 16 == 0 ==> construction_layout(capacity),
+    {
         // Activate the existing global-layout directives' generated theorems locally.
         broadcast use {
             super::VERUS_layout_of_TestNode,
@@ -2585,9 +2600,12 @@ pub mod verify {
         assert(vstd::layout::align_of::<TestId>() == 4);
         assert(vstd::layout::align_of::<RegexId>() == 4);
         assert(vstd::layout::align_of::<TransitionId>() == 4);
-        assert(ARENA_CAPACITY == 102400) by (compute);
         assert(CHUNK_ALIGN == 16) by (compute);
-        assert(102400int % 8 == 0 && 102400int % 4 == 0) by (compute);
+        if capacity as int % 16 == 0 {
+            let c = capacity as int;
+            assert(c % 8 == 0 && c % 4 == 0) by (nonlinear_arith)
+                requires c % 16 == 0, c >= 0;
+        }
     }
 
     pub(super) open spec fn layout_premises() -> bool {
