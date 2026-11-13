@@ -184,7 +184,7 @@ pub mod verify {
     }
 
     /// Whole-word languages over concrete event tuples, not numeric graph states.
-    pub open spec fn lang<C>(
+    pub open spec fn flat_lang<C>(
         tests: Seq<FlatTest<C>>, regexes: Seq<FlatRegex>, id: nat,
         candidate: Seq<C>, word: Seq<Seq<C>>, eq: spec_fn(Component, C, C) -> bool,
     ) -> bool
@@ -200,21 +200,21 @@ pub mod verify {
                     && test_sem(tests, test as nat, candidate, word[0], eq),
                 FlatRegex::Union(children) => references_before(children@, id)
                     && (exists|i: int| 0 <= i < children@.len()
-                        && lang(tests, regexes, children@[i] as nat, candidate, word, eq)),
+                        && flat_lang(tests, regexes, children@[i] as nat, candidate, word, eq)),
                 FlatRegex::Intersect(children) => references_before(children@, id)
                     && (forall|i: int| 0 <= i < children@.len() ==>
-                        lang(tests, regexes, children@[i] as nat, candidate, word, eq)),
+                        flat_lang(tests, regexes, children@[i] as nat, candidate, word, eq)),
                 FlatRegex::Concat(children) => references_before(children@, id)
                     && (exists|parts: Seq<Seq<Seq<C>>>| parts.len() == children@.len()
                         && word == parts.flatten()
                         && (forall|i: int| 0 <= i < children@.len() ==>
-                            lang(tests, regexes, children@[i] as nat, candidate, parts[i], eq))),
+                            flat_lang(tests, regexes, children@[i] as nat, candidate, parts[i], eq))),
                 FlatRegex::Star(child) => child < id
                     && (exists|parts: Seq<Seq<Seq<C>>>| word == parts.flatten()
                         && (forall|i: int| 0 <= i < parts.len() ==>
-                            lang(tests, regexes, child as nat, candidate, parts[i], eq))),
+                            flat_lang(tests, regexes, child as nat, candidate, parts[i], eq))),
                 FlatRegex::Complement(child) => child < id
-                    && !lang(tests, regexes, child as nat, candidate, word, eq),
+                    && !flat_lang(tests, regexes, child as nat, candidate, word, eq),
             }
     }
 
@@ -255,8 +255,8 @@ pub mod verify {
             more_regexes.len() >= regexes.len(), more_regexes.take(regexes.len() as int) == regexes,
             forall|i: int| 0 <= i < regexes.len() ==>
                 regex_wf(#[trigger] regexes[i], i as nat, tests.len()),
-        ensures lang(tests, regexes, id, candidate, word, eq)
-            == lang(more_tests, more_regexes, id, candidate, word, eq),
+        ensures flat_lang(tests, regexes, id, candidate, word, eq)
+            == flat_lang(more_tests, more_regexes, id, candidate, word, eq),
         decreases id,
     {
         assert(more_regexes[id as int] == regexes[id as int]);
@@ -269,44 +269,44 @@ pub mod verify {
             FlatRegex::Concat(children) => {
                 assert forall|parts: Seq<Seq<Seq<C>>>| parts.len() == children@.len() implies
                     ((forall|i: int| 0 <= i < children@.len() ==>
-                        lang(tests, regexes, children@[i] as nat, candidate, parts[i], eq))
+                        flat_lang(tests, regexes, children@[i] as nat, candidate, parts[i], eq))
                     == (forall|i: int| 0 <= i < children@.len() ==>
-                        lang(more_tests, more_regexes, children@[i] as nat, candidate, parts[i], eq))) by {
+                        flat_lang(more_tests, more_regexes, children@[i] as nat, candidate, parts[i], eq))) by {
                     assert forall|i: int| 0 <= i < children@.len() implies
-                        lang(tests, regexes, children@[i] as nat, candidate, parts[i], eq)
-                        == lang(more_tests, more_regexes, children@[i] as nat, candidate, parts[i], eq) by {
+                        flat_lang(tests, regexes, children@[i] as nat, candidate, parts[i], eq)
+                        == flat_lang(more_tests, more_regexes, children@[i] as nat, candidate, parts[i], eq) by {
                         lemma_lang_prefix(tests, more_tests, regexes, more_regexes,
                             children@[i] as nat, candidate, parts[i], eq);
                     }
                 }
-                assert(lang(tests, regexes, id, candidate, word, eq)
-                    == lang(more_tests, more_regexes, id, candidate, word, eq));
+                assert(flat_lang(tests, regexes, id, candidate, word, eq)
+                    == flat_lang(more_tests, more_regexes, id, candidate, word, eq));
             },
             FlatRegex::Union(children) | FlatRegex::Intersect(children) => {
                 assert forall|i: int| 0 <= i < children@.len() implies
-                    lang(tests, regexes, children@[i] as nat, candidate, word, eq)
-                        == lang(more_tests, more_regexes, children@[i] as nat, candidate, word, eq) by {
+                    flat_lang(tests, regexes, children@[i] as nat, candidate, word, eq)
+                        == flat_lang(more_tests, more_regexes, children@[i] as nat, candidate, word, eq) by {
                     lemma_lang_prefix(tests, more_tests, regexes, more_regexes,
                         children@[i] as nat, candidate, word, eq);
                 }
-                assert(lang(tests, regexes, id, candidate, word, eq)
-                    == lang(more_tests, more_regexes, id, candidate, word, eq));
+                assert(flat_lang(tests, regexes, id, candidate, word, eq)
+                    == flat_lang(more_tests, more_regexes, id, candidate, word, eq));
             },
             FlatRegex::Star(child) => {
                 assert forall|parts: Seq<Seq<Seq<C>>>| #![trigger parts.len()]
                     ((forall|i: int| 0 <= i < parts.len() ==>
-                        lang(tests, regexes, child as nat, candidate, parts[i], eq))
+                        flat_lang(tests, regexes, child as nat, candidate, parts[i], eq))
                     == (forall|i: int| 0 <= i < parts.len() ==>
-                        lang(more_tests, more_regexes, child as nat, candidate, parts[i], eq))) by {
+                        flat_lang(more_tests, more_regexes, child as nat, candidate, parts[i], eq))) by {
                     assert forall|i: int| 0 <= i < parts.len() implies
-                        lang(tests, regexes, child as nat, candidate, parts[i], eq)
-                        == lang(more_tests, more_regexes, child as nat, candidate, parts[i], eq) by {
+                        flat_lang(tests, regexes, child as nat, candidate, parts[i], eq)
+                        == flat_lang(more_tests, more_regexes, child as nat, candidate, parts[i], eq) by {
                         lemma_lang_prefix(tests, more_tests, regexes, more_regexes,
                             child as nat, candidate, parts[i], eq);
                     }
                 }
-                assert(lang(tests, regexes, id, candidate, word, eq)
-                    == lang(more_tests, more_regexes, id, candidate, word, eq));
+                assert(flat_lang(tests, regexes, id, candidate, word, eq)
+                    == flat_lang(more_tests, more_regexes, id, candidate, word, eq));
             },
             FlatRegex::Complement(child) => {
                 lemma_lang_prefix(tests, more_tests, regexes, more_regexes,
@@ -323,19 +323,19 @@ pub mod verify {
         ensures
             test_sem(seq![FlatTest::And(empty)], 0, candidate, candidate, eq),
             !test_sem(seq![FlatTest::Or(empty)], 0, candidate, candidate, eq),
-            !lang(Seq::<FlatTest<C>>::empty(), seq![FlatRegex::Union(empty)], 0, candidate, word, eq),
-            lang(Seq::<FlatTest<C>>::empty(), seq![FlatRegex::Intersect(empty)], 0, candidate, word, eq),
-            lang(Seq::<FlatTest<C>>::empty(), seq![FlatRegex::Concat(empty)], 0, candidate, word, eq)
+            !flat_lang(Seq::<FlatTest<C>>::empty(), seq![FlatRegex::Union(empty)], 0, candidate, word, eq),
+            flat_lang(Seq::<FlatTest<C>>::empty(), seq![FlatRegex::Intersect(empty)], 0, candidate, word, eq),
+            flat_lang(Seq::<FlatTest<C>>::empty(), seq![FlatRegex::Concat(empty)], 0, candidate, word, eq)
                 <==> word.len() == 0,
     {
-        if lang(Seq::<FlatTest<C>>::empty(), seq![FlatRegex::Concat(empty)], 0, candidate, word, eq) {
+        if flat_lang(Seq::<FlatTest<C>>::empty(), seq![FlatRegex::Concat(empty)], 0, candidate, word, eq) {
             let parts = choose|parts: Seq<Seq<Seq<C>>>| parts.len() == 0 && word == parts.flatten();
             assert(parts =~= Seq::empty());
         }
         if word.len() == 0 {
             let parts: Seq<Seq<Seq<C>>> = Seq::empty();
             assert(parts.flatten() =~= word);
-            assert(lang(Seq::<FlatTest<C>>::empty(), seq![FlatRegex::Concat(empty)], 0, candidate, word, eq));
+            assert(flat_lang(Seq::<FlatTest<C>>::empty(), seq![FlatRegex::Concat(empty)], 0, candidate, word, eq));
         }
     }
 
@@ -346,8 +346,8 @@ pub mod verify {
         requires id < regexes.len(), regexes[id as int] == FlatRegex::Complement(child),
             child < id,
             forall|i: int| 0 <= i < word.len() ==> event_wf(#[trigger] word[i], candidate.len()),
-        ensures lang(tests, regexes, id, candidate, word, eq)
-            <==> !lang(tests, regexes, child as nat, candidate, word, eq),
+        ensures flat_lang(tests, regexes, id, candidate, word, eq)
+            <==> !flat_lang(tests, regexes, child as nat, candidate, word, eq),
     {}
     }
 }

@@ -1239,11 +1239,11 @@ pub mod verify {
             event_representation(candidate, request), word_representation(word, numeric),
             forall|i: int| 0 <= i < word.len() ==> word[i].len() == candidate.len(),
             language::head_match(head_view(template), request, theta),
-        ensures portable::lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality())
+        ensures portable::flat_lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality())
             == source_regex(template, id, theta, numeric),
         decreases id,
     {
-        reveal_with_fuel(portable::lang, 1);
+        reveal_with_fuel(portable::flat_lang, 1);
         reveal_with_fuel(source_regex, 1);
         assert(portable::regex_wf(template.regexes@[id as int], id, template.tests@.len()));
         assert forall|i: int| 0 <= i < word.len() implies portable::event_wf(word[i], candidate.len()) by {
@@ -1258,15 +1258,15 @@ pub mod verify {
             FlatRegex::Union(children) | FlatRegex::Intersect(children) => {
                 assert(portable::references_before(children@, id));
                 assert forall|i: int| 0 <= i < children@.len() implies
-                    portable::lang(template.tests@, template.regexes@, children@[i] as nat, candidate, word, numeric_equality())
+                    portable::flat_lang(template.tests@, template.regexes@, children@[i] as nat, candidate, word, numeric_equality())
                         == source_regex(template, children@[i] as nat, theta, numeric) by {
                     lemma_flat_regex(template, children@[i] as nat, candidate, request, word, numeric, theta);
                 }
             },
             FlatRegex::Concat(children) => {
-                if portable::lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()) {
+                if portable::flat_lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()) {
                     let parts = choose|parts: Seq<Seq<Seq<u64>>>| parts.len() == children@.len() && word == parts.flatten()
-                        && (forall|i: int| 0 <= i < parts.len() ==> portable::lang(template.tests@, template.regexes@, children@[i] as nat, candidate, parts[i], numeric_equality()));
+                        && (forall|i: int| 0 <= i < parts.len() ==> portable::flat_lang(template.tests@, template.regexes@, children@[i] as nat, candidate, parts[i], numeric_equality()));
                     junco_core::verify::flatten::lemma_partition_arity(parts, candidate.len());
                     let reverse = |n: EventView, e: Seq<u64>| event_representation(e, n);
                     assert(pointwise(numeric, word, reverse));
@@ -1290,16 +1290,16 @@ pub mod verify {
                         && forall|i: int| 0 <= i < parts.len() ==> pointwise(lifted[i], parts[i], event_relation());
                     junco_core::verify::flatten::lemma_partition_arity(lifted, candidate.len());
                     assert forall|i: int| 0 <= i < parts.len() implies
-                        portable::lang(template.tests@, template.regexes@, children@[i] as nat, candidate, lifted[i], numeric_equality()) by {
+                        portable::flat_lang(template.tests@, template.regexes@, children@[i] as nat, candidate, lifted[i], numeric_equality()) by {
                         lemma_flat_regex(template, children@[i] as nat, candidate, request, lifted[i], parts[i], theta);
                     }
-                    assert(portable::lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()));
+                    assert(portable::flat_lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()));
                 }
             },
             FlatRegex::Star(child) => {
-                if portable::lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()) {
+                if portable::flat_lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()) {
                     let parts = choose|parts: Seq<Seq<Seq<u64>>>| word == parts.flatten()
-                        && (forall|i: int| 0 <= i < parts.len() ==> portable::lang(template.tests@, template.regexes@, child as nat, candidate, parts[i], numeric_equality()));
+                        && (forall|i: int| 0 <= i < parts.len() ==> portable::flat_lang(template.tests@, template.regexes@, child as nat, candidate, parts[i], numeric_equality()));
                     junco_core::verify::flatten::lemma_partition_arity(parts, candidate.len());
                     let reverse = |n: EventView, e: Seq<u64>| event_representation(e, n);
                     assert(pointwise(numeric, word, reverse));
@@ -1323,10 +1323,10 @@ pub mod verify {
                         && forall|i: int| 0 <= i < parts.len() ==> pointwise(lifted[i], parts[i], event_relation());
                     junco_core::verify::flatten::lemma_partition_arity(lifted, candidate.len());
                     assert forall|i: int| 0 <= i < parts.len() implies
-                        portable::lang(template.tests@, template.regexes@, child as nat, candidate, lifted[i], numeric_equality()) by {
+                        portable::flat_lang(template.tests@, template.regexes@, child as nat, candidate, lifted[i], numeric_equality()) by {
                         lemma_flat_regex(template, child as nat, candidate, request, lifted[i], parts[i], theta);
                     }
-                    assert(portable::lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()));
+                    assert(portable::flat_lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()));
                 }
             },
             FlatRegex::Complement(child) => {
