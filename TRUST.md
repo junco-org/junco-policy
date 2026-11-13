@@ -43,9 +43,9 @@ is not verified at all (see Unverified glue below).
 | `exec_allows_no_decreases_clause` | 0 | 1 | 1 | 0 | 0 | 2 |
 | `axiom` | 5 | 0 | 0 | 0 | 0 | 5 |
 | `uninterp` | 3 | 9 | 22 | 0 | 4 | 38 |
-| `derived_eq_claim` | 2 | 0 | 1 | 0 | 10 | 13 |
-| `unannotated_pub_fn` | 2 | 16 | 3 | 0 | 0 | 21 |
-| **total** | **23** | **40** | **72** | **5** | **40** | **180** |
+| `derived_eq_claim` | 2 | 0 | 1 | 3 | 10 | 16 |
+| `unannotated_pub_fn` | 0 | 16 | 3 | 0 | 0 | 19 |
+| **total** | **21** | **40** | **72** | **8** | **40** | **181** |
 
 ## `crates/history-analysis`
 
@@ -65,11 +65,11 @@ is not verified at all (see Unverified glue below).
 
 ### `axiom` (5)
 
-- `crates/history-analysis/src/verify/key_axioms.rs:19`: `fn axiom_regex_id_key_model`
-- `crates/history-analysis/src/verify/key_axioms.rs:23`: `fn axiom_test_id_key_model`
-- `crates/history-analysis/src/verify/key_axioms.rs:27`: `fn axiom_pair_key_model`
-- `crates/history-analysis/src/verify/key_axioms.rs:31`: `fn axiom_regex_id_smallvec_key_model`
-- `crates/history-analysis/src/verify/key_axioms.rs:36`: `fn axiom_constraint_key_model`
+- `crates/history-analysis/src/verify/key_axioms.rs:23`: `fn axiom_constraint_regex_pair_key_model`
+- `crates/history-analysis/src/verify/key_axioms.rs:27`: `fn axiom_regex_pair_key_model`
+- `crates/history-analysis/src/verify/key_axioms.rs:31`: `fn axiom_test_pair_key_model`
+- `crates/history-analysis/src/verify/key_axioms.rs:37`: `fn axiom_regex_id_smallvec_key_model`
+- `crates/history-analysis/src/verify/key_axioms.rs:45`: `fn axiom_constraint_key_model`
 
 ### `uninterp` (3)
 
@@ -82,16 +82,11 @@ is not verified at all (see Unverified glue below).
 - `crates/history-analysis/src/constraint.rs:866`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for RegisterConstraint`
 - `crates/history-analysis/src/constraint.rs:908`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for Constraint`
 
-### `unannotated_pub_fn` (2)
-
-- `crates/history-analysis/src/analyzer.rs:109`: `impl<E: Event> Domains<E> :: fn infinite`
-- `crates/history-analysis/src/analyzer.rs:119`: `impl<E: Event> Domains<E> :: fn with_domain`
-
 ## `crates/history-semantics`
 
 ### `external_body` (14)
 
-- `crates/history-semantics/src/compiled_rule.rs:420`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
+- `crates/history-semantics/src/compiled_rule.rs:433`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
 - `crates/history-semantics/src/policy/evaluate.rs:69`: `fn render_denial`
 - `crates/history-semantics/src/policy/evaluate.rs:161`: `fn unpack_policy_rule`
 - `crates/history-semantics/src/policy/rule.rs:23`: `struct PolicyRule<E: Event, C>`
@@ -99,16 +94,16 @@ is not verified at all (see Unverified glue below).
 - `crates/history-semantics/src/policy/rule.rs:67`: `fn diagnostic_from_fn`
 - `crates/history-semantics/src/policy/rule.rs:92`: `fn pack_policy_rule`
 - `crates/history-semantics/src/policy/trace.rs:38`: `struct NativeTraceDiagnostic<E>`
-- `crates/history-semantics/src/policy/trace.rs:197`: `fn store_trace_diagnostic`
-- `crates/history-semantics/src/policy/trace.rs:222`: `fn pack_trace_rule`
-- `crates/history-semantics/src/policy/trace.rs:230`: `fn unpack_trace_rule`
-- `crates/history-semantics/src/policy/trace.rs:241`: `fn forward_trace_diagnostic`
-- `crates/history-semantics/src/policy/trace.rs:275`: `struct TraceRule<E: Event>`
-- `crates/history-semantics/src/policy/trace.rs:304`: `impl<E: Event> Clone for TraceRule<E> :: fn clone`
+- `crates/history-semantics/src/policy/trace.rs:195`: `fn store_trace_diagnostic`
+- `crates/history-semantics/src/policy/trace.rs:220`: `fn pack_trace_rule`
+- `crates/history-semantics/src/policy/trace.rs:228`: `fn unpack_trace_rule`
+- `crates/history-semantics/src/policy/trace.rs:239`: `fn forward_trace_diagnostic`
+- `crates/history-semantics/src/policy/trace.rs:273`: `struct TraceRule<E: Event>`
+- `crates/history-semantics/src/policy/trace.rs:302`: `impl<E: Event> Clone for TraceRule<E> :: fn clone`
 
 ### `exec_allows_no_decreases_clause` (1)
 
-- `crates/history-semantics/src/policy/evaluate.rs:384`: `impl<E: Event, C> CompiledPolicy<E, C> :: fn from_iterator`
+- `crates/history-semantics/src/policy/evaluate.rs:383`: `impl<E: Event, C> CompiledPolicy<E, C> :: fn from_iterator`
 
 ### `uninterp` (9)
 
@@ -124,22 +119,22 @@ is not verified at all (see Unverified glue below).
 
 ### `unannotated_pub_fn` (16)
 
-- `crates/history-semantics/src/compiled_rule.rs:634`: `impl<E: Event> CompiledRule<E> :: fn new_lazy`
-- `crates/history-semantics/src/compiled_rule.rs:638`: `impl<E: Event> CompiledRule<E> :: fn work_counters`
-- `crates/history-semantics/src/compiled_rule.rs:642`: `impl<E: Event> CompiledRule<E> :: fn work_events`
-- `crates/history-semantics/src/compiled_rule.rs:646`: `impl<E: Event> CompiledRule<E> :: fn reset_work_events`
-- `crates/history-semantics/src/compiled_rule.rs:650`: `impl<E: Event> CompiledRule<E> :: fn cursor_positions`
-- `crates/history-semantics/src/compiled_rule.rs:656`: `impl<E: Event> CompiledRule<E> :: fn replace_graph_byte_pressure`
-- `crates/history-semantics/src/compiled_rule.rs:660`: `impl<E: Event> CompiledRule<E> :: fn set_answer_checkpoint_failure`
+- `crates/history-semantics/src/compiled_rule.rs:647`: `impl<E: Event> CompiledRule<E> :: fn new_lazy`
+- `crates/history-semantics/src/compiled_rule.rs:651`: `impl<E: Event> CompiledRule<E> :: fn work_counters`
+- `crates/history-semantics/src/compiled_rule.rs:655`: `impl<E: Event> CompiledRule<E> :: fn work_events`
+- `crates/history-semantics/src/compiled_rule.rs:659`: `impl<E: Event> CompiledRule<E> :: fn reset_work_events`
+- `crates/history-semantics/src/compiled_rule.rs:663`: `impl<E: Event> CompiledRule<E> :: fn cursor_positions`
+- `crates/history-semantics/src/compiled_rule.rs:669`: `impl<E: Event> CompiledRule<E> :: fn replace_graph_byte_pressure`
+- `crates/history-semantics/src/compiled_rule.rs:673`: `impl<E: Event> CompiledRule<E> :: fn set_answer_checkpoint_failure`
 - `crates/history-semantics/src/progress.rs:2784`: `impl CompiledPair :: fn reset_work_events`
 - `crates/history-semantics/src/progress.rs:2788`: `impl CompiledPair :: fn work_events`
 - `crates/history-semantics/src/progress.rs:2792`: `impl CompiledPair :: fn set_answer_checkpoint_failure`
-- `crates/history-semantics/src/runtime.rs:828`: `impl RuleRuntime :: fn work_counters`
-- `crates/history-semantics/src/runtime.rs:832`: `impl RuleRuntime :: fn reset_work_events`
-- `crates/history-semantics/src/runtime.rs:836`: `impl RuleRuntime :: fn work_events`
-- `crates/history-semantics/src/runtime.rs:841`: `impl RuleRuntime :: fn cursor_positions`
-- `crates/history-semantics/src/runtime.rs:857`: `impl RuleRuntime :: fn replace_graph_byte_pressure`
-- `crates/history-semantics/src/runtime.rs:861`: `impl RuleRuntime :: fn set_answer_checkpoint_failure`
+- `crates/history-semantics/src/runtime.rs:831`: `impl RuleRuntime :: fn work_counters`
+- `crates/history-semantics/src/runtime.rs:835`: `impl RuleRuntime :: fn reset_work_events`
+- `crates/history-semantics/src/runtime.rs:839`: `impl RuleRuntime :: fn work_events`
+- `crates/history-semantics/src/runtime.rs:844`: `impl RuleRuntime :: fn cursor_positions`
+- `crates/history-semantics/src/runtime.rs:860`: `impl RuleRuntime :: fn replace_graph_byte_pressure`
+- `crates/history-semantics/src/runtime.rs:864`: `impl RuleRuntime :: fn set_answer_checkpoint_failure`
 
 ## `crates/history-store`
 
@@ -194,8 +189,8 @@ is not verified at all (see Unverified glue below).
 
 ### `external` (2)
 
-- `crates/history-store/src/graph.rs:524`: `impl Drop for ArenaStorage`
-- `crates/history-store/src/graph.rs:1379`: `impl core::fmt::Debug for ArenaStorage`
+- `crates/history-store/src/graph.rs:522`: `impl Drop for ArenaStorage`
+- `crates/history-store/src/graph.rs:1377`: `impl core::fmt::Debug for ArenaStorage`
 
 ### `exec_allows_no_decreases_clause` (1)
 
@@ -219,11 +214,11 @@ is not verified at all (see Unverified glue below).
 - `crates/history-store/src/store.rs:1498`: `fn numeric_authorities` — **meaning**: the process-wide coordinate and history-key allocators (static installation)
 - `crates/history-store/src/store.rs:1832`: `fn cell_view`
 - `crates/history-store/src/store.rs:1833`: `fn record_view`
-- `crates/history-store/src/typed.rs:975`: `fn store_ids_authority_id`
-- `crates/history-store/src/typed.rs:976`: `fn process_store_ids` — **meaning**: the process-wide store-id allocator (static installation)
-- `crates/history-store/src/typed.rs:980`: `fn store_ids_mutex_valid`
-- `crates/history-store/src/typed.rs:1164`: `fn snapshot_published` — **meaning**: persistent provenance of a codebook snapshot under the registry resource
-- `crates/history-store/src/typed.rs:1294`: `fn mutex_valid`
+- `crates/history-store/src/typed.rs:987`: `fn store_ids_authority_id`
+- `crates/history-store/src/typed.rs:988`: `fn process_store_ids` — **meaning**: the process-wide store-id allocator (static installation)
+- `crates/history-store/src/typed.rs:992`: `fn store_ids_mutex_valid`
+- `crates/history-store/src/typed.rs:1176`: `fn snapshot_published` — **meaning**: persistent provenance of a codebook snapshot under the registry resource
+- `crates/history-store/src/typed.rs:1306`: `fn mutex_valid`
 - `crates/history-store/src/typed/map.rs:24`: `fn representatives` — **meaning**: the entries of an external_body hash map, as `eq_spec` classes under `key_laws`
 
 ### `derived_eq_claim` (1)
@@ -244,13 +239,19 @@ is not verified at all (see Unverified glue below).
 
 ### `external_type_specification` (2)
 
-- `crates/history-syntax/src/event.rs:263`: `struct ExCoproduct<H, T>(Coproduct<H, T>)`
-- `crates/history-syntax/src/event.rs:268`: `struct ExCNil(CNil) (opaque)`
+- `crates/history-syntax/src/event.rs:264`: `struct ExCoproduct<H, T>(Coproduct<H, T>)`
+- `crates/history-syntax/src/event.rs:269`: `struct ExCNil(CNil) (opaque)`
 
 ### `external_trait_specification` (2)
 
-- `crates/history-syntax/src/event.rs:253`: `trait ExArity: sealed::Sealed (with external_trait_extension)`
-- `crates/history-syntax/src/event.rs:273`: `trait ExEvent: Copy + Debug + Eq + Hash (with external_trait_extension)`
+- `crates/history-syntax/src/event.rs:254`: `trait ExArity: sealed::Sealed (with external_trait_extension)`
+- `crates/history-syntax/src/event.rs:274`: `trait ExEvent: Copy + Debug + Eq + Hash (with external_trait_extension)`
+
+### `derived_eq_claim` (3)
+
+- `crates/history-syntax/src/event.rs:341`: `impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec> PartialEqSpecImpl for Component2<A, B>`
+- `crates/history-syntax/src/event.rs:354`: `impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec, C: PartialEq + PartialEqSpec> PartialEqSpecIm`
+- `crates/history-syntax/src/event.rs:370`: `impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec, C: PartialEq + PartialEqSpec, D: PartialEq + `
 
 ## `crates/junco-core`
 
