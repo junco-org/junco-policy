@@ -48,11 +48,6 @@ verus! {
             ensures Self::obeys_projection_spec() ==>
                 result as nat == Self::coordinate_spec(component)
                 && result < Self::Arity::value_spec();
-        fn coordinate_cardinality(index: usize) -> (result: Option<usize>)
-            ensures result matches Some(count) ==> (Self::obeys_projection_spec()
-                ==> finite_coordinate_values::<Self::Component>(
-                    |value: Self::Component| Self::coordinate_spec(value),
-                    Self::Arity::value_spec(), index as nat, count as nat));
     }
 /// A head coordinate is either a typed constant or a named candidate binding (Section 3).
 pub enum PatternView<T> {
@@ -123,20 +118,13 @@ pub open spec fn surjectivity<E: Event>() -> bool {
 
 /// The tagged values at one coordinate have exactly `count` equality classes (Section 3).
 pub open spec fn finite_coordinate<E: Event>(index: nat, count: nat) -> bool {
-    finite_coordinate_values::<E::Component>(|value: E::Component| E::coordinate_spec(value),
-        arity::<E>(), index, count)
-}
-
-/// Coordinate cardinality stated over a tagged carrier, usable at the external trait boundary.
-pub open spec fn finite_coordinate_values<C: PartialEq>(tag: spec_fn(C) -> nat,
-    arity: nat, index: nat, count: nat) -> bool {
-    index < arity && exists|values: Seq<C>|
+    index < arity::<E>() && exists|values: Seq<E::Component>|
         values.len() == count
         && (forall|j: int| 0 <= j < values.len()
-            ==> tag(#[trigger] values[j]) == index)
+            ==> E::coordinate_spec(#[trigger] values[j]) == index)
         && (forall|j: int, k: int| #![trigger values[j], values[k]]
             0 <= j < k < values.len() ==> !values[j].eq_spec(&values[k]))
-        && (forall|value: C| #[trigger] tag(value) == index
+        && (forall|value: E::Component| #[trigger] E::coordinate_spec(value) == index
             ==> exists|j: int| 0 <= j < values.len() && value.eq_spec(&values[j]))
 }
 

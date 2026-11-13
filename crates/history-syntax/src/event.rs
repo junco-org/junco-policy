@@ -74,15 +74,6 @@ pub trait Event: Copy + Debug + Eq + Hash {
     ///
     /// For every valid `i`, `Self::coordinate(event.component(i)) == i`.
     fn coordinate(component: Self::Component) -> usize;
-
-    /// Optional exact number of equality classes at a coordinate.
-    ///
-    /// `None` leaves the coordinate's cardinality unknown. This metadata does not
-    /// declare or restrict a policy domain; finite implementations prove its R1 contract.
-    #[verus_verify]
-    fn coordinate_cardinality(_index: usize) -> Option<usize> {
-        None
-    }
 }
 
 /// Tagged coordinates of a two-component tuple event.
