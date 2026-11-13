@@ -172,9 +172,6 @@ Each track lists its plan items, the files it owns, and its output.
 
 ### Track 0 — Interface freeze (blocks everything; one agent)
 
-- First, before the interfaces: add `--jobs`, `--target-root` and `--only` to
-  `scripts/verify-all.sh` (see Verification), check it once against a full sequential run, and use
-  it for every gate.
 - Create R1–R6 as files containing only `spec` definitions with doc comments: event laws and
   surjectivity (R1); typed semantics over `E` (R2); policy questions, domains, counterexample
   instances, `fresh_capacity` (R3); hypothesis bundles and axioms as `uninterp`/`spec` (R4);
@@ -343,15 +340,15 @@ Files: `history-semantics/tests/reviewer.rs`, `history-analysis/tests/reviewer.r
 
 - Install the pinned toolchain with `scripts/verify-all.sh --download <dir>`; lower
   `--num-threads` if Verus is killed for memory.
-- `scripts/verify-all.sh` runs its eleven configurations one after another, and each re-verifies
-  the package's verified dependencies unless they are cached. Track 0 first extends it with
-  `--jobs N` (run configurations concurrently, each with its own persistent `CARGO_TARGET_DIR`
-  under a `--target-root DIR`, so cargo locks don't serialize them and unchanged dependencies stay
-  cached between runs) and `--only PATTERN...` (run only the configurations whose argument string
-  contains one of the patterns, e.g. `--only 'history-semantics --features runtime,std,cache'`).
-  Keep the existing sequential behavior as the default so CI is unchanged. Give each concurrent
-  configuration `--num-threads` ≈ total threads / jobs; one configuration cannot use 144 threads
-  well because a few long proofs dominate its wall time.
+- Do not modify `scripts/verify-all.sh` beyond registering the two reviewer test targets
+  (Track T); it is used unchanged for the wave gate and the final run. It runs its eleven
+  configurations one after another. To run gates
+  faster, invoke the same `cargo verus verify --locked <configuration> -- --num-threads N`
+  commands directly (`scripts/verify-all.sh --list` prints them), several at once, each with its
+  own persistent `CARGO_TARGET_DIR` so cargo locks don't serialize them and unchanged dependencies
+  stay cached between runs. Give each concurrent configuration `--num-threads` ≈ total threads /
+  concurrent configurations; one configuration cannot use 144 threads well because a few long
+  proofs dominate its wall time.
 
 ### Gates
 
@@ -360,8 +357,8 @@ Three tiers; use the cheapest that covers the change.
 | Gate | When | What |
 |---|---|---|
 | Inner loop | inside a track | `cargo verus verify` on the changed crate with `--verify-module`/`--verify-function`; `cargo check` |
-| Merge gate | each merge (or batch of merges) into the integration branch | `verify-all.sh --jobs --only` the changed crates **and their downstream crates** (order: `history-syntax → junco-core → history-store → history-semantics → history-analysis`), using each package's full-feature configuration only, plus `public_specs` when `history-semantics` is included; in parallel with it, `cargo fmt --check`, `cargo clippy -D warnings` and `cargo test` for those packages, each with its own target directory |
-| Wave gate | once per wave, after its last merge | everything CI runs: all eleven configurations with `--jobs`, workspace and fuzz fmt/clippy/tests, `scripts/spec-check.sh` only if `history_assumptions.rs` changed |
+| Merge gate | each merge (or batch of merges) into the integration branch | the `cargo verus verify` commands of the changed crates **and their downstream crates** (order: `history-syntax → junco-core → history-store → history-semantics → history-analysis`), run concurrently, using each package's full-feature configuration only, plus `public_specs` when `history-semantics` is included; in parallel with it, `cargo fmt --check`, `cargo clippy -D warnings` and `cargo test` for those packages, each with its own target directory |
+| Wave gate | once per wave, after its last merge | everything CI runs: all eleven configurations (concurrently, as above; `scripts/verify-all.sh` for the final run), workspace and fuzz fmt/clippy/tests, `scripts/spec-check.sh` only if `history_assumptions.rs` changed |
 
 - Batch merges: when several tracks of a wave are ready together and own disjoint files, merge
   them in one go and run one merge gate.
