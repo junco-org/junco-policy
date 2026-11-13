@@ -7,10 +7,10 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 | Item | State | Evidence / public statements |
 |---|---|---|
 | H1 | merged | [PR #13](https://github.com/junco-org/junco-policy/pull/13), merge commit `bce1df8511fc56919724e18bdbf5e610c8252bdb`; every CI check passed. Public statements detailed below. |
-| H3 | in progress | Local gates passed; [PR #15](https://github.com/junco-org/junco-policy/pull/15), rebased head `2a6f942` atop merged H6, awaits fresh CI. Prior head passed every check. `Denial::index` and exact-index `check_step` added; paper/reviewer/public clients and root observations updated. |
-| H4 | in progress | Local gates passed; [PR #17](https://github.com/junco-org/junco-policy/pull/17), head `06f0db5`, awaits CI. `stmt_search_correct` and its theorem require trace_steps_ok only for expanded nodes; public index uses the same statement. |
+| H3 | merged | [PR #15](https://github.com/junco-org/junco-policy/pull/15), merge commit `bedc0c955dd9eb24e224126a456d6c84a6092d55`; all seven CI checks passed on exact head `2a6f942428173122cb0e546a62182ea219e28747`. Public statements detailed below. |
+| H4 | in progress | Local gates passed; [PR #17](https://github.com/junco-org/junco-policy/pull/17), rebased head `dd3e3ad` atop H6, awaits CI. Prior head passed every check. `stmt_search_correct` and its theorem require trace_steps_ok only for expanded nodes; public index uses the same statement. |
 | H6 | merged | [PR #14](https://github.com/junco-org/junco-policy/pull/14), merge commit `4151cb0a66058e9ecbc7e787b23438b40f319192`; all CI passed. Public statements detailed below. |
-| H5 | in progress | Monitor half first: explicit resource_error and propagation through core/store/evaluator/public monitor contracts staged. Core **288**, store **289** verified, **0 errors**. Native check passed. Monitor gate running after correcting public opaque-field access. Analyzer half not started. |
+| H5 | in progress | Monitor half passed: core **288**, store **289**, monitor **1624**, reviewer **9**, public_specs **19** verified, **0 errors**. Native clippy/fmt passed, **118 tests passed**; runtime grant/deny/history smoke passed. UnknownId-as-check_step negative probe failed its postcondition as required (**0 verified, 1 error**); removed. Analyzer half now implemented, awaiting integrated proof gate. |
 | H2 | not started | |
 | H7 | not started | |
 | H8 | not started | |
@@ -22,7 +22,7 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 | H14 | not started | |
 | H15 | not started | Deferred unless all other items complete. |
 
-Merged items: H1, PR #13, `bce1df8511fc56919724e18bdbf5e610c8252bdb`; H6, PR #14, `4151cb0a66058e9ecbc7e787b23438b40f319192`.
+Merged items: H1, PR #13, `bce1df8511fc56919724e18bdbf5e610c8252bdb`; H6, PR #14, `4151cb0a66058e9ecbc7e787b23438b40f319192`; H3, PR #15, `bedc0c955dd9eb24e224126a456d6c84a6092d55`.
 
 H1 public statements:
 - `counterexample_spec<E>` (`crates/history-analysis/src/spec/analyzer.rs`) now includes `forall i. 0 <= i < arity::<E>() && a.domains[i] is Some ==> fresh_used(cex,i) =~= ISet::empty()` and `undeclared_capacity::<E>(a,cex) ==> cex_has_instance::<E>(a.domains,a.known,cex)`; existing arity and every-instance validity clauses retained.
@@ -37,6 +37,11 @@ H6 changed public statements:
 - `head_coordinates_wf` is the existing public predicate: exact arity, and every Constant(value) in head[i] has `E::coordinate_spec(value) == i`.
 - Deleted unused `analyzer_wf` and `rule_constants_tagged` from `crates/history-analysis/src/spec/analyzer.rs`; no replacement unproved view invariant.
 
+H3 changed public statements:
+- `Denial<E>::index` (`crates/history-semantics/src/validator.rs`) is the zero-based source index of the first violated rule.
+- `check_step<E,M>` (`crates/history-semantics/src/spec/monitor.rs`), denial arm: `least_violation(before.rules, request.event, before.history, denial.index as int) && denial.mode == before.rules[denial.index as int].mode`. Grant/error clauses and history frame retained.
+- `stmt_matcher` (`crates/history-semantics/src/paper.rs`) and `stmt_monitor_check` (`crates/history-semantics/tests/reviewer.rs`) identify the same exact index; executable/public reviewer clients consume it.
+
 Verification: H1 library merge gate `history-analysis --no-default-features --features runtime,std`: **603 verified, 0 errors**; reviewer: **17 verified, 0 errors**. Ghost-erased clippy passed (`--all-targets -- -D warnings`); package tests **27 passed**. Final package fmt passed after removing the throwaway smoke example. Runtime smoke observed counterexample candidate `[Constant(C0(3)), Constant(C1(7))]`, empty history, both coordinates declared; concrete `(3,7), []` refutes All ⊆ Empty. No ensures weakened; no trusted items added; no paper or benchmark edits.
 
 H6 gates: monitor **1624**, public_specs **19**, monitor reviewer **7**, analyzer **603**, analyzer reviewer **14** verified, all **0 errors**. Ghost-erased clippy passed; package tests **73 passed**; fmt passed. Runtime smoke exercised both analyzer and builder: lawful pair rule accepted; wrong head arity and mistagged head constants rejected with corresponding errors.
@@ -45,7 +50,7 @@ H3 gates before rebase: monitor **1624**, public_specs **19**, monitor reviewer 
 
 H4 gates: monitor **1624**, public_specs **19**, analyzer **603**, analyzer reviewer **17** verified, all **0 errors**; ghost-erased clippy/fmt passed, **73 tests passed**. Runtime search smoke: All ⊆ All returned Holds; All ⊆ Empty returned a constant-only counterexample with empty history.
 
-Rebased H6 composition gate passed: analyzer **603**, reviewer **17**, **0 errors**. Awaiting CI before merge.
+Rebased H6 composition gate passed: analyzer **603**, reviewer **17**, **0 errors**; subsequently all seven CI checks passed and PR #14 merged.
 
 Toolchain: downloaded pinned Z3 cannot execute on host glibc 2.31. Existing `/ssd0/zkent/junco-proof-tools/compat-verus` and `z3-compat` pass the script's pinned version checks; these are used for verification.
 
@@ -53,6 +58,6 @@ Inbox: acknowledged **2026-11-13: Port H1 and H6 from attempt A (PR #12) first**
 
 Inbox additionally acknowledged **2026-11-13: Vacuity probe results (no blocker; priorities unchanged)** at handoff `5e6505f`. No inconsistency reported. Exact `pos_ac1_junk_cex_declared` source/contract run at H1 head: **expected postcondition failure**, **0 verified, 1 error** in probe; analyzer library **603 verified, 0 errors**. Result posted to PR #13; throwaway source removed. New H14 scope: show reachable `Ok` results, not only conditional client guarantees.
 
-Inbox additionally acknowledged **2026-11-13: Submission cleanup PR; no plan ids in new text** at handoff `a25a1e7`. H1 remains unchanged. Will rebase open branches after cleanup merges, preserve cleanup-side comment wording and reapply semantic changes. New code/comments/docs will use descriptive wording; item ids only in STATUS.md and PR titles. H6 rebased onto merged H1 at `c6b5503`; combined analyzer/reviewer proof gate running and CI restarted.
+Inbox additionally acknowledged **2026-11-13: Submission cleanup PR; no plan ids in new text** at handoff `a25a1e7`. H1 remains unchanged. Will rebase open branches after cleanup merges, preserve cleanup-side comment wording and reapply semantic changes. New code/comments/docs use descriptive wording; item ids only in STATUS.md and PR titles. Last inbox fetch at this gate showed no new messages.
 
 Delivery uses one branch/PR per item into main, and this separate status branch, as requested by user (superseding handoff's integration-PR instructions).
