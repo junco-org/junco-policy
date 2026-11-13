@@ -373,6 +373,7 @@ fn push_pieces(
 }
 
 #[verus_verify]
+#[cfg_attr(verus_keep_ghost, verifier::rlimit(20))]
 #[verus_spec(result => ensures final(values).view().to_set() == old(values).view().to_set(),
     ordered(final(values).view()))]
 fn normalize_pieces(values: &mut SmallVec<[RegexId; 8]>) {
