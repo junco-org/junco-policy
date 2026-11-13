@@ -428,6 +428,7 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
     {
         let ghost before = *self.constants;
         self.calls = Ghost(self.calls@ + 1);
+        proof { enc::lemma_grows_by_refl(crate::verify::constant_book(*self.constants), enc::only_value(field, *value)); }
         if self.overflowed { return Err(HistoryError::IdExhausted { domain: "constant" }); }
         validate_component::<E>(field, value)?;
         let result = match self.constants.try_intern(field, *value) {
@@ -440,8 +441,14 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
         proof {
             lemma_constants_maps(*self.constants);
             lemma_constants_extend(before, *self.constants);
+            assert(value_field::<E>(*value) == field);
+            if self.constants.values@.len() > before.values@.len() {
+                assert(self.constants.values@ =~= before.values@.push(*value));
+            } else {
+                assert(self.constants.values@ =~= before.values@);
+            }
+            lemma_constants_grow(before, *self.constants, field, *value);
             if let Ok(id) = result {
-                assert(value_field::<E>(*value) == field);
                 lemma_stored_encoded(*self.constants, *value, id as u32);
             }
         }
@@ -523,6 +530,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                     crate::spec::analyzer::declared_sets(input@).take(index as int)),
                 forall|i: int| 0 <= i < index ==>
                     declared_universe(constants, universes@[i], input.components@[i]),
+                values_known::<E>(crate::spec::analyzer::declared_sets(input@), constants.values@),
             decreases arity - index,
         {
             let ghost before = constants;
@@ -534,7 +542,20 @@ impl<E: Event> PolicyAnalyzer<E> {
                         assert(input.components@[index as int] == Some(*values));
                         lemma_declared_values_tagged(input, index as int);
                     }
-                    Some(constants.universe(field, values))
+                    let universe = constants.universe(field, values);
+                    proof {
+                        broadcast use vstd::prelude::Seq::to_set_ensures;
+                        let ghost known = crate::spec::analyzer::declared_sets(input@);
+                        assert(known[index as int] == values@.to_set());
+                        assert forall|j: int| before.values@.len() <= j < constants.values@.len()
+                            implies E::coordinate_spec(#[trigger] constants.values@[j]) == index
+                                && known[index as int].contains(constants.values@[j]) by {
+                            let i = choose|i: int| 0 <= i < values@.len() && values@[i] == constants.values@[j];
+                            assert(E::coordinate_spec(values@[i]) == index);
+                        }
+                        lemma_values_known_extend::<E>(known, before.values@, constants.values@, index as int);
+                    }
+                    Some(universe)
                 },
                 None => None,
             };
@@ -560,6 +581,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         proof {
             lemma_declared_wf(result, input);
             lemma_constructor_domains(result, input);
+            lemma_stored_known_from_values(result);
         }
         result
     }
@@ -588,10 +610,19 @@ impl<E: Event> PolicyAnalyzer<E> {
         proof {
             self.known = Ghost(crate::spec::analyzer::known_with(self.known@,
                 junco_core::spec::questions::rule_constants(rule@)));
+            lemma_stored_known_grows(before, *self, junco_core::spec::questions::rule_constants(rule@));
         }
+        let ghost staged = *self;
         let flat = flatten_rule_parts(rule.mode, &rule.head, &rule.tail, &mut Unmetered, &mut ObservationWorld)?;
         let numeric_result = self.encode(&flat.source);
-        proof { lemma_universes_frame(before.constants, self.constants, self.universes); }
+        proof {
+            lemma_universes_frame(before.constants, self.constants, self.universes);
+            assert forall|k: int| 0 <= k < arity::<E>() implies
+                junco_core::spec::questions::rule_constants(rule@)[k].subset_of(#[trigger] staged.known@[k]) by {
+                assert(staged.known@[k] == before.known@[k].union(junco_core::spec::questions::rule_constants(rule@)[k]));
+            }
+            lemma_stored_known_lowered(staged, *self, *rule, flat);
+        }
         let numeric = numeric_result?;
         let constants = Self::head_constants(&numeric.head);
         let constraint = Constraint::head(&constants, &self.universes);
@@ -603,10 +634,12 @@ impl<E: Event> PolicyAnalyzer<E> {
             lemma_universes_frame(before.constants, self.constants, self.universes);
         }
         let id = RuleId(self.rules.len(), self.owner);
+        let ghost encoded = *self;
         self.rules.push(StoredRule { original: Ghost(*rule), flat: Ghost(flat),
             numeric, constants, constraint, mode: rule.mode });
         proof {
             assert(analyzer_view(*self).rules =~= analyzer_view(before).rules.push(rule@));
+            lemma_stored_known_frame(encoded, *self);
         }
         Ok(id)
     }
@@ -1124,7 +1157,9 @@ impl<E: Event> PolicyAnalyzer<E> {
         proof {
             self.known = Ghost(crate::spec::analyzer::known_with(self.known@,
                 crate::spec::analyzer::tail_constants(head@, left@, right@)));
+            lemma_stored_known_grows(before, *self, crate::spec::analyzer::tail_constants(head@, left@, right@));
         }
+        let ghost staged = *self;
         let ghost left_rule = Rule { mode: RuleMode::Forbid, head: *head, tail: *left };
         let ghost right_rule = Rule { mode: RuleMode::Forbid, head: *head, tail: *right };
         let left_flat = flatten_rule_parts(RuleMode::Forbid, head, left, &mut Unmetered, &mut ObservationWorld)?;
@@ -1132,13 +1167,35 @@ impl<E: Event> PolicyAnalyzer<E> {
         proof {
             assert(left_rule.head@ == head@ && right_rule.head@ == head@);
             assert(left_rule.tail@ == left@ && right_rule.tail@ == right@);
+            assert(head@.len() == arity::<E>());
+            assert forall|k: int| 0 <= k < arity::<E>() implies
+                junco_core::spec::questions::rule_constants(left_rule@)[k].subset_of(#[trigger] staged.known@[k])
+                && junco_core::spec::questions::rule_constants(right_rule@)[k].subset_of(staged.known@[k]) by {
+                let added = crate::spec::analyzer::tail_constants(head@, left@, right@);
+                assert(staged.known@[k] == before.known@[k].union(added[k]));
+                assert(added[k] == junco_core::spec::questions::head_constants(head@)[k]
+                    .union(junco_core::spec::questions::regex_constants(left@, head@.len())[k])
+                    .union(junco_core::spec::questions::regex_constants(right@, head@.len())[k]));
+                assert(junco_core::spec::questions::rule_constants(left_rule@)[k]
+                    == junco_core::spec::questions::regex_constants(left@, head@.len())[k]
+                        .union(junco_core::spec::questions::head_constants(head@)[k]));
+                assert(junco_core::spec::questions::rule_constants(right_rule@)[k]
+                    == junco_core::spec::questions::regex_constants(right@, head@.len())[k]
+                        .union(junco_core::spec::questions::head_constants(head@)[k]));
+            }
         }
         let left_result = self.encode(&left_flat.source);
-        proof { lemma_universes_extended(before.constants, self.constants, self.universes); }
+        proof {
+            lemma_universes_extended(before.constants, self.constants, self.universes);
+            lemma_stored_known_lowered(staged, *self, left_rule, left_flat);
+        }
         let left_numeric = left_result?;
         let ghost first = *self;
         let right_result = self.encode(&right_flat.source);
-        proof { lemma_universes_extended(first.constants, self.constants, self.universes); }
+        proof {
+            lemma_universes_extended(first.constants, self.constants, self.universes);
+            lemma_stored_known_lowered(first, *self, right_rule, right_flat);
+        }
         let right_numeric = right_result?;
         let ghost input = TailInput { left: left_rule, right: right_rule, left_flat, right_flat,
             left_numeric, right_numeric };
@@ -1237,7 +1294,9 @@ impl<E: Event> PolicyAnalyzer<E> {
             final(self).owner == old(self).owner,
             final(self).declared == old(self).declared,
             final(self).known == old(self).known,
-            analyzer_state_wf(*old(self)) ==> analyzer_state_wf(*final(self)),
+            analyzer_books_wf(*old(self)) ==> analyzer_books_wf(*final(self)),
+            enc::grows_by(crate::verify::constant_book(old(self).constants), crate::verify::constant_book(final(self).constants),
+                enc::source_constants(*source)),
             junco_core::verify::history_specs::no_invariant_failure(result),
             final(self).constants.values@.len() <= old(self).constants.values@.len() + source.head@.len() + source.tests@.len(),
             result matches Ok(target) ==> enc::lowering(*source, target, crate::verify::constant_book(final(self).constants), fl::component_equality::<E>())
@@ -1270,7 +1329,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             lemma_constant_book_length(self.constants);
             assert(self.constants.values@.len() == count);
             if let Ok(target) = &result { lemma_lowered_head_bound(self.constants, *source, *target); }
-            if analyzer_state_wf(before) {
+            if analyzer_books_wf(before) {
                 lemma_universes_extended(before.constants, self.constants, self.universes);
                 lemma_universes_frame(before.constants, self.constants, self.universes);
                 lemma_store_extends(before.constants, self.constants, self.universes, self.rules@);

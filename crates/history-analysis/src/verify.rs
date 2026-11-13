@@ -2542,8 +2542,9 @@ pub use frontend::{analyzer_state_wf, analyzer_view};
 pub(crate) mod frontend {
     use super::*;
     use crate::analyzer::{Domains, PolicyAnalyzer, RuleId, StoredRule};
-    use crate::spec::analyzer::{AnalyzerView, declared_sets, known_count};
+    use crate::spec::analyzer::{AnalyzerView, declared_sets, known_count, known_with};
     use history_syntax::spec::events::RuleView;
+    use history_syntax::syntax::Rule;
     use junco_core::flat::{FlatHead, FlatPair};
     use junco_core::spec::questions::{DomainsView, in_domain};
     use junco_core::verify::{encoding as enc, flatten as fl};
@@ -3132,13 +3133,235 @@ pub(crate) mod frontend {
                 ==> #[trigger] in_domain(a@.domains[k], x) == in_domain(selected_values(a.constants, a.universes[k]), x)
         }
 
-        /// Every interned constant is known at its coordinate up to `eq_spec`. The counterexample
-        /// bridges (`every_instance`, `minimal_in_case`, the refutation clauses) take it as a
-        /// hypothesis; Track F establishes it from `known`'s contracts (wave 2).
+        /// Every interned constant is known at its coordinate up to `eq_spec` (R6 clause 3): the
+        /// counterexample bridges (`every_instance`, `minimal_in_case`, the refutation clauses) rest
+        /// on it. Part of `analyzer_state_wf`; `new` establishes it from the declared values and
+        /// `add_rule`/`tail_included` keep it because a lowering interns only the input's constants.
         pub(crate) open spec fn stored_known<E: Event>(a: PolicyAnalyzer<E>) -> bool {
             forall|k: int, j: int| #![trigger a@.known[k], a.constants.values@[j]]
                 0 <= k < arity::<E>() && 0 <= j < a.constants.values@.len() && E::coordinate_spec(a.constants.values@[j]) == k
                 ==> exists|w: E::Component| #[trigger] a@.known[k].contains(w) && a.constants.values@[j].eq_spec(&w)
+        }
+
+        /// Some member of `known[k]` is `eq_spec`-equal to `v`.
+        pub(crate) open spec fn known_at<C: PartialEq>(known: Seq<Set<C>>, k: int, v: C) -> bool {
+            exists|w: C| #[trigger] known[k].contains(w) && v.eq_spec(&w)
+        }
+
+        /// `stored_known` in the one-variable form the prover can establish (the trigger
+        /// `values[j]` is ground in a goal, `known[k]` is not): every value is known at its own
+        /// coordinate.
+        pub(crate) open spec fn values_known<E: Event>(known: Seq<Set<E::Component>>, values: Seq<E::Component>) -> bool {
+            forall|j: int| #![trigger values[j]] 0 <= j < values.len()
+                ==> known_at(known, E::coordinate_spec(values[j]) as int, values[j])
+        }
+
+        pub(crate) proof fn lemma_stored_known_from_values<E: Event>(a: PolicyAnalyzer<E>)
+            requires values_known::<E>(a.known@, a.constants.values@),
+            ensures stored_known(a),
+        {
+            assert forall|j: int| #![trigger a.constants.values@[j]] 0 <= j < a.constants.values@.len()
+                implies exists|w: E::Component| #[trigger] a@.known[E::coordinate_spec(a.constants.values@[j]) as int].contains(w)
+                    && a.constants.values@[j].eq_spec(&w) by {
+                let k = E::coordinate_spec(a.constants.values@[j]) as int;
+                assert(known_at(a.known@, k, a.constants.values@[j]));
+                let w = choose|w: E::Component| #[trigger] a.known@[k].contains(w) && a.constants.values@[j].eq_spec(&w);
+                assert(a@.known[k].contains(w));
+            }
+        }
+
+        /// `stored_known` instantiated at one stored value.
+        pub(crate) proof fn lemma_stored_known_at<E: Event>(a: PolicyAnalyzer<E>, j: int)
+            requires stored_known(a), constants_wf(a.constants), 0 <= j < a.constants.values@.len(),
+            ensures exists|w: E::Component| #[trigger] a@.known[E::coordinate_spec(a.constants.values@[j]) as int].contains(w)
+                && a.constants.values@[j].eq_spec(&w),
+        {
+            let k = E::coordinate_spec(a.constants.values@[j]) as int;
+            assert(0 <= k < arity::<E>());
+            let w = choose|w: E::Component| #[trigger] a@.known[k].contains(w) && a.constants.values@[j].eq_spec(&w);
+            assert(a@.known[k].contains(w));
+        }
+
+        /// `stored_known` reads only `known` and the constants.
+        pub(crate) proof fn lemma_stored_known_frame<E: Event>(before: PolicyAnalyzer<E>, after: PolicyAnalyzer<E>)
+            requires stored_known(before), constants_wf(before.constants),
+                after.known == before.known, after.constants == before.constants,
+            ensures stored_known(after),
+        {
+            assert forall|j: int| #![trigger after.constants.values@[j]] 0 <= j < after.constants.values@.len()
+                implies exists|w: E::Component| #[trigger] after@.known[E::coordinate_spec(after.constants.values@[j]) as int].contains(w)
+                    && after.constants.values@[j].eq_spec(&w) by {
+                lemma_stored_known_at(before, j);
+                let w = choose|w: E::Component| #[trigger] before@.known[E::coordinate_spec(before.constants.values@[j]) as int].contains(w)
+                    && before.constants.values@[j].eq_spec(&w);
+                assert(after@.known[E::coordinate_spec(after.constants.values@[j]) as int].contains(w));
+            }
+        }
+
+        /// Values interned from a declared slice at `index` stay known.
+        pub(crate) proof fn lemma_values_known_extend<E: Event>(known: Seq<Set<E::Component>>,
+            before: Seq<E::Component>, after: Seq<E::Component>, index: int)
+            requires analyzer_obligations::<E>(), values_known::<E>(known, before), before.is_prefix_of(after),
+                forall|j: int| before.len() <= j < after.len()
+                    ==> E::coordinate_spec(#[trigger] after[j]) == index && known[index].contains(after[j]),
+            ensures values_known::<E>(known, after),
+        {
+            assert forall|j: int| #![trigger after[j]] 0 <= j < after.len()
+                implies known_at(known, E::coordinate_spec(after[j]) as int, after[j]) by {
+                if j < before.len() {
+                    assert(after[j] == before[j]);
+                    assert(known_at(known, E::coordinate_spec(before[j]) as int, before[j]));
+                } else {
+                    let w = after[j];
+                    let k = E::coordinate_spec(w) as int;
+                    assert(known[k].contains(w));
+                    assert(w.eq_spec(&w)) by { assert(junco_core::spec::hypotheses::eq_equivalence::<E::Component>()); }
+                    assert(known_at(known, k, w));
+                }
+            }
+        }
+
+        /// Growing `known` pointwise keeps every stored value known.
+        pub(crate) proof fn lemma_stored_known_grows<E: Event>(before: PolicyAnalyzer<E>, after: PolicyAnalyzer<E>,
+            added: Seq<Set<E::Component>>)
+            requires stored_known(before), constants_wf(before.constants), after.constants == before.constants,
+                before.known@.len() == arity::<E>(),
+                after.known@ == known_with(before.known@, added),
+            ensures stored_known(after),
+        {
+            assert forall|j: int| #![trigger after.constants.values@[j]] 0 <= j < after.constants.values@.len()
+                implies exists|w: E::Component| #[trigger] after@.known[E::coordinate_spec(after.constants.values@[j]) as int].contains(w)
+                    && after.constants.values@[j].eq_spec(&w) by {
+                let k = E::coordinate_spec(after.constants.values@[j]) as int;
+                lemma_stored_known_at(before, j);
+                let w = choose|w: E::Component| #[trigger] before@.known[k].contains(w)
+                    && before.constants.values@[j].eq_spec(&w);
+                assert(0 <= k < arity::<E>());
+                assert(after@.known[k] == before.known@[k].union(added[k]));
+                assert(after@.known[k].contains(w));
+            }
+        }
+
+        /// Interning `value` at `field` adds nothing else to the book.
+        pub(crate) proof fn lemma_constants_grow<E: Event>(before: Constants<E>, after: Constants<E>,
+            field: Component, value: E::Component)
+            requires after.values@ == before.values@ || after.values@ == before.values@.push(value),
+                value_field::<E>(value) == field,
+            ensures enc::grows_by(constant_book(before), constant_book(after), enc::only_value(field, value)),
+        {
+            let a = constant_book(after);
+            let b = constant_book(before);
+            assert forall|f: int, i: int| #![trigger a[f][i]] 0 <= f < a.len() && 0 <= i < a[f].len()
+                implies (exists|j: int| 0 <= j < b[f].len() && (#[trigger] b[f][j]).0 == a[f][i].0)
+                    || enc::only_value(field, value)(enc::field_at(f), a[f][i].0) by {
+                let component = Component(f as u8);
+                assert(a[f] == field_entries::<E>(after.values@, component));
+                assert(b[f] == field_entries::<E>(before.values@, component));
+                lemma_field_entry_source::<E>(after.values@, component, i);
+                let j = choose|j: int| 0 <= j < after.values@.len() && a[f][i] == (after.values@[j], (j + 1) as u64);
+                if j < before.values@.len() {
+                    assert(after.values@[j] == before.values@[j]);
+                    lemma_field_entry_at::<E>(before.values@, component, j);
+                    let k = choose|k: int| 0 <= k < b[f].len() && b[f][k] == (before.values@[j], (j + 1) as u64);
+                    assert(b[f][k].0 == a[f][i].0);
+                } else {
+                    assert(after.values@[j] == value);
+                    assert(component == field);
+                }
+            }
+        }
+
+        /// The values a book gained are old values or ones `added` admits at their coordinate.
+        pub(crate) proof fn lemma_values_grow<E: Event>(before: Constants<E>, after: Constants<E>,
+            added: spec_fn(Component, E::Component) -> bool)
+            requires constants_wf(after), constants_frame(before, after),
+                enc::grows_by(constant_book(before), constant_book(after), added),
+            ensures forall|j: int| before.values@.len() <= j < after.values@.len()
+                ==> (exists|k: int| 0 <= k < before.values@.len() && before.values@[k] == #[trigger] after.values@[j])
+                    || added(value_field::<E>(after.values@[j]), after.values@[j]),
+        {
+            let a = constant_book(after);
+            let b = constant_book(before);
+            assert forall|j: int| before.values@.len() <= j < after.values@.len()
+                implies (exists|k: int| 0 <= k < before.values@.len() && before.values@[k] == #[trigger] after.values@[j])
+                    || added(value_field::<E>(after.values@[j]), after.values@[j]) by {
+                let v = after.values@[j];
+                let f = E::coordinate_spec(v) as int;
+                let component = Component(f as u8);
+                assert(component == value_field::<E>(v) && component == enc::field_at(f));
+                assert(a[f] == field_entries::<E>(after.values@, component));
+                assert(b[f] == field_entries::<E>(before.values@, component));
+                lemma_field_entry_at::<E>(after.values@, component, j);
+                let i = choose|i: int| 0 <= i < a[f].len() && a[f][i] == (v, (j + 1) as u64);
+                if exists|k: int| 0 <= k < b[f].len() && (#[trigger] b[f][k]).0 == a[f][i].0 {
+                    let k = choose|k: int| 0 <= k < b[f].len() && (#[trigger] b[f][k]).0 == a[f][i].0;
+                    lemma_field_entry_source::<E>(before.values@, component, k);
+                    let l = choose|l: int| 0 <= l < before.values@.len() && b[f][k] == (before.values@[l], (l + 1) as u64);
+                    assert(before.values@[l] == v);
+                }
+            }
+        }
+
+        /// Interning only constants that `known` already holds keeps every stored value known.
+        pub(crate) proof fn lemma_stored_known_interned<E: Event>(before: PolicyAnalyzer<E>, after: PolicyAnalyzer<E>,
+            added: spec_fn(Component, E::Component) -> bool)
+            requires stored_known(before), analyzer_obligations::<E>(), constants_wf(before.constants),
+                constants_wf(after.constants), constants_frame(before.constants, after.constants),
+                after.known == before.known,
+                enc::grows_by(constant_book(before.constants), constant_book(after.constants), added),
+                forall|v: E::Component| #[trigger] added(value_field::<E>(v), v) && E::coordinate_spec(v) < arity::<E>()
+                    ==> before@.known[E::coordinate_spec(v) as int].contains(v),
+            ensures stored_known(after),
+        {
+            assert(junco_core::spec::hypotheses::eq_equivalence::<E::Component>());
+            assert(after@.known == before@.known);
+            lemma_values_grow(before.constants, after.constants, added);
+            assert forall|j: int| #![trigger after.constants.values@[j]] 0 <= j < after.constants.values@.len()
+                implies exists|w: E::Component| #[trigger] after@.known[E::coordinate_spec(after.constants.values@[j]) as int].contains(w)
+                    && after.constants.values@[j].eq_spec(&w) by {
+                let v = after.constants.values@[j];
+                let k = E::coordinate_spec(v) as int;
+                if j < before.constants.values@.len() {
+                    assert(v == before.constants.values@[j]);
+                    lemma_stored_known_at(before, j);
+                    let w = choose|w: E::Component| #[trigger] before@.known[k].contains(w)
+                        && before.constants.values@[j].eq_spec(&w);
+                    assert(after@.known[k].contains(w) && v.eq_spec(&w));
+                } else if exists|l: int| 0 <= l < before.constants.values@.len() && before.constants.values@[l] == v {
+                    let l = choose|l: int| 0 <= l < before.constants.values@.len() && before.constants.values@[l] == v;
+                    lemma_stored_known_at(before, l);
+                    let w = choose|w: E::Component| #[trigger] before@.known[k].contains(w)
+                        && before.constants.values@[l].eq_spec(&w);
+                    assert(after@.known[k].contains(w) && v.eq_spec(&w));
+                } else {
+                    assert(added(value_field::<E>(v), v));
+                    assert(after@.known[k].contains(v) && v.eq_spec(&v));
+                }
+            }
+        }
+
+        /// Lowering a rule interns only its constants, which `known` holds after the contract's
+        /// `known_with` step: every stored value stays known.
+        pub(crate) proof fn lemma_stored_known_lowered<E: Event>(before: PolicyAnalyzer<E>, after: PolicyAnalyzer<E>,
+            rule: Rule<E>, flat: junco_core::flat::FlatRule<E::Component>)
+            requires analyzer_state_wf(before), analyzer_obligations::<E>(), fl::flattened(rule, flat),
+                constants_wf(after.constants), constants_frame(before.constants, after.constants),
+                after.known == before.known,
+                enc::grows_by(constant_book(before.constants), constant_book(after.constants), enc::source_constants(flat.source)),
+                forall|k: int| 0 <= k < arity::<E>()
+                    ==> junco_core::spec::questions::rule_constants(rule@)[k].subset_of(#[trigger] before.known@[k]),
+            ensures stored_known(after),
+        {
+            fl::lemma_flattened_constants(rule, flat);
+            assert forall|v: E::Component| #[trigger] enc::source_constants(flat.source)(value_field::<E>(v), v)
+                && E::coordinate_spec(v) < arity::<E>()
+                implies before@.known[E::coordinate_spec(v) as int].contains(v) by {
+                let k = E::coordinate_spec(v) as int;
+                assert(enc::source_constant(flat.source, value_field::<E>(v), v));
+                assert(value_field::<E>(v).0 as int == k);
+                assert(junco_core::spec::questions::rule_constants(rule@)[k].contains(v));
+            }
+            lemma_stored_known_interned(before, after, enc::source_constants(flat.source));
         }
 
         /// Interning constants keeps the view links: the ghost fields and the universes are unchanged.
@@ -3160,10 +3383,15 @@ pub(crate) mod frontend {
 
         /// Constant books, declared coordinate domains and stored rules remain well formed across
         /// queries, and the ghost view stays linked to the interned universes.
-        pub open(crate) spec fn analyzer_state_wf<E: Event>(a: PolicyAnalyzer<E>) -> bool {
+        pub(crate) open spec fn analyzer_books_wf<E: Event>(a: PolicyAnalyzer<E>) -> bool {
             constants_wf(a.constants) && universes_wf(a.constants, a.universes)
                 && (forall|i: int| 0 <= i < a.rules@.len() ==> stored_rule_wf(a.constants, a.universes, a.rules@[i]))
                 && domains_linked(a)
+        }
+
+        /// `analyzer_books_wf` plus clause 3: every interned constant is known (`stored_known`).
+        pub open(crate) spec fn analyzer_state_wf<E: Event>(a: PolicyAnalyzer<E>) -> bool {
+            analyzer_books_wf(a) && stored_known(a)
         }
 
         pub(crate) proof fn lemma_universes_frame<E: Event>(a: Constants<E>, b: Constants<E>, us: Universes)

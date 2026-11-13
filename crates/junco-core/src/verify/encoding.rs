@@ -76,6 +76,108 @@ pub proof fn lemma_extends_transitive<C>(a: Codebook<C>, b: Codebook<C>, c: Code
     ensures extends(a, c, eq),
 {}
 
+/// Every value in `after`'s books is a value `before` held at the same coordinate or one that
+/// `added` admits there: an encoding interns nothing but what it was asked to encode.
+pub open spec fn grows_by<C>(before: Codebook<C>, after: Codebook<C>, added: spec_fn(Component, C) -> bool) -> bool {
+    after.len() == before.len() && forall|f: int, i: int| #![trigger after[f][i]] 0 <= f < after.len() && 0 <= i < after[f].len()
+        ==> (exists|j: int| 0 <= j < before[f].len() && (#[trigger] before[f][j]).0 == after[f][i].0)
+            || added(field_at(f), after[f][i].0)
+}
+
+/// The one value an `encode` call may intern.
+pub open spec fn only_value<C>(field: Component, value: C) -> spec_fn(Component, C) -> bool {
+    |f: Component, v: C| f == field && v == value
+}
+
+/// The constant a head slot at `field` may intern.
+pub open spec fn head_constant_of<C>(head: FlatHead<C>, field: Component) -> spec_fn(Component, C) -> bool {
+    |f: Component, v: C| f == field && head == FlatHead::Constant(v)
+}
+
+/// The constant a test atom may intern.
+pub open spec fn test_constant_of<C>(test: FlatTest<C>) -> spec_fn(Component, C) -> bool {
+    |f: Component, v: C| match test {
+        FlatTest::Atom { field, term: FlatTerm::Constant(value), .. } => f == field && v == value,
+        _ => false,
+    }
+}
+
+/// `value` is a constant of `source` at coordinate `field` (a head slot or a test atom).
+pub open spec fn source_constant<C>(source: FlatPair<C>, field: Component, value: C) -> bool {
+    (exists|i: int| 0 <= i < source.head@.len() && field_at(i) == field
+        && (#[trigger] source.head@[i]) == FlatHead::Constant(value))
+    || (exists|i: int| 0 <= i < source.tests@.len() && match #[trigger] source.tests@[i] {
+        FlatTest::Atom { field: f, term: FlatTerm::Constant(v), .. } => f == field && v == value,
+        _ => false,
+    })
+}
+
+pub open spec fn source_constants<C>(source: FlatPair<C>) -> spec_fn(Component, C) -> bool {
+    |f: Component, v: C| source_constant(source, f, v)
+}
+
+pub proof fn lemma_head_source_constant<C>(source: FlatPair<C>, i: int)
+    requires 0 <= i < source.head@.len(),
+    ensures forall|f: Component, v: C| #[trigger] head_constant_of(source.head@[i], field_at(i))(f, v)
+        ==> source_constants(source)(f, v),
+{
+    assert forall|f: Component, v: C| #[trigger] head_constant_of(source.head@[i], field_at(i))(f, v)
+        implies source_constants(source)(f, v) by {
+        assert(source.head@[i] == FlatHead::Constant(v));
+    }
+}
+
+pub proof fn lemma_test_source_constant<C>(source: FlatPair<C>, i: int)
+    requires 0 <= i < source.tests@.len(),
+    ensures forall|f: Component, v: C| #[trigger] test_constant_of(source.tests@[i])(f, v)
+        ==> source_constants(source)(f, v),
+{
+    assert forall|f: Component, v: C| #[trigger] test_constant_of(source.tests@[i])(f, v)
+        implies source_constants(source)(f, v) by {
+        assert(match source.tests@[i] {
+            FlatTest::Atom { field: f2, term: FlatTerm::Constant(v2), .. } => f2 == f && v2 == v,
+            _ => false,
+        });
+    }
+}
+
+pub proof fn lemma_grows_by_refl<C>(book: Codebook<C>, added: spec_fn(Component, C) -> bool)
+    ensures grows_by(book, book, added),
+{
+    assert forall|f: int, i: int| #![trigger book[f][i]] 0 <= f < book.len() && 0 <= i < book[f].len()
+        implies exists|j: int| 0 <= j < book[f].len() && (#[trigger] book[f][j]).0 == book[f][i].0 by {
+        let j = i;
+        assert(0 <= j < book[f].len() && book[f][j].0 == book[f][i].0);
+    }
+}
+
+/// Two growths compose, and either bound may be weakened to a common one.
+pub proof fn lemma_grows_by_transitive<C>(a: Codebook<C>, b: Codebook<C>, c: Codebook<C>,
+    p: spec_fn(Component, C) -> bool, q: spec_fn(Component, C) -> bool, r: spec_fn(Component, C) -> bool)
+    requires grows_by(a, b, p), grows_by(b, c, q),
+        forall|f: Component, v: C| #[trigger] p(f, v) ==> r(f, v),
+        forall|f: Component, v: C| #[trigger] q(f, v) ==> r(f, v),
+    ensures grows_by(a, c, r),
+{
+    assert forall|f: int, i: int| #![trigger c[f][i]] 0 <= f < c.len() && 0 <= i < c[f].len()
+        implies (exists|j: int| 0 <= j < a[f].len() && (#[trigger] a[f][j]).0 == c[f][i].0)
+            || r(field_at(f), c[f][i].0) by {
+        if exists|j: int| 0 <= j < b[f].len() && (#[trigger] b[f][j]).0 == c[f][i].0 {
+            let j = choose|j: int| 0 <= j < b[f].len() && (#[trigger] b[f][j]).0 == c[f][i].0;
+            assert(0 <= f < b.len() && 0 <= j < b[f].len());
+        }
+    }
+}
+
+pub proof fn lemma_grows_by_weaken<C>(a: Codebook<C>, b: Codebook<C>,
+    p: spec_fn(Component, C) -> bool, q: spec_fn(Component, C) -> bool)
+    requires grows_by(a, b, p), forall|f: Component, v: C| #[trigger] p(f, v) ==> q(f, v),
+    ensures grows_by(a, b, q),
+{
+    lemma_grows_by_refl(a, p);
+    lemma_grows_by_transitive(a, a, b, p, p, q);
+}
+
 pub proof fn lemma_encoded_equality<C>(
     maps: Codebook<C>, eq: Equality<C>, domain: Domain<C>, field: Component,
     left: C, right: C, left_id: u64, right_id: u64,
