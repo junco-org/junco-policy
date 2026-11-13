@@ -6,7 +6,7 @@ use crate::store::Event as NumericEvent;
 use crate::store::HistoryStore;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::hash::Hash;
+use history_syntax::KeyHash;
 #[cfg(verus_keep_ghost)]
 use history_syntax::event::specs::{AritySpec, EventSpec};
 #[cfg(verus_keep_ghost)]
@@ -30,8 +30,7 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
 
-pub(crate) mod map;
-use map::NativeMap;
+use crate::keyed::KeyedMap;
 
 // Ghost<T> signatures still name T after native erasure; this is the exact finite model.
 pub type ComponentMaps<E> = vstd::seq::Seq<vstd::seq::Seq<(<E as Event>::Component, u64)>>;
@@ -51,8 +50,8 @@ verus! {
 
 broadcast use {vstd::seq::group_seq_lemmas, vstd::std_specs::vec::group_vec_axioms};
 
-pub(crate) struct Codebook<K: Copy + Eq + Hash> {
-    pub(crate) values: NativeMap<K>,
+pub(crate) struct Codebook<K: Copy + Eq + KeyHash> {
+    pub(crate) values: KeyedMap<K, u64>,
     pub(crate) last: u64,
     #[cfg(verus_keep_ghost)]
     pub(crate) issued: Tracked<Option<crate::store::ComponentReceipts>>,
@@ -147,14 +146,14 @@ impl NativeStoreIds {
     }
 }
 
-impl<K: Copy + Eq + Hash> Codebook<K> {
+impl<K: Copy + Eq + KeyHash> Codebook<K> {
     fn new() -> (result: Self)
         ensures book_wf(result), book_entries(result) == Seq::<(K, u64)>::empty(),
             result.issued@ is None, result.last == 0,
             forall|index: int, issuer: crate::store::ComponentIssuer|
                 book_receipts_wf(result, index, issuer),
     {
-        Self { values: NativeMap::new(), last: 0,
+        Self { values: KeyedMap::new(), last: 0,
             #[cfg(verus_keep_ghost)] issued: Tracked(None) }
     }
 
@@ -1232,10 +1231,10 @@ pub mod verify {
             && junco_core::verify::encoding::event_representation(numeric_values(numeric), numeric@)
     }
 
-    pub(crate) open(crate) spec fn book_entries<K: Copy + Eq + Hash>(book: Codebook<K>) -> Seq<(K, u64)> {
-        map::representatives(book.values)
+    pub(crate) open(crate) spec fn book_entries<K: Copy + Eq + KeyHash>(book: Codebook<K>) -> Seq<(K, u64)> {
+        book.values@
     }
-    pub(crate) open(crate) spec fn book_wf<K: Copy + Eq + Hash>(book: Codebook<K>) -> bool {
+    pub(crate) open(crate) spec fn book_wf<K: Copy + Eq + KeyHash>(book: Codebook<K>) -> bool {
         (forall|i: int| #![trigger book_entries(book)[i]]
             0 <= i < book_entries(book).len() ==> 0 < book_entries(book)[i].1 <= book.last)
             && (junco_core::spec::hypotheses::key_laws::<K>() ==> forall|i: int, j: int|
@@ -1243,11 +1242,11 @@ pub mod verify {
                 ==> (book_entries(book)[i].0.eq_spec(&book_entries(book)[j].0)
                     == (book_entries(book)[i].1 == book_entries(book)[j].1)))
     }
-    pub(crate) open(crate) spec fn book_encoded<K: Copy + Eq + Hash>(book: Codebook<K>, value: K, id: u64) -> bool {
+    pub(crate) open(crate) spec fn book_encoded<K: Copy + Eq + KeyHash>(book: Codebook<K>, value: K, id: u64) -> bool {
         id > 0 && exists|i: int| 0 <= i < book_entries(book).len()
             && book_entries(book)[i].1 == id && value.eq_spec(&book_entries(book)[i].0)
     }
-    pub(crate) open(crate) spec fn book_receipts_wf<K: Copy + Eq + Hash>(book: Codebook<K>,
+    pub(crate) open(crate) spec fn book_receipts_wf<K: Copy + Eq + KeyHash>(book: Codebook<K>,
         index: int, issuer: crate::store::ComponentIssuer) -> bool {
         match book.issued@ {
             None => book.last == 0
@@ -1427,6 +1426,11 @@ mod tests {
     impl Hash for Key {
         fn hash<H: Hasher>(&self, state: &mut H) {
             0u8.hash(state);
+        }
+    }
+    impl history_syntax::KeyHash for Key {
+        fn key_hash(&self) -> u64 {
+            history_syntax::key_hash::hash_via_std(self)
         }
     }
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -1727,6 +1731,11 @@ mod tests {
                 self.id.hash(state);
             }
         }
+        impl history_syntax::KeyHash for Borrowed<'_> {
+            fn key_hash(&self) -> u64 {
+                history_syntax::key_hash::hash_via_std(self)
+            }
+        }
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
         struct BorrowedEvent<'a>(Borrowed<'a>);
         impl<'a> Event for BorrowedEvent<'a> {
@@ -1797,6 +1806,11 @@ mod tests {
             fn hash<H: Hasher>(&self, state: &mut H) {
                 assert_ne!(self.0, 8, "deliberate component hash failure");
                 self.0.hash(state);
+            }
+        }
+        impl history_syntax::KeyHash for PanickingKey {
+            fn key_hash(&self) -> u64 {
+                history_syntax::key_hash::hash_via_std(self)
             }
         }
         #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]

@@ -3,7 +3,7 @@
 use core::fmt::{self, Debug};
 use core::hash::Hash;
 
-use history_syntax::{Event, N3};
+use history_syntax::{Event, KeyHash, N3};
 
 /// Ownership-lock capability action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -38,6 +38,13 @@ pub enum LockComponent<P, R> {
     Action(Action),
     /// Protected resource at coordinate two.
     Resource(R),
+}
+
+// Unverified glue: `hash_respects_eq` is a hypothesis for this type (as `event_laws` already is).
+impl<P: Hash, R: Hash> KeyHash for LockComponent<P, R> {
+    fn key_hash(&self) -> u64 {
+        history_syntax::key_hash::hash_via_std(self)
+    }
 }
 
 /// Built-in compact ownership-lock event.

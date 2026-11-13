@@ -71,6 +71,13 @@ enum DocComponent {
     Resource(SrcX),
 }
 
+// Unverified glue: `hash_respects_eq` is a hypothesis for this type (as `event_laws` already is).
+impl history_syntax::KeyHash for DocComponent {
+    fn key_hash(&self) -> u64 {
+        history_syntax::key_hash::hash_via_std(self)
+    }
+}
+
 impl Event for DocEvent {
     type Component = DocComponent;
     type Arity = N3;

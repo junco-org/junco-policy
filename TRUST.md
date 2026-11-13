@@ -34,53 +34,26 @@ is not verified at all (see Unverified glue below).
 |---|---:|---:|---:|---:|---:|---:|
 | `assume_specification` | 0 | 0 | 0 | 0 | 19 | 19 |
 | `external_fn_specification` | 0 | 0 | 0 | 0 | 0 | 0 |
-| `external_body` | 11 | 14 | 41 | 1 | 3 | 70 |
+| `external_body` | 0 | 14 | 37 | 1 | 3 | 55 |
 | `external_type_specification` | 0 | 0 | 2 | 2 | 3 | 7 |
-| `external_trait_specification` | 0 | 0 | 0 | 2 | 1 | 3 |
+| `external_trait_specification` | 0 | 0 | 0 | 3 | 1 | 4 |
 | `external` | 0 | 0 | 2 | 0 | 0 | 2 |
 | `admit` | 0 | 0 | 0 | 0 | 0 | 0 |
 | `assume` | 0 | 0 | 0 | 0 | 0 | 0 |
 | `exec_allows_no_decreases_clause` | 0 | 1 | 1 | 0 | 0 | 2 |
-| `axiom` | 5 | 0 | 0 | 0 | 0 | 5 |
-| `uninterp` | 3 | 9 | 22 | 0 | 4 | 38 |
-| `derived_eq_claim` | 2 | 0 | 1 | 3 | 10 | 16 |
-| `unannotated_pub_fn` | 0 | 16 | 3 | 0 | 0 | 19 |
-| **total** | **21** | **40** | **72** | **8** | **40** | **181** |
+| `axiom` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `uninterp` | 0 | 9 | 21 | 0 | 3 | 33 |
+| `derived_eq_claim` | 3 | 0 | 1 | 3 | 10 | 17 |
+| `unannotated_pub_fn` | 0 | 16 | 3 | 1 | 0 | 20 |
+| **total** | **3** | **40** | **67** | **10** | **39** | **159** |
 
 ## `crates/history-analysis`
 
-### `external_body` (11)
+### `derived_eq_claim` (3)
 
-- `crates/history-analysis/src/native.rs:12`: `struct NativeMap<K: Eq + Hash, V: Copy>`
-- `crates/history-analysis/src/native.rs:23`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn new`
-- `crates/history-analysis/src/native.rs:30`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn lookup`
-- `crates/history-analysis/src/native.rs:43`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn insert_fresh`
-- `crates/history-analysis/src/native.rs:55`: `struct NativeSet<K: Eq + Hash>`
-- `crates/history-analysis/src/native.rs:64`: `impl<K: Eq + Hash> NativeSet<K> :: fn new`
-- `crates/history-analysis/src/native.rs:71`: `impl<K: Eq + Hash> NativeSet<K> :: fn insert`
-- `crates/history-analysis/src/native.rs:84`: `struct NativeGroups<K: Eq + Hash, V>`
-- `crates/history-analysis/src/native.rs:94`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn new`
-- `crates/history-analysis/src/native.rs:101`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn get`
-- `crates/history-analysis/src/native.rs:112`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn push`
-
-### `axiom` (5)
-
-- `crates/history-analysis/src/verify/key_axioms.rs:23`: `fn axiom_constraint_regex_pair_key_model`
-- `crates/history-analysis/src/verify/key_axioms.rs:27`: `fn axiom_regex_pair_key_model`
-- `crates/history-analysis/src/verify/key_axioms.rs:31`: `fn axiom_test_pair_key_model`
-- `crates/history-analysis/src/verify/key_axioms.rs:37`: `fn axiom_regex_id_smallvec_key_model`
-- `crates/history-analysis/src/verify/key_axioms.rs:45`: `fn axiom_constraint_key_model`
-
-### `uninterp` (3)
-
-- `crates/history-analysis/src/native.rs:19`: `fn representatives` — **meaning**: the entries of an external_body hash map, as `eq_spec` classes under `key_laws`
-- `crates/history-analysis/src/native.rs:61`: `fn members` — **meaning**: the entries of an external_body hash set, as `eq_spec` classes under `key_laws`
-- `crates/history-analysis/src/native.rs:91`: `fn groups` — **meaning**: the entries of an external_body hash multimap, as `eq_spec` classes under `key_laws`
-
-### `derived_eq_claim` (2)
-
-- `crates/history-analysis/src/constraint.rs:866`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for RegisterConstraint`
-- `crates/history-analysis/src/constraint.rs:908`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for Constraint`
+- `crates/history-analysis/src/constraint.rs:870`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for RegisterConstraint`
+- `crates/history-analysis/src/constraint.rs:912`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for Constraint`
+- `crates/history-analysis/src/prune.rs:59`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for Parts`
 
 ## `crates/history-semantics`
 
@@ -138,12 +111,13 @@ is not verified at all (see Unverified glue below).
 
 ## `crates/history-store`
 
-### `external_body` (41)
+### `external_body` (37)
 
 - `crates/history-store/src/cache.rs:69`: `impl GraphCaches :: fn successor_cache`
 - `crates/history-store/src/cache.rs:79`: `impl GraphCaches :: fn successor_get`
 - `crates/history-store/src/cache.rs:93`: `impl GraphCaches :: fn successor_put`
 - `crates/history-store/src/cache.rs:129`: `impl HistoryCursor :: fn position`
+- `crates/history-store/src/keyed.rs:164`: `impl<K: Eq + KeyHash, V> KeyedMap<K, V> :: fn reserve_one`
 - `crates/history-store/src/store.rs:214`: `impl Domain :: fn path_lookup`
 - `crates/history-store/src/store.rs:225`: `impl Domain :: fn path_insert`
 - `crates/history-store/src/store.rs:233`: `impl Domain :: fn path_remove`
@@ -167,20 +141,15 @@ is not verified at all (see Unverified glue below).
 - `crates/history-store/src/store.rs:1813`: `impl<'a> NativeRecordReadGuard<'a> :: fn acquire`
 - `crates/history-store/src/store.rs:1822`: `impl<'a> NativeRecordReadGuard<'a> :: fn cell`
 - `crates/history-store/src/store.rs:1886`: `impl HistoryStore :: fn new`
-- `crates/history-store/src/typed.rs:116`: `struct NativeStoreIds`
-- `crates/history-store/src/typed.rs:122`: `impl NativeStoreIds :: fn new`
-- `crates/history-store/src/typed.rs:129`: `impl NativeStoreIds :: fn with_state`
-- `crates/history-store/src/typed.rs:416`: `struct NativeBooks<E: Event>`
-- `crates/history-store/src/typed.rs:423`: `impl<E: Event> NativeBooks<E> :: fn new`
-- `crates/history-store/src/typed.rs:435`: `impl<E: Event> NativeBooks<E> :: fn with_books`
-- `crates/history-store/src/typed.rs:477`: `fn share_store`
-- `crates/history-store/src/typed.rs:487`: `fn borrow_store`
-- `crates/history-store/src/typed.rs:495`: `fn process_store_ids_ref`
-- `crates/history-store/src/typed/map.rs:17`: `struct NativeMap<K: Copy + Eq + Hash>`
-- `crates/history-store/src/typed/map.rs:27`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn new`
-- `crates/history-store/src/typed/map.rs:34`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn lookup`
-- `crates/history-store/src/typed/map.rs:47`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn reserve_one`
-- `crates/history-store/src/typed/map.rs:58`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn insert_fresh`
+- `crates/history-store/src/typed.rs:115`: `struct NativeStoreIds`
+- `crates/history-store/src/typed.rs:121`: `impl NativeStoreIds :: fn new`
+- `crates/history-store/src/typed.rs:128`: `impl NativeStoreIds :: fn with_state`
+- `crates/history-store/src/typed.rs:415`: `struct NativeBooks<E: Event>`
+- `crates/history-store/src/typed.rs:422`: `impl<E: Event> NativeBooks<E> :: fn new`
+- `crates/history-store/src/typed.rs:434`: `impl<E: Event> NativeBooks<E> :: fn with_books`
+- `crates/history-store/src/typed.rs:476`: `fn share_store`
+- `crates/history-store/src/typed.rs:486`: `fn borrow_store`
+- `crates/history-store/src/typed.rs:494`: `fn process_store_ids_ref`
 
 ### `external_type_specification` (2)
 
@@ -196,7 +165,7 @@ is not verified at all (see Unverified glue below).
 
 - `crates/history-store/src/history.rs:309`: `impl<E: TypedEvent> History<E> :: fn from_iterator`
 
-### `uninterp` (22)
+### `uninterp` (21)
 
 - `crates/history-store/src/cache.rs:257`: `fn successor_cache_view` — **meaning**: the entries of the LRU successor cache; contracts allow eviction, never a fabricated entry
 - `crates/history-store/src/store.rs:871`: `fn record_id`
@@ -214,12 +183,11 @@ is not verified at all (see Unverified glue below).
 - `crates/history-store/src/store.rs:1498`: `fn numeric_authorities` — **meaning**: the process-wide coordinate and history-key allocators (static installation)
 - `crates/history-store/src/store.rs:1832`: `fn cell_view`
 - `crates/history-store/src/store.rs:1833`: `fn record_view`
-- `crates/history-store/src/typed.rs:999`: `fn store_ids_authority_id`
-- `crates/history-store/src/typed.rs:1000`: `fn process_store_ids` — **meaning**: the process-wide store-id allocator (static installation)
-- `crates/history-store/src/typed.rs:1004`: `fn store_ids_mutex_valid`
-- `crates/history-store/src/typed.rs:1188`: `fn snapshot_published` — **meaning**: persistent provenance of a codebook snapshot under the registry resource
-- `crates/history-store/src/typed.rs:1318`: `fn mutex_valid`
-- `crates/history-store/src/typed/map.rs:24`: `fn representatives` — **meaning**: the entries of an external_body hash map, as `eq_spec` classes under `key_laws`
+- `crates/history-store/src/typed.rs:998`: `fn store_ids_authority_id`
+- `crates/history-store/src/typed.rs:999`: `fn process_store_ids` — **meaning**: the process-wide store-id allocator (static installation)
+- `crates/history-store/src/typed.rs:1003`: `fn store_ids_mutex_valid`
+- `crates/history-store/src/typed.rs:1187`: `fn snapshot_published` — **meaning**: persistent provenance of a codebook snapshot under the registry resource
+- `crates/history-store/src/typed.rs:1317`: `fn mutex_valid`
 
 ### `derived_eq_claim` (1)
 
@@ -235,23 +203,28 @@ is not verified at all (see Unverified glue below).
 
 ### `external_body` (1)
 
-- `crates/history-syntax/src/event.rs:201`: `fn absurd_nil`
+- `crates/history-syntax/src/event.rs:239`: `fn absurd_nil`
 
 ### `external_type_specification` (2)
 
-- `crates/history-syntax/src/event.rs:264`: `struct ExCoproduct<H, T>(Coproduct<H, T>)`
-- `crates/history-syntax/src/event.rs:269`: `struct ExCNil(CNil) (opaque)`
+- `crates/history-syntax/src/event.rs:303`: `struct ExCoproduct<H, T>(Coproduct<H, T>)`
+- `crates/history-syntax/src/event.rs:308`: `struct ExCNil(CNil) (opaque)`
 
-### `external_trait_specification` (2)
+### `external_trait_specification` (3)
 
-- `crates/history-syntax/src/event.rs:254`: `trait ExArity: sealed::Sealed (with external_trait_extension)`
-- `crates/history-syntax/src/event.rs:274`: `trait ExEvent: Copy + Debug + Eq + Hash (with external_trait_extension)`
+- `crates/history-syntax/src/event.rs:293`: `trait ExArity: sealed::Sealed (with external_trait_extension)`
+- `crates/history-syntax/src/event.rs:313`: `trait ExEvent: Copy + Debug + Eq + Hash (with external_trait_extension)`
+- `crates/history-syntax/src/key_hash.rs:94`: `trait ExKeyHash (with external_trait_extension)`
 
 ### `derived_eq_claim` (3)
 
-- `crates/history-syntax/src/event.rs:341`: `impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec> PartialEqSpecImpl for Component2<A, B>`
-- `crates/history-syntax/src/event.rs:354`: `impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec, C: PartialEq + PartialEqSpec> PartialEqSpecIm`
-- `crates/history-syntax/src/event.rs:370`: `impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec, C: PartialEq + PartialEqSpec, D: PartialEq + `
+- `crates/history-syntax/src/event.rs:380`: `impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec> PartialEqSpecImpl for Component2<A, B>`
+- `crates/history-syntax/src/event.rs:393`: `impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec, C: PartialEq + PartialEqSpec> PartialEqSpecIm`
+- `crates/history-syntax/src/event.rs:409`: `impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec, C: PartialEq + PartialEqSpec, D: PartialEq + `
+
+### `unannotated_pub_fn` (1)
+
+- `crates/history-syntax/src/key_hash.rs:16`: `fn hash_via_std`
 
 ## `crates/junco-core`
 
@@ -293,25 +266,24 @@ is not verified at all (see Unverified glue below).
 
 - `crates/junco-core/src/observation.rs:53`: `trait ExSmallVecArray`
 
-### `uninterp` (4)
+### `uninterp` (3)
 
 - `crates/junco-core/src/observation.rs:73`: `fn view`
-- `crates/junco-core/src/spec/hypotheses.rs:22`: `fn hash_coherent` — **meaning**: the single hashing hypothesis (R4): a key type's `Hash`/`Eq` are faithful to `eq_spec`, so the external_body hash containers behave as maps on `eq_spec` classes
 - `crates/junco-core/src/verify/history_assumptions.rs:59`: `fn arc_identity` — **meaning**: native allocation identity of an `Arc`; faithful because every compared type has a unique-per-allocation value (comment at the declaration)
 - `crates/junco-core/src/verify/history_assumptions.rs:60`: `fn reference_identity` — **meaning**: native identity of a `&T`; same fidelity argument as `arc_identity`
 
 ### `derived_eq_claim` (10)
 
-- `crates/junco-core/src/kernel.rs:959`: `impl PartialEqSpecImpl for $id`
-- `crates/junco-core/src/kernel.rs:963`: `impl OrdSpecImpl for $id`
-- `crates/junco-core/src/kernel.rs:971`: `impl PartialOrdSpecImpl for $id`
-- `crates/junco-core/src/kernel.rs:1053`: `impl PartialEqSpecImpl for super::Term`
-- `crates/junco-core/src/kernel.rs:1057`: `impl PartialEqSpecImpl for super::Primitive`
-- `crates/junco-core/src/kernel.rs:1061`: `impl PartialEqSpecImpl for TestView<'_>`
-- `crates/junco-core/src/kernel.rs:1065`: `impl PartialEqSpecImpl for RegexKindView<'_>`
-- `crates/junco-core/src/kernel.rs:1069`: `impl PartialEqSpecImpl for RegexView<'_>`
-- `crates/junco-core/src/kernel.rs:1073`: `impl PartialEqSpecImpl for TransitionView<'_>`
-- `crates/junco-core/src/kernel.rs:1096`: `impl PartialEqSpecImpl for Bindings`
+- `crates/junco-core/src/kernel.rs:965`: `impl PartialEqSpecImpl for $id`
+- `crates/junco-core/src/kernel.rs:973`: `impl OrdSpecImpl for $id`
+- `crates/junco-core/src/kernel.rs:981`: `impl PartialOrdSpecImpl for $id`
+- `crates/junco-core/src/kernel.rs:1069`: `impl PartialEqSpecImpl for super::Term`
+- `crates/junco-core/src/kernel.rs:1073`: `impl PartialEqSpecImpl for super::Primitive`
+- `crates/junco-core/src/kernel.rs:1077`: `impl PartialEqSpecImpl for TestView<'_>`
+- `crates/junco-core/src/kernel.rs:1081`: `impl PartialEqSpecImpl for RegexKindView<'_>`
+- `crates/junco-core/src/kernel.rs:1085`: `impl PartialEqSpecImpl for RegexView<'_>`
+- `crates/junco-core/src/kernel.rs:1089`: `impl PartialEqSpecImpl for TransitionView<'_>`
+- `crates/junco-core/src/kernel.rs:1112`: `impl PartialEqSpecImpl for Bindings`
 
 ## Helper crates (pinned git dependencies of `history-store`)
 
@@ -385,11 +357,11 @@ Verus verifies `verus-bumpalo` and `hashconsius` as dependencies at the revision
 - `crates/history-store/src/cache.rs`: the LRU successor cache behind `successor_cache_view`.
   Its contracts allow any entry to be evicted and never a fabricated one; the search's
   correctness does not depend on hits, only on the cached values being the ones once inserted.
-- The hash containers `NativeMap`/`NativeSet`/`NativeGroups` (`crates/history-store/src/typed/map.rs`,
-  `crates/history-analysis/src/native.rs`): external_body wrappers over hashbrown whose
-  contracts hold under `key_laws` (R4, `crates/junco-core/src/spec/hypotheses.rs`): the key's
-  `Hash`/`Eq` are faithful to `eq_spec` (`hash_coherent`, the single hashing hypothesis),
-  instantiated for the library's own key types by the `axiom` items above.
+- `crates/history-store/src/keyed.rs`: `KeyedMap`, the verified hash container behind the store's
+  codebooks and the analyzer's `NativeSet`/`NativeGroups` (`crates/history-analysis/src/native.rs`),
+  over hashconsius's `index::Buckets`. Its lookup contract on `eq_spec` classes is proved from
+  `key_laws` (R4, `crates/junco-core/src/spec/hypotheses.rs`: `KeyHash::hash_spec` respects
+  `eq_spec`); only `reserve_one` (capacity reservation, test-util fault injection) is external_body.
 - Identity of stores: `arc_identity`/`reference_identity` are functions of the pointee's spec
   value (Verus erases `Arc<T>` and `&T` to `T`). The wrappers that equate them with pointer
   comparison are faithful because `HistoryStore` is one static singleton per arity and
@@ -404,6 +376,7 @@ Verus verifies `verus-bumpalo` and `hashconsius` as dependencies at the revision
   history errors become `Deny`). The verified `check_step` covers each `TracePolicy::decide`,
   not this composition.
 - The root event types `LockEvent`, `FlowEvent`, `AgentEvent` implement `Event` by hand in the
-  unverified crate; `event_laws` (R1) is a hypothesis for them, stated at each impl.
-- User `Hash`/`Eq` code runs under the store lock; a panic there unwinds through the lock and
+  unverified crate; `event_laws` (R1) and `hash_respects_eq` (R4, their `KeyHash` being
+  `hash_via_std`, FNV-1a over `std::hash::Hash`) are hypotheses for them, stated at each impl.
+- User `Eq`/`KeyHash` code runs under the store lock; a panic there unwinds through the lock and
   is outside the trusted base (the store assumes its lock invariant on re-entry).

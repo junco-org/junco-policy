@@ -1320,6 +1320,18 @@ mod typed_tests {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     struct Path(u32);
 
+    impl history_syntax::KeyHash for Actor {
+        fn key_hash(&self) -> u64 {
+            history_syntax::key_hash::hash_via_std(self)
+        }
+    }
+
+    impl history_syntax::KeyHash for Path {
+        fn key_hash(&self) -> u64 {
+            history_syntax::key_hash::hash_via_std(self)
+        }
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     struct TestEvent {
         actor: Actor,

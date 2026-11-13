@@ -3,6 +3,8 @@
 use core::fmt::Debug;
 use core::hash::Hash;
 use frunk_core::coproduct::{CNil, Coproduct};
+
+use crate::key_hash::{KeyHash, mix};
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
@@ -64,7 +66,7 @@ arities!(
 /// Projections, equality and hashing must remain stable while values are used by a policy.
 pub trait Event: Copy + Debug + Eq + Hash {
     /// Tagged value of one coordinate, with one variant per coordinate.
-    type Component: Copy + Debug + Eq + Hash;
+    type Component: Copy + Debug + Eq + Hash + KeyHash;
     /// Number of coordinates in this event.
     type Arity: Arity;
 
@@ -116,7 +118,7 @@ pub enum Component4<A, B, C, D> {
 }
 
 #[verus_verify]
-impl<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash> Event for (A, B)
+impl<A: Copy + Debug + Eq + Hash + KeyHash, B: Copy + Debug + Eq + Hash + KeyHash> Event for (A, B)
 where
     (A, B): Copy,
 {
@@ -139,8 +141,11 @@ where
 }
 
 #[verus_verify]
-impl<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash, C: Copy + Debug + Eq + Hash> Event
-    for (A, B, C)
+impl<
+    A: Copy + Debug + Eq + Hash + KeyHash,
+    B: Copy + Debug + Eq + Hash + KeyHash,
+    C: Copy + Debug + Eq + Hash + KeyHash,
+> Event for (A, B, C)
 where
     (A, B, C): Copy,
 {
@@ -166,10 +171,10 @@ where
 
 #[verus_verify]
 impl<
-    A: Copy + Debug + Eq + Hash,
-    B: Copy + Debug + Eq + Hash,
-    C: Copy + Debug + Eq + Hash,
-    D: Copy + Debug + Eq + Hash,
+    A: Copy + Debug + Eq + Hash + KeyHash,
+    B: Copy + Debug + Eq + Hash + KeyHash,
+    C: Copy + Debug + Eq + Hash + KeyHash,
+    D: Copy + Debug + Eq + Hash + KeyHash,
 > Event for (A, B, C, D)
 where
     (A, B, C, D): Copy,
@@ -192,6 +197,39 @@ where
             Component4::C1(_) => 1,
             Component4::C2(_) => 2,
             Component4::C3(_) => 3,
+        }
+    }
+}
+
+#[verus_verify]
+impl<A: KeyHash, B: KeyHash> KeyHash for Component2<A, B> {
+    fn key_hash(&self) -> u64 {
+        match self {
+            Component2::C0(a) => mix(0, a.key_hash()),
+            Component2::C1(b) => mix(1, b.key_hash()),
+        }
+    }
+}
+
+#[verus_verify]
+impl<A: KeyHash, B: KeyHash, C: KeyHash> KeyHash for Component3<A, B, C> {
+    fn key_hash(&self) -> u64 {
+        match self {
+            Component3::C0(a) => mix(0, a.key_hash()),
+            Component3::C1(b) => mix(1, b.key_hash()),
+            Component3::C2(c) => mix(2, c.key_hash()),
+        }
+    }
+}
+
+#[verus_verify]
+impl<A: KeyHash, B: KeyHash, C: KeyHash, D: KeyHash> KeyHash for Component4<A, B, C, D> {
+    fn key_hash(&self) -> u64 {
+        match self {
+            Component4::C0(a) => mix(0, a.key_hash()),
+            Component4::C1(b) => mix(1, b.key_hash()),
+            Component4::C2(c) => mix(2, c.key_hash()),
+            Component4::C3(d) => mix(3, d.key_hash()),
         }
     }
 }
@@ -248,6 +286,7 @@ where
 #[cfg(verus_keep_ghost)]
 pub mod specs {
     use super::*;
+    use crate::key_hash::specs::{KeyHashSpec, KeyHashSpecImpl, spec_mix};
     use vstd::std_specs::cmp::{PartialEqSpec, PartialEqSpecImpl};
     verus! {
 
@@ -275,7 +314,7 @@ pub mod specs {
     #[verifier::external_trait_extension(EventSpec via EventSpecImpl)]
     pub trait ExEvent: Copy + Debug + Eq + Hash {
         type ExternalTraitSpecificationFor: Event;
-        type Component: Copy + Debug + Eq + Hash;
+        type Component: Copy + Debug + Eq + Hash + KeyHash;
         type Arity: Arity;
 
         spec fn obeys_projection_spec() -> bool;
@@ -290,7 +329,7 @@ pub mod specs {
                 && result < Self::Arity::value_spec();
     }
 
-    impl<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash> EventSpecImpl for (A, B)
+    impl<A: Copy + Debug + Eq + Hash + KeyHash, B: Copy + Debug + Eq + Hash + KeyHash> EventSpecImpl for (A, B)
     where (A, B): Copy,
     {
         open spec fn obeys_projection_spec() -> bool { true }
@@ -302,8 +341,8 @@ pub mod specs {
         }
     }
 
-    impl<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash, C: Copy + Debug + Eq + Hash>
-        EventSpecImpl for (A, B, C)
+    impl<A: Copy + Debug + Eq + Hash + KeyHash, B: Copy + Debug + Eq + Hash + KeyHash,
+        C: Copy + Debug + Eq + Hash + KeyHash> EventSpecImpl for (A, B, C)
     where (A, B, C): Copy,
     {
         open spec fn obeys_projection_spec() -> bool { true }
@@ -317,8 +356,8 @@ pub mod specs {
         }
     }
 
-    impl<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash,
-        C: Copy + Debug + Eq + Hash, D: Copy + Debug + Eq + Hash> EventSpecImpl for (A, B, C, D)
+    impl<A: Copy + Debug + Eq + Hash + KeyHash, B: Copy + Debug + Eq + Hash + KeyHash,
+        C: Copy + Debug + Eq + Hash + KeyHash, D: Copy + Debug + Eq + Hash + KeyHash> EventSpecImpl for (A, B, C, D)
     where (A, B, C, D): Copy,
     {
         open spec fn obeys_projection_spec() -> bool { true }
@@ -378,6 +417,44 @@ pub mod specs {
                 (Component4::C2(a), Component4::C2(b)) => a.eq_spec(b),
                 (Component4::C3(a), Component4::C3(b)) => a.eq_spec(b),
                 _ => false,
+            }
+        }
+    }
+
+    /// `hash_spec` of a tagged component mixes the coordinate tag with the payload's `hash_spec`.
+    impl<A: KeyHash, B: KeyHash> KeyHashSpecImpl for Component2<A, B> {
+        open spec fn obeys_hash_spec() -> bool { A::obeys_hash_spec() && B::obeys_hash_spec() }
+        open spec fn hash_spec(&self) -> u64 {
+            match self {
+                Component2::C0(a) => spec_mix(0, a.hash_spec()),
+                Component2::C1(b) => spec_mix(1, b.hash_spec()),
+            }
+        }
+    }
+
+    impl<A: KeyHash, B: KeyHash, C: KeyHash> KeyHashSpecImpl for Component3<A, B, C> {
+        open spec fn obeys_hash_spec() -> bool {
+            A::obeys_hash_spec() && B::obeys_hash_spec() && C::obeys_hash_spec()
+        }
+        open spec fn hash_spec(&self) -> u64 {
+            match self {
+                Component3::C0(a) => spec_mix(0, a.hash_spec()),
+                Component3::C1(b) => spec_mix(1, b.hash_spec()),
+                Component3::C2(c) => spec_mix(2, c.hash_spec()),
+            }
+        }
+    }
+
+    impl<A: KeyHash, B: KeyHash, C: KeyHash, D: KeyHash> KeyHashSpecImpl for Component4<A, B, C, D> {
+        open spec fn obeys_hash_spec() -> bool {
+            A::obeys_hash_spec() && B::obeys_hash_spec() && C::obeys_hash_spec() && D::obeys_hash_spec()
+        }
+        open spec fn hash_spec(&self) -> u64 {
+            match self {
+                Component4::C0(a) => spec_mix(0, a.hash_spec()),
+                Component4::C1(b) => spec_mix(1, b.hash_spec()),
+                Component4::C2(c) => spec_mix(2, c.hash_spec()),
+                Component4::C3(d) => spec_mix(3, d.hash_spec()),
             }
         }
     }

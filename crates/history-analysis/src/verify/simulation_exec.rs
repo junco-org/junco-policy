@@ -21,11 +21,14 @@ pub(crate) open spec fn memo_obligations() -> bool {
     key_laws::<(RegexId, RegexId)>() && key_laws::<(TestId, TestId)>()
 }
 
-/// Id pairs compare field by field on `u32` views; the hash model comes from the key axioms.
+/// Id pairs compare field by field on `u32` views and hash by mixing them (no axiom).
 pub(crate) proof fn lemma_memo_obligations()
     ensures memo_obligations(),
 {
-    broadcast use crate::verify::key_axioms::group_internal_key_axioms;
+    RegexId::lemma_key_laws();
+    TestId::lemma_key_laws();
+    junco_core::verify::hypotheses::lemma_key_laws_pair::<RegexId, RegexId>();
+    junco_core::verify::hypotheses::lemma_key_laws_pair::<TestId, TestId>();
 }
 
 pub(crate) open spec fn semantic_le() -> spec_fn(Regex<model::Test>, Regex<model::Test>) -> bool {

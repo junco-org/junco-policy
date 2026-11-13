@@ -25,12 +25,15 @@ pub(crate) open spec fn search_obligations() -> bool {
         && crate::verify::prune_exec::parts_key_obligations()
 }
 
-/// Every internal hash key of the search satisfies `key_laws` (equality is structural; the hash
-/// model is the key axioms).
+/// Every internal hash key of the search satisfies `key_laws`: equality is structural and each
+/// hash is a function of the key (no axiom).
 pub(crate) proof fn lemma_search_obligations()
     ensures search_obligations(),
 {
-    broadcast use crate::verify::key_axioms::group_internal_key_axioms;
+    junco_core::verify::hypotheses::lemma_key_laws_u32();
+    RegexId::lemma_key_laws();
+    junco_core::verify::hypotheses::lemma_key_laws_pair::<ConstraintId, RegexId>();
+    crate::constraint::equality::lemma_key_laws_constraint();
     crate::verify::simulation_exec::lemma_memo_obligations();
     crate::verify::prune_exec::lemma_parts_key_obligations();
 }

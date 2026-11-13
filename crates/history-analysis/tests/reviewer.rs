@@ -23,7 +23,7 @@ use history_syntax::event::Component2;
 use history_syntax::spec::events::{HeadView, RegexView, RuleView, arity, event_view};
 use history_syntax::{Event, Head, RegexExpr, Rule};
 use junco_core::event::Request;
-use junco_core::spec::hypotheses::{event_obligations, hash_coherent};
+use junco_core::spec::hypotheses::event_obligations;
 use junco_core::spec::questions::{
     CexView, DomainsView, FreshChoice, InclusionView, admissible, always_denies, capacity_for,
     cex_has_instance, covers, domains_wf, every_instance, forbid_all, fresh_capacity, fresh_used,
@@ -370,7 +370,7 @@ pub proof fn theorem_analyzer_to_monitor<E: Event, M>(
 /// Capacity at an undeclared coordinate of `(u32, u64)` events: coordinate 0 offers `k` fresh
 /// values whenever `known[0].len() + k <= 2^32`, coordinate 1 whenever `known[1].len() + k <= 2^64`.
 pub proof fn theorem_capacity_u32_u64(domains: DomainsView<Component2<u32, u64>>, known: Seq<Set<Component2<u32, u64>>>, k: nat)
-    requires hash_coherent::<Component2<u32, u64>>(), domains.len() == 2, known.len() == 2,
+    requires domains.len() == 2, known.len() == 2,
     ensures
         domains[0] is None && known[0].len() + k <= 0x1_0000_0000 ==> fresh_capacity::<(u32, u64)>(domains, known, 0, k),
         domains[1] is None && known[1].len() + k <= 0x1_0000_0000_0000_0000 ==> fresh_capacity::<(u32, u64)>(domains, known, 1, k),
@@ -444,12 +444,11 @@ fn analyzer_client<E: Event>(rule: &Rule<E>, head: &Head<E>, left: &RegexExpr<E>
     Ok((a, covered, redundant, strict, tails))
 }
 
-/// The client for `(u32, u64)` events under the single premise `hash_coherent`.
+/// The client for `(u32, u64)` events, premise-free.
 fn analyzer_client_u32_u64(rule: &Rule<(u32, u64)>, head: &Head<(u32, u64)>, left: &RegexExpr<(u32, u64)>, right: &RegexExpr<(u32, u64)>)
     -> (result: Result<(PolicyAnalyzer<(u32, u64)>, Result<Inclusion<(u32, u64)>, HistoryError>, Result<Inclusion<(u32, u64)>, HistoryError>,
         Result<Inclusion<(u32, u64)>, HistoryError>, Result<Inclusion<(u32, u64)>, CompileError>), CompileError>)
-    requires hash_coherent::<Component2<u32, u64>>(),
-        2 + regex_cost::<(u32, u64)>(rule.tail@) <= u32::MAX,
+    requires 2 + regex_cost::<(u32, u64)>(rule.tail@) <= u32::MAX,
         known_count(known_with(declared_sets(Seq::new(2, |i: int| None::<Set<Component2<u32, u64>>>)), rule_constants(rule@)))
             + 4 + regex_cost::<(u32, u64)>(left@) + regex_cost::<(u32, u64)>(right@) <= u32::MAX,
     ensures result matches Ok((a, covered, redundant, strict, tails)) ==> a.wf()

@@ -816,7 +816,6 @@ dependencies = [
 name = "history-store"
 version = "0.1.0"
 dependencies = [
- "hashbrown 0.17.0",
  "hashconsius",
  "history-syntax",
  "junco-core",

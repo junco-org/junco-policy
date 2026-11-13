@@ -87,7 +87,7 @@ refinement. Read them against the paper in this order:
 | R1 | `crates/history-syntax/src/spec/events.rs` | 14 (+6 `View` impls) | what an event is: `arity`, `event_view`, `well_tagged`, `views_surjective`, `event_laws`; the DSL views `RuleView`, `HeadView`, `RegexView`, `TestView` | `sec:events`, `sec:rules` |
 | R2 | `crates/junco-core/src/spec/semantics.rs` | 26 | `head_matches`, `test_sem`, `lang`; over events `rule_evaluation`, `rule_violated`, `policy_denies`, `policy_permits`, `least_violation` | `def:violates`, `def:policy-violates` |
 | R3 | `crates/junco-core/src/spec/questions.rs` | 44 | `in_domains`, `domains_wf`, `refines`, `covers`, `never_denies`, `always_denies`, `tails_included`; symbolic counterexamples `CexView`, `InclusionView`, `admissible`, `instantiates`, `cex_has_instance`, `every_instance`, `fresh_capacity`, `capacity_for`; minimality `same_profile`, `shortest`, `shortest_in_case`, `minimal_in_case`; the constant extractors | `def:policy-refinement`, `app:policy-reduction`, `thm:search` |
-| R4 | `crates/junco-core/src/spec/hypotheses.rs` | 4 | `hash_coherent` (the trust token), `eq_equivalence`, `key_laws`, `event_obligations` | hypotheses (below) |
+| R4 | `crates/junco-core/src/spec/hypotheses.rs` | 4 | `eq_equivalence`, `hash_respects_eq`, `key_laws`, `event_obligations` | hypotheses (below) |
 | R5 | `crates/history-semantics/src/spec/monitor.rs` | 6 | `ValidatorView`, `check_frame`, `check_step`, `permits_result`, `rollback_step`, `trace_safe` | `thm:matcher` at the level of `Validator` |
 | R6 | `crates/history-analysis/src/spec/analyzer.rs` | 22 | `AnalyzerView`, `analyzer_wf`, `known_with`, the capacities, `rules_of`, `without_rule`, `counterexample_spec`, `covered_spec`, `removal_preserves_decisions`, `redundant_spec`, `at_least_as_strict_spec`, `tail_included_spec`; A5 in prose in the header | A1–A6 |
 | P | `crates/history-semantics/src/verify/paper.rs` | one `stmt_*`/`theorem_*` per paper result | the paper index: table of paper label → mechanized statement → proof → file; `theorem_paper_index` proves every row | all |
@@ -129,19 +129,21 @@ in `crates/history-semantics/src/verify/refinement/`: $\mathcal{L}_\theta(r)$ is
 - **`event_obligations::<E>()` (R4).** Every monitor and analyzer guarantee about the event type
   `E` is conditional on `event_laws::<E>()` (R1: arity in `1..=MAX_ARITY`, stable projections
   tagged with their coordinate, `views_surjective`) and `key_laws::<E::Component>()` (`Eq` agrees
-  with `eq_spec`, which is an equivalence, and `hash_coherent`). The frames (`check_frame`,
-  `rollback_step`, the view equations of `add_rule`/`tail_included`) are unconditional.
-  `junco_core::verify::hypotheses` and `history_syntax::verify::events` prove every conjunct for
-  the built-in tuple events `(A, B)`, `(A, B, C)`, `(A, B, C, D)` from the payloads' `eq_spec`,
-  except `hash_coherent`.
-- **`hash_coherent::<C>()`, the single trust token.** The `external_body` hash containers
-  (`NativeMap`/`NativeSet`/`NativeGroups`) behave as maps on `eq_spec` classes only if the key's
-  `Hash`/`Eq` are faithful. Nothing discharges this for a user component type: every concrete
-  reviewer theorem (`theorem_event_obligations_u32_u64`, `monitor_client_u32_u64`,
-  `analyzer_client_u32_u64`, `theorem_capacity_u32_u64`) carries
-  `hash_coherent::<Component2<u32, u64>>()` as its only premise. The library's own internal key
-  types take it by the five `axiom fn`s in `crates/history-analysis/src/verify/key_axioms.rs`
-  (TRUST.md, `axiom`).
+  with `eq_spec`, which is an equivalence; `KeyHash::key_hash` agrees with the spec function
+  `hash_spec`, which is constant on `eq_spec` classes: `hash_respects_eq`). The frames
+  (`check_frame`, `rollback_step`, the view equations of `add_rule`/`tail_included`) are
+  unconditional. R4 has no uninterpreted conjunct: `junco_core::verify::hypotheses` and
+  `history_syntax::verify::events` prove every conjunct for the built-in tuple events `(A, B)`,
+  `(A, B, C)`, `(A, B, C, D)` from `key_laws` of the payloads, and `key_laws` for every primitive
+  payload, so the concrete reviewer theorems (`theorem_event_obligations_u32_u64`,
+  `monitor_client_u32_u64`, `analyzer_client_u32_u64`, `theorem_capacity_u32_u64`) are
+  premise-free.
+- **Hash containers are verified code.** `history_store::keyed::KeyedMap` (and the analyzer's
+  `NativeSet`/`NativeGroups` over it) is insertion-ordered entries behind hashconsius's chained
+  `index::Buckets`, keyed by `key_hash`; its lookup contract on `eq_spec` classes is proved from
+  `hash_respects_eq`, not assumed. Its one `external_body` item is `reserve_one` (capacity
+  reservation and the test-util allocation-failure hook). The library's internal keys
+  (`Constraint`, `Parts`, id pairs) carry verified `KeyHash` impls and `key_laws` lemmas.
 - **Root event types.** `LockEvent`, `FlowEvent`, `AgentEvent` in the unverified root crate
   implement `Event` by hand; `event_laws` is a documented hypothesis at each impl (D4), not a
   theorem.
@@ -236,18 +238,18 @@ in `crates/history-semantics/src/verify/refinement/`: $\mathcal{L}_\theta(r)$ is
 ## Trusted base
 
 Besides Verus (with `vstd`), Z3 and Rust, the proofs trust the items listed in `TRUST.md`
-(181 in the five crates at the last regeneration; 17 more in the verified helper crates
+(159 in the five crates at the last regeneration; 17 more in the verified helper crates
 `verus-bumpalo` and `hashconsius`): 19 `assume_specification`s for the standard library and
-`smallvec` (tested by `scripts/spec-check.sh`); 70 `external_body` items at native boundaries
+`smallvec` (tested by `scripts/spec-check.sh`); 55 `external_body` items at native boundaries
 (the history store's interior-mutable tables and caches, the runtime policies' callback and
-diagnostic adapters, allocation-reservation helpers, the hash-map wrappers); external
+diagnostic adapters, allocation-reservation helpers including `KeyedMap::reserve_one`); external
 type/trait specifications for the `Event` trait, `frunk` coproducts, `smallvec` and `lru`; two
-`from_iterator` constructors whose termination is not checked; the 5 `axiom fn`s giving
-`hash_coherent` to the library's internal key types; 38 `uninterp` spec fns (the native
-values' identities, lock invariants and views; those with a meaning are marked); 16
-`derived_eq_claim`s (what `derive(PartialEq)` computes, including `Component2/3/4`); and 19
+`from_iterator` constructors whose termination is not checked; `uninterp` spec fns (the native
+values' identities, lock invariants and views; those with a meaning are marked);
+`derived_eq_claim`s (what `derive(PartialEq)` computes, including `Component2/3/4`); and
 `unannotated_pub_fn`s outside `verus!`. TRUST.md's "Trusted leaves of the search" names the LRU
-successor cache and the hash containers; "Unverified glue" names `RulePolicy::check` and the
-root event impls (`event_laws` as hypothesis). No analysis algorithm is trusted; typed
-guarantees are conditional on `event_obligations::<E>()`, stated as a hypothesis, with
-`hash_coherent::<C>()` the only conjunct no proof discharges.
+successor cache; "Unverified glue" names `RulePolicy::check` and the root event impls
+(`event_laws` and `hash_respects_eq` as hypotheses, their `key_hash` being FNV-1a over
+`std::hash::Hash`). No analysis algorithm and no hash container is trusted; typed guarantees are
+conditional on `event_obligations::<E>()`, stated as a hypothesis and proved for every built-in
+event type.

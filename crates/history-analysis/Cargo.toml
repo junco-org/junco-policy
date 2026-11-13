@@ -19,7 +19,6 @@ history-syntax = { path = "../history-syntax", default-features = false }
 junco-core = { path = "../junco-core", default-features = false }
 history-semantics = { path = "../history-semantics", default-features = false }
 history-store = { path = "../history-store", default-features = false }
-hashbrown = { version = "0.17", default-features = false, features = ["default-hasher"] }
 smallvec = { version = "=1.16.2", default-features = false }
 vstd = { version = "=0.0.0-2026-10-04-0306", default-features = false, features = ["alloc"] }
 

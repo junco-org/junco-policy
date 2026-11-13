@@ -41,6 +41,13 @@ enum AccessComponent {
     Resource(u32),
 }
 
+// Unverified glue: `hash_respects_eq` is a hypothesis for this type (as `event_laws` already is).
+impl history_syntax::KeyHash for AccessComponent {
+    fn key_hash(&self) -> u64 {
+        history_syntax::key_hash::hash_via_std(self)
+    }
+}
+
 impl Event for Access {
     type Component = AccessComponent;
     type Arity = N3;
@@ -435,6 +442,12 @@ struct IndexedComponent {
     value: u16,
 }
 
+impl history_syntax::KeyHash for IndexedComponent {
+    fn key_hash(&self) -> u64 {
+        history_syntax::key_hash::hash_via_std(self)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct IndexedEvent<const N: usize>([u16; N]);
 
@@ -614,6 +627,12 @@ impl Eq for UntaggedEqualityComponent {}
 impl core::hash::Hash for UntaggedEqualityComponent {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         core::hash::Hash::hash(&self.value, state);
+    }
+}
+
+impl history_syntax::KeyHash for UntaggedEqualityComponent {
+    fn key_hash(&self) -> u64 {
+        history_syntax::key_hash::hash_via_std(self)
     }
 }
 

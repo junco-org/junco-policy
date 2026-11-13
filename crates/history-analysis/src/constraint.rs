@@ -17,6 +17,8 @@ use alloc::rc::Rc;
 use alloc::vec::Vec;
 #[cfg(verus_keep_ghost)]
 use history_semantics::verify::refinement::{encoding, implementation, inclusion};
+use history_syntax::KeyHash;
+use history_syntax::key_hash::mix;
 use junco_core::HistoryError;
 #[cfg(verus_keep_ghost)]
 use junco_core::observation::SmallVecSpecFns;
@@ -848,6 +850,8 @@ fn normalize_ids<A: smallvec::Array<Item = ConstId>>(values: &mut SmallVec<A>) {
 
 pub(crate) mod equality {
     use super::*;
+    #[cfg(verus_keep_ghost)]
+    use history_syntax::key_hash::specs::{KeyHashSpecImpl, spec_mix};
 
     #[cfg(verus_keep_ghost)]
     verus! {
@@ -911,6 +915,96 @@ pub(crate) mod equality {
             constraint_key(*self) == constraint_key(*other)
         }
     }
+
+    /// FNV-style fold of a register's constants, in order.
+    pub open(crate) spec fn seq_hash(s: Seq<u32>) -> u64
+        decreases s.len(),
+    {
+        if s.len() == 0 { 0 } else { spec_mix(seq_hash(s.drop_last()), s.last() as u64) }
+    }
+
+    /// Hash of a register key: the variant tag mixed with its payload.
+    pub open(crate) spec fn register_hash(k: (Option<u32>, Seq<u32>)) -> u64 {
+        match k.0 {
+            Some(v) => spec_mix(1, v as u64),
+            None => spec_mix(2, seq_hash(k.1)),
+        }
+    }
+
+    /// Fold of the register hashes, in order.
+    pub open(crate) spec fn constraint_hash(ks: Seq<(Option<u32>, Seq<u32>)>) -> u64
+        decreases ks.len(),
+    {
+        if ks.len() == 0 { 0 } else { spec_mix(constraint_hash(ks.drop_last()), register_hash(ks.last())) }
+    }
+
+    impl KeyHashSpecImpl for RegisterConstraint {
+        open spec fn obeys_hash_spec() -> bool { true }
+        open(crate) spec fn hash_spec(&self) -> u64 { register_hash(register_key(*self)) }
+    }
+
+    impl KeyHashSpecImpl for Constraint {
+        open spec fn obeys_hash_spec() -> bool { true }
+        open(crate) spec fn hash_spec(&self) -> u64 { constraint_hash(constraint_key(*self)) }
+    }
+
+    /// `eq_spec` is `constraint_key` equality and `hash_spec` a function of it (R4 `key_laws`).
+    pub(crate) proof fn lemma_key_laws_constraint()
+        ensures junco_core::spec::hypotheses::key_laws::<Constraint>(),
+    {
+    }
+    }
+
+    #[verus_verify]
+    impl KeyHash for RegisterConstraint {
+        #[verus_spec(result => ensures result == register_hash(register_key(*self)))]
+        fn key_hash(&self) -> u64 {
+            match self {
+                Self::Equals(value) => mix(1, *value as u64),
+                Self::Differs(values) => {
+                    let values: &[ConstId] = values;
+                    let mut acc = 0u64;
+                    let mut index = 0;
+                    #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+                        index <= values@.len(), register_key(*self) == (None, values@),
+                        acc == seq_hash(values@.take(index as int)),
+                        decreases values@.len() - index))]
+                    while index < values.len() {
+                        proof! {
+                            assert(values@.take(index as int + 1).drop_last() =~= values@.take(index as int));
+                        }
+                        acc = mix(acc, values[index] as u64);
+                        index += 1;
+                    }
+                    proof! { assert(values@.take(values@.len() as int) =~= values@); }
+                    mix(2, acc)
+                }
+            }
+        }
+    }
+
+    #[verus_verify]
+    impl KeyHash for Constraint {
+        #[verus_spec(result => ensures result == constraint_hash(constraint_key(*self)))]
+        fn key_hash(&self) -> u64 {
+            let mut acc = 0u64;
+            let mut index = 0;
+            #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+                index <= self.0@.len(),
+                acc == constraint_hash(constraint_key(*self).take(index as int)),
+                decreases self.0@.len() - index))]
+            while index < self.0.len() {
+                proof! {
+                    assert(constraint_key(*self)[index as int] == register_key(self.0@[index as int]));
+                    assert(constraint_key(*self).take(index as int + 1).drop_last()
+                        =~= constraint_key(*self).take(index as int));
+                }
+                acc = mix(acc, self.0[index].key_hash());
+                index += 1;
+            }
+            proof! { assert(constraint_key(*self).take(self.0@.len() as int) =~= constraint_key(*self)); }
+            acc
+        }
     }
 
     #[verus_verify]

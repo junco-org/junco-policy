@@ -15,6 +15,8 @@ use history_semantics::verify::refinement::{
 };
 #[cfg(verus_keep_ghost)]
 use history_semantics::{normalize_verify as norm, symbolic_language_verify as facade};
+use history_syntax::KeyHash;
+use history_syntax::key_hash::mix;
 use junco_core::HistoryError;
 use junco_core::kernel::{RegexId, RegexKindView, RegexView};
 #[cfg(verus_keep_ghost)]
@@ -41,9 +43,87 @@ pub(crate) enum Root {
     Other,
 }
 
+/// Antichain key: the required parts, compared and hashed by their ordered ids.
+#[verus_verify]
+#[verus_verify(external_derive)]
+#[derive(Clone, Debug, Eq)]
+pub(crate) struct Parts(pub(crate) SmallVec<[RegexId; 4]>);
+
+#[cfg(verus_keep_ghost)]
+verus! {
+    impl View for Parts {
+        type V = Seq<RegexId>;
+        open(crate) spec fn view(&self) -> Seq<RegexId> { SmallVecSpecFns::view(&self.0) }
+    }
+
+    impl vstd::std_specs::cmp::PartialEqSpecImpl for Parts {
+        open spec fn obeys_eq_spec() -> bool { true }
+        open(crate) spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
+    }
+
+    /// Fold of the part ids, in order.
+    pub open(crate) spec fn parts_hash(s: Seq<RegexId>) -> u64
+        decreases s.len(),
+    {
+        if s.len() == 0 { 0 } else {
+            history_syntax::key_hash::specs::spec_mix(parts_hash(s.drop_last()), s.last()@ as u64)
+        }
+    }
+
+    impl history_syntax::key_hash::specs::KeyHashSpecImpl for Parts {
+        open spec fn obeys_hash_spec() -> bool { true }
+        open(crate) spec fn hash_spec(&self) -> u64 { parts_hash(self@) }
+    }
+}
+
+#[verus_verify]
+impl PartialEq for Parts {
+    #[verus_spec(result => ensures result == (self@ == other@))]
+    fn eq(&self, other: &Self) -> bool {
+        let left: &[RegexId] = &self.0;
+        let right: &[RegexId] = &other.0;
+        if left.len() != right.len() {
+            return false;
+        }
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+            index <= left@.len(), left@.len() == right@.len(), left@ == self@, right@ == other@,
+            forall|i: int| 0 <= i < index ==> left@[i] == right@[i],
+            decreases left@.len() - index))]
+        while index < left.len() {
+            if left[index] != right[index] {
+                return false;
+            }
+            index += 1;
+        }
+        proof! { assert(left@ =~= right@); }
+        true
+    }
+}
+
+#[verus_verify]
+impl KeyHash for Parts {
+    #[verus_spec(result => ensures result == parts_hash(self@))]
+    fn key_hash(&self) -> u64 {
+        let ids: &[RegexId] = &self.0;
+        let mut acc = 0u64;
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
+            index <= ids@.len(), ids@ == self@, acc == parts_hash(ids@.take(index as int)),
+            decreases ids@.len() - index))]
+        while index < ids.len() {
+            proof! { assert(ids@.take(index as int + 1).drop_last() =~= ids@.take(index as int)); }
+            acc = mix(acc, ids[index].key_hash());
+            index += 1;
+        }
+        proof! { assert(ids@.take(ids@.len() as int) =~= ids@); }
+        acc
+    }
+}
+
 #[verus_verify]
 pub(crate) struct Decomposition {
-    pub(crate) parts: SmallVec<[RegexId; 4]>,
+    pub(crate) parts: Parts,
     pub(crate) pieces: SmallVec<[RegexId; 8]>,
 }
 
@@ -173,7 +253,10 @@ impl Decomposition {
             lemma_valid_set(g,collected,pieces.view());
             assert(lifted(g,pieces.view()) == lifted(g,collected));
         }
-        let d = Self { parts, pieces };
+        let d = Self {
+            parts: Parts(parts),
+            pieces,
+        };
         proof! {
             lemma_lifted(g,d.parts.view()); lemma_lifted(g,d.pieces.view());
             assert(decomposition_of(g,facade::abs(*language,residual),d));
@@ -202,8 +285,8 @@ impl Decomposition {
             decomposition_valid(facade::graph(*language),*self),
             memo_wf(*simulation,*language),memo_obligations(),index <= self.parts.view().len(),
             decreases self.parts.view().len()-index))]
-        while index < self.parts.len() {
-            let parts: &[RegexId] = &self.parts;
+        while index < self.parts.0.len() {
+            let parts: &[RegexId] = &self.parts.0;
             let part = parts[index];
             let members = push_pieces(language, part, SmallVec::new())?;
             proof! { lemma_ordered(self.pieces.view()); }
@@ -436,7 +519,7 @@ fn normalize_pieces(values: &mut SmallVec<[RegexId; 8]>) {
 
 #[verus_verify]
 pub(crate) struct Antichain {
-    pub(crate) groups: NativeGroups<SmallVec<[RegexId; 4]>, Entry>,
+    pub(crate) groups: NativeGroups<Parts, Entry>,
 }
 
 #[verus_verify]
@@ -480,10 +563,10 @@ impl Antichain {
     ) -> Result<bool, HistoryError> {
         let c = constraints.get(constraint);
         let parts = &state.parts;
-        let result = if parts.len() > ENUMERATED_PARTS {
+        let result = if parts.0.len() > ENUMERATED_PARTS {
             self.group_subsumes(language, simulation, constraints, c, parts, state)
         } else {
-            let limit = 1usize << parts.len();
+            let limit = 1usize << parts.0.len();
             let mut mask = 0;
             let mut found = false;
             #[cfg_attr(verus_keep_ghost,verus_spec(invariant
@@ -507,17 +590,23 @@ impl Antichain {
                     valid(facade::graph(*language),subset.view()),
                     decomposition_valid(facade::graph(*language),*state),
                     decreases parts.view().len()-bit))]
-                while bit < parts.len() {
+                while bit < parts.0.len() {
                     if mask & (1usize << bit) != 0 {
-                        let slice: &[RegexId] = parts;
+                        let slice: &[RegexId] = &parts.0;
                         proof! { lemma_valid_push(facade::graph(*language),subset.view(),slice[bit as int]); }
                         subset.push(slice[bit]);
                         proof! { assert(subset.view().to_set().subset_of(parts.view().to_set())); }
                     }
                     bit += 1;
                 }
-                found =
-                    self.group_subsumes(language, simulation, constraints, c, &subset, state)?;
+                found = self.group_subsumes(
+                    language,
+                    simulation,
+                    constraints,
+                    c,
+                    &Parts(subset),
+                    state,
+                )?;
                 mask += 1;
             }
             Ok(found)
@@ -551,14 +640,14 @@ impl Antichain {
         simulation: &mut Simulation,
         constraints: &ConstraintTable,
         constraint: &Constraint,
-        parts: &SmallVec<[RegexId; 4]>,
+        parts: &Parts,
         state: &Decomposition,
     ) -> Result<bool, HistoryError> {
         let Some(entries) = self.groups.get(parts) else {
             return Ok(false);
         };
         proof_decl! {
-            let ghost key = choose|key: SmallVec<[RegexId;4]>|
+            let ghost key = choose|key: Parts|
                 crate::native::groups(self.groups).dom().contains(key)
                 && parts.eq_spec(&key) && entries@ == crate::native::groups(self.groups)[key];
         }
@@ -636,7 +725,7 @@ impl Antichain {
                 antichain_wf(before,g,table,nodes) && constraint < table@.len()
                 && node.item.constraint == implementation::constraint_of(table@[constraint as int])
                 && decomposition_of(g,node.item.state,old_state) implies antichain_wf(*self,g,table,nodes.push(node)) by {
-                assert forall|key: SmallVec<[RegexId;4]>,i: int|
+                assert forall|key: Parts,i: int|
                     crate::native::groups(self.groups).dom().contains(key)
                     && 0 <= i < crate::native::groups(self.groups)[key].len() implies
                     indexed_entry(g,table,key,crate::native::groups(self.groups)[key][i],nodes.push(node)) by {

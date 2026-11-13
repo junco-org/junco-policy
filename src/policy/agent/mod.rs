@@ -34,8 +34,8 @@ use history_semantics::policy::{
     PRINCIPAL_VAR, RESOURCE_VAR, action_is, last_state_change, principal_is,
 };
 use history_syntax::{
-    AtomPattern, Comparison, Component, ComponentPattern, Event, Head, N3, RegexExpr, Rule,
-    RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, ComponentPattern, Event, Head, KeyHash, N3, RegexExpr,
+    Rule, RuleMode, TestExpr,
 };
 
 use super::rules::{RuleDenial, RulePolicy, RuleSet};
@@ -115,6 +115,13 @@ pub enum AgentComponent<P, C> {
     Action(AgentAction),
     /// Coordinate 2: the resource class.
     Class(C),
+}
+
+// Unverified glue: `hash_respects_eq` is a hypothesis for this type (as `event_laws` already is).
+impl<P: Hash, C: Hash> KeyHash for AgentComponent<P, C> {
+    fn key_hash(&self) -> u64 {
+        history_syntax::key_hash::hash_via_std(self)
+    }
 }
 
 // Hypothesis (D4): this crate is not verified, so `event_laws::<AgentEvent<P, C>>` (R1) is

@@ -3,7 +3,7 @@
 
 use super::errors::HistoryError;
 use alloc::vec::Vec;
-use history_syntax::{MAX_ARITY, syntax::Component};
+use history_syntax::{KeyHash, MAX_ARITY, syntax::Component};
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
@@ -72,6 +72,12 @@ macro_rules! id {
             #[verus_spec(result => ensures result == *self)]
             fn clone(&self) -> Self {
                 *self
+            }
+        }
+        #[verus_verify]
+        impl KeyHash for $name {
+            fn key_hash(&self) -> u64 {
+                self.0 as u64
             }
         }
         #[verus_verify]
@@ -960,6 +966,10 @@ pub mod verify {
                 open spec fn obeys_eq_spec() -> bool { true }
                 open spec fn eq_spec(&self, other: &Self) -> bool { self@ == other@ }
             }
+            impl history_syntax::key_hash::specs::KeyHashSpecImpl for $id {
+                open spec fn obeys_hash_spec() -> bool { true }
+                open spec fn hash_spec(&self) -> u64 { self@ as u64 }
+            }
             impl OrdSpecImpl for $id {
                 open spec fn obeys_cmp_spec() -> bool { true }
                 open spec fn cmp_spec(&self, other: &Self) -> core::cmp::Ordering {
@@ -995,6 +1005,12 @@ pub mod verify {
                     reveal(vstd::laws_cmp::obeys_partial_cmp_spec_properties);
                     reveal(vstd::laws_cmp::obeys_cmp_partial_ord);
                     reveal(vstd::laws_cmp::obeys_cmp_ord);
+                }
+                /// `eq_spec` compares the view and `hash_spec` is a function of the payload, so an
+                /// ID is a hash key (R4 `key_laws`).
+                pub proof fn lemma_key_laws()
+                    ensures crate::spec::hypotheses::key_laws::<Self>(),
+                {
                 }
             }
             pub open spec fn $ids(ids: Seq<$id>) -> Seq<nat> {
