@@ -61,9 +61,56 @@ use crate::tables::Tables;
 const GRAPH_BYTES: usize = 16 * 1024 * 1024;
 
 verus! {
-/// Stable index of a rule in one analyzer. Query ids must belong to that analyzer.
+/// Stable index of a rule in one analyzer, tagged with the id of the analyzer that issued it
+/// (decision 7). A query given an id of another analyzer, or an index it never issued, returns
+/// `HistoryError::UnknownId`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RuleId(pub(crate) usize);
+pub struct RuleId(pub(crate) usize, pub(crate) u64);
+
+impl RuleId {
+    /// The rule's position among the analyzer's rules.
+    pub closed spec fn index(&self) -> nat { self.0 as nat }
+
+    /// The issuing analyzer's owner id.
+    pub closed spec fn owner(&self) -> u64 { self.1 }
+}
+
+/// Every id was issued by `a` and names one of its rules (decision 7).
+pub open spec fn ids_owned<E: Event>(a: &PolicyAnalyzer<E>, ids: Seq<RuleId>) -> bool {
+    forall|i: int| 0 <= i < ids.len()
+        ==> (#[trigger] ids[i]).owner() == a.owner() && ids[i].index() < a@.rules.len()
+}
+
+proof fn lemma_ids_owned_concat<E: Event>(a: &PolicyAnalyzer<E>, xs: Seq<RuleId>, ys: Seq<RuleId>)
+    ensures ids_owned(a, xs + ys) == (ids_owned(a, xs) && ids_owned(a, ys)),
+{
+    if ids_owned(a, xs) && ids_owned(a, ys) {
+        assert forall|i: int| 0 <= i < (xs + ys).len()
+            implies (#[trigger] (xs + ys)[i]).owner() == a.owner() && (xs + ys)[i].index() < a@.rules.len() by {
+            if i < xs.len() { assert((xs + ys)[i] == xs[i]); } else { assert((xs + ys)[i] == ys[i - xs.len()]); }
+        }
+    }
+    if ids_owned(a, xs + ys) {
+        assert forall|i: int| 0 <= i < xs.len()
+            implies (#[trigger] xs[i]).owner() == a.owner() && xs[i].index() < a@.rules.len() by {
+            assert((xs + ys)[i] == xs[i]);
+        }
+        assert forall|i: int| 0 <= i < ys.len()
+            implies (#[trigger] ys[i]).owner() == a.owner() && ys[i].index() < a@.rules.len() by {
+            assert((xs + ys)[xs.len() + i] == ys[i]);
+        }
+    }
+}
+
+/// Owned ids are in range for the stored rules.
+proof fn lemma_owned_valid<E: Event>(a: &PolicyAnalyzer<E>, ids: Seq<RuleId>)
+    requires ids_owned(a, ids),
+    ensures valid_ids(*a, ids), forall|i: int| 0 <= i < ids.len() ==> #[trigger] ids[i].0 < a.rules@.len(),
+{
+    assert forall|i: int| 0 <= i < ids.len() implies #[trigger] ids[i].0 < a.rules@.len() by {
+        assert(ids[i].index() == ids[i].0 as nat);
+    }
+}
 
 /// Lowered executable rule plus its original front-end provenance.
 pub(crate) struct StoredRule<E: Event> {
@@ -104,43 +151,76 @@ pub struct Domains<E: Event> {
     pub(crate) components: Vec<Option<Vec<E::Component>>>,
 }
 
+verus! {
+/// Why `Domains::with_domain` rejects a declaration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DomainError {
+    /// The coordinate is outside the event's arity.
+    OutOfArity,
+    /// No values were declared; a declared domain is nonempty (decision 8).
+    Empty,
+    /// A value belongs to another coordinate.
+    WrongCoordinate,
+}
+
 impl<E: Event> Domains<E> {
     /// Every component infinite.
-    pub fn infinite() -> Self {
-        Self {
-            components: (0..E::Arity::value()).map(|_| None).collect(),
+    pub fn infinite() -> (result: Self)
+        ensures result@ == Seq::new(arity::<E>(), |i: int| None::<Set<E::Component>>),
+    {
+        let count = E::Arity::value();
+        let mut components: Vec<Option<Vec<E::Component>>> = Vec::with_capacity(count);
+        while components.len() < count
+            invariant components@.len() <= count, count == arity::<E>(),
+                forall|i: int| 0 <= i < components@.len() ==> components@[i] is None,
+            decreases count - components@.len(),
+        {
+            components.push(None);
         }
+        let result = Self { components };
+        proof { assert(result@ =~= Seq::new(arity::<E>(), |i: int| None::<Set<E::Component>>)); }
+        result
     }
 
-    /// Declares all values of one coordinate, in declaration order.
-    ///
-    /// # Panics
-    /// Panics if the coordinate is outside this event's arity or a value belongs to another coordinate.
-    pub fn with_domain(
-        mut self,
-        component: Component,
-        values: impl IntoIterator<Item = E::Component>,
-    ) -> Self {
+    /// Declares all values of one coordinate, in declaration order. Rejects a coordinate outside
+    /// the arity, an empty set (decision 8), and a value of another coordinate.
+    pub fn with_domain(self, component: Component, values: &[E::Component])
+        -> (result: Result<Self, DomainError>)
+        ensures match result {
+            Ok(d) => component.0 < self@.len() && values@.len() > 0
+                && d@ == self@.update(component.0 as int, Some(values@.to_set()))
+                && (E::obeys_projection_spec() ==> forall|j: int| 0 <= j < values@.len()
+                    ==> E::coordinate_spec(values@[j]) == component.0 as nat),
+            Err(_) => true,
+        },
+        (component.0 < self@.len() && values@.len() > 0 && E::obeys_projection_spec()
+            && forall|j: int| 0 <= j < values@.len() ==> E::coordinate_spec(values@[j]) == component.0 as nat)
+            ==> result is Ok,
+    {
         let index = component.index();
-        assert!(
-            index < self.components.len(),
-            "domain coordinate is outside event arity"
-        );
-        self.components[index] = Some(
-            values
-                .into_iter()
-                .map(|value| {
-                    assert_eq!(
-                        E::coordinate(value),
-                        index,
-                        "domain value belongs to another coordinate"
-                    );
-                    value
-                })
-                .collect(),
-        );
-        self
+        if index >= self.components.len() { return Err(DomainError::OutOfArity); }
+        if values.is_empty() { return Err(DomainError::Empty); }
+        let mut i = 0;
+        while i < values.len()
+            invariant i <= values@.len(),
+                E::obeys_projection_spec() ==> forall|j: int| 0 <= j < i ==> E::coordinate_spec(values@[j]) == component.0 as nat,
+            decreases values@.len() - i,
+        {
+            if validate_component::<E>(component, &values[i]).is_err() { return Err(DomainError::WrongCoordinate); }
+            i += 1;
+        }
+        let mut components = self.components;
+        let ghost before = components@;
+        components.set(index, Some(vstd::slice::slice_to_vec(values)));
+        let result = Self { components };
+        proof {
+            assert(result@ =~= before.map_values(|vs: Option<Vec<E::Component>>|
+                match vs { None => None, Some(vs) => Some(vs@.to_set()) })
+                .update(component.0 as int, Some(values@.to_set())));
+        }
+        Ok(result)
     }
+}
 }
 
 /// One component value of a counterexample.
@@ -207,8 +287,11 @@ impl<E: Event> Constants<E> {
             field.0 < arity::<E>(), E::coordinate_spec(value) == field.0 as nat,
         ensures constants_wf(*final(self)), constants_frame(*old(self), *final(self)),
             final(self).values@.len() <= old(self).values@.len() + 1,
+            forall|j: int| old(self).values@.len() <= j < final(self).values@.len() ==> final(self).values@[j] == value,
             result matches Ok(id) ==> stored_code(*final(self), value, id),
-            result is Err ==> *final(self) == *old(self) && old(self).values@.len() == u32::MAX,
+            result is Err ==> *final(self) == *old(self) && old(self).values@.len() == u32::MAX
+                && forall|j: int| 0 <= j < old(self).values@.len() && value_field::<E>(old(self).values@[j]) == field
+                    ==> !value.eq_spec(&old(self).values@[j]),
     {
         let ghost before = *self;
         let index = field.index();
@@ -216,6 +299,7 @@ impl<E: Event> Constants<E> {
             proof { lemma_constant_lookup(*self, field, value, id); }
             return Ok(id);
         }
+        proof { lemma_lookup_missed(*self, field, value); }
         let id = ConstId::try_from(self.values.len() as u64 + 1)?;
         self.values.push(value);
         self.ids[index].insert_fresh(value, id);
@@ -223,25 +307,16 @@ impl<E: Event> Constants<E> {
         Ok(id)
     }
 
-    fn intern(&mut self, field: Component, value: E::Component) -> (result: ConstId)
-        requires constants_wf(*old(self)), crate::verify::analyzer_obligations::<E>(),
-            old(self).values@.len() < u32::MAX,
-            field.0 < arity::<E>(), E::coordinate_spec(value) == field.0 as nat,
-        ensures constants_wf(*final(self)), constants_frame(*old(self), *final(self)),
-            final(self).values@.len() <= old(self).values@.len() + 1,
-            stored_code(*final(self), value, result),
-    {
-        self.try_intern(field, value).expect("constant ids fit in u32")
-    }
-
-    /// The universe of a declared finite component, in declaration order without repeats.
+    /// The universe of a declared finite component, in declaration order without repeats. At most
+    /// one constant is interned per distinct declared value.
     fn universe(&mut self, field: Component, values: &[E::Component]) -> (result: Rc<Vec<ConstId>>)
         requires constants_wf(*old(self)), crate::verify::analyzer_obligations::<E>(),
-            old(self).values@.len() + values@.len() <= u32::MAX,
+            old(self).values@.len() + values@.to_set().len() <= u32::MAX,
             field.0 < arity::<E>(),
             forall|i: int| 0 <= i < values@.len() ==> E::coordinate_spec(values@[i]) == field.0 as nat,
         ensures constants_wf(*final(self)), constants_frame(*old(self), *final(self)),
-            final(self).values@.len() <= old(self).values@.len() + values@.len(),
+            final(self).values@.len() <= old(self).values@.len() + values@.to_set().len(),
+            forall|j: int| old(self).values@.len() <= j < final(self).values@.len() ==> values@.contains(final(self).values@[j]),
             universe_encoded(*final(self), (*result)@, values@),
     {
         hide(universe_encoded);
@@ -253,22 +328,41 @@ impl<E: Event> Constants<E> {
             invariant i <= values@.len(), constants_wf(*self), crate::verify::analyzer_obligations::<E>(),
                 field.0 < arity::<E>(),
                 forall|j: int| 0 <= j < values@.len() ==> E::coordinate_spec(values@[j]) == field.0 as nat,
-                constants_frame(before, *self), self.values@.len() <= before.values@.len() + i,
+                constants_frame(before, *self),
+                self.values@.len() <= before.values@.len() + values@.take(i as int).to_set().len(),
+                forall|j: int| before.values@.len() <= j < self.values@.len() ==> values@.take(i as int).contains(self.values@[j]),
                 universe_encoded(*self, ids@, values@.take(i as int)),
-                before.values@.len() + values@.len() <= u32::MAX,
+                before.values@.len() + values@.to_set().len() <= u32::MAX,
             decreases values@.len() - i,
         {
             let ghost prior = *self;
+            let ghost seen = values@.take(i as int);
             let value = values[i];
-            let id = self.intern(field, value);
-            proof { lemma_universe_frame(prior, *self, ids@, values@.take(i as int)); }
+            let attempt = self.try_intern(field, value);
+            proof {
+                if attempt is Err {
+                    lemma_universe_no_overflow(*self, field, ids@, values@, i as int, before.values@.len() as int);
+                }
+            }
+            let id = attempt.expect("constant ids fit in u32");
+            proof {
+                lemma_universe_frame(prior, *self, ids@, seen);
+                lemma_universe_count_step(prior, *self, field, ids@, values@, i as int, before.values@.len() as int);
+                assert(values@.take(i as int + 1) =~= seen.push(value));
+                assert forall|j: int| before.values@.len() <= j < self.values@.len()
+                    implies values@.take(i as int + 1).contains(self.values@[j]) by {
+                    if j < prior.values@.len() {
+                        let k = choose|k: int| 0 <= k < seen.len() && seen[k] == prior.values@[j];
+                        assert(values@.take(i as int + 1)[k] == self.values@[j]);
+                    } else {
+                        assert(values@.take(i as int + 1)[i as int] == value);
+                    }
+                }
+            }
             let ghost old_ids = ids@;
             let found = contains_id(&ids, id);
             if !found { ids.push(id); } else { proof { assert(ids@.contains(id)); } }
-            proof {
-                assert(values@.take(i as int + 1) =~= values@.take(i as int).push(value));
-                lemma_universe_step(*self, old_ids, ids@, values@.take(i as int), value, id);
-            }
+            proof { lemma_universe_step(*self, old_ids, ids@, seen, value, id); }
             i += 1;
         }
         proof { assert(values@.take(i as int) =~= values@); }
@@ -366,18 +460,36 @@ pub struct PolicyAnalyzer<E: Event> {
     pub(crate) constants: Constants<E>,
     pub(crate) universes: Universes,
     pub(crate) rules: Vec<StoredRule<E>>,
+    /// Process-unique id stamped on every issued `RuleId`; `0` only if the allocator is exhausted.
+    pub(crate) owner: u64,
+    /// The declared domains, as passed to `new` (R6 `AnalyzerView::domains`).
+    #[cfg(verus_keep_ghost)]
+    pub(crate) declared: Ghost<junco_core::spec::questions::DomainsView<E::Component>>,
+    /// The constants of every input so far (R6 `AnalyzerView::known`): declared values, then the
+    /// constants of each rule and tail query, whether or not the call succeeded.
+    #[cfg(verus_keep_ghost)]
+    pub(crate) known: Ghost<Seq<Set<E::Component>>>,
 }
 
 verus! {
 impl<E: Event> PolicyAnalyzer<E> {
+    /// The analyzer's internal invariant: constant books, declared universes and stored rules are
+    /// well formed. Opaque to clients; established by `new` and preserved by every method.
+    pub closed spec fn wf(&self) -> bool { analyzer_state_wf(*self) }
+
+    /// The id this analyzer stamps on the `RuleId`s it issues.
+    pub closed spec fn owner(&self) -> u64 { self.owner }
+
     /// Creates an analyzer for events whose components take the values of `domains`.
     // Each match keeps the declared domain's exact vector view.
-    #[allow(clippy::manual_map)]
+    // `Result::unwrap_or` has no vstd specification; the match is the verified form.
+    #[allow(clippy::manual_map, clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
     pub fn new(domains: Domains<E>) -> (result: Self)
-        requires crate::verify::analyzer_obligations::<E>(), domains_wf(domains), constructor_capacity(domains),
-        ensures constructor_result(result, domains),
+        requires crate::verify::analyzer_obligations::<E>(),
+            junco_core::spec::questions::domains_wf::<E>(domains@),
+            crate::spec::analyzer::constructor_capacity::<E>(domains@),
+        ensures result.wf(), constructed_from(result, domains),
     {
-        proof { lemma_constructor_contract::<E>(); }
         let ghost input = domains;
         let arity = E::Arity::value();
         let mut ids = Vec::with_capacity(arity);
@@ -397,25 +509,25 @@ impl<E: Event> PolicyAnalyzer<E> {
         index = 0;
         while index < arity
             invariant index <= arity, arity == history_syntax::spec::events::arity::<E>(),
-                1 <= arity <= MAX_ARITY, domains == input, constructor_capacity(input),
-                crate::verify::analyzer_obligations::<E>(), domains_wf(input),
+                1 <= arity <= MAX_ARITY, domains == input,
+                crate::spec::analyzer::constructor_capacity::<E>(input@),
+                crate::verify::analyzer_obligations::<E>(),
+                junco_core::spec::questions::domains_wf::<E>(input@),
                 constants_wf(constants), universes@.len() == index,
-                constants.values@.len() <= domain_values_count(input.components@.take(index as int)),
+                constants.values@.len() <= crate::spec::analyzer::known_count(
+                    crate::spec::analyzer::declared_sets(input@).take(index as int)),
                 forall|i: int| 0 <= i < index ==>
                     declared_universe(constants, universes@[i], input.components@[i]),
             decreases arity - index,
         {
             let ghost before = constants;
-            proof { lemma_domain_count_step(input.components@, index as int); }
+            proof { lemma_declared_count_step(input, index as int); }
             let field = Component::new(index);
             let universe = match &domains.components[index] {
                 Some(values) => {
                     proof {
-                        lemma_constructor_contract::<E>();
-                        assert(domain_values_count(input.components@) <= u32::MAX);
                         assert(input.components@[index as int] == Some(*values));
-                        assert(option_len(input.components@[index as int]) == values@.len());
-                        assert(constants.values@.len() + values@.len() <= u32::MAX);
+                        lemma_declared_values_tagged(input, index as int);
                     }
                     Some(constants.universe(field, values))
                 },
@@ -431,9 +543,18 @@ impl<E: Event> PolicyAnalyzer<E> {
             universes.push(universe);
             index += 1;
         }
-        proof { assert(input.components@.take(index as int) =~= input.components@); }
-        let result = Self { constants, universes, rules: Vec::new() };
-        proof { lemma_declared_wf(result, input); lemma_constructor_domains(result, input); }
+        let owner = match history_store::typed::issue_owner_id() { Ok(id) => id, Err(_) => 0 };
+        let result = Self {
+            constants, universes, rules: Vec::new(), owner,
+            #[cfg(verus_keep_ghost)]
+            declared: Ghost(input@),
+            #[cfg(verus_keep_ghost)]
+            known: Ghost(crate::spec::analyzer::declared_sets(input@)),
+        };
+        proof {
+            lemma_declared_wf(result, input);
+            lemma_constructor_domains(result, input);
+        }
         result
     }
 }
@@ -442,21 +563,27 @@ impl<E: Event> PolicyAnalyzer<E> {
 verus! {
 impl<E: Event> PolicyAnalyzer<E> {
 
-    /// Validates and stores a rule. Indices remain stable when later rules add constants.
+    /// Validates and stores a rule. Indices remain stable when later rules add constants. The
+    /// rule's constants enter `known` on every return: interning may precede a failure.
     pub fn add_rule(&mut self, rule: &Rule<E>) -> (result: Result<RuleId, CompileError>)
-        requires views::analyzer_obligations::<E>(), analyzer_state_wf(*old(self)),
-            add_rule_capacity(*old(self), *rule),
-        ensures analyzer_state_wf(*final(self)),
-            final(self)@.domains == old(self)@.domains,
-            result matches Ok(id) ==> final(self)@.rules == old(self)@.rules.push(encoding::rule_view(*rule))
-                && id@ == old(self)@.rules.len()
-                && junco_core::spec::semantics::rule_wf(encoding::rule_view(*rule)),
-            result is Err ==> final(self)@.rules == old(self)@.rules,
+        requires views::analyzer_obligations::<E>(), old(self).wf(),
+            crate::spec::analyzer::add_rule_capacity::<E>(analyzer_view(*old(self)), rule@),
+        ensures final(self).wf(), final(self).owner() == old(self).owner(),
+            analyzer_view(*final(self)).domains == analyzer_view(*old(self)).domains,
+            analyzer_view(*final(self)).known == crate::spec::analyzer::known_with(
+                analyzer_view(*old(self)).known, junco_core::spec::questions::rule_constants(rule@)),
+            result matches Ok(id) ==> analyzer_view(*final(self)).rules == analyzer_view(*old(self)).rules.push(rule@)
+                && id.index() == analyzer_view(*old(self)).rules.len() && id.owner() == final(self).owner()
+                && junco_core::spec::semantics::rule_wf(rule@),
+            result is Err ==> analyzer_view(*final(self)).rules == analyzer_view(*old(self)).rules,
             junco_core::verify::history_specs::no_invariant_compile_failure(result),
     {
         let ghost before = *self;
+        proof {
+            self.known = Ghost(crate::spec::analyzer::known_with(self.known@,
+                junco_core::spec::questions::rule_constants(rule@)));
+        }
         let flat = flatten_rule_parts(rule.mode, &rule.head, &rule.tail, &mut Unmetered, &mut ObservationWorld)?;
-        proof { assert(encode_capacity(*self, flat.source)); }
         let numeric_result = self.encode(&flat.source);
         proof { lemma_universes_frame(before.constants, self.constants, self.universes); }
         let numeric = numeric_result?;
@@ -469,26 +596,69 @@ impl<E: Event> PolicyAnalyzer<E> {
             }
             lemma_universes_frame(before.constants, self.constants, self.universes);
         }
-        let id = RuleId(self.rules.len());
+        let id = RuleId(self.rules.len(), self.owner);
         self.rules.push(StoredRule { original: Ghost(*rule), flat: Ghost(flat),
             numeric, constants, constraint, mode: rule.mode });
         proof {
-            assert(self@.rules =~= before@.rules.push(encoding::rule_view(*rule)));
+            assert(analyzer_view(*self).rules =~= analyzer_view(before).rules.push(rule@));
         }
         Ok(id)
     }
 
     /// Whether `by` covers every denial of the stored rule.
     pub fn covered(&self, rule: RuleId, by: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
-        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
-            rule@ < self@.rules.len(), valid_ids(*self, by@),
+        requires self.wf(), views::analyzer_obligations::<E>(),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            !ids_owned(self, seq![rule] + by@) ==> result matches Err(HistoryError::UnknownId { .. }),
             result matches Ok(v) ==> verdict::covered_ok(self@, rule@, rule_ids(by@), v@),
             result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
                 && !semantics::covers(self@.domains, verdict::rules_of(self@, rule_ids(by@)), self@.rules[rule@ as int]),
     {
+        proof { lemma_ids_owned_concat(self, seq![rule], by@); }
+        self.check_id(rule)?;
+        self.check_ids(by)?;
+        proof {
+            assert(seq![rule][0] == rule);
+            lemma_owned_valid(self, seq![rule]);
+            lemma_owned_valid(self, by@);
+        }
         self.covered_with(rule, by, None)
+    }
+
+    /// `Ok` iff `id` was issued by this analyzer and names one of its rules.
+    fn check_id(&self, id: RuleId) -> (result: Result<(), HistoryError>)
+        ensures result is Ok <==> ids_owned(self, seq![id]),
+            result matches Err(error) ==> error matches HistoryError::UnknownId { .. },
+    {
+        proof { assert(seq![id][0] == id); }
+        if id.1 == self.owner && id.0 < self.rules.len() { Ok(()) }
+        else { Err(HistoryError::UnknownId { domain: "rule", id: id.0 as u64 }) }
+    }
+
+    /// `Ok` iff every id was issued by this analyzer and names one of its rules.
+    fn check_ids(&self, ids: &[RuleId]) -> (result: Result<(), HistoryError>)
+        ensures result is Ok <==> ids_owned(self, ids@),
+            result matches Err(error) ==> error matches HistoryError::UnknownId { .. },
+    {
+        let mut i = 0;
+        while i < ids.len()
+            invariant i <= ids@.len(), ids_owned(self, ids@.take(i as int)),
+            decreases ids@.len() - i,
+        {
+            let checked = self.check_id(ids[i]);
+            if checked.is_err() {
+                proof { assert(!ids_owned(self, ids@)) by { assert(seq![ids@[i as int]][0] == ids@[i as int]); } }
+                return checked;
+            }
+            proof {
+                assert(ids@.take(i as int + 1) =~= ids@.take(i as int).push(ids@[i as int]));
+                assert(seq![ids@[i as int]][0] == ids@[i as int]);
+            }
+            i += 1;
+        }
+        proof { assert(ids@.take(i as int) =~= ids@); }
+        Ok(())
     }
 
     /// Checks coverage after excluding every occurrence of `rule`, without a filtered allocation.
@@ -497,10 +667,10 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// removal changes a decision when `policy` contains `rule`; an absent rule retains the
     /// coverage-query interpretation.
     pub fn redundant(&self, rule: RuleId, policy: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
-        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
-            rule@ < self@.rules.len(), valid_ids(*self, policy@),
+        requires self.wf(), views::analyzer_obligations::<E>(),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            !ids_owned(self, seq![rule] + policy@) ==> result matches Err(HistoryError::UnknownId { .. }),
             result matches Ok(v) ==> verdict::redundant_ok(self@, rule@, rule_ids(policy@), v@),
             result matches Ok(v) ==> removal::redundant_decisions_ok(self@, rule@, rule_ids(policy@), v@),
             result matches Ok(Inclusion::Holds) ==> removal::removal_preserves_decisions(self@, rule@, rule_ids(policy@)),
@@ -510,6 +680,14 @@ impl<E: Event> PolicyAnalyzer<E> {
                 && !semantics::covers(self@.domains,
                     verdict::rules_of(self@, verdict::without_rule(rule_ids(policy@), rule@)), self@.rules[rule@ as int]),
     {
+        proof { lemma_ids_owned_concat(self, seq![rule], policy@); }
+        self.check_id(rule)?;
+        self.check_ids(policy)?;
+        proof {
+            assert(seq![rule][0] == rule);
+            lemma_owned_valid(self, seq![rule]);
+            lemma_owned_valid(self, policy@);
+        }
         let result = self.covered_with(rule, policy, Some(rule))?;
         proof {
             queries::lemma_selected_ids(*self, policy@, Some(rule));
@@ -533,24 +711,34 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// Whether `stricter` denies everything denied by `than`.
     pub fn at_least_as_strict(&self, stricter: &[RuleId], than: &[RuleId])
         -> (result: Result<Inclusion<E>, HistoryError>)
-        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
-            valid_ids(*self, stricter@), valid_ids(*self, than@),
+        requires self.wf(), views::analyzer_obligations::<E>(),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            !ids_owned(self, stricter@ + than@) ==> result matches Err(HistoryError::UnknownId { .. }),
             result matches Ok(v) ==> verdict::at_least_as_strict_ok(self@, rule_ids(stricter@), rule_ids(than@), v@),
             result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
                 && !semantics::refines(self@.domains, verdict::rules_of(self@, rule_ids(stricter@)),
                     verdict::rules_of(self@, rule_ids(than@))),
     {
+        proof { lemma_ids_owned_concat(self, stricter@, than@); }
+        self.check_ids(stricter)?;
+        self.check_ids(than)?;
+        proof { lemma_owned_valid(self, stricter@); lemma_owned_valid(self, than@); }
         let mut index = 0;
         while index < than.len()
             invariant index <= than@.len(), analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+                ids_owned(self, stricter@), ids_owned(self, than@),
                 valid_ids(*self, stricter@), valid_ids(*self, than@),
                 verdict::unrestricted_components_infinite(self@.domains),
                 forall|j: int| 0 <= j < index ==> semantics::covers(self@.domains,
                     verdict::rules_of(self@, rule_ids(stricter@)), self@.rules[than@[j]@ as int]),
             decreases than@.len() - index,
         {
+            proof {
+                lemma_ids_owned_concat(self, stricter@, than@);
+                assert(seq![than@[index as int]][0] == than@[index as int]);
+                lemma_ids_owned_concat(self, seq![than@[index as int]], stricter@);
+            }
             let inclusion = self.covered(than[index], stricter)?;
             match inclusion {
                 Inclusion::Holds => {},
@@ -561,7 +749,10 @@ impl<E: Event> PolicyAnalyzer<E> {
             }
             index += 1;
         }
-        proof { bridge::lemma_refinement_holds(self@, rule_ids(stricter@), rule_ids(than@)); }
+        proof {
+            lemma_ids_owned_concat(self, stricter@, than@);
+            bridge::lemma_refinement_holds(self@, rule_ids(stricter@), rule_ids(than@));
+        }
         Ok(Inclusion::Holds)
     }
 
@@ -919,9 +1110,13 @@ impl<E: Event> PolicyAnalyzer<E> {
     ///
     /// Both tails may refer to the head's variables. A counterexample is a matching candidate and
     /// a history in `left` but not in `right`.
-    #[verus_spec(result => requires views::analyzer_obligations::<E>(),
-        analyzer_state_wf(*old(self)), query_capacity(*old(self), *left, *right),
-        ensures analyzer_state_wf(*final(self)),
+    #[verus_spec(result => requires views::analyzer_obligations::<E>(), old(self).wf(),
+        crate::spec::analyzer::query_capacity::<E>(analyzer_view(*old(self)), left@, right@),
+        ensures final(self).wf(), final(self).owner() == old(self).owner(),
+            analyzer_view(*final(self)).domains == analyzer_view(*old(self)).domains,
+            analyzer_view(*final(self)).rules == analyzer_view(*old(self)).rules,
+            analyzer_view(*final(self)).known == crate::spec::analyzer::known_with(
+                analyzer_view(*old(self)).known, crate::spec::analyzer::tail_constants(head@, left@, right@)),
             junco_core::verify::history_specs::no_invariant_compile_failure(result),
             result matches Ok(v) ==> verdict::tail_included_ok(final(self)@, head@, left@, right@, v@))]
     pub fn tail_included(
@@ -931,8 +1126,10 @@ impl<E: Event> PolicyAnalyzer<E> {
         right: &RegexExpr<E>,
     ) -> Result<Inclusion<E>, CompileError> {
         let ghost before = *self;
-        proof { lemma_query_capacity(*self, *left, *right); }
-        let ghost bound = self.constants.values@.len() + 2 * arity::<E>() + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@);
+        proof {
+            self.known = Ghost(crate::spec::analyzer::known_with(self.known@,
+                crate::spec::analyzer::tail_constants(head@, left@, right@)));
+        }
         let ghost left_rule = Rule { mode: RuleMode::Forbid, head: *head, tail: *left };
         let ghost right_rule = Rule { mode: RuleMode::Forbid, head: *head, tail: *right };
         let left_flat = flatten_rule_parts(RuleMode::Forbid, head, left, &mut Unmetered, &mut ObservationWorld)?;
@@ -940,15 +1137,11 @@ impl<E: Event> PolicyAnalyzer<E> {
         proof {
             assert(left_rule.head@ == head@ && right_rule.head@ == head@);
             assert(left_rule.tail@ == left@ && right_rule.tail@ == right@);
-            assert(left_flat.source.tests@.len() <= fl::regex_cost::<E>(left@));
-            assert(right_flat.source.tests@.len() <= fl::regex_cost::<E>(right@));
-            assert(encode_capacity(*self, left_flat.source));
         }
         let left_result = self.encode(&left_flat.source);
         proof { lemma_universes_extended(before.constants, self.constants, self.universes); }
         let left_numeric = left_result?;
         let ghost first = *self;
-        proof { assert(encode_capacity(*self, right_flat.source)); }
         let right_result = self.encode(&right_flat.source);
         proof { lemma_universes_extended(first.constants, self.constants, self.universes); }
         let right_numeric = right_result?;
@@ -960,7 +1153,6 @@ impl<E: Event> PolicyAnalyzer<E> {
             lemma_lowered_payload(self.constants, left_flat.source, left_numeric);
             lemma_lowered_payload(self.constants, right_flat.source, right_numeric);
             assert(tail_input_wf(self.constants, input));
-            assert(self.constants.values@.len() <= bound);
         }
         let constants = Self::head_constants(&left_numeric.head);
         proof {
@@ -1039,13 +1231,17 @@ impl<E: Event> PolicyAnalyzer<E> {
         result
     }
 
-    /// `source` with each constant replaced by its constant id.
+    /// `source` with each constant replaced by its constant id. Exhausting the `u32` id space is
+    /// reported as `Err(IdExhausted)`; the capacity preconditions of the entry points rule it out.
     fn encode(&mut self, source: &FlatPair<E::Component>) -> (result: Result<FlatPair<u64>, HistoryError>)
-        requires constants_wf(old(self).constants), crate::verify::analyzer_obligations::<E>(), encode_capacity(*old(self), *source),
+        requires constants_wf(old(self).constants), crate::verify::analyzer_obligations::<E>(),
         ensures constants_wf(final(self).constants), enc::extends(crate::verify::constant_book(old(self).constants), crate::verify::constant_book(final(self).constants), fl::component_equality::<E>()),
             constants_frame(old(self).constants, final(self).constants),
             final(self).universes == old(self).universes,
             final(self).rules == old(self).rules,
+            final(self).owner == old(self).owner,
+            final(self).declared == old(self).declared,
+            final(self).known == old(self).known,
             analyzer_state_wf(*old(self)) ==> analyzer_state_wf(*final(self)),
             junco_core::verify::history_specs::no_invariant_failure(result),
             final(self).constants.values@.len() <= old(self).constants.values@.len() + source.head@.len() + source.tests@.len(),
@@ -1056,7 +1252,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         let ghost before = *self;
         proof { assert(initial_count == old(self).constants.values@.len()); }
         proof { lemma_constants_maps(self.constants); }
-        let (result, overflowed, Ghost(maps), Ghost(count)) = {
+        let (result, Ghost(maps), Ghost(count)) = {
             let mut encoder = BorrowedEncoder {
                 constants: &mut self.constants, overflowed: false,
                 calls: Ghost(initial_count),
@@ -1070,25 +1266,18 @@ impl<E: Event> PolicyAnalyzer<E> {
                 assert(encoder.constants.values@.len() <= initial_count + source.head@.len() + source.tests@.len());
                 lemma_constant_book_length(*encoder.constants);
                 assert(book_entries_count(maps) == encoder.constants.values@.len());
-                assert(!encoder.overflowed);
             }
             let ghost count = encoder.constants.values@.len();
-            let overflowed = encoder.overflowed;
-            (result, overflowed, Ghost(maps), Ghost(count))
+            (result, Ghost(maps), Ghost(count))
         };
         proof {
             assert(crate::verify::constant_book(self.constants) == maps);
             lemma_constant_book_length(self.constants);
             assert(self.constants.values@.len() == count);
-            assert(!overflowed);
-        }
-        if overflowed {
-            let _ = ConstId::try_from(self.constants.values.len() + 1).expect("constant ids fit in u32");
-        }
-        proof {
             if let Ok(target) = &result { lemma_lowered_head_bound(self.constants, *source, *target); }
             if analyzer_state_wf(before) {
-            lemma_universes_extended(before.constants, self.constants, self.universes);
+                lemma_universes_extended(before.constants, self.constants, self.universes);
+                lemma_universes_frame(before.constants, self.constants, self.universes);
                 lemma_store_extends(before.constants, self.constants, self.universes, self.rules@);
             }
         }

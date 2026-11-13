@@ -31,7 +31,9 @@ fn benchmark_regexlib_subset(criterion: &mut Criterion) {
     for instance in &INSTANCES {
         let (left, right) = ((instance.left)(), (instance.right)());
         let mut analyzer = PolicyAnalyzer::new(
-            Domains::<Char>::infinite().with_domain(Component(1), ALPHABET.map(Component3::C1)),
+            Domains::<Char>::infinite()
+                .with_domain(Component(1), &ALPHABET.map(Component3::C1))
+                .expect("domain"),
         );
         let verdict = analyzer
             .tail_included(&head, &left, &right)

@@ -283,11 +283,13 @@ fn alice_bob_coverage_regression() {
             let mut setup = policy_setup();
             if !finite {
                 setup.domains = Domains::infinite()
-                    .with_domain(Component(1), ACTIONS.map(AccessComponent::Action))
+                    .with_domain(Component(1), &ACTIONS.map(AccessComponent::Action))
+                    .expect("domain")
                     .with_domain(
                         Component(2),
-                        [MENTIONED, MENTIONED + 1].map(AccessComponent::Resource),
-                    );
+                        &[MENTIONED, MENTIONED + 1].map(AccessComponent::Resource),
+                    )
+                    .expect("domain");
                 setup.principal_domain = None;
             }
             let head = Head::new([
@@ -365,12 +367,15 @@ fn policy_setup() -> Setup {
             ComponentPattern::variable("r"),
         ]),
         domains: Domains::infinite()
-            .with_domain(Component(0), [1, 2, 3].map(AccessComponent::Principal))
-            .with_domain(Component(1), ACTIONS.map(AccessComponent::Action))
+            .with_domain(Component(0), &[1, 2, 3].map(AccessComponent::Principal))
+            .expect("domain")
+            .with_domain(Component(1), &ACTIONS.map(AccessComponent::Action))
+            .expect("domain")
             .with_domain(
                 Component(2),
-                [MENTIONED, MENTIONED + 1].map(AccessComponent::Resource),
-            ),
+                &[MENTIONED, MENTIONED + 1].map(AccessComponent::Resource),
+            )
+            .expect("domain"),
         principal_register: true,
         action_register: true,
         resource_register: true,
@@ -708,19 +713,24 @@ impl Setup {
             Some(vec![11, 12]),
         ][rng.below(4)]
         .clone();
-        let mut domains =
-            Domains::infinite().with_domain(Component(1), ACTIONS.map(AccessComponent::Action));
+        let mut domains = Domains::infinite()
+            .with_domain(Component(1), &ACTIONS.map(AccessComponent::Action))
+            .expect("domain");
         if let Some(values) = &principal_domain {
-            domains = domains.with_domain(
-                Component(0),
-                values.iter().copied().map(AccessComponent::Principal),
-            );
+            let values: Vec<_> = values
+                .iter()
+                .copied()
+                .map(AccessComponent::Principal)
+                .collect();
+            domains = domains.with_domain(Component(0), &values).expect("domain");
         }
         if let Some(values) = &resource_domain {
-            domains = domains.with_domain(
-                Component(2),
-                values.iter().copied().map(AccessComponent::Resource),
-            );
+            let values: Vec<_> = values
+                .iter()
+                .copied()
+                .map(AccessComponent::Resource)
+                .collect();
+            domains = domains.with_domain(Component(2), &values).expect("domain");
         }
         let head = Head::new([
             ComponentPattern::variable("p"),

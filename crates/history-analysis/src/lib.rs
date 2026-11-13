@@ -69,4 +69,6 @@ pub mod spec;
 pub mod verify;
 
 #[cfg(feature = "runtime")]
-pub use analyzer::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, RuleId, Value};
+pub use analyzer::{
+    Components, Counterexample, DomainError, Domains, Inclusion, PolicyAnalyzer, RuleId, Value,
+};
