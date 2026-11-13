@@ -5,9 +5,10 @@
 //! is proved. The mapping to the paper's results is the index `crate::verify::paper`.
 //!
 //! Layers, top-down:
-//! - [`semantics`]: proofs of the R2/R3 questions (refinement iff coverage, redundancy iff
-//!   coverage, genericity) and the constants of a rule. What each analyzer verdict means is R6
-//!   (`history_analysis::spec::analyzer`), over R2/R3 (`junco_core::spec::{semantics, questions}`).
+//! - [`semantics`]: proofs of the policy questions (refinement iff coverage, redundancy iff
+//!   coverage, genericity) and the constants of a rule. What each analyzer verdict means is stated by
+//!   the analyzer specification (`history_analysis::spec::analyzer`), over the semantics and the
+//!   analysis questions (`junco_core::spec::{semantics, questions}`).
 //! - [`encoding`]: typed rules as numeric rules, through the existing verified front end
 //!   (`flatten_rule`, `lower_flat`, `compile`), plus renaming invariance for fresh values.
 //! - [`inclusion`]: constraints, `Split`, constrained inclusion, and the policy reduction.

@@ -1,4 +1,4 @@
-//! R1: events as tagged component tuples, and the views of the owned DSL (paper: `sec:events`,
+//! Events as tagged component tuples, and the views of the owned DSL (paper: `sec:events`,
 //! `sec:rules`).
 
 use crate::event::specs::{AritySpec, EventSpec};

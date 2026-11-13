@@ -1,4 +1,4 @@
-//! R4's `hash_coherent` for the analyzer's internal hash keys (TRUST.md, "axiom").
+//! The hypotheses' `hash_coherent` (`junco_core::spec::hypotheses`) for the analyzer's internal hash keys (TRUST.md, "axiom").
 //!
 //! Each key type's `Hash` and `Eq` are structural: `ConstraintId` is `u32`, `RegexId`/`TestId` are
 //! `u32` newtypes with derived impls; pairs hash and compare field by field (std); `SmallVec`

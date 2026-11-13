@@ -1,8 +1,5 @@
-From f8949b96d926687ec8671f163d14f9232a3a3476 Mon Sep 17 00:00:00 2001
-From: Lef Ioannidis <eioannidis@microsoft.com>
-Date: Thu, 12 Nov 2026 15:35:42 -0800
-Subject: [PATCH] Add -timed to the verified kernel: parse the whole log first,
- then time and report the monitor steps alone
+Add -timed to the verified kernel: parse the whole log first, then time and report the monitor
+steps alone. Apply with `git apply` in a VeriMon checkout.
 
 ---
  src/algorithm_verified.ml  | 27 +++++++++++++++++++++++----

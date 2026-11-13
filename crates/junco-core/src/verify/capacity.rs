@@ -1,5 +1,5 @@
-//! Real instances of symbolic counterexamples (R3, decision 2): fresh-value capacity gives an
-//! admissible choice of fresh values, R1 `views_surjective` turns the chosen tuples into events,
+//! Real instances of symbolic counterexamples (`junco_core::spec::questions`): fresh-value capacity gives an
+//! admissible choice of fresh values, `views_surjective` turns the chosen tuples into events,
 //! and integer coordinates have capacity whenever the type is large enough.
 
 use crate::spec::hypotheses::{eq_equivalence, event_obligations};
@@ -161,7 +161,7 @@ proof fn lemma_event_of_well_tagged<E: Event>(
     }
 }
 
-/// An admissible choice denotes a real pair of events (R1 `views_surjective`).
+/// An admissible choice denotes a real pair of events (`views_surjective` in `history_syntax::spec::events`).
 pub proof fn lemma_instance_from_choice<E: Event>(
     domains: DomainsView<E::Component>, known: Seq<Set<E::Component>>, cex: CexView<E::Component>,
     f: FreshChoice<E::Component>,

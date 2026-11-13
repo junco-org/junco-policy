@@ -46,6 +46,23 @@ pub open spec fn head_coordinates_wf<E: Event>(head: SourceHead<E>) -> bool {
     }
 }
 
+pub(crate) proof fn lemma_rule_head_coordinates<E: Event>(
+    rule: history_syntax::spec::events::RuleView<E::Component>,
+)
+    requires rule.head.len() == arity::<E>(), dsl::rule_constants_tagged::<E>(rule),
+    ensures head_coordinates_wf::<E>(rule.head),
+{
+    assert forall|i: int| 0 <= i < rule.head.len() implies match #[trigger] rule.head[i] {
+        PatternView::Constant(value) => E::coordinate_spec(value) == i,
+        _ => true,
+    } by {
+        if let PatternView::Constant(value) = rule.head[i] {
+            assert(crate::spec::questions::head_constants(rule.head)[i].contains(value));
+            assert(crate::spec::questions::rule_constants(rule)[i].contains(value));
+        }
+    }
+}
+
 pub open spec fn atom_coordinates_wf<E: Event>(atom: AtomView<E::Component>) -> bool {
     atom.component < arity::<E>() && match atom.pattern {
         PatternView::Constant(value) => E::coordinate_spec(value) == atom.component,
@@ -229,7 +246,7 @@ pub(crate) proof fn lemma_work_scoped_pop<E: Event>(work: Seq<Work<'_, E>>, head
     } by { assert(work.drop_last()[i] == work[i]); }
 }
 
-// ----- the constants a flattening may intern are the rule's (R6 `known`) -----
+// ----- the constants a flattening may intern are the rule's (the analyzer's `known`) -----
 
 /// `source` compares each coordinate only against constants `tail` does (a sub-term of `tail`).
 pub open spec fn regex_constants_within<C>(source: RegexView<C>, tail: RegexView<C>) -> bool {
@@ -348,8 +365,8 @@ pub proof fn lemma_test_children_within<C>(children: Seq<TestView<C>>, source: T
     }
 }
 
-/// Every constant a flattening can intern is a constant of the rule at that coordinate (R6
-/// `known` after `add_rule` is `known_with(.., rule_constants(rule))`).
+/// Every constant a flattening can intern is a constant of the rule at that coordinate (the
+/// analyzer specification's `known` after `add_rule` is `known_with(.., rule_constants(rule))`).
 pub proof fn lemma_flattened_constants<E: Event>(rule: Rule<E>, flat: FlatRule<E::Component>)
     requires flattened::<E>(rule, flat),
     ensures forall|f: Component, v: E::Component| #[trigger] crate::verify::encoding::source_constant(flat.source, f, v)

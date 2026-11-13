@@ -1,4 +1,4 @@
-//! R1's `event_laws` for the built-in event types: tuples and Frunk coproducts (`sec:events`).
+//! `event_laws` (`history_syntax::spec::events`) for the built-in event types: tuples and Frunk coproducts (`sec:events`).
 
 use crate::event::specs::EventSpec;
 use crate::event::{Component2, Component3, Component4, Event};

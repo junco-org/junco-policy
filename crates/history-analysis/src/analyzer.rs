@@ -1,16 +1,16 @@
 //! Policy coverage, redundancy, refinement, and tail inclusion through constrained search.
 //!
-//! Every verdict is stated over real events inside the declared domains (R3 `in_domains`, R6
+//! Every verdict is stated over real events inside the declared domains (`in_domains`, and the analyzer specification's
 //! `covered_spec`/`redundant_spec`/`at_least_as_strict_spec`/`tail_included_spec`): a declared
 //! coordinate ranges over exactly its declared values, an undeclared one over every value of its
-//! type (decision 8, S9). So a verdict transfers to the monitor only for candidates and histories
+//! type. So a verdict transfers to the monitor only for candidates and histories
 //! whose declared coordinates take declared values; `Domains::with_domain` rejects an empty
-//! declaration, and the bridge theorem to `Validator::check` is Track T's.
+//! declaration, and the bridge theorem to `Validator::check` is `theorem_analyzer_to_monitor`.
 //!
 //! `Inclusion::Exhausted` is returned exactly when `SymbolicLanguage::compile` or `search` fails
 //! with `HistoryError::GraphBudget` (the two arms in `decide`); every other error, including
 //! `GraphIndex` overflow, propagates as `Err`. The budget error carries no ghost claim, so the
-//! `*_spec` predicates say nothing about `Exhausted` (A5 is prose in R6's header).
+//! `*_spec` predicates say nothing about `Exhausted` (the escape guarantees are prose in the header of `spec::analyzer`).
 
 use crate::native::NativeMap;
 #[cfg(verus_keep_ghost)]
@@ -51,6 +51,8 @@ use junco_core::observation::SmallVecSpecFns;
 #[cfg(verus_keep_ghost)]
 use junco_core::spec::questions::covers;
 #[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics as sem;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::{encoding as enc, flatten as fl};
 use junco_core::{CompileError, FlatEncoder, HistoryError, lower_flat};
 use vstd::prelude::*;
@@ -76,8 +78,8 @@ use crate::tables::Tables;
 const GRAPH_BYTES: usize = 16 * 1024 * 1024;
 
 verus! {
-/// Stable index of a rule in one analyzer, tagged with the id of the analyzer that issued it
-/// (decision 7). A query given an id of another analyzer, or an index it never issued, returns
+/// Stable index of a rule in one analyzer, tagged with the id of the analyzer that issued it.
+/// A query given an id of another analyzer, or an index it never issued, returns
 /// `HistoryError::UnknownId`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleId(pub(crate) usize, pub(crate) u64);
@@ -89,14 +91,14 @@ impl RuleId {
     /// The issuing analyzer's owner id.
     pub closed spec fn owner(&self) -> u64 { self.1 }
 
-    /// A rule id's view (the index used by R6's `ids_of`) is its `index()`.
+    /// A rule id's view (the index used by `spec::analyzer::ids_of`) is its `index()`.
     pub proof fn lemma_view_is_index(&self)
         ensures self@ == self.index(),
     {
     }
 }
 
-/// Every id was issued by `a` and names one of its rules (decision 7).
+/// Every id was issued by `a` and names one of its rules.
 pub open spec fn ids_owned<E: Event>(a: &PolicyAnalyzer<E>, ids: Seq<RuleId>) -> bool {
     forall|i: int| 0 <= i < ids.len()
         ==> (#[trigger] ids[i]).owner() == a.owner() && ids[i].index() < a@.rules.len()
@@ -178,7 +180,7 @@ verus! {
 pub enum DomainError {
     /// The coordinate is outside the event's arity.
     OutOfArity,
-    /// No values were declared; a declared domain is nonempty (decision 8).
+    /// No values were declared; a declared domain is nonempty.
     Empty,
     /// A value belongs to another coordinate.
     WrongCoordinate,
@@ -204,7 +206,7 @@ impl<E: Event> Domains<E> {
     }
 
     /// Declares all values of one coordinate, in declaration order. Rejects a coordinate outside
-    /// the arity, an empty set (decision 8), and a value of another coordinate.
+    /// the arity, an empty set, and a value of another coordinate.
     pub fn with_domain(self, component: Component, values: &[E::Component])
         -> (result: Result<Self, DomainError>)
         ensures match result {
@@ -432,6 +434,7 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
         constants_wf(*self.constants) && crate::verify::analyzer_obligations::<E>()
     }
     open spec fn errors_are_non_invariant(&self) -> bool { true }
+    open spec fn errors_are_resource(&self) -> bool { true }
     #[verifier::prophetic]
     open(crate) spec fn restoration(&self) -> (enc::Codebook<E::Component>, bool) {
         let future = mut_ref_future(self.constants);
@@ -490,10 +493,10 @@ pub struct PolicyAnalyzer<E: Event> {
     pub(crate) rules: Vec<StoredRule<E>>,
     /// Process-unique id stamped on every issued `RuleId`; `0` only if the allocator is exhausted.
     pub(crate) owner: u64,
-    /// The declared domains, as passed to `new` (R6 `AnalyzerView::domains`).
+    /// The declared domains, as passed to `new` (`AnalyzerView::domains`).
     #[cfg(verus_keep_ghost)]
     pub(crate) declared: Ghost<junco_core::spec::questions::DomainsView<E::Component>>,
-    /// The constants of every input so far (R6 `AnalyzerView::known`): declared values, then the
+    /// The constants of every input so far (`AnalyzerView::known`): declared values, then the
     /// constants of each rule and tail query, whether or not the call succeeded.
     #[cfg(verus_keep_ghost)]
     pub(crate) known: Ghost<Seq<Set<E::Component>>>,
@@ -623,6 +626,9 @@ impl<E: Event> PolicyAnalyzer<E> {
                 && junco_core::verify::flatten::head_coordinates_wf::<E>(rule@.head),
             result is Err ==> final(self)@.rules == old(self)@.rules,
             junco_core::verify::history_specs::no_invariant_compile_failure(result),
+            sem::rule_wf(rule@) && rule@.head.len() == arity::<E>()
+                && sem::rule_constants_tagged::<E>(rule@)
+                ==> (result is Ok || (result matches Err(CompileError::Runtime(error)) && sem::resource_error(error))),
     {
         let ghost before = *self;
         proof {
@@ -673,10 +679,11 @@ impl<E: Event> PolicyAnalyzer<E> {
         Ok(id)
     }
 
-    /// Whether `by` covers every violation of the stored rule (A1, A2, A6: R6 `covered_spec`).
+    /// Whether `by` covers every violation of the stored rule (`covered_spec`).
     pub fn covered(&self, rule: RuleId, by: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), views::analyzer_obligations::<E>(),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            ids_owned(self, seq![rule] + by@) ==> (result matches Err(error) ==> sem::resource_error(error)),
             !ids_owned(self, seq![rule] + by@) ==> result matches Err(HistoryError::UnknownId { .. }),
             ids_owned(self, seq![rule] + by@) ==> (result matches Ok(v)
                 ==> crate::spec::analyzer::covered_spec::<E>(self@, rule@, ids_of(by@), v@)),
@@ -730,10 +737,11 @@ impl<E: Event> PolicyAnalyzer<E> {
     }
 
     /// Checks coverage after excluding every occurrence of `rule`, without a filtered allocation
-    /// (A3, decision 5: R6 `redundant_spec`; `Holds` proves removal preserves every decision).
+    /// (`redundant_spec`; `Holds` proves removal preserves every decision).
     pub fn redundant(&self, rule: RuleId, policy: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), views::analyzer_obligations::<E>(),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            ids_owned(self, seq![rule] + policy@) ==> (result matches Err(error) ==> sem::resource_error(error)),
             !ids_owned(self, seq![rule] + policy@) ==> result matches Err(HistoryError::UnknownId { .. }),
             ids_owned(self, seq![rule] + policy@) ==> (result matches Ok(v)
                 ==> crate::spec::analyzer::redundant_spec::<E>(self@, rule@, ids_of(policy@), v@)),
@@ -759,12 +767,13 @@ impl<E: Event> PolicyAnalyzer<E> {
         Ok(result)
     }
 
-    /// Whether `stricter` denies everything denied by `than` (A3, `def:policy-refinement`: R6
+    /// Whether `stricter` denies everything denied by `than` (`def:policy-refinement`:
     /// `at_least_as_strict_spec`).
     pub fn at_least_as_strict(&self, stricter: &[RuleId], than: &[RuleId])
         -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), views::analyzer_obligations::<E>(),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            ids_owned(self, stricter@ + than@) ==> (result matches Err(error) ==> sem::resource_error(error)),
             !ids_owned(self, stricter@ + than@) ==> result matches Err(HistoryError::UnknownId { .. }),
             ids_owned(self, stricter@ + than@) ==> (result matches Ok(v)
                 ==> crate::spec::analyzer::at_least_as_strict_spec::<E>(self@, ids_of(stricter@), ids_of(than@), v@)),
@@ -812,6 +821,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
             rule.0 < self.rules@.len(), valid_ids(*self, by@),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> sem::resource_error(error),
             result matches Ok(v) ==> crate::spec::analyzer::covered_spec::<E>(self@, rule@, queries::selected_rule_ids(by@, exclude), v@),
     {
         let analyzed = &self.rules[rule.0];
@@ -1008,6 +1018,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                 && views::codes(operands.constants@[k].view()).contains(v)
                 ==> views::reconstruction::code_field(self.constants, Component(k as u8), v),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> sem::resource_error(error),
             result matches Ok(difference) ==> decision_ready(*self, NumericInput {
                 left: inclusion::denial(queries::stored_numeric(self.rules@[rule.0 as int])),
                 right: inclusion::firing_denials(views::ndomains(self.universes),
@@ -1155,7 +1166,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     }
 
     /// Whether, for every candidate that `head` matches, every history in `left` is in `right`
-    /// (A4: R6 `tail_included_spec`). The query's constants enter `known` on every return.
+    /// (`tail_included_spec`). The query's constants enter `known` on every return.
     ///
     /// Both tails may refer to the head's variables. A counterexample is a matching candidate and
     /// a history in `left` but not in `right`, of minimum length.
@@ -1167,8 +1178,13 @@ impl<E: Event> PolicyAnalyzer<E> {
             final(self)@.known == crate::spec::analyzer::known_with(
                 old(self)@.known, crate::spec::analyzer::tail_constants(head@, left@, right@)),
             junco_core::verify::history_specs::no_invariant_compile_failure(result),
+            sem::head_tails_wf(head@, left@, right@) && head@.len() == arity::<E>()
+                && sem::rule_constants_tagged::<E>(Rule { mode: RuleMode::Forbid, head: *head, tail: *left }@)
+                && sem::rule_constants_tagged::<E>(Rule { mode: RuleMode::Forbid, head: *head, tail: *right }@)
+                ==> (result is Ok || (result matches Err(CompileError::Runtime(error)) && sem::resource_error(error))),
             result matches Ok(v) ==> junco_core::spec::semantics::head_tails_wf(head@, left@, right@)
                 && head@.len() == arity::<E>()
+                && fl::head_coordinates_wf::<E>(head@)
                 && crate::spec::analyzer::tail_included_spec::<E>(final(self)@, head@, left@, right@, v@))]
     pub fn tail_included(
         &mut self,
@@ -1191,6 +1207,15 @@ impl<E: Event> PolicyAnalyzer<E> {
             assert(left_rule.head@ == head@ && right_rule.head@ == head@);
             assert(left_rule.tail@ == left@ && right_rule.tail@ == right@);
             assert(head@.len() == arity::<E>());
+            assert forall|i: int| 0 <= i < head@.len() implies
+                match #[trigger] head@[i] {
+                    history_syntax::spec::events::PatternView::Constant(value) => E::coordinate_spec(value) == i,
+                    _ => true,
+                } by {
+                assert(fl::head_slot_represents(left_flat.source.head@[i], head@[i]));
+                assert(enc::head_in_domain(left_flat.source.head@[i],
+                    enc::field_at(i), fl::component_domain::<E>()));
+            }
             assert forall|k: int| 0 <= k < arity::<E>() implies
                 junco_core::spec::questions::rule_constants(left_rule@)[k].subset_of(#[trigger] staged.known@[k])
                 && junco_core::spec::questions::rule_constants(right_rule@)[k].subset_of(staged.known@[k]) by {
@@ -1325,6 +1350,8 @@ impl<E: Event> PolicyAnalyzer<E> {
             enc::grows_by(crate::verify::constant_book(old(self).constants), crate::verify::constant_book(final(self).constants),
                 enc::source_constants(*source)),
             junco_core::verify::history_specs::no_invariant_failure(result),
+            junco_core::flat::verify::structural_wf(*source) && enc::constants_in_domain(*source, fl::component_domain::<E>())
+                ==> (result matches Err(error) ==> sem::resource_error(error)),
             final(self).constants.values@.len() <= old(self).constants.values@.len() + source.head@.len() + source.tests@.len(),
             result matches Ok(target) ==> enc::lowering(*source, target, crate::verify::constant_book(final(self).constants), fl::component_equality::<E>())
                 && junco_core::flat::verify::structural_wf(target) && numeric_head_wf(target.head@),
@@ -1380,6 +1407,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         requires decision_ready(*self, input, constraint, difference),
         ensures result matches Ok(v) ==> numeric_decision_ok(*self, input, constraint@, v),
             junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> sem::resource_error(error),
     {
         proof {
             assert(numeric::source_dag_wf(difference)) by { reveal(views::table::dag); }
@@ -1464,7 +1492,8 @@ impl<E: Event> PolicyAnalyzer<E> {
             self.universes, *constraint, letters@, alphabets@),
         ensures result matches Ok(c) ==> crate::verify::reconstruction::reconstructed(self.constants,
             self.universes, *constraint, letters@, alphabets@, c),
-            junco_core::verify::history_specs::no_invariant_failure(result))]
+            junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> sem::resource_error(error))]
     fn counterexample(
         &self,
         constraint: &Constraint,

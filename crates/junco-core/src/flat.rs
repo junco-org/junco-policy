@@ -538,6 +538,8 @@ impl<C> FlatBuilder<C> {
         no_invariant_failure(result),
         verify::test_wf(old(self).head_view(), node, old(self).tests_view().len())
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        verify::test_wf(old(self).head_view(), node, old(self).tests_view().len())
+            ==> (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         match result {
             Ok(id) => id == old(self).tests_view().len()
                 && final(self).tests_view() == old(self).tests_view().push(node),
@@ -585,6 +587,8 @@ impl<C> FlatBuilder<C> {
         no_invariant_failure(result),
         verify::regex_wf(node, old(self).regexes_view().len(), old(self).tests_view().len())
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        verify::regex_wf(node, old(self).regexes_view().len(), old(self).tests_view().len())
+            ==> (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         match result {
             Ok(id) => id == old(self).regexes_view().len()
                 && final(self).regexes_view() == old(self).regexes_view().push(node),
@@ -627,6 +631,8 @@ impl<C> FlatBuilder<C> {
         no_invariant_failure(result),
         root < self.regexes_view().len()
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        root < self.regexes_view().len()
+            ==> (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         match result {
             Ok(pair) => verify::structural_wf(pair) && pair.head@ == self.head_view()
                 && pair.tests@ == self.tests_view() && pair.regexes@ == self.regexes_view()

@@ -49,7 +49,7 @@ impl<E: Judged> RuleSet<E> {
 
 /// Rules over one event type, and how their verdicts are applied to an owned history.
 ///
-/// Unverified glue (D1): this type is outside the Verus proofs. On top of the verified
+/// Unverified glue: this type is outside the Verus proofs. On top of the verified
 /// `TracePolicy`/`History` it adds, exactly: (1) a `could_fire` head filter selecting the rules
 /// compiled for each event; (2) one `TracePolicy` per distinct event of the batch, built from the
 /// selected rules; (3) decide-then-append: a granted event is pushed to the history after its

@@ -189,7 +189,7 @@ public decision methods; the
 [`public_compiled_decision`](crates/history-semantics/src/verify/typed_decision.rs#L122)
 verification endpoint calls the actual `CompiledRule::new` constructor and
 `accepts_history` method. Given a well-formed store and history, and the event hypotheses
-below (`event_obligations`, R4), its successful result has this meaning:
+below (`event_obligations`), its successful result has this meaning:
 
 ```text
 Ok(None)            The candidate does not match the head.
@@ -204,7 +204,7 @@ inside it on a successful evaluation. The result keeps a head mismatch separate 
 a matching head whose tail rejects the history.
 
 Checked `CompiledPolicy` and `Validator` bodies skip nonmatching heads and select the
-first violating Require or Forbid rule: `Validator::check` ensures R5 `check_step` and
+first violating Require or Forbid rule: `Validator::check` ensures `check_step` and
 `check_frame` ([`crates/history-semantics/src/spec/monitor.rs`](crates/history-semantics/src/spec/monitor.rs)),
 and every reachable validator state is trace safe
 ([`theorem_trace_safe`](crates/history-semantics/tests/reviewer.rs)). Their constructors
@@ -241,7 +241,7 @@ do not remove issued IDs.
 The theorem is conditional on stable `Event` projections and component equality and
 hashing that agree with their models. Modeled equality must be reflexive, symmetric
 and transitive; equal native keys must hash coherently. These obligations are explicit
-in [`event_obligations` and `key_laws`](crates/junco-core/src/spec/hypotheses.rs) (R4), not
+in [`event_obligations` and `key_laws`](crates/junco-core/src/spec/hypotheses.rs), not
 universal proofs about arbitrary user types; `hash_coherent` is the single hashing hypothesis
 (see `VERIFY.md`, Hypotheses). Native field projections, callback invocation, const/static
 installation and reference identity, mutex/Arc/record adapters, container operations
@@ -259,7 +259,7 @@ uses only public imports to consume these contracts, including exact iterator-ba
 histories, owner checks, diagnostic ordering and lifecycle receipts. The two
 [`reviewer`](crates/history-semantics/tests/reviewer.rs) targets
 ([analysis](crates/history-analysis/tests/reviewer.rs)) state the monitor theorem and the
-analyzer's A1–A6 over public items only; `VERIFY.md` is their guide.
+analyzer's guarantees over public items only; `VERIFY.md` is their guide.
 
 Under the native event laws, production compilation and valid decisions exclude
 `HistoryError::Invariant`. Scoped sources also exclude unbound-variable,
@@ -639,6 +639,26 @@ Analysis has no features beyond `runtime`/`std`; it is no_std + alloc and verifi
 configurations. It uses Semantics `runtime` through `SymbolicLanguage`, a native facade like
 `TracePolicy` that owns a compiled pair and calls only verified graph operations.
 
+## Build and test
+
+The crates need Rust `1.98.1` (the toolchain the pinned Verus release is built against):
+
+```sh
+rustup toolchain install 1.98.1-x86_64-unknown-linux-gnu --profile minimal \
+    --component rustc-dev --component llvm-tools --component rustfmt
+export RUSTUP_TOOLCHAIN=1.98.1-x86_64-unknown-linux-gnu
+cargo build --locked --workspace
+cargo test --locked --workspace --features junco-policy/test-util
+```
+
+The `Dockerfile` builds the same environment with Verus and Z3 installed (Linux x86-64):
+
+```sh
+docker build -t junco .
+docker run --rm junco                    # verify every configuration
+docker run --rm junco cargo test --locked --workspace --features junco-policy/test-util
+```
+
 ## Reproduce the verification
 
 The pinned toolchain is Rust `1.98.1`, Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0` and
@@ -656,8 +676,8 @@ cargo verus verify --locked -p history-analysis --no-default-features --features
 cargo verus verify --locked -p history-analysis --no-default-features --features runtime,std --test reviewer
 ```
 
-`VERIFY.md` lists the expected counts, the six reviewer interface files (R1–R6) and the
-hypotheses; `TRUST.md` is the generated trusted-base inventory. The
+`VERIFY.md` lists what is proved, the hypotheses, the six interface files and the expected
+counts; `TRUST.md` is the generated trusted-base inventory. The
 [CI workflow](.github/workflows/ci.yml#L86-L152) contains the toolchain setup and
 full library feature matrix. Verified helper dependencies are pinned to
 [bumpus](https://github.com/elefthei/bumpus) (`verus-bumpalo`) commit
