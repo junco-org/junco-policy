@@ -290,4 +290,180 @@ pub(crate) proof fn lemma_numeric_rule(p: FlatPair<u64>, mode: RuleMode)
 {
     lemma_source_model(p);
 }
+
+/// Extending flat tables cannot introduce a primitive below an existing test root.
+pub(crate) proof fn lemma_test_primitives_frame(before: FlatPair<u64>, after: FlatPair<u64>, id: nat)
+    requires table::dag(before), table::frame(before, after), id < before.tests@.len(),
+    ensures numeric::reachable_test_primitives(after, id).subset_of(numeric::reachable_test_primitives(before, id)),
+    decreases id,
+{
+    reveal_with_fuel(numeric::reachable_test_primitives, 1);
+    assert(after.tests@[id as int] == before.tests@[id as int]);
+    assert forall|p: model::Primitive| numeric::reachable_test_primitives(after, id).contains(p)
+        implies numeric::reachable_test_primitives(before, id).contains(p) by {
+        match before.tests@[id as int] {
+            FlatTest::And(children) | FlatTest::Or(children) => {
+                numeric::lemma_reachable_test_prefix_member(after, id, children@.len(), children@, p);
+                let i = choose|i: int| 0 <= i < children@.len() && children@[i] < id
+                    && numeric::reachable_test_primitives(after, children@[i] as nat).contains(p);
+                lemma_test_primitives_frame(before, after, children@[i] as nat);
+                numeric::lemma_reachable_test_child(before, id, children@.len(), i);
+            },
+            _ => {},
+        }
+    }
+}
+
+/// The corresponding frame fact for a regex follows its actual reachable references.
+pub(crate) proof fn lemma_regex_primitives_frame(before: FlatPair<u64>, after: FlatPair<u64>, id: nat)
+    requires table::dag(before), table::frame(before, after), id < before.regexes@.len(),
+    ensures numeric::reachable_regex_primitives(after, id).subset_of(numeric::reachable_regex_primitives(before, id)),
+    decreases id,
+{
+    reveal_with_fuel(numeric::reachable_regex_primitives, 1);
+    assert(after.regexes@[id as int] == before.regexes@[id as int]);
+    assert forall|p: model::Primitive| numeric::reachable_regex_primitives(after, id).contains(p)
+        implies numeric::reachable_regex_primitives(before, id).contains(p) by {
+        match before.regexes@[id as int] {
+            FlatRegex::Test(test) => {
+                assert(test < before.tests@.len());
+                lemma_test_primitives_frame(before, after, test as nat);
+            },
+            FlatRegex::Union(children) | FlatRegex::Concat(children) | FlatRegex::Intersect(children) => {
+                numeric::lemma_reachable_regex_prefix_member(after, id, children@.len(), children@, p);
+                let i = choose|i: int| 0 <= i < children@.len() && children@[i] < id
+                    && numeric::reachable_regex_primitives(after, children@[i] as nat).contains(p);
+                lemma_regex_primitives_frame(before, after, children@[i] as nat);
+                numeric::lemma_reachable_regex_child(before, id, children@.len(), i);
+            },
+            FlatRegex::Star(child) | FlatRegex::Complement(child) => {
+                if child < id { lemma_regex_primitives_frame(before, after, child as nat); }
+            },
+            _ => {},
+        }
+    }
+}
+
+/// Offset copying preserves precisely the source test's primitive support.
+pub(crate) proof fn lemma_test_primitives_copy(source: FlatPair<u64>, target: FlatPair<u64>,
+    by: nat, count: nat, id: nat)
+    requires table::dag(source), table::tests_copied(source, target, by, count), id < count,
+    ensures numeric::reachable_test_primitives(target, by + id).subset_of(numeric::reachable_test_primitives(source, id)),
+    decreases id,
+{
+    reveal_with_fuel(numeric::reachable_test_primitives, 1);
+    assert(table::test_shift(source.tests@[id as int], target.tests@[(by + id) as int], by));
+    assert forall|p: model::Primitive| numeric::reachable_test_primitives(target, by + id).contains(p)
+        implies numeric::reachable_test_primitives(source, id).contains(p) by {
+        match (source.tests@[id as int], target.tests@[(by + id) as int]) {
+            (FlatTest::And(a), FlatTest::And(b)) | (FlatTest::Or(a), FlatTest::Or(b)) => {
+                numeric::lemma_reachable_test_prefix_member(target, by + id, b@.len(), b@, p);
+                let i = choose|i: int| 0 <= i < b@.len() && b@[i] < by + id
+                    && numeric::reachable_test_primitives(target, b@[i] as nat).contains(p);
+                assert(b@[i] as nat == a@[i] as nat + by);
+                assert(a@[i] < id);
+                lemma_test_primitives_copy(source, target, by, count, a@[i] as nat);
+                numeric::lemma_reachable_test_child(source, id, a@.len(), i);
+            },
+            _ => {},
+        }
+    }
+}
+
+/// The test and regex offsets are distinct; both are tracked by the real copy contract.
+pub(crate) proof fn lemma_regex_primitives_copy(source: FlatPair<u64>, target: FlatPair<u64>,
+    tests: nat, regexes: nat, count: nat, id: nat)
+    requires table::dag(source), table::tests_copied(source, target, tests, source.tests@.len()),
+        table::regexes_copied(source, target, tests, regexes, count), id < count,
+    ensures numeric::reachable_regex_primitives(target, regexes + id).subset_of(numeric::reachable_regex_primitives(source, id)),
+    decreases id,
+{
+    reveal_with_fuel(numeric::reachable_regex_primitives, 1);
+    assert(table::regex_shift(source.regexes@[id as int], target.regexes@[(regexes + id) as int], tests, regexes));
+    assert forall|p: model::Primitive| numeric::reachable_regex_primitives(target, regexes + id).contains(p)
+        implies numeric::reachable_regex_primitives(source, id).contains(p) by {
+        match (source.regexes@[id as int], target.regexes@[(regexes + id) as int]) {
+            (FlatRegex::Test(a), FlatRegex::Test(b)) => {
+                assert(a < source.tests@.len());
+                assert(b as nat == a as nat + tests);
+                lemma_test_primitives_copy(source, target, tests, source.tests@.len(), a as nat);
+            },
+            (FlatRegex::Union(a), FlatRegex::Union(b)) | (FlatRegex::Concat(a), FlatRegex::Concat(b))
+                | (FlatRegex::Intersect(a), FlatRegex::Intersect(b)) => {
+                numeric::lemma_reachable_regex_prefix_member(target, regexes + id, b@.len(), b@, p);
+                let i = choose|i: int| 0 <= i < b@.len() && b@[i] < regexes + id
+                    && numeric::reachable_regex_primitives(target, b@[i] as nat).contains(p);
+                assert(b@[i] as nat == a@[i] as nat + regexes);
+                assert(a@[i] < id);
+                lemma_regex_primitives_copy(source, target, tests, regexes, count, a@[i] as nat);
+                numeric::lemma_reachable_regex_child(source, id, a@.len(), i);
+            },
+            (FlatRegex::Star(a), FlatRegex::Star(b)) | (FlatRegex::Complement(a), FlatRegex::Complement(b)) => {
+                assert(b as nat == a as nat + regexes);
+                if a < id { lemma_regex_primitives_copy(source, target, tests, regexes, count, a as nat); }
+            },
+            _ => {},
+        }
+    }
+}
+
+/// Appending a forbid/require denial adds no primitive outside that source tail.
+pub(crate) proof fn lemma_denial_primitives(source: FlatPair<u64>, target: FlatPair<u64>,
+    tests: nat, regexes: nat, mode: RuleMode, root: nat)
+    requires table::dag(source), source.root < source.regexes@.len(),
+        table::tests_copied(source, target, tests, source.tests@.len()),
+        table::regexes_copied(source, target, tests, regexes, source.regexes@.len()),
+        root < target.regexes@.len(), root <= u32::MAX,
+        match mode {
+            RuleMode::Forbid => root == regexes + source.root as nat,
+            RuleMode::Require => root == regexes + source.regexes@.len()
+                && target.regexes@[root as int] == FlatRegex::Complement((regexes + source.root as nat) as u32),
+        },
+    ensures numeric::reachable_regex_primitives(target, root)
+        .subset_of(numeric::reachable_regex_primitives(source, source.root as nat)),
+{
+    lemma_regex_primitives_copy(source, target, tests, regexes, source.regexes@.len(), source.root as nat);
+    if mode is Require {
+        reveal_with_fuel(numeric::reachable_regex_primitives, 1);
+        assert(regexes + (source.root as nat) < root);
+    }
+}
+
+/// The two actual nodes built by difference contribute only the two supplied roots.
+pub(crate) proof fn lemma_difference_primitives(before: FlatPair<u64>, after: FlatPair<u64>,
+    left: nat, right: nat)
+    requires table::dag(before), table::frame(before, after),
+        left < before.regexes@.len(), right < before.regexes@.len(),
+        after.root as nat == before.regexes@.len() + 1,
+        after.regexes@.len() == before.regexes@.len() + 2,
+        after.regexes@[before.regexes@.len() as int] == FlatRegex::Complement(right as u32),
+        match after.regexes@[after.root as int] {
+            FlatRegex::Intersect(children) => children@ == seq![left as u32, before.regexes@.len() as u32],
+            _ => false,
+        },
+    ensures numeric::reachable_regex_primitives(after, after.root as nat).subset_of(
+        numeric::reachable_regex_primitives(before, left).union(numeric::reachable_regex_primitives(before, right))),
+{
+    lemma_regex_primitives_frame(before, after, left);
+    lemma_regex_primitives_frame(before, after, right);
+    reveal_with_fuel(numeric::reachable_regex_primitives, 1);
+    if let FlatRegex::Intersect(children) = after.regexes@[after.root as int] {
+        assert forall|p: model::Primitive|
+            numeric::reachable_regex_primitives(after, after.root as nat).contains(p)
+            implies numeric::reachable_regex_primitives(before, left).union(
+                numeric::reachable_regex_primitives(before, right)).contains(p) by {
+            numeric::lemma_reachable_regex_prefix_member(after, after.root as nat, children@.len(), children@, p);
+            let i = choose|i: int| 0 <= i < children@.len() && children@[i] < after.root as nat
+                && numeric::reachable_regex_primitives(after, children@[i] as nat).contains(p);
+            if i == 0 {
+                assert(children@[i] as nat == left);
+            } else {
+                assert(i == 1);
+                assert(children@[i] as nat == before.regexes@.len());
+                assert(right as u32 as nat == right);
+                assert(numeric::reachable_regex_primitives(after, right).contains(p));
+            }
+        }
+    }
+}
 }
