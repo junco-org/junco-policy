@@ -12,7 +12,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use history_syntax::{Component, MAX_ARITY};
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]

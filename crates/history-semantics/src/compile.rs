@@ -11,7 +11,7 @@ use history_store::store::Event as NumericEvent;
 use history_syntax::MAX_ARITY;
 #[cfg(any(verus_keep_ghost, test))]
 use history_syntax::syntax::Component;
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 #[cfg(verus_keep_ghost)]
 use junco_core::flat::verify as flat;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};

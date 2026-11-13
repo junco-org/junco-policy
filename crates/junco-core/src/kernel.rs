@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-use super::error::HistoryError;
+use super::errors::HistoryError;
 use alloc::vec::Vec;
 use history_syntax::{MAX_ARITY, syntax::Component};
 use vstd::prelude::*;

@@ -10,7 +10,7 @@ extern crate std;
 
 pub mod bits;
 pub mod compile;
-pub mod error;
+pub mod errors;
 pub mod event;
 pub mod flat;
 pub mod flatten;
@@ -28,6 +28,6 @@ pub mod spec;
 pub mod verify;
 
 pub use compile::{FlatEncoder, lower_flat};
-pub use error::{CompileError, HistoryError};
+pub use errors::{CompileError, HistoryError};
 pub use event::{Grant, Request};
 pub use flatten::flatten_rule;

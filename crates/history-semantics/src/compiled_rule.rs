@@ -8,7 +8,7 @@ use history_store::history::StoredHistory;
 use history_store::typed::Store;
 use history_syntax::Event;
 use history_syntax::syntax::{Rule, RuleMode};
-use junco_core::error::{CompileError, HistoryError};
+use junco_core::errors::{CompileError, HistoryError};
 use junco_core::flat::FlatPair;
 use junco_core::flatten::flatten_rule;
 use junco_core::limits::{Limits, Unmetered};

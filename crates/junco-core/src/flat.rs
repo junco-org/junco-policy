@@ -1,6 +1,6 @@
 //! Portable, store-independent source tables and their checked construction boundary.
 
-use crate::error::HistoryError;
+use crate::errors::HistoryError;
 use crate::limits::Limits;
 use crate::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]

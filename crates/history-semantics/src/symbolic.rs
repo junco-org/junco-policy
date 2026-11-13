@@ -24,7 +24,7 @@ use crate::verify::history_algebra as algebra;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use junco_core::bits::checked_shr;
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
 use junco_core::kernel::*;

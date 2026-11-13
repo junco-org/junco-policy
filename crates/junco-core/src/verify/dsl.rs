@@ -206,7 +206,7 @@ pub proof fn lemma_complement_is_whole_word<C: PartialEq>(
 
 /// The real scope bodies preserve declarations and reject a cross-coordinate use.
 pub fn scope_client<'a>(name: &'a str, arity: usize, first: Component, second: Component)
-    -> (result: Result<Component, crate::error::CompileError>)
+    -> (result: Result<Component, crate::errors::CompileError>)
     requires 1 <= arity <= history_syntax::MAX_ARITY,
         first.0 < arity, second.0 < arity, first != second,
     ensures result == Ok(first),

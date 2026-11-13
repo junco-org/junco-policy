@@ -21,7 +21,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use history_syntax::Event as TypedEvent;
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use junco_core::limits::{Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
 use vstd::prelude::*;

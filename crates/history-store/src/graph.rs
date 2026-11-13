@@ -19,7 +19,7 @@ use junco_core::observation::SmallVecSpecFns;
 use junco_core::verify::history_assumptions::KernelStoreSpec;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::no_invariant_failure;
-use junco_core::{error::HistoryError, kernel::*};
+use junco_core::{errors::HistoryError, kernel::*};
 use verus_bumpalo::{AllocErr, CHUNK_ALIGN, SliceArena};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
