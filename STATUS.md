@@ -10,9 +10,9 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 | H3 | merged | [PR #15](https://github.com/junco-org/junco-policy/pull/15), merge commit `bedc0c955dd9eb24e224126a456d6c84a6092d55`; all seven CI checks passed on exact head `2a6f942428173122cb0e546a62182ea219e28747`. Public statements detailed below. |
 | H4 | merged | [PR #17](https://github.com/junco-org/junco-policy/pull/17), merge commit `184383710b2b0918b3567869d998185940a3454d`; all seven CI checks passed on exact head `55282cb79f2b4472ee5e1da37c0aa5b4e220bbd9`. Public statement detailed below. |
 | H6 | merged | [PR #14](https://github.com/junco-org/junco-policy/pull/14), merge commit `4151cb0a66058e9ecbc7e787b23438b40f319192`; all CI passed. Public statements detailed below. |
-| H5 | in progress | Local merge gate passed; [PR #19](https://github.com/junco-org/junco-policy/pull/19), head `a11905aaf633f72c0ad37700c8fb3e5c377d4afc` atop merged H4, awaits CI. Latest change only corrects docs to enumerate all Limit variants (time, memory, regex-size). Core **288**, store **289**, monitor cache/no-cache **1624/1619**, monitor reviewer **9**, public_specs **19**, analyzer **603**, analyzer reviewer **19** verified, **0 errors**. Workspace ghost-erased fmt/clippy passed; **200 tests passed**. |
-| H2 | in progress | Local merge gate passed; [PR #21](https://github.com/junco-org/junco-policy/pull/21), head `6562d54`, awaits CI. Full benchmark smoke passed **100 instances**, validating **180 counterexamples**; measured after-run validated **84,234**, no fresh declared-coordinate values. Unit probe reported `fresh at a unit-typed coordinate: false`; removed. Analyzer provider **603**, reviewer **17** verified, **0 errors**; workspace fmt/clippy passed, **200 tests passed**. Complete before/after data committed; summary below. |
-| H7 | in progress | Started from main `1843837` on isolated `fix/audit-h7`; scoping verified decide/commit cutover and AgentDojo enforcement/reproduction paths. |
+| H5 | merged | [PR #19](https://github.com/junco-org/junco-policy/pull/19), merge commit `8b326a683d0ca4db998ab0959250fb92fc81f717`; all seven CI checks passed on exact head `a11905aaf633f72c0ad37700c8fb3e5c377d4afc`. Core **288**, store **289**, monitor cache/no-cache **1624/1619**, monitor reviewer **9**, public_specs **19**, analyzer **603**, analyzer reviewer **19** verified, **0 errors**. Workspace fmt/clippy and **200 tests** passed. Public statements below. |
+| H2 | merged | [PR #21](https://github.com/junco-org/junco-policy/pull/21), merge commit `5e10a8cd7419c9beaddd5208877c2db7a398500b`; all seven CI checks passed on exact head `6562d5462ea1dadfd1a01ccdda3306033fc3e4a4`. Full smoke **100 instances / 180 concrete counterexamples**; measured run **84,234**, no fresh declared-coordinate values. Unit probe passed; removed. Analyzer **603**, reviewer **17** verified, **0 errors**; workspace fmt/clippy and **200 tests** passed. Before/after data below. No public Verus statement changed. |
+| H7 | in progress | Source checkpointed on local `fix/audit-h7`, rebased onto merged H5. First native workspace fmt/clippy/**200 tests** and actual AgentDojo worker/model-free self-test passed. First formal gate found **2 closed-spec opacity diagnostics**; repair in progress without weakening guarantees. Latest score-field cutover still needs its final native gate. **Scoring blocker:** actual live banking/user_task_0 attempt with configured credential failed after retries with HTTP **403 Forbidden**; no paired utility/attack measurement claimed. |
 | H8 | not started | |
 | H9 | not started | |
 | H10 | not started | |
@@ -22,7 +22,7 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 | H14 | not started | |
 | H15 | not started | Deferred unless all other items complete. |
 
-Merged items: H1, PR #13, `bce1df8511fc56919724e18bdbf5e610c8252bdb`; H6, PR #14, `4151cb0a66058e9ecbc7e787b23438b40f319192`; H3, PR #15, `bedc0c955dd9eb24e224126a456d6c84a6092d55`; H4, PR #17, `184383710b2b0918b3567869d998185940a3454d`.
+Merged items: H1, PR #13, `bce1df8511fc56919724e18bdbf5e610c8252bdb`; H6, PR #14, `4151cb0a66058e9ecbc7e787b23438b40f319192`; H3, PR #15, `bedc0c955dd9eb24e224126a456d6c84a6092d55`; H4, PR #17, `184383710b2b0918b3567869d998185940a3454d`; H2, PR #21, `5e10a8cd7419c9beaddd5208877c2db7a398500b`; H5, PR #19, `8b326a683d0ca4db998ab0959250fb92fc81f717`.
 
 H1 public statements:
 - `counterexample_spec<E>` (`crates/history-analysis/src/spec/analyzer.rs`) now includes `forall i. 0 <= i < arity::<E>() && a.domains[i] is Some ==> fresh_used(cex,i) =~= ISet::empty()` and `undeclared_capacity::<E>(a,cex) ==> cex_has_instance::<E>(a.domains,a.known,cex)`; existing arity and every-instance validity clauses retained.
@@ -58,7 +58,7 @@ Rebased H6 composition gate passed: analyzer **603**, reviewer **17**, **0 error
 
 H5 runtime evidence: monitor permits/check granted `(3,7)`, committed it once, then permits/check denied `(9,7)` without appending; final history `[(3,7)]`. Analyzer registered two different constant-head rules; self-coverage and self-refinement returned `Holds`, redundancy and All ⊆ Empty returned real constant-only `(3,7), []` counterexamples. Negative probe claiming check_step for UnknownId failed its postcondition (**0 verified, 1 error**). All throwaway sources removed.
 
-H5 public statements for citation (local gate passed; not merged):
+H5 merged public statements for citation:
 - `resource_error` (`crates/junco-core/src/spec/semantics.rs`): exactly GraphBudget, GraphIndex, AllocationFailed, ArenaExhausted, IdExhausted, RevisionExhausted and Limit. `rule_constants_tagged<E>` (same file) requires each constant extracted for coordinate i to have `E::coordinate_spec(value) == i`.
 - `check_step` and `permits_result` (`crates/history-semantics/src/spec/monitor.rs`): their Err arm is `resource_error(error)`, preserving the grant/denial and exact-index meaning.
 - `Validator::check` and `Validator::permits` (`crates/history-semantics/src/validator.rs`): under existing well-formedness precondition and event_obligations, `result matches Err(error) ==> resource_error(error)`.
@@ -78,6 +78,10 @@ H2 measurements: geometric means of per-instance Criterion mean estimates, micro
 | all | 100 | 3380.419 | 3361.173 | −0.57% |
 
 All per-instance mean/median/95%-CI values: `benches/smt/counterexample-timings.csv` on `fix/audit-h2`; baseline JSONs: `/tmp/junco-audit-bench/criterion/regexlib_subset/*/*/{before-declared-units,after-declared-units}/estimates.json`. No paper files or pre-existing figure data changed. No new public Verus statement in H2: benchmark configuration/validation only.
+H2 citation: no new or changed public Verus statement. `benchmark_regexlib_subset` (`benches/smt/main.rs`) uses the existing `PolicyAnalyzer::tail_included` contract with `{()}` domains at coordinates 0 and 2 and the complete representative alphabet at coordinate 1, and checks every returned counterexample with the concrete matcher. Data and method are in `benches/smt/counterexample-timings.csv` and `benches/smt/README.md` at merge commit `5e10a8c`.
+
+H7 prerequisites/evidence: installed Python 3.12.12 + agentdojo 0.1.34 at `/tmp/junco-audit-agentdojo-python`; actual `--self-test` passed (real worker/scorer and scripted native P/Q isolation). Existing configured GitHub credential was tried without disclosure; the real provider invocation returned HTTP 403. Failed-run score fields are not usable benchmark utility/attack values. Configured GITHUB_TOKEN and harness token cache were absent; inspected local corpora were event-only, with no genuine P/Q scripts found in the inspected locations (broader search inconclusive). Fresh provider access or genuine replay scripts are needed. No credentials were committed or printed; temporary auth runner removed.
+
 
 Toolchain: downloaded pinned Z3 cannot execute on host glibc 2.31. Existing `/ssd0/zkent/junco-proof-tools/compat-verus` and `z3-compat` pass the script's pinned version checks; these are used for verification.
 
