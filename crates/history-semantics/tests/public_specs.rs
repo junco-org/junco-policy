@@ -38,6 +38,8 @@ fn indexed_projection<E: Event>(event: E, index: usize) -> (result: (E::Componen
     let coordinate = E::coordinate(component);
     proof {
         assert(history_syntax::spec::events::well_tagged::<E>(event_view(event)));
+        assert(E::coordinate_spec(event_view(event)[index as int]) == index);
+        assert(event_view(event)[index as int] == event.component_spec(index as int));
         assert(E::coordinate_spec(event.component_spec(index as int)) == index);
     }
     (component, coordinate)
