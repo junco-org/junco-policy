@@ -76,6 +76,108 @@ pub proof fn lemma_extends_transitive<C>(a: Codebook<C>, b: Codebook<C>, c: Code
     ensures extends(a, c, eq),
 {}
 
+/// Every value in `after`'s books is a value `before` held at the same coordinate or one that
+/// `added` admits there: an encoding interns nothing but what it was asked to encode.
+pub open spec fn grows_by<C>(before: Codebook<C>, after: Codebook<C>, added: spec_fn(Component, C) -> bool) -> bool {
+    after.len() == before.len() && forall|f: int, i: int| #![trigger after[f][i]] 0 <= f < after.len() && 0 <= i < after[f].len()
+        ==> (exists|j: int| 0 <= j < before[f].len() && (#[trigger] before[f][j]).0 == after[f][i].0)
+            || added(field_at(f), after[f][i].0)
+}
+
+/// The one value an `encode` call may intern.
+pub open spec fn only_value<C>(field: Component, value: C) -> spec_fn(Component, C) -> bool {
+    |f: Component, v: C| f == field && v == value
+}
+
+/// The constant a head slot at `field` may intern.
+pub open spec fn head_constant_of<C>(head: FlatHead<C>, field: Component) -> spec_fn(Component, C) -> bool {
+    |f: Component, v: C| f == field && head == FlatHead::Constant(v)
+}
+
+/// The constant a test atom may intern.
+pub open spec fn test_constant_of<C>(test: FlatTest<C>) -> spec_fn(Component, C) -> bool {
+    |f: Component, v: C| match test {
+        FlatTest::Atom { field, term: FlatTerm::Constant(value), .. } => f == field && v == value,
+        _ => false,
+    }
+}
+
+/// `value` is a constant of `source` at coordinate `field` (a head slot or a test atom).
+pub open spec fn source_constant<C>(source: FlatPair<C>, field: Component, value: C) -> bool {
+    (exists|i: int| 0 <= i < source.head@.len() && field_at(i) == field
+        && (#[trigger] source.head@[i]) == FlatHead::Constant(value))
+    || (exists|i: int| 0 <= i < source.tests@.len() && match #[trigger] source.tests@[i] {
+        FlatTest::Atom { field: f, term: FlatTerm::Constant(v), .. } => f == field && v == value,
+        _ => false,
+    })
+}
+
+pub open spec fn source_constants<C>(source: FlatPair<C>) -> spec_fn(Component, C) -> bool {
+    |f: Component, v: C| source_constant(source, f, v)
+}
+
+pub proof fn lemma_head_source_constant<C>(source: FlatPair<C>, i: int)
+    requires 0 <= i < source.head@.len(),
+    ensures forall|f: Component, v: C| #[trigger] head_constant_of(source.head@[i], field_at(i))(f, v)
+        ==> source_constants(source)(f, v),
+{
+    assert forall|f: Component, v: C| #[trigger] head_constant_of(source.head@[i], field_at(i))(f, v)
+        implies source_constants(source)(f, v) by {
+        assert(source.head@[i] == FlatHead::Constant(v));
+    }
+}
+
+pub proof fn lemma_test_source_constant<C>(source: FlatPair<C>, i: int)
+    requires 0 <= i < source.tests@.len(),
+    ensures forall|f: Component, v: C| #[trigger] test_constant_of(source.tests@[i])(f, v)
+        ==> source_constants(source)(f, v),
+{
+    assert forall|f: Component, v: C| #[trigger] test_constant_of(source.tests@[i])(f, v)
+        implies source_constants(source)(f, v) by {
+        assert(match source.tests@[i] {
+            FlatTest::Atom { field: f2, term: FlatTerm::Constant(v2), .. } => f2 == f && v2 == v,
+            _ => false,
+        });
+    }
+}
+
+pub proof fn lemma_grows_by_refl<C>(book: Codebook<C>, added: spec_fn(Component, C) -> bool)
+    ensures grows_by(book, book, added),
+{
+    assert forall|f: int, i: int| #![trigger book[f][i]] 0 <= f < book.len() && 0 <= i < book[f].len()
+        implies exists|j: int| 0 <= j < book[f].len() && (#[trigger] book[f][j]).0 == book[f][i].0 by {
+        let j = i;
+        assert(0 <= j < book[f].len() && book[f][j].0 == book[f][i].0);
+    }
+}
+
+/// Two growths compose, and either bound may be weakened to a common one.
+pub proof fn lemma_grows_by_transitive<C>(a: Codebook<C>, b: Codebook<C>, c: Codebook<C>,
+    p: spec_fn(Component, C) -> bool, q: spec_fn(Component, C) -> bool, r: spec_fn(Component, C) -> bool)
+    requires grows_by(a, b, p), grows_by(b, c, q),
+        forall|f: Component, v: C| #[trigger] p(f, v) ==> r(f, v),
+        forall|f: Component, v: C| #[trigger] q(f, v) ==> r(f, v),
+    ensures grows_by(a, c, r),
+{
+    assert forall|f: int, i: int| #![trigger c[f][i]] 0 <= f < c.len() && 0 <= i < c[f].len()
+        implies (exists|j: int| 0 <= j < a[f].len() && (#[trigger] a[f][j]).0 == c[f][i].0)
+            || r(field_at(f), c[f][i].0) by {
+        if exists|j: int| 0 <= j < b[f].len() && (#[trigger] b[f][j]).0 == c[f][i].0 {
+            let j = choose|j: int| 0 <= j < b[f].len() && (#[trigger] b[f][j]).0 == c[f][i].0;
+            assert(0 <= f < b.len() && 0 <= j < b[f].len());
+        }
+    }
+}
+
+pub proof fn lemma_grows_by_weaken<C>(a: Codebook<C>, b: Codebook<C>,
+    p: spec_fn(Component, C) -> bool, q: spec_fn(Component, C) -> bool)
+    requires grows_by(a, b, p), forall|f: Component, v: C| #[trigger] p(f, v) ==> q(f, v),
+    ensures grows_by(a, b, q),
+{
+    lemma_grows_by_refl(a, p);
+    lemma_grows_by_transitive(a, a, b, p, p, q);
+}
+
 pub proof fn lemma_encoded_equality<C>(
     maps: Codebook<C>, eq: Equality<C>, domain: Domain<C>, field: Component,
     left: C, right: C, left_id: u64, right_id: u64,
@@ -358,8 +460,8 @@ pub proof fn lemma_lang_preservation<C>(source: FlatPair<C>, target: FlatPair<u6
         id < source.regexes@.len(), maps_wf(maps, eq, domain), constants_in_domain(source, domain),
         event_encoded(maps, eq, domain, request, numeric_request),
         word_encoded(maps, eq, domain, word, numeric_word),
-    ensures crate::flat::verify::lang(source.tests@, source.regexes@, id, request, word, eq)
-        == crate::flat::verify::lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()),
+    ensures crate::flat::verify::flat_lang(source.tests@, source.regexes@, id, request, word, eq)
+        == crate::flat::verify::flat_lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()),
     decreases id,
 {
     lemma_topology_wf(source, target);
@@ -376,30 +478,30 @@ pub proof fn lemma_lang_preservation<C>(source: FlatPair<C>, target: FlatPair<u6
                 lemma_test_preservation(source, target, test as nat, maps, eq, domain,
                     request, numeric_request, word[0], numeric_word[0]);
             }
-            assert(crate::flat::verify::lang(source.tests@, source.regexes@, id, request, word, eq)
-                == crate::flat::verify::lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
+            assert(crate::flat::verify::flat_lang(source.tests@, source.regexes@, id, request, word, eq)
+                == crate::flat::verify::flat_lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
         },
         FlatRegex::Union(children) | FlatRegex::Intersect(children) => {
             assert forall|i: int| 0 <= i < children@.len() implies
-                crate::flat::verify::lang(source.tests@, source.regexes@, children@[i] as nat, request, word, eq)
-                    == crate::flat::verify::lang(target.tests@, target.regexes@, children@[i] as nat, numeric_request, numeric_word, numeric_equality()) by {
+                crate::flat::verify::flat_lang(source.tests@, source.regexes@, children@[i] as nat, request, word, eq)
+                    == crate::flat::verify::flat_lang(target.tests@, target.regexes@, children@[i] as nat, numeric_request, numeric_word, numeric_equality()) by {
                 lemma_lang_preservation(source, target, children@[i] as nat, maps, eq, domain,
                     request, numeric_request, word, numeric_word);
             }
-            assert(crate::flat::verify::lang(source.tests@, source.regexes@, id, request, word, eq)
-                == crate::flat::verify::lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
+            assert(crate::flat::verify::flat_lang(source.tests@, source.regexes@, id, request, word, eq)
+                == crate::flat::verify::flat_lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
         },
         FlatRegex::Complement(child) => {
             lemma_lang_preservation(source, target, child as nat, maps, eq, domain,
                 request, numeric_request, word, numeric_word);
-            assert(crate::flat::verify::lang(source.tests@, source.regexes@, id, request, word, eq)
-                == crate::flat::verify::lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
+            assert(crate::flat::verify::flat_lang(source.tests@, source.regexes@, id, request, word, eq)
+                == crate::flat::verify::flat_lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
         },
         FlatRegex::Concat(children) => {
-            if crate::flat::verify::lang(source.tests@, source.regexes@, id, request, word, eq) {
+            if crate::flat::verify::flat_lang(source.tests@, source.regexes@, id, request, word, eq) {
                 let parts = choose|parts: Seq<Seq<Seq<C>>>| parts.len() == children@.len()
                     && word == parts.flatten() && forall|i: int| 0 <= i < children@.len() ==>
-                        crate::flat::verify::lang(source.tests@, source.regexes@, children@[i] as nat, request, parts[i], eq);
+                        crate::flat::verify::flat_lang(source.tests@, source.regexes@, children@[i] as nat, request, parts[i], eq);
                 let relation = |n: Seq<u64>, r: Seq<C>| event_encoded(maps, eq, domain, r, n);
                 assert(pointwise(numeric_word, word, relation));
                 lemma_partition_lift(numeric_word, word, parts, relation);
@@ -407,36 +509,36 @@ pub proof fn lemma_lang_preservation<C>(source: FlatPair<C>, target: FlatPair<u6
                     && numeric_word == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> pointwise(lifted[i], parts[i], relation);
                 assert forall|i: int| 0 <= i < children@.len() implies
-                    crate::flat::verify::lang(target.tests@, target.regexes@, children@[i] as nat, numeric_request, lifted[i], numeric_equality()) by {
+                    crate::flat::verify::flat_lang(target.tests@, target.regexes@, children@[i] as nat, numeric_request, lifted[i], numeric_equality()) by {
                     assert(word_encoded(maps, eq, domain, parts[i], lifted[i]));
                     lemma_lang_preservation(source, target, children@[i] as nat, maps, eq, domain,
                         request, numeric_request, parts[i], lifted[i]);
                 }
             }
-            if crate::flat::verify::lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()) {
+            if crate::flat::verify::flat_lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()) {
                 let parts = choose|parts: Seq<Seq<Seq<u64>>>| parts.len() == children@.len()
                     && numeric_word == parts.flatten() && forall|i: int| 0 <= i < children@.len() ==>
-                        crate::flat::verify::lang(target.tests@, target.regexes@, children@[i] as nat, numeric_request, parts[i], numeric_equality());
+                        crate::flat::verify::flat_lang(target.tests@, target.regexes@, children@[i] as nat, numeric_request, parts[i], numeric_equality());
                 let relation = |r: Seq<C>, n: Seq<u64>| event_encoded(maps, eq, domain, r, n);
                 lemma_partition_lift(word, numeric_word, parts, relation);
                 let lifted = choose|lifted: Seq<Seq<Seq<C>>>| lifted.len() == parts.len()
                     && word == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> pointwise(lifted[i], parts[i], relation);
                 assert forall|i: int| 0 <= i < children@.len() implies
-                    crate::flat::verify::lang(source.tests@, source.regexes@, children@[i] as nat, request, lifted[i], eq) by {
+                    crate::flat::verify::flat_lang(source.tests@, source.regexes@, children@[i] as nat, request, lifted[i], eq) by {
                     assert(word_encoded(maps, eq, domain, lifted[i], parts[i]));
                     lemma_lang_preservation(source, target, children@[i] as nat, maps, eq, domain,
                         request, numeric_request, lifted[i], parts[i]);
                 }
             }
-            assert(crate::flat::verify::lang(source.tests@, source.regexes@, id, request, word, eq)
-                == crate::flat::verify::lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
+            assert(crate::flat::verify::flat_lang(source.tests@, source.regexes@, id, request, word, eq)
+                == crate::flat::verify::flat_lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
         },
         FlatRegex::Star(child) => {
-            if crate::flat::verify::lang(source.tests@, source.regexes@, id, request, word, eq) {
+            if crate::flat::verify::flat_lang(source.tests@, source.regexes@, id, request, word, eq) {
                 let parts = choose|parts: Seq<Seq<Seq<C>>>| word == parts.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==>
-                        crate::flat::verify::lang(source.tests@, source.regexes@, child as nat, request, parts[i], eq);
+                        crate::flat::verify::flat_lang(source.tests@, source.regexes@, child as nat, request, parts[i], eq);
                 let relation = |n: Seq<u64>, r: Seq<C>| event_encoded(maps, eq, domain, r, n);
                 assert(pointwise(numeric_word, word, relation));
                 lemma_partition_lift(numeric_word, word, parts, relation);
@@ -444,34 +546,34 @@ pub proof fn lemma_lang_preservation<C>(source: FlatPair<C>, target: FlatPair<u6
                     && numeric_word == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> pointwise(lifted[i], parts[i], relation);
                 assert forall|i: int| 0 <= i < parts.len() implies
-                    crate::flat::verify::lang(target.tests@, target.regexes@, child as nat, numeric_request, lifted[i], numeric_equality()) by {
+                    crate::flat::verify::flat_lang(target.tests@, target.regexes@, child as nat, numeric_request, lifted[i], numeric_equality()) by {
                     assert(word_encoded(maps, eq, domain, parts[i], lifted[i]));
                     lemma_lang_preservation(source, target, child as nat, maps, eq, domain,
                         request, numeric_request, parts[i], lifted[i]);
                 }
             }
-            if crate::flat::verify::lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()) {
+            if crate::flat::verify::flat_lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()) {
                 let parts = choose|parts: Seq<Seq<Seq<u64>>>| numeric_word == parts.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==>
-                        crate::flat::verify::lang(target.tests@, target.regexes@, child as nat, numeric_request, parts[i], numeric_equality());
+                        crate::flat::verify::flat_lang(target.tests@, target.regexes@, child as nat, numeric_request, parts[i], numeric_equality());
                 let relation = |r: Seq<C>, n: Seq<u64>| event_encoded(maps, eq, domain, r, n);
                 lemma_partition_lift(word, numeric_word, parts, relation);
                 let lifted = choose|lifted: Seq<Seq<Seq<C>>>| lifted.len() == parts.len()
                     && word == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> pointwise(lifted[i], parts[i], relation);
                 assert forall|i: int| 0 <= i < parts.len() implies
-                    crate::flat::verify::lang(source.tests@, source.regexes@, child as nat, request, lifted[i], eq) by {
+                    crate::flat::verify::flat_lang(source.tests@, source.regexes@, child as nat, request, lifted[i], eq) by {
                     assert(word_encoded(maps, eq, domain, lifted[i], parts[i]));
                     lemma_lang_preservation(source, target, child as nat, maps, eq, domain,
                         request, numeric_request, lifted[i], parts[i]);
                 }
             }
-            assert(crate::flat::verify::lang(source.tests@, source.regexes@, id, request, word, eq)
-                == crate::flat::verify::lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
+            assert(crate::flat::verify::flat_lang(source.tests@, source.regexes@, id, request, word, eq)
+                == crate::flat::verify::flat_lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
         },
         _ => {
-            assert(crate::flat::verify::lang(source.tests@, source.regexes@, id, request, word, eq)
-                == crate::flat::verify::lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
+            assert(crate::flat::verify::flat_lang(source.tests@, source.regexes@, id, request, word, eq)
+                == crate::flat::verify::flat_lang(target.tests@, target.regexes@, id, numeric_request, numeric_word, numeric_equality()));
         },
     }
 }
@@ -487,8 +589,8 @@ pub proof fn lemma_later_maps_preservation<C>(source: FlatPair<C>, target: FlatP
         word_encoded(later_maps, eq, domain, word, numeric_word),
     ensures crate::flat::verify::head_matches(source.head@, request, eq)
             == crate::flat::verify::head_matches(target.head@, numeric_request, numeric_equality()),
-        crate::flat::verify::lang(source.tests@, source.regexes@, source.root as nat, request, word, eq)
-            == crate::flat::verify::lang(target.tests@, target.regexes@, target.root as nat, numeric_request, numeric_word, numeric_equality()),
+        crate::flat::verify::flat_lang(source.tests@, source.regexes@, source.root as nat, request, word, eq)
+            == crate::flat::verify::flat_lang(target.tests@, target.regexes@, target.root as nat, numeric_request, numeric_word, numeric_equality()),
 {
     lemma_lowering_extends(source, target, compiled_maps, later_maps, eq);
     lemma_head_preservation(source, target, later_maps, eq, domain, request, numeric_request);
@@ -520,10 +622,10 @@ pub proof fn lemma_dsl_later_maps_preservation<E: history_syntax::Event>(
             request, numeric_request),
         word_encoded(later_maps, crate::verify::flatten::component_equality::<E>(), domain,
             history, numeric_history),
-    ensures crate::verify::dsl::head_matches(rule.head@, request)
+    ensures crate::spec::semantics::head_matches(rule.head@, request)
             == crate::flat::verify::head_matches(numeric.head@, numeric_request, numeric_equality()),
-        crate::verify::dsl::lang(rule.tail@, rule.head@, request, history)
-            == crate::flat::verify::lang(numeric.tests@, numeric.regexes@, numeric.root as nat,
+        crate::spec::semantics::lang(rule.tail@, rule.head@, request, history)
+            == crate::flat::verify::flat_lang(numeric.tests@, numeric.regexes@, numeric.root as nat,
                 numeric_request, numeric_history, numeric_equality()),
 {
     assert forall|i: int| 0 <= i < history.len() implies history[i].len() == request.len() by {

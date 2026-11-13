@@ -19,18 +19,6 @@ pub(crate) struct NativeMap<K: Eq + Hash, V: Copy> {
 pub(crate) uninterp spec fn representatives<K: Eq + Hash, V: Copy>(m: NativeMap<K, V>)
     -> Seq<(K, V)>;
 
-/// Native Hash/Eq coherence supplied as an implementation obligation.
-pub uninterp spec fn hash_coherent<K: Eq + Hash>() -> bool;
-
-/// Equality laws and native hashing obligations required by the hashbrown leaves.
-pub open spec fn key_obligations<K: Eq + Hash>() -> bool {
-    K::obeys_eq_spec() && hash_coherent::<K>()
-        && (forall|a: K| #[trigger] a.eq_spec(&a))
-        && (forall|a: K, b: K| #[trigger] a.eq_spec(&b) == b.eq_spec(&a))
-        && (forall|a: K, b: K, c: K| #[trigger] a.eq_spec(&b)
-            && #[trigger] b.eq_spec(&c) ==> a.eq_spec(&c))
-}
-
 impl<K: Eq + Hash, V: Copy> NativeMap<K, V> {
     #[verifier::external_body]
     pub(crate) fn new() -> (m: Self)
@@ -41,7 +29,7 @@ impl<K: Eq + Hash, V: Copy> NativeMap<K, V> {
 
     #[verifier::external_body]
     pub(crate) fn lookup(&self, key: &K) -> (value: Option<V>)
-        ensures key_obligations::<K>() ==> match value {
+        ensures junco_core::spec::hypotheses::key_laws::<K>() ==> match value {
             Some(v) => exists|i: int| 0 <= i < representatives(*self).len()
                 && representatives(*self)[i].1 == v
                 && key.eq_spec(&representatives(*self)[i].0),
@@ -54,10 +42,10 @@ impl<K: Eq + Hash, V: Copy> NativeMap<K, V> {
 
     #[verifier::external_body]
     pub(crate) fn insert_fresh(&mut self, key: K, value: V)
-        requires key_obligations::<K>() ==> forall|i: int|
+        requires junco_core::spec::hypotheses::key_laws::<K>() ==> forall|i: int|
             0 <= i < representatives(*old(self)).len()
                 ==> !key.eq_spec(&representatives(*old(self))[i].0),
-        ensures key_obligations::<K>() ==>
+        ensures junco_core::spec::hypotheses::key_laws::<K>() ==>
             representatives(*final(self)) == representatives(*old(self)).push((key, value)),
     {
         self.inner.insert(key, value);
@@ -82,7 +70,7 @@ impl<K: Eq + Hash> NativeSet<K> {
 
     #[verifier::external_body]
     pub(crate) fn insert(&mut self, key: K) -> (fresh: bool)
-        ensures key_obligations::<K>() ==> {
+        ensures junco_core::spec::hypotheses::key_laws::<K>() ==> {
             &&& fresh == !(exists|k: K| members(*old(self)).contains(k) && key.eq_spec(&k))
             &&& members(*final(self)) == if fresh {
                 members(*old(self)).insert(key)
@@ -112,7 +100,7 @@ impl<K: Eq + Hash, V> NativeGroups<K, V> {
 
     #[verifier::external_body]
     pub(crate) fn get(&self, key: &K) -> (value: Option<&Vec<V>>)
-        ensures key_obligations::<K>() ==> match value {
+        ensures junco_core::spec::hypotheses::key_laws::<K>() ==> match value {
             Some(values) => exists|k: K| groups(*self).dom().contains(k)
                 && key.eq_spec(&k) && values@ == groups(*self)[k],
             None => forall|k: K| groups(*self).dom().contains(k) ==> !key.eq_spec(&k),
@@ -123,7 +111,7 @@ impl<K: Eq + Hash, V> NativeGroups<K, V> {
 
     #[verifier::external_body]
     pub(crate) fn push(&mut self, key: K, value: V)
-        ensures key_obligations::<K>() ==> {
+        ensures junco_core::spec::hypotheses::key_laws::<K>() ==> {
             &&& groups(*final(self)).dom() == if exists|k: K|
                 groups(*old(self)).dom().contains(k) && key.eq_spec(&k)
             { groups(*old(self)).dom() } else { groups(*old(self)).dom().insert(key) }

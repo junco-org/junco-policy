@@ -32,7 +32,7 @@ use junco_core::verify::history_assumptions::*;
 use junco_core::verify::history_specs as language;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::{EventView, Subst};
-use junco_core::{error::HistoryError, kernel::*};
+use junco_core::{errors::HistoryError, kernel::*};
 use smallvec::SmallVec;
 #[cfg(verus_keep_ghost)]
 use verify::*;
@@ -83,9 +83,9 @@ pub(crate) struct CompiledPair {
 impl CompiledPair {
     // Individually representable byte counts can overflow when combined.
     #[verus_verify]
-    #[verus_spec(result => ensures language::no_internal_error(result),
+    #[verus_spec(result => ensures language::no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
-        result matches Err(error) ==> error is AllocationFailed || error is GraphLimit,
+        result matches Err(error) ==> error is AllocationFailed || error is GraphIndex,
         result matches Ok(bytes) ==> bytes as int ==
             growth * vstd::layout::size_of::<Option<AtomSet>>()
                 + count * vstd::layout::size_of::<TestId>())]
@@ -101,7 +101,7 @@ impl CompiledPair {
         ensures result != Err(HistoryError::WrongHistoryOwner),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             transition@ < atoms@.len() && atoms@[transition@ as int] is Some
-                ==> language::no_internal_error(result),
+                ==> language::no_invariant_failure(result),
             result matches Ok(set) ==> transition@ < atoms@.len() && atoms@[transition@ as int] == Some(*set),
     )]
     pub(crate) fn cached_atoms(
@@ -153,7 +153,7 @@ impl CompiledPair {
         requires pair_wf(*old(self)), residual@ < (*old(self)).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_internal_error(result),
+            language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             (*final(self)).store.graph() == (*old(self)).store.graph(),
             result matches Ok(answer) ==> answer == language::nullable(model::lift_regex((*final(self)).store.graph(), residual@)),
@@ -195,7 +195,7 @@ impl CompiledPair {
             residual@ < (*old(self)).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_internal_error(result),
+            language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result matches Ok(out) ==> residual_folds(*final(self), bindings@, residual, history_store::store::verify::events_view(events@), out),
     )]
@@ -207,7 +207,7 @@ impl CompiledPair {
         limits: &mut L,
         world: &mut ObservationWorld,
     ) -> KernelResult<RegexId> {
-            hide(language::lang);
+            hide(language::numeric_lang);
             hide(model::regex_lang);
             hide(model::lift_regex);
             hide(model::lift_transition);
@@ -324,7 +324,7 @@ impl CompiledPair {
         requires pair_wf(*old(self)), transition@ < old(self).store.graph().transitions.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_internal_error(result),
+            language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result is Ok ==> has_atoms(*final(self), transition),
             final(self).caches.derivatives@ == old(self).caches.derivatives@,
@@ -461,7 +461,7 @@ impl CompiledPair {
             residual@ < old(self).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_internal_error(result),
+            language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result is Ok ==> has_guard(*final(self), residual),
     )]
@@ -573,13 +573,13 @@ impl CompiledPair {
             residual@ < old(self).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_internal_error(result),
+            language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).caches.atoms@ == old(self).caches.atoms@, final(self).caches.guards@ == old(self).caches.guards@,
             result matches Ok(mask) ==> guard_wf(final(self).store.graph(), final(self).caches.atoms@, residual@ as int, Guard { transition, mask }),
     )]
     /// Atoms true in every truth word whose successor leaves `residual`: each of the 2^k words
-    /// is interpreted once and the leaving words are intersected. `GraphLimit` yields mask 0.
+    /// is interpreted once and the leaving words are intersected. A graph budget or index error yields mask 0.
     fn guard_mask<L: Limits>(
         &mut self,
         residual: RegexId,
@@ -642,7 +642,7 @@ impl CompiledPair {
             }
             let successor = match successor {
                 Ok(successor) => successor,
-                Err(HistoryError::GraphLimit { .. }) => {
+                Err(HistoryError::GraphBudget { .. } | HistoryError::GraphIndex) => {
                     mask = 0;
                     break;
                 }
@@ -695,7 +695,7 @@ impl CompiledPair {
             transition@ < old(self).store.graph().transitions.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_internal_error(result),
+            language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).caches.atoms@ == old(self).caches.atoms@, final(self).caches.guards@ == old(self).caches.guards@,
             successor_entries((*final(self)).caches.successors) == successor_entries((*old(self)).caches.successors),
@@ -809,7 +809,7 @@ impl CompiledPair {
         requires pair_wf(*old(self)), transition@ < old(self).store.graph().transitions.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_internal_error(result),
+            language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result matches Ok(id) ==> instantiation_result(*final(self), transition, bindings@, *event, id),
     )]
@@ -998,7 +998,7 @@ impl CompiledPair {
             result != Err(HistoryError::WrongHistoryOwner),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             symbolic::verify::assignment_valid(old(self).caches.atoms@[key.transition@ as int].unwrap()@.len(), key.words.view())
-                ==> language::no_internal_error(result),
+                ==> language::no_invariant_failure(result),
             final(self).caches.atoms@ == old(self).caches.atoms@,
             final(self).caches.derivatives@ == old(self).caches.derivatives@,
             result matches Ok(id) ==> successor_entries((*final(self)).caches.successors).contains_key(class_key(key))
@@ -1087,13 +1087,13 @@ impl CompiledPair {
         requires pair_wf(*old(self)),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_internal_error(result),
+            language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
     )]
     /// Eagerly builds derivatives, atom sets and successor classes for up to `PRECOMPILE_STATES`
     /// residual states reachable from `root`, depth-first, within the successor cache's capacity;
     /// anything beyond the budget is left to the lazy path. Errors leave the pair well-formed;
-    /// `GraphLimit` means the caller should discard it.
+    /// a graph budget or index error means the caller should discard it.
     pub(crate) fn precompile<L: Limits>(
         &mut self,
         limits: &mut L,
@@ -1254,7 +1254,7 @@ impl CompiledPair {
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy()
                 ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-            old(store).errors_are_non_invariant() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invariant() ==> language::no_invariant_failure(result),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             result matches Ok(atoms) ==> atoms_wf(final(store).graph(), root@, atoms@),
             result matches Ok(atoms) ==> atoms_contained(final(store).graph(), root@, atoms@),
@@ -2369,7 +2369,7 @@ pub(crate) mod verify {
             residual_after_prefix(before, history, bindings, count, residual),
         ensures residual_after_prefix(after, history, bindings, count, residual),
     {
-        hide(language::lang); hide(model::lift_regex); hide(model::lift_transition); hide(model::test_holds);
+        hide(language::numeric_lang); hide(model::lift_regex); hide(model::lift_transition); hide(model::test_holds);
         model::lemma_graph_wf_elim(before.store.graph());
         model::lemma_lift_regex_stable(before.store.graph(), after.store.graph(), before.root@);
         model::lemma_lift_regex_stable(before.store.graph(), after.store.graph(), residual@);
@@ -2390,7 +2390,7 @@ pub(crate) mod verify {
             residual_after_prefix(pair, before, bindings, count, residual),
         ensures residual_after_prefix(pair, after, bindings, count, residual),
     {
-        hide(language::lang); hide(model::lift_regex); hide(model::lift_transition); hide(model::test_holds);
+        hide(language::numeric_lang); hide(model::lift_regex); hide(model::lift_transition); hide(model::test_holds);
         assert(before.take(count as int) =~= after.take(count as int));
     }
 
@@ -2446,7 +2446,7 @@ pub(crate) mod verify {
         requires model::graph_wf(a), model::graph_extends(a, b), atom_cache_wf(a, atoms), successor_entries_wf(a, atoms, entries),
         ensures successor_entries_wf(b, atoms, entries),
     {
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(language::interp_transition);
         hide(model::test_holds);
         hide(model::lift_regex);
@@ -2520,7 +2520,7 @@ pub(crate) mod verify {
         requires model::graph_wf(a), model::graph_extends(a, b), atom_cache_wf(a, atoms_cache), guard_wf(a, atoms_cache, r, guard),
         ensures guard_wf(b, atoms_cache, r, guard),
     {
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(language::interp_transition);
         hide(model::test_holds);
         hide(model::lift_test);
@@ -2561,7 +2561,7 @@ pub(crate) mod verify {
             guard_class_covered(before, atoms, residual, transition, w),
         ensures guard_class_covered(after, atoms, residual, transition, w),
     {
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(language::interp_transition);
         hide(model::test_holds);
         hide(model::lift_regex);
@@ -2723,7 +2723,7 @@ pub(crate) mod verify {
         requires pair_wf(before), pair_frame(before, after), residual_folds(before, bindings, from, events, to),
         ensures residual_folds(after, bindings, from, events, to),
     {
-        hide(language::lang); hide(model::lift_regex); hide(model::lift_transition); hide(model::test_holds);
+        hide(language::numeric_lang); hide(model::lift_regex); hide(model::lift_transition); hide(model::test_holds);
         model::lemma_graph_wf_elim(before.store.graph());
         model::lemma_lift_regex_stable(before.store.graph(), after.store.graph(), from@);
         model::lemma_lift_regex_stable(before.store.graph(), after.store.graph(), to@);
@@ -2754,7 +2754,7 @@ pub(crate) mod verify {
     {
         // Keep recursive semantics opaque: absorption only needs their established equalities.
         hide(pair_wf); hide(model::regex_lang);
-        hide(language::lang); hide(model::lift_regex); hide(model::test_holds); hide(model::lift_transition);
+        hide(language::numeric_lang); hide(model::lift_regex); hide(model::test_holds); hide(model::lift_transition);
         assert(model::graph_wf(pair.store.graph())) by { reveal(pair_wf); }
         lemma_absorbing_language(pair, bindings, residual);
         assert forall|word: Seq<EventView>| model::regex_lang(pair.store.graph(), bindings, residual@, word)

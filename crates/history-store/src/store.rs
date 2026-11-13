@@ -12,7 +12,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use history_syntax::{Component, MAX_ARITY};
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
@@ -1281,15 +1281,10 @@ pub mod verify {
             && (forall|i: int| 0 <= i < arity ==> native_domain_valid(store.domains@[i])
                 && native_domain_index(store.domains@[i]) == i)
     }
-    // Static installation and persistent mutex-invariant fidelity, not issuance.
-    #[verifier::external_body]
-    pub(crate) proof fn singleton_invariants(arity: nat)
-        requires 1 <= arity <= MAX_ARITY,
-        ensures singleton_valid(arity),
-    {}
-
-    pub open spec fn numeric_store_wf(store: HistoryStore) -> bool {
+    /// The store is the process-wide singleton of its arity, with its static authorities installed.
+    pub open(crate) spec fn numeric_store_wf(store: HistoryStore) -> bool {
         1 <= store.arity_spec() <= MAX_ARITY && store == *singleton_store(store.arity_spec())
+            && singleton_valid(store.arity_spec())
     }
 
     pub uninterp spec fn coordinate_ids(wrapper: NativeCoordinates) -> Seq<vstd::resource::Loc>;
@@ -1952,7 +1947,7 @@ impl HistoryStore {
         issuer: Ghost<ComponentIssuer>,
         prior: Tracked<Option<&ComponentReceipts>>,
     ) -> Result<(u64, Tracked<ComponentIdReceipt>), HistoryError> {
-        proof! { singleton_invariants(self.arity_spec()); reveal(coordinate_authority); }
+        proof! { reveal(coordinate_authority); }
         self.authorities.coordinates.with_state((index, domain, last, issuer, prior),
             verus_exec_expr! {
             |state: &mut CoordinateState, context: (usize, &'static str, u64, Ghost<ComponentIssuer>, Tracked<Option<&ComponentReceipts>>)|
@@ -1980,7 +1975,7 @@ impl HistoryStore {
         issuer: Ghost<HistoryIssuer>,
         prior: Tracked<Option<&HistoryKeyReceipt>>,
     ) -> Result<(usize, Tracked<HistoryKeyReceipt>), HistoryError> {
-        proof! { singleton_invariants(self.arity_spec()); reveal(history_authority); }
+        proof! { reveal(history_authority); }
         if last == usize::MAX {
             return Err(HistoryError::IdExhausted { domain: "history" });
         }
@@ -2045,7 +2040,6 @@ impl HistoryStore {
         limits: &mut L,
         _world: &mut ObservationWorld,
     ) -> Result<(u64, Tracked<ByteBindingReceipt>), HistoryError> {
-        proof! { singleton_invariants(self.arity_spec()); }
         let index = component.index();
         if index >= self.arity() {
             return Err(HistoryError::invalid_policy(
@@ -2162,7 +2156,6 @@ impl HistoryStore {
         ensures event_validation_result(self, *event, result),
             result matches Err(error) ==> event_validation_error(*event, error))]
     pub fn validate_event(&self, event: &Event) -> Result<(), HistoryError> {
-        proof! { singleton_invariants(self.arity_spec()); }
         let arity = self.arity();
         if event.arity() != arity {
             return Err(HistoryError::invalid_policy(
@@ -2172,7 +2165,7 @@ impl HistoryStore {
         }
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(
-            invariant numeric_store_wf(*self), singleton_valid(self.arity_spec()),
+            invariant numeric_store_wf(*self),
                 index <= arity == self.arity_spec(), event@.len() == arity,
                 forall|i: int| 0 <= i < index ==> byte_validation_observed(self, i, event@[i] as u64, true),
             decreases arity - index,

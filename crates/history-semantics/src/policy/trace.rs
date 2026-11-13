@@ -15,7 +15,9 @@ use super::rule::{Diagnostic, PolicyRule, pack_policy_rule};
 use history_store::{History, Store};
 use history_syntax::{Event, Rule};
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{no_internal_compile_error, no_internal_error};
+use junco_core::spec::semantics as sem;
+#[cfg(verus_keep_ghost)]
+use junco_core::verify::history_specs::{no_invariant_compile_failure, no_invariant_failure};
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
@@ -104,7 +106,7 @@ pub mod verify {
         result: Result<PolicyDecision, HistoryError>,
     ) -> bool {
         super::super::evaluate::policy_decision_result(before.compiled, after.compiled, history, candidate, result)
-            && no_internal_error(result)
+            && no_invariant_failure(result)
             && trace_wf(after) && trace_store(after) == trace_store(before)
             && trace_sources(after) == trace_sources(before)
             && trace_diagnostic_ids(after) == trace_diagnostic_ids(before)
@@ -115,21 +117,17 @@ pub mod verify {
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before),
                 Ok(PolicyDecision::Grant) => trace_context_calls(after) == trace_context_calls(before)
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before)
-                    && (history_store::typed::verify::native_obligations::<E>() ==>
-                        forall|i: int| 0 <= i < trace_sources(before).len() ==>
-                            !junco_core::verify::dsl::rule_violated(trace_sources(before)[i], candidate,
-                                history_store::history::verify::raw_events(history))),
+                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
+                        sem::policy_permits(sem::rule_views(trace_sources(before)), candidate,
+                            history_store::history::verify::raw_events(history))),
                 Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) =>
                     trace_context_calls(after) == trace_context_calls(before) + 1
                         && trace_diagnostic_calls(after) == trace_diagnostic_calls(before) + 1
                         && trace_selected_index(after) < trace_sources(before).len()
                         && trace_selected_diagnostic_id(after) == trace_diagnostic_ids(before)[trace_selected_index(after) as int]
-                        && (history_store::typed::verify::native_obligations::<E>() ==>
-                            junco_core::verify::dsl::rule_violated(trace_sources(before)[trace_selected_index(after) as int], candidate,
-                                history_store::history::verify::raw_events(history))
-                                && forall|i: int| 0 <= i < trace_selected_index(after) ==>
-                                    !junco_core::verify::dsl::rule_violated(trace_sources(before)[i], candidate,
-                                        history_store::history::verify::raw_events(history)))
+                        && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
+                            sem::least_violation(sem::rule_views(trace_sources(before)), candidate,
+                                history_store::history::verify::raw_events(history), trace_selected_index(after) as int))
                         && diagnostic_output(super::super::evaluate::verify::policy_trace(after.compiled).calls.last().diagnostic_id,
                             candidate, failed_precondition@, allowed_fixes.deep_view()),
             }
@@ -160,7 +158,7 @@ pub mod verify {
         ensures trace_wf(after), trace_frame(before, after),
             trace_store(after) == trace_store(before), trace_sources(after) == trace_sources(before),
             trace_diagnostic_ids(after) == trace_diagnostic_ids(before),
-            no_internal_error(result),
+            no_invariant_failure(result),
             (result == Err(HistoryError::WrongHistoryOwner))
                 == !history_store::typed::verify::same_store_owner(trace_store(before), history_store::history::verify::store_of(history)),
             match result {
@@ -170,19 +168,18 @@ pub mod verify {
                 Ok(PolicyDecision::Grant) => trace_callbacks_frame(before, after)
                     && trace_context_calls(after) == trace_context_calls(before)
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before)
-                    && (history_store::typed::verify::native_obligations::<E>() ==> forall|i: int|
-                        0 <= i < trace_sources(before).len() ==>
-                            !junco_core::verify::dsl::rule_violated(trace_sources(before)[i], candidate,
-                                history_store::history::verify::raw_events(history))),
+                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
+                        sem::policy_permits(sem::rule_views(trace_sources(before)), candidate,
+                            history_store::history::verify::raw_events(history))),
                 Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) =>
                     trace_context_calls(after) == trace_context_calls(before) + 1
                         && trace_diagnostic_calls(after) == trace_diagnostic_calls(before) + 1
                         && trace_selected_index(after) < trace_sources(before).len()
                         && trace_selected_source(after) == trace_sources(before)[trace_selected_index(after) as int]
                         && trace_selected_diagnostic_id(after) == trace_diagnostic_ids(before)[trace_selected_index(after) as int]
-                        && (history_store::typed::verify::native_obligations::<E>() ==>
-                            crate::compiled_rule::verify::least_violation(trace_sources(before), history,
-                                candidate, trace_selected_index(after) as int))
+                        && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
+                            sem::least_violation(sem::rule_views(trace_sources(before)), candidate,
+                                history_store::history::verify::raw_events(history), trace_selected_index(after) as int))
                         && diagnostic_output(trace_selected_diagnostic_id(after), candidate,
                             failed_precondition@, allowed_fixes.deep_view()),
             },
@@ -303,7 +300,8 @@ impl<E: Event> TraceRule<E> {
 #[verus_verify]
 impl<E: Event> Clone for TraceRule<E> {
     #[verus_verify(external_body)]
-    #[verus_spec(result => ensures trace_rule_diagnostic_id(result) == trace_rule_diagnostic_id(*self))]
+    #[verus_spec(result => ensures trace_rule_source(result) == trace_rule_source(*self),
+        trace_rule_diagnostic_id(result) == trace_rule_diagnostic_id(*self))]
     fn clone(&self) -> Self {
         Self {
             rule: self.rule.clone(),
@@ -339,7 +337,7 @@ impl<E: Event + 'static> TracePolicy<E> {
     /// Exact source and diagnostic order require the input's `into_iter_yields` law.
     /// Native event laws exclude internal invariant failures, not ordinary compile/resource errors.
     #[verus_spec(result => requires history_store::typed::verify::store_wf(*store),
-        ensures history_store::typed::verify::native_obligations::<E>() ==> no_internal_compile_error(result),
+        ensures junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_compile_failure(result),
             result matches Ok(policy) ==> trace_wf(policy) && trace_store(policy) == store
             && trace_context_calls(policy) == 0 && trace_diagnostic_calls(policy) == 0
             && forall|items: Seq<TraceRule<E>>| junco_core::verify::history_specs::into_iter_yields(rules, items) ==>
@@ -398,7 +396,7 @@ impl<E: Event + 'static> TracePolicy<E> {
     /// Operational errors cannot be internal invariant failures.
     #[verus_spec(result => requires trace_wf(*old(self)), history_store::history::verify::history_wf(*history),
         ensures trace_decision_result(*old(self), *final(self), *history, *candidate, result),
-            no_internal_error(result))]
+            no_invariant_failure(result))]
     pub fn decide(
         &mut self,
         history: &History<E>,

@@ -1,10 +1,33 @@
 //! Layer 5: finitely many states (Lemma Finitely many residuals, `lem:finite-states`;
-//! appendix `app:normalization`), and
-//! finitely many items, which makes termination of the search (`search::stmt_search_terminates`)
-//! unconditional.
+//! appendix `app:finiteness`), and finitely many items. `stmt_search_terminates` stays
+//! conditional on `finitely_many_items`; this layer discharges that hypothesis for the
+//! implementation's search (`theorem_impl_finitely_many_items`).
 //!
-//! The abstract development is `verify::finite_states` (`Model<S>`, `theorem_finite_reachable`,
-//! proved against the contract (N0)–(N5), (S0)–(S6)). The canonical-state abstraction maps a graph
+//! The abstract development is `verify::finite_states` (`Model<S>`, `theorem_finite_reachable`),
+//! proved against the contract `Model::contract` and the invariant `Model::good`. Their conjuncts
+//! carry the code's numbers (N0)–(N5), (S0)–(S6), (C1)–(C4); the paper's appendix `app:finiteness`
+//! states the same conditions in prose. The names, once, for both:
+//!
+//! | Code | Name | `Model` predicate | Meaning |
+//! |---|---|---|---|
+//! | (N0) | normal-form constants and substates | `constants_ok`, `substates_ok`, `fixpoints_ok` | `∅`, `ε`, `Univ` are the only states of their kinds; operands, bodies and list elements are smaller states, list elements atoms; `N(¬·)`/`N(·⋯·)` fix a complement/list state |
+//! | (N1), (N2) | normalized union/intersection shape | `nset_ok` | an output of `N(ΣX)`/`N(&X)` is a constant or has operands drawn from the flattened operands of `X` or test combinations of them; finitely many such states over a finite operand set |
+//! | (N3) | complement shape | `not_ok` | `N(¬x)` is a constant, the body of `x`, or `¬x` |
+//! | (N4) | concatenation flattening | `cat_ok` | `N(x₁⋯xₖ)` absorbs `∅`, flattens, drops `ε`, returns `ε`, a single factor or the list of factors |
+//! | (N5) | finite test closure | `tests_ok` | finitely many tests are reachable by `∨`/`∧` combination from a finite test set |
+//! | (S0) | successors are unions of products | `succ_shape` (`built` case) | `∂(p)` evaluates to a normalized union of products of `p` |
+//! | (S1) | base states are constant | `succ_shape`, `lit_shape`, `prod_shape` (`base_kind` case) | constants and tests have constant successors, literals and products |
+//! | (S2) | union step | `lit_shape`/`prod_shape` (`Union` case) | literals are normalized unions of operand literals; a product is an operand's product or a literal |
+//! | (S3) | intersection step | `lit_shape`/`prod_shape` (`Intersect` case) | normalized intersections of operand literals |
+//! | (S4) | complement step | `lit_shape`/`prod_shape` (`Not` case) | literals are normalized intersections of complemented body literals; products normalized intersections of literals |
+//! | (S5) | star step | `lit_shape`/`prod_shape` (`Star` case) | `N(v p)` for products `v` of the body |
+//! | (S6) | list step | `lit_shape`/`prod_shape` (`List` case) | `N(v yᵢ₊₁⋯yₖ)` for products `v` of a non-final element, or literals/products of the final element |
+//! | (C1) | finite, rooted, with constants | `good` (first two conjuncts) | `r` is finite, contains `q`, `∅`, `ε`, `Univ` |
+//! | (C2) | closed under values | `vals_into(r, r)` | successors, literals and products of members stay in `r` |
+//! | (C3) | closed under operands | `r_ops` | operands of set states and bodies of complements stay in `r` |
+//! | (C4) | closed under list tails | `r_lists_in(r, r)` | `N(v yᵢ₊₁⋯yₖ)` for every list member and product `v` of its elements stays in `r` |
+//!
+//! The canonical-state abstraction maps a graph
 //! id to its lifted tree `model::lift_regex(g, id)`: within one well-formed graph, interning makes
 //! the lift injective, and graph extension preserves it (`model::lemma_lift_stable_under_extends`),
 //! so identity of ids in the search's visited set is identity of abstract states.
@@ -88,7 +111,7 @@ pub open spec fn atom_codes(atoms: Set<model::Primitive>) -> ISet<nat> {
 }
 
 /// Each successor case only adds literals about codes compared by the atoms of the parent's
-/// state, or about declared finite-domain values (`constraint.rs:236-281`).
+/// state, or about declared finite-domain values (`split` and `letters` in `history-analysis/src/constraint.rs`).
 pub open spec fn cases_from_atoms(d: NDomains, cases_of: spec_fn(Item) -> Set<Case>,
     atoms_of: spec_fn(Regex<model::Test>) -> Set<model::Primitive>) -> bool {
     forall|i: Item, c: Case, l: Literal| #[trigger] cases_of(i).contains(c) && #[trigger] c.constraint.contains(l)

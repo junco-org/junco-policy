@@ -1,7 +1,7 @@
 //! Layer 1: typed rules and pairs as numeric ones.
 //!
 //! The typed-to-numeric bridge is the existing verified front end, which the analyzer already
-//! calls (`add_rule`, `analyzer.rs:301-312`): `flatten_rule` (`junco_core::verify::flatten`,
+//! calls (`PolicyAnalyzer::add_rule` and `tail_included`): `flatten_rule_parts` (`junco_core::verify::flatten`,
 //! `flattened`, `flattening_preserves_semantics`), `lower_flat` with the analyzer's encoder
 //! (`junco_core::verify::encoding`, `lowering`, `lemma_dsl_later_maps_preservation`), and the
 //! graph compiler (`crate::compile`, `lemma_flat_regex`, the `compile` contract). This layer only
@@ -11,8 +11,9 @@
 use super::semantics::*;
 use crate::compile::verify as numeric;
 use history_syntax::Event;
+use history_syntax::spec::events::RuleView;
 use history_syntax::syntax::{Component, Rule, RuleMode};
-use history_syntax::verify::dsl::RuleView;
+use junco_core::spec::semantics::{rule_violated_view, violated_by};
 
 use junco_core::flat::verify as portable;
 use junco_core::flat::{FlatHead, FlatPair, FlatRule};
@@ -31,7 +32,7 @@ broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemm
 
 /// Kernel test semantics under the whole-candidate valuation `θ`.
 pub open spec fn n_lang(theta: Subst, r: Regex<model::Test>, w: Seq<EventView>) -> bool {
-    language::lang(model::gsem(theta), r, w)
+    language::numeric_lang(model::gsem(theta), r, w)
 }
 
 /// A numeric head: a code per constant component, `None` for a variable.
@@ -155,7 +156,7 @@ pub open spec fn stmt_front_end_denies<E: Event>() -> bool {
             && enc::event_encoded(later, fl::component_equality::<E>(), domain, candidate, request)
             && enc::word_encoded(later, fl::component_equality::<E>(), domain, history, word)
             && enc::event_representation(request, theta) && enc::word_representation(word, w)
-            ==> (rule_denies(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w))
+            ==> (rule_violated_view(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w))
 }
 
 // ----- fresh values -----
@@ -398,7 +399,7 @@ pub proof fn lemma_front_end_denies<E: Event>(
         enc::event_encoded(later, fl::component_equality::<E>(), domain, candidate, request),
         enc::word_encoded(later, fl::component_equality::<E>(), domain, history, word),
         enc::event_representation(request, theta), enc::word_representation(word, w),
-    ensures rule_denies(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w),
+    ensures rule_violated_view(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w),
 {
     enc::lemma_dsl_later_maps_preservation::<E>(rule, flat, template, maps, later, domain,
         candidate, history, request, word);
@@ -460,7 +461,7 @@ pub proof fn theorem_front_end_denies<E: Event>()
             && enc::event_encoded(later, fl::component_equality::<E>(), domain, candidate, request)
             && enc::word_encoded(later, fl::component_equality::<E>(), domain, history, word)
             && enc::event_representation(request, theta) && enc::word_representation(word, w)
-        implies (rule_denies(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w)) by {
+        implies (rule_violated_view(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w)) by {
         lemma_front_end_denies::<E>(rule, flat, template, maps, later, domain, n, candidate, history,
             request, word, theta, w);
     }
@@ -545,11 +546,11 @@ pub proof fn lemma_lang_rename(r: Regex<model::Test>, theta: Subst, f: spec_fn(n
     requires n_renaming_ok(f, fixed, values), n_in_values(values, theta),
         enc::pointwise(u, v, n_renamed(f, values)),
         forall|c: Component, k: nat| #[trigger] regex_mentions(r, c, k) ==> fixed.contains(k),
-    ensures language::lang(model::gsem(theta), r, u)
-        == language::lang(model::gsem(n_rename_event(f, theta)), r, v),
+    ensures language::numeric_lang(model::gsem(theta), r, u)
+        == language::numeric_lang(model::gsem(n_rename_event(f, theta)), r, v),
     decreases r,
 {
-    reveal_with_fuel(language::lang, 1);
+    reveal_with_fuel(language::numeric_lang, 1);
     reveal_with_fuel(regex_mentions, 1);
     let ftheta = n_rename_event(f, theta);
     let rel = n_renamed(f, values);
@@ -566,7 +567,7 @@ pub proof fn lemma_lang_rename(r: Regex<model::Test>, theta: Subst, f: spec_fn(n
         },
         Regex::Union(cs) | Regex::Intersect(cs) => {
             assert forall|i: int| 0 <= i < cs.len() implies
-                language::lang(model::gsem(theta), cs[i], u) == language::lang(model::gsem(ftheta), cs[i], v) by {
+                language::numeric_lang(model::gsem(theta), cs[i], u) == language::numeric_lang(model::gsem(ftheta), cs[i], v) by {
                 assert forall|c: Component, k: nat| #[trigger] regex_mentions(cs[i], c, k) implies fixed.contains(k) by {
                     reveal(regex_mention_child);
                     assert(regex_mention_child(r, i) == Some(cs[i]));
@@ -590,60 +591,60 @@ pub proof fn lemma_lang_rename(r: Regex<model::Test>, theta: Subst, f: spec_fn(n
                     assert(regex_mentions(r, c, k));
                 }
             }
-            if language::lang(model::gsem(theta), r, u) {
+            if language::numeric_lang(model::gsem(theta), r, u) {
                 let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == cs.len() && u == parts.flatten()
-                    && forall|i: int| 0 <= i < cs.len() ==> language::lang(model::gsem(theta), cs[i], parts[i]);
+                    && forall|i: int| 0 <= i < cs.len() ==> language::numeric_lang(model::gsem(theta), cs[i], parts[i]);
                 assert(enc::pointwise(v, u, rev));
                 enc::lemma_partition_lift(v, u, parts, rev);
                 let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && v == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rev);
-                assert forall|i: int| 0 <= i < cs.len() implies language::lang(model::gsem(ftheta), cs[i], lifted[i]) by {
+                assert forall|i: int| 0 <= i < cs.len() implies language::numeric_lang(model::gsem(ftheta), cs[i], lifted[i]) by {
                     assert(enc::pointwise(lifted[i], parts[i], rev));
                     assert(enc::pointwise(parts[i], lifted[i], rel));
                     lemma_lang_rename(cs[i], theta, f, fixed, values, parts[i], lifted[i]);
                 }
-                assert(language::lang(model::gsem(ftheta), r, v));
+                assert(language::numeric_lang(model::gsem(ftheta), r, v));
             }
-            if language::lang(model::gsem(ftheta), r, v) {
+            if language::numeric_lang(model::gsem(ftheta), r, v) {
                 let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == cs.len() && v == parts.flatten()
-                    && forall|i: int| 0 <= i < cs.len() ==> language::lang(model::gsem(ftheta), cs[i], parts[i]);
+                    && forall|i: int| 0 <= i < cs.len() ==> language::numeric_lang(model::gsem(ftheta), cs[i], parts[i]);
                 enc::lemma_partition_lift(u, v, parts, rel);
                 let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && u == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rel);
-                assert forall|i: int| 0 <= i < cs.len() implies language::lang(model::gsem(theta), cs[i], lifted[i]) by {
+                assert forall|i: int| 0 <= i < cs.len() implies language::numeric_lang(model::gsem(theta), cs[i], lifted[i]) by {
                     lemma_lang_rename(cs[i], theta, f, fixed, values, lifted[i], parts[i]);
                 }
-                assert(language::lang(model::gsem(theta), r, u));
+                assert(language::numeric_lang(model::gsem(theta), r, u));
             }
         },
         Regex::Star(b) => {
             assert forall|c: Component, k: nat| #[trigger] regex_mentions(*b, c, k) implies fixed.contains(k) by {
                 assert(regex_mentions(r, c, k));
             }
-            if language::lang(model::gsem(theta), r, u) {
+            if language::numeric_lang(model::gsem(theta), r, u) {
                 let parts = choose|parts: Seq<Seq<EventView>>| u == parts.flatten()
-                    && forall|i: int| 0 <= i < parts.len() ==> language::lang(model::gsem(theta), *b, parts[i]);
+                    && forall|i: int| 0 <= i < parts.len() ==> language::numeric_lang(model::gsem(theta), *b, parts[i]);
                 assert(enc::pointwise(v, u, rev));
                 enc::lemma_partition_lift(v, u, parts, rev);
                 let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && v == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rev);
-                assert forall|i: int| 0 <= i < lifted.len() implies language::lang(model::gsem(ftheta), *b, lifted[i]) by {
+                assert forall|i: int| 0 <= i < lifted.len() implies language::numeric_lang(model::gsem(ftheta), *b, lifted[i]) by {
                     assert(enc::pointwise(lifted[i], parts[i], rev));
                     assert(enc::pointwise(parts[i], lifted[i], rel));
                     lemma_lang_rename(*b, theta, f, fixed, values, parts[i], lifted[i]);
                 }
-                assert(language::lang(model::gsem(ftheta), r, v));
+                assert(language::numeric_lang(model::gsem(ftheta), r, v));
             }
-            if language::lang(model::gsem(ftheta), r, v) {
+            if language::numeric_lang(model::gsem(ftheta), r, v) {
                 let parts = choose|parts: Seq<Seq<EventView>>| v == parts.flatten()
-                    && forall|i: int| 0 <= i < parts.len() ==> language::lang(model::gsem(ftheta), *b, parts[i]);
+                    && forall|i: int| 0 <= i < parts.len() ==> language::numeric_lang(model::gsem(ftheta), *b, parts[i]);
                 enc::lemma_partition_lift(u, v, parts, rel);
                 let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && u == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rel);
-                assert forall|i: int| 0 <= i < lifted.len() implies language::lang(model::gsem(theta), *b, lifted[i]) by {
+                assert forall|i: int| 0 <= i < lifted.len() implies language::numeric_lang(model::gsem(theta), *b, lifted[i]) by {
                     lemma_lang_rename(*b, theta, f, fixed, values, lifted[i], parts[i]);
                 }
-                assert(language::lang(model::gsem(theta), r, u));
+                assert(language::numeric_lang(model::gsem(theta), r, u));
             }
         },
         _ => {},

@@ -3,7 +3,7 @@ use super::*;
 use super::{frontend::*, policy_firing, policy_queries as queries, reconstruction, verdict};
 use crate::analyzer::{PolicyAnalyzer, RuleId};
 use history_semantics::verify::refinement::{encoding, implementation, inclusion};
-use history_syntax::event::specs::arity;
+use history_syntax::spec::events::arity;
 use history_syntax::{Event, syntax::Component};
 use vstd::prelude::*;
 

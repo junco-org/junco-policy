@@ -34,9 +34,9 @@
 //! Rules are validated and lowered from borrowed inputs by
 //! [`junco_core::flatten::flatten_rule_parts`] and [`junco_core::lower_flat`], without cloning
 //! caller-owned syntax. Each search compiles one graph that may be charged 16 MiB; a search that
-//! exceeds it is reported as [`Inclusion::Exhausted`]. The executable query contracts relate
-//! results to typed policy semantics under the documented native laws and sufficient
-//! resource-capacity preconditions.
+//! exceeds it, or whose index or case-product computation overflows, is reported as
+//! [`Inclusion::Exhausted`]. The executable query contracts relate results to typed policy
+//! semantics under the documented native laws and sufficient resource-capacity preconditions.
 
 #![no_std]
 #![cfg_attr(not(verus_keep_ghost), forbid(unsafe_code))]
@@ -64,12 +64,11 @@ mod tables;
 mod tests;
 
 #[cfg(all(verus_keep_ghost, feature = "runtime"))]
+pub mod spec;
+#[cfg(all(verus_keep_ghost, feature = "runtime"))]
 pub mod verify;
 
-#[cfg(all(verus_keep_ghost, feature = "runtime"))]
-pub use native::{
-    hash_coherent as native_hash_coherent, key_obligations as native_key_obligations,
-};
-
 #[cfg(feature = "runtime")]
-pub use analyzer::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, RuleId, Value};
+pub use analyzer::{
+    Components, Counterexample, DomainError, Domains, Inclusion, PolicyAnalyzer, RuleId, Value,
+};

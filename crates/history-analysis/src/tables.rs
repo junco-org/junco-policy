@@ -11,7 +11,7 @@ use junco_core::HistoryError;
 use junco_core::flat::verify as flat;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::no_internal_error;
+use junco_core::verify::history_specs::no_invariant_failure;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::{EventView, Subst};
 use vstd::prelude::*;
@@ -61,7 +61,7 @@ impl Tables {
     /// Appends `source`'s tables after the existing ones and returns its root.
     #[verus_spec(result => requires dag(old(self)@), dag(*source),
         source.root < source.regexes@.len(),
-        ensures no_internal_error(result),
+        ensures no_invariant_failure(result),
             dag(final(self)@), frame(old(self)@, final(self)@),
             forall|index: nat, theta: Subst, word: Seq<EventView>| index < old(self).regexes@.len()
                 ==> numeric::source_regex(old(self)@, index, theta, word)
@@ -172,7 +172,7 @@ impl Tables {
     /// Appends the source tail and returns its denial language.
     #[verus_spec(result => requires dag(old(self)@), dag(*source),
         source.root < source.regexes@.len(),
-        ensures no_internal_error(result),
+        ensures no_invariant_failure(result),
             result matches Ok(root) ==> root < final(self).regexes@.len()
                 && dag(final(self)@)
                 && frame(old(self)@, final(self)@)
@@ -188,7 +188,7 @@ impl Tables {
                             == numeric::source_regex(final(self)@, index, theta, word))
                 && forall|theta: Subst, word: Seq<EventView>|
                     numeric::source_regex(final(self)@, root as nat, theta, word)
-                        == history_semantics::verify::refinement::semantics::violated_by(
+                        == junco_core::spec::semantics::violated_by(
                             mode, numeric::source_regex(*source, source.root as nat, theta, word)))]
     pub(crate) fn denial(
         &mut self,
@@ -205,11 +205,11 @@ impl Tables {
                     lemma_frame_languages(appended, self@);
                     assert forall|theta: Subst, word: Seq<EventView>|
                         numeric::source_regex(self@, root as nat, theta, word)
-                            == history_semantics::verify::refinement::semantics::violated_by(
+                            == junco_core::spec::semantics::violated_by(
                                 mode, numeric::source_regex(*source, source.root as nat, theta, word))
                         by {
                         reveal_with_fuel(numeric::source_regex, 1);
-                        reveal(history_semantics::verify::refinement::semantics::violated_by);
+                        reveal(junco_core::spec::semantics::violated_by);
                         assert(self.regexes@[root as int] == FlatRegex::Complement(source_root));
                         assert(numeric::source_regex(self@, root as nat, theta, word)
                             == !numeric::source_regex(self@, source_root as nat, theta, word));
@@ -225,7 +225,7 @@ impl Tables {
     /// Appends one regex node over earlier nodes.
     #[verus_spec(result => requires dag(old(self)@),
         flat::regex_wf(regex, old(self).regexes@.len(), old(self).tests@.len()),
-        ensures no_internal_error(result),
+        ensures no_invariant_failure(result),
             dag(final(self)@), final(self).tests@ == old(self).tests@,
             frame(old(self)@, final(self)@),
             result matches Ok(id) ==> id as nat == old(self).regexes@.len()
@@ -271,7 +271,7 @@ impl Tables {
     /// `left ∩ ¬right` as the root of these tables. Heads play no part in a tail's language.
     #[verus_spec(result => requires dag(self@), left < self.regexes@.len(),
         right < self.regexes@.len(),
-        ensures no_internal_error(result),
+        ensures no_invariant_failure(result),
             result matches Ok(pair) ==> dag(pair) && pair.root < pair.regexes@.len()
                 && frame(self@, pair)
                 && pair.tests@ == self.tests@
@@ -326,9 +326,9 @@ impl Tables {
 }
 
 #[verus_verify]
-#[verus_spec(result => ensures no_internal_error(result),
+#[verus_spec(result => ensures no_invariant_failure(result),
     result matches Ok(id) ==> id as nat == length as nat,
-    result is Err ==> length > u32::MAX)]
+    result matches Err(error) ==> error is GraphIndex && length > u32::MAX)]
 fn index(length: usize) -> Result<u32, HistoryError> {
     match u32::try_from(length) {
         Ok(id) => Ok(id),
@@ -337,9 +337,9 @@ fn index(length: usize) -> Result<u32, HistoryError> {
 }
 
 #[verus_verify]
-#[verus_spec(result => ensures no_internal_error(result),
+#[verus_spec(result => ensures no_invariant_failure(result),
     result matches Ok(value) ==> value as nat == id as nat + by as nat,
-    result is Err ==> id as nat + by as nat > u32::MAX)]
+    result matches Err(error) ==> error is GraphIndex && id as nat + by as nat > u32::MAX)]
 fn offset(id: u32, by: u32) -> Result<u32, HistoryError> {
     match id.checked_add(by) {
         Some(value) => Ok(value),
@@ -348,7 +348,7 @@ fn offset(id: u32, by: u32) -> Result<u32, HistoryError> {
 }
 
 #[verus_verify]
-#[verus_spec(result => ensures no_internal_error(result),
+#[verus_spec(result => ensures no_invariant_failure(result),
     result matches Ok(values) ==> shifted(ids@, values@, by as nat))]
 fn shift(ids: &[u32], by: u32) -> Result<Vec<u32>, HistoryError> {
     let mut values = Vec::new();
@@ -366,7 +366,7 @@ fn shift(ids: &[u32], by: u32) -> Result<Vec<u32>, HistoryError> {
 }
 
 #[verus_verify]
-#[verus_spec(result => ensures no_internal_error(result),
+#[verus_spec(result => ensures no_invariant_failure(result),
     result matches Ok(copied) ==> test_shift(*test, copied, by as nat))]
 fn copy_test(test: &FlatTest<u64>, by: u32) -> Result<FlatTest<u64>, HistoryError> {
     Ok(match test {
@@ -389,7 +389,7 @@ fn copy_test(test: &FlatTest<u64>, by: u32) -> Result<FlatTest<u64>, HistoryErro
 }
 
 #[verus_verify]
-#[verus_spec(result => ensures no_internal_error(result),
+#[verus_spec(result => ensures no_invariant_failure(result),
     result matches Ok(copied) ==>
         regex_shift(*regex, copied, tests as nat, regexes as nat))]
 fn copy_regex(regex: &FlatRegex, tests: u32, regexes: u32) -> Result<FlatRegex, HistoryError> {

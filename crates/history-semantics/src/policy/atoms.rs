@@ -5,7 +5,7 @@
 
 use alloc::string::String;
 #[cfg(verus_keep_ghost)]
-use history_syntax::verify::dsl::{AtomView, PatternView, TestView};
+use history_syntax::spec::events::{AtomView, PatternView, TestView};
 use history_syntax::{AtomPattern, Comparison, Component, ComponentPattern, Event, TestExpr};
 use vstd::prelude::*;
 
@@ -62,7 +62,8 @@ pub fn component_equals<E: Event>(
 
 /// Compares coordinate 0 with `p` in the three-ary `(principal, action, resource)` convention.
 #[verus_verify]
-#[verus_spec(result => ensures result@ == (TestView::Atom {
+#[verus_spec(result => requires history_syntax::spec::events::arity::<E>() == 3,
+    ensures result@ == (TestView::Atom {
     comparison, pattern: AtomView { component: 0, pattern: PatternView::Variable(seq!['p']) },
 }))]
 pub fn principal_is<E: Event>(comparison: Comparison) -> TestExpr<E> {
@@ -72,7 +73,8 @@ pub fn principal_is<E: Event>(comparison: Comparison) -> TestExpr<E> {
 
 /// Compares coordinate 2 with `r` in the three-ary `(principal, action, resource)` convention.
 #[verus_verify]
-#[verus_spec(result => ensures result@ == (TestView::Atom {
+#[verus_spec(result => requires history_syntax::spec::events::arity::<E>() == 3,
+    ensures result@ == (TestView::Atom {
     comparison, pattern: AtomView { component: 2, pattern: PatternView::Variable(seq!['r']) },
 }))]
 pub fn resource_is<E: Event>(comparison: Comparison) -> TestExpr<E> {

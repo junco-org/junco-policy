@@ -27,7 +27,7 @@ use history_store::history::StoredHistory;
 #[cfg(verus_keep_ghost)]
 use history_store::history::verify as raw;
 use history_store::store::{Event, HistoryStore};
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use junco_core::flat::FlatPair;
 use junco_core::kernel::Bindings;
 #[cfg(verus_keep_ghost)]
@@ -60,7 +60,7 @@ pub mod verify {
         template: junco_core::flat::FlatPair<u64>,
     ) -> bool {
         result != Err(HistoryError::WrongHistoryOwner)
-            && (junco_core::flat::verify::structural_wf(template) ==> language::no_internal_error(result))
+            && (junco_core::flat::verify::structural_wf(template) ==> language::no_invariant_failure(result))
             && (junco_core::flat::verify::structural_wf(template)
                 ==> !(result matches Err(HistoryError::InvalidPolicy { .. })))
             && (result matches Ok(runtime) ==> runtime_wf(runtime)
@@ -113,7 +113,7 @@ pub mod verify {
     ) -> bool {
         result != Err(HistoryError::WrongHistoryOwner)
             && (batch_size > 0 && start.consumed <= target_len
-                && target_len <= stored@.events.len() ==> language::no_internal_error(result))
+                && target_len <= stored@.events.len() ==> language::no_invariant_failure(result))
             && runtime_wf(after) && after.store == before.store && progress::pair_frame(before.pair, after.pair)
             && after.snapshots@ == before.snapshots@.insert((stored.id(), stored.revision()), history_store::store::verify::events_view(history_store::history::verify::stored_events(&stored)))
             && batch_matches_snapshot(after.pair, cursor, stored.id(), stored.revision(), bindings, after.snapshots@)
@@ -142,7 +142,7 @@ pub mod verify {
         requires runtime_wf(before), runtime_frame(before, after),
         ensures runtime_accepts(before, bindings, events) == runtime_accepts(after, bindings, events),
     {
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(model::lift_regex);
         reveal(runtime_wf);
         reveal(runtime_frame);
@@ -220,7 +220,7 @@ pub mod verify {
         ensures runtime_wf(after), runtime_frame(before, after),
             result != Err(HistoryError::WrongHistoryOwner),
             batch_size > 0 && cursor_consumed(start) <= target_len && target_len <= stored@.events.len()
-                ==> language::no_internal_error(result),
+                ==> language::no_invariant_failure(result),
             after.spec_store() == before.spec_store(),
             after.spec_snapshots() == before.spec_snapshots().insert(
                 (stored.id(), stored.revision()), stored@.events),
@@ -492,7 +492,7 @@ impl RuleRuntime {
 
     #[verus_spec(result => ensures constructor_result(result, *store, *template),
         result != Err(HistoryError::WrongHistoryOwner),
-        junco_core::flat::verify::structural_wf(*template) ==> language::no_internal_error(result)
+        junco_core::flat::verify::structural_wf(*template) ==> language::no_invariant_failure(result)
             && !(result matches Err(HistoryError::InvalidPolicy { .. }))) ]
     pub fn new<L: Limits>(
         store: &Arc<HistoryStore>,
@@ -509,7 +509,10 @@ impl RuleRuntime {
         if precompile {
             proof_decl! { let ghost compiled = pair; }
             if let Err(error) = pair.precompile(limits, world) {
-                if !matches!(error, HistoryError::GraphLimit { .. }) {
+                if !matches!(
+                    error,
+                    HistoryError::GraphBudget { .. } | HistoryError::GraphIndex
+                ) {
                     return Err(error);
                 }
                 drop(pair);
@@ -553,7 +556,7 @@ impl RuleRuntime {
             progress::pair_frame(old(self).pair, final(self).pair),
             final(self).spec_store() == old(self).spec_store(),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_internal_error(result),
+            language::no_invariant_failure(result),
             result is Err ==> final(self).cursors@ == old(self).cursors@,
             final(self).snapshots@ == old(self).snapshots@
                 || final(self).snapshots@ == old(self).snapshots@.insert((stored.id(), stored.revision()),
@@ -659,7 +662,7 @@ impl RuleRuntime {
         requires resume_requires(*old(self), *bindings, *stored, target_len),
         ensures resume_ensures(*old(self), *final(self), result, *bindings, *stored, target_len),
     )]
-    pub fn resume_cursor(
+    pub(crate) fn resume_cursor(
         &mut self,
         bindings: &Bindings,
         stored: &StoredHistory,
@@ -729,7 +732,7 @@ impl RuleRuntime {
             *bindings, *stored, target_len, batch_size, result),
             result != Err(HistoryError::WrongHistoryOwner),
     )]
-    pub fn advance_cursor<L: Limits>(
+    pub(crate) fn advance_cursor<L: Limits>(
         &mut self,
         cursor: &mut BatchCursor,
         bindings: &Bindings,
@@ -898,7 +901,7 @@ impl BatchCursor {
             crate::progress::verify::pair_frame(*old(pair), *final(pair)),
             result != Err(HistoryError::WrongHistoryOwner),
             batch_size > 0 && old(self).consumed <= target_len && target_len <= events@.len()
-                ==> language::no_internal_error(result),
+                ==> language::no_invariant_failure(result),
             result is Err ==> final(self).consumed == old(self).consumed
                 && final(self).residual == old(self).residual,
             result is Ok ==> old(self).consumed <= final(self).consumed
@@ -973,7 +976,7 @@ impl BatchCursor {
         proof! {
             model::lemma_graph_wf_elim(entry.store.graph());
             model::lemma_lift_regex_stable(entry.store.graph(), (*pair).store.graph(), entry.root@);
-            history_algebra::theorem_batch_extends_pinned_prefix(
+            history_algebra::lemma_batch_extends_pinned_prefix(
                 entry.store.graph(), (*pair).store.graph(), bindings@,
                 entry.root@, entry_cursor.residual@, residual@, history_store::store::verify::events_view(events@),
                 entry_cursor.consumed as nat, end as nat,

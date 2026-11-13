@@ -12,5 +12,6 @@ pub mod finite_steps;
 pub mod finite_trans;
 pub mod history_algebra;
 pub mod history_examples;
+pub mod paper;
 pub mod refinement;
 pub mod typed_decision;

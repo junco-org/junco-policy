@@ -21,7 +21,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use history_syntax::Event as TypedEvent;
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use junco_core::limits::{Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
 use vstd::prelude::*;
@@ -117,7 +117,7 @@ impl StoredHistory {
     #[verus_spec(result =>
         ensures verify::stored_append_result(*old(self), *final(self), events@, result),
             result != Err(HistoryError::WrongHistoryOwner),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
     )]
     pub(crate) fn append_events<L: Limits>(
         &mut self,
@@ -235,7 +235,7 @@ impl<E: TypedEvent> History<E> {
     #[verus_spec(result =>
         requires books::store_wf(*store),
         ensures result matches Ok(history) ==> history_wf(history) && empty_history(history, store),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
     )]
     pub fn new(store: Arc<Store<E>>) -> Result<Self, HistoryError> {
         proof! { books::lemma_empty_snapshot(&*store); }
@@ -258,7 +258,7 @@ impl<E: TypedEvent> History<E> {
             reveal(<StoredHistory as View>::view);
             assert(crate::store::verify::events_view(numeric.events@) =~= Seq::empty());
             assert(numeric@ == empty);
-            if books::native_obligations::<E>() { books::lemma_empty_maps_wf::<E>(); }
+            if junco_core::spec::hypotheses::event_obligations::<E>() { books::lemma_empty_maps_wf::<E>(); }
         }
         Ok(Self {
             events: Vec::new(),
@@ -383,7 +383,7 @@ impl<E: TypedEvent> History<E> {
         let encoded = self.store.encode_event(&event);
         proof! {
             *self.maps = maps@;
-            if books::native_obligations::<E>() {
+            if junco_core::spec::hypotheses::event_obligations::<E>() {
                 lemma_correspondence_extends(before.events@, before.numeric.events@,
                     before.maps@, self.maps@);
             }
@@ -397,7 +397,7 @@ impl<E: TypedEvent> History<E> {
             assert(self.numeric.events@.last() == encoded);
             assert(stored_events(&self.numeric) == stored_events(&before.numeric) + seq![encoded]);
             assert(stored_append_result(before.numeric, self.numeric, seq![encoded], Ok(())));
-            if books::native_obligations::<E>() {
+            if junco_core::spec::hypotheses::event_obligations::<E>() {
                 assert forall|i: int| 0 <= i < self.events@.len() implies
                     books::event_encoded::<E>(self.maps@, self.events@[i], self.numeric.events@[i]) by {
                     if i < before.events@.len() {
@@ -412,7 +412,7 @@ impl<E: TypedEvent> History<E> {
             self.lifecycle.borrow_mut().advance(self.numeric@);
             assert(owner_frame(before, *self));
             assert(self.numeric.events@.drop_last() == before.numeric.events@);
-            if books::native_obligations::<E>() {
+            if junco_core::spec::hypotheses::event_obligations::<E>() {
                 assert(books::maps_extend::<E>(before.maps@, self.maps@));
             }
             assert(push_result(before, *self, event, Ok(())));
@@ -434,7 +434,7 @@ impl<E: TypedEvent> History<E> {
             if len < before.events@.len() {
                 assert(self.events@ == before.events@.take(len as int));
             }
-            if books::native_obligations::<E>() {
+            if junco_core::spec::hypotheses::event_obligations::<E>() {
                 assert forall|i: int| 0 <= i < self.events@.len() implies
                     books::event_encoded::<E>(self.maps@, self.events@[i], self.numeric.events@[i]) by {
                     assert(self.events@[i] == before.events@[i]);
@@ -621,7 +621,7 @@ impl<E: TypedEvent> Eq for History<E> {}
 #[cfg(verus_keep_ghost)]
 pub mod verify {
     use super::*;
-    use history_syntax::{Arity, event::specs::event_view};
+    use history_syntax::{Arity, spec::events::event_view};
     use junco_core::verify::history_specs::{
         HistoryStateView, history_mutation, lemma_revision_chain_preserves_prefix,
     };
@@ -739,7 +739,7 @@ pub mod verify {
             raw_events(history).len() == stored_events(history.spec_numeric()).len(),
             history.lifecycle_model().wf(), history.lifecycle_model().state() == (*history.spec_numeric())@,
             history.lifecycle_model().id() == history.registration_model().value(),
-            books::native_obligations::<E>() ==> books::maps_wf::<E>(history_maps(history))
+            junco_core::spec::hypotheses::event_obligations::<E>() ==> books::maps_wf::<E>(history_maps(history))
                 && books::snapshot_published::<E>(books::registry_id::<E>(&*store_of(history)), history_maps(history))
                 && correspondence(raw_events(history), stored_events(history.spec_numeric()), history_maps(history)),
     { reveal(history_wf); }
@@ -890,7 +890,7 @@ pub mod verify {
             store: books::registry_id::<E>(&*history.store),
             lifecycle: history.lifecycle@.id(),
         })
-        && (books::native_obligations::<E>() ==> books::maps_wf::<E>(history.maps@)
+        && (junco_core::spec::hypotheses::event_obligations::<E>() ==> books::maps_wf::<E>(history.maps@)
             && books::snapshot_published::<E>(books::registry_id::<E>(&history.store), history.maps@)
             && correspondence(history.events@, history.numeric.events@, history.maps@))
     }
@@ -925,10 +925,10 @@ pub mod verify {
         before: History<E>, after: History<E>, event: E, result: Result<(), HistoryError>,
     ) -> bool {
         history_wf(after) && owner_frame(before, after)
-        && (books::native_obligations::<E>() ==> junco_core::verify::history_specs::no_internal_error(result))
+        && (junco_core::spec::hypotheses::event_obligations::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(result))
         && after.numeric.revision == before.numeric.revision
         && junco_core::verify::history_specs::history_mutation(before.numeric@, after.numeric@)
-        && (books::native_obligations::<E>() ==> books::maps_extend::<E>(before.maps@, after.maps@))
+        && (junco_core::spec::hypotheses::event_obligations::<E>() ==> books::maps_extend::<E>(before.maps@, after.maps@))
         && match result {
             Err(_) => state_frame(before, after),
             Ok(()) => after.events@ == before.events@.push(event)
@@ -995,7 +995,7 @@ pub mod verify {
         requires push_result(before, after, event, result),
         ensures history_wf(after), owner_frame(before, after), store_of(after) == store_of(before),
             after.spec_numeric().spec_revision() == before.spec_numeric().spec_revision(),
-            books::native_obligations::<E>() ==> junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::spec::hypotheses::event_obligations::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(result),
             result is Err ==> state_frame(before, after),
             result is Ok ==> raw_events(after) == raw_events(before).push(event),
     {}

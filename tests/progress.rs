@@ -412,6 +412,7 @@ fn foreign_and_future_checkpoints_are_rejected_before_mutation() {
 }
 
 /// Whether a [`Counted`] event is committed history or a probe.
+#[cfg(feature = "test-util")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Role {
     History,
@@ -419,12 +420,14 @@ enum Role {
 }
 
 /// Unique identity of one recorded event.
+#[cfg(feature = "test-util")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Sequence(u32);
 
 /// Caller event retaining full identity beyond its projected components.
 ///
 /// Full equality includes the role and sequence, so every recorded event is distinct.
+#[cfg(feature = "test-util")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Counted {
     role: Role,
@@ -434,6 +437,7 @@ struct Counted {
     doc: Doc,
 }
 
+#[cfg(feature = "test-util")]
 impl Event for Counted {
     type Component = LockComponent<Actor, Doc>;
     type Arity = history_syntax::N3;
@@ -455,6 +459,7 @@ impl Event for Counted {
     }
 }
 
+#[cfg(feature = "test-util")]
 fn recorded(sequence: u32, actor: Actor, action: Action, doc: Doc) -> Counted {
     Counted {
         role: Role::History,
@@ -465,6 +470,7 @@ fn recorded(sequence: u32, actor: Actor, action: Action, doc: Doc) -> Counted {
     }
 }
 
+#[cfg(feature = "test-util")]
 fn released(actor: Actor, doc: Doc) -> Counted {
     Counted {
         role: Role::Probe,
@@ -475,6 +481,7 @@ fn released(actor: Actor, doc: Doc) -> Counted {
     }
 }
 
+#[cfg(feature = "test-util")]
 #[test]
 fn evicted_cursor_rereads_history_and_keeps_its_verdict() {
     let rules = [prior_edit()];
@@ -646,6 +653,7 @@ fn lagging_rules_resume_independently_after_rollback() {
     );
 }
 
+#[cfg(feature = "test-util")]
 #[test]
 fn warm_permits_read_no_history_and_one_append_reads_one_event() {
     let rules = [Rule::new(

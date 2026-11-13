@@ -7,7 +7,7 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 use self::verify::{diagnostic_identity, policy_rule_diagnostic, policy_rule_source};
 use super::atoms::{PRINCIPAL_VAR, RESOURCE_VAR};
 #[cfg(verus_keep_ghost)]
-use history_syntax::verify::dsl::PatternView;
+use history_syntax::spec::events::PatternView;
 use history_syntax::{ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
@@ -101,7 +101,8 @@ pub(crate) fn pack_policy_rule<E: Event, C>(
 
 /// Builds a `Forbid` rule using the three-ary `(principal, action, resource)` convention.
 #[verus_verify]
-#[verus_spec(result => ensures
+#[verus_spec(result => requires history_syntax::spec::events::arity::<E>() == 3,
+    ensures
     policy_rule_source(result).mode == RuleMode::Forbid,
     policy_rule_source(result).head@ == seq![
         PatternView::Variable(seq!['p']), PatternView::Constant(action), PatternView::Variable(seq!['r']),

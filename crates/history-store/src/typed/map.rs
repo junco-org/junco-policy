@@ -1,8 +1,13 @@
 //! Native hashbrown leaves; representatives model Eq classes, not Rust identity.
+//!
+//! Keys are user component types, so user `Hash`/`Eq` code runs under the store lock. A panic
+//! there unwinds through the lock and is outside the trusted base: Verus assumes the lock
+//! invariant on re-entry, and the contracts below hold only for `Hash`/`Eq` that return
+//! (`key_laws`, R4, states the faithfulness they must also have).
 
 use core::hash::Hash;
 use hashbrown::HashMap;
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
@@ -18,17 +23,6 @@ pub(crate) struct NativeMap<K: Copy + Eq + Hash> {
 /// These are precisely the finite representatives stored by this native map.
 pub(crate) uninterp spec fn representatives<K: Copy + Eq + Hash>(map: NativeMap<K>) -> Seq<(K, u64)>;
 
-/// Native Hash/Eq coherence is an obligation, never inferred for opaque user types.
-pub(crate) uninterp spec fn hash_coherent<K: Copy + Eq + Hash>() -> bool;
-
-pub(crate) open(crate) spec fn key_obligations<K: Copy + Eq + Hash>() -> bool {
-    K::obeys_eq_spec() && hash_coherent::<K>()
-        && (forall|a: K| #[trigger] a.eq_spec(&a))
-        && (forall|a: K, b: K| #[trigger] a.eq_spec(&b) == b.eq_spec(&a))
-        && (forall|a: K, b: K, c: K| #[trigger] a.eq_spec(&b)
-            && #[trigger] b.eq_spec(&c) ==> a.eq_spec(&c))
-}
-
 impl<K: Copy + Eq + Hash> NativeMap<K> {
     #[verifier::external_body]
     pub(super) fn new() -> (result: Self)
@@ -39,7 +33,7 @@ impl<K: Copy + Eq + Hash> NativeMap<K> {
 
     #[verifier::external_body]
     pub(super) fn lookup(&self, key: &K) -> (result: Option<u64>)
-        ensures key_obligations::<K>() ==> match result {
+        ensures junco_core::spec::hypotheses::key_laws::<K>() ==> match result {
             Some(id) => exists|i: int| 0 <= i < representatives(*self).len()
                 && representatives(*self)[i].1 == id
                 && key.eq_spec(&representatives(*self)[i].0),
@@ -63,10 +57,10 @@ impl<K: Copy + Eq + Hash> NativeMap<K> {
 
     #[verifier::external_body]
     pub(super) fn insert_fresh(&mut self, key: K, id: u64)
-        requires key_obligations::<K>() ==> forall|i: int|
+        requires junco_core::spec::hypotheses::key_laws::<K>() ==> forall|i: int|
             0 <= i < representatives(*old(self)).len()
                 ==> !key.eq_spec(&representatives(*old(self))[i].0),
-        ensures key_obligations::<K>() ==>
+        ensures junco_core::spec::hypotheses::key_laws::<K>() ==>
             representatives(*final(self)) == representatives(*old(self)).push((key, id)),
     {
         self.inner.insert(key, id);

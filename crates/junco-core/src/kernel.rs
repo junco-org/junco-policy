@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-use super::error::HistoryError;
+use super::errors::HistoryError;
 use alloc::vec::Vec;
 use history_syntax::{MAX_ARITY, syntax::Component};
 use vstd::prelude::*;
@@ -9,7 +9,7 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::history_assumptions::*;
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_specs::no_internal_error;
+use crate::verify::history_specs::no_invariant_failure;
 #[cfg(verus_keep_ghost)]
 use verify::*;
 #[cfg(verus_keep_ghost)]
@@ -86,7 +86,7 @@ macro_rules! id {
             }
 
             #[verus_spec(result => ensures
-                                                self@ > usize::MAX || no_internal_error(result),
+                                                self@ > usize::MAX || no_invariant_failure(result),
                                                 match result {
                                                     Ok(index) => index as nat == self@,
                                                     Err(error) => self@ > usize::MAX as nat && error is Invariant,
@@ -99,10 +99,10 @@ macro_rules! id {
                 }
             }
             #[verus_spec(result => ensures
-                                                no_internal_error(result),
+                                                no_invariant_failure(result),
                                                 match result {
                                                     Ok(id) => id@ == index as nat,
-                                                    Err(error) => index as nat > u32::MAX as nat && error is GraphLimit,
+                                                    Err(error) => index as nat > u32::MAX as nat && error is GraphIndex,
                                                 },
                                             )]
             pub fn from_index(index: usize) -> KernelResult<Self> {
@@ -476,7 +476,7 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
-            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_internal_error(r),
+            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).valid_store() == old(self).valid_store(), final(self).restoration() == old(self).restoration();
     fn charge_aux(&mut self, bytes: usize) -> (r: KernelResult<()>)
@@ -485,7 +485,7 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
-            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_internal_error(r),
+            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
             old(self).valid_store() ==> final(self).valid_store(), final(self).restoration() == old(self).restoration();
     fn reserve_derivatives(&mut self, values: &mut Vec<Option<TransitionId>>, additional: usize)
@@ -495,7 +495,7 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
-            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_internal_error(r),
+            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).valid_store() == old(self).valid_store(), final(self).restoration() == old(self).restoration();
     fn reserve_atoms(&mut self, values: &mut Vec<TestId>, additional: usize)
@@ -505,7 +505,7 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
-            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_internal_error(r),
+            old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).valid_store() == old(self).valid_store(), final(self).restoration() == old(self).restoration();
     fn constants(&self) -> (r: Constants)
@@ -517,7 +517,7 @@ pub trait KernelStore: KernelStoreSpec {
             && v@ == self.graph().tests[id@ as int],
             self.errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             self.errors_are_non_invariant() && self.valid_store() && id@ < self.graph().tests.len()
-                ==> r is Ok && no_internal_error(r),
+                ==> r is Ok && no_invariant_failure(r),
             self.errors_are_non_invalid_policy() && self.valid_store() && id@ < self.graph().tests.len()
                 ==> !(r matches Err(HistoryError::InvalidPolicy { .. }));
     fn regex(&self, id: RegexId) -> (r: KernelResult<RegexView<'_>>)
@@ -525,7 +525,7 @@ pub trait KernelStore: KernelStoreSpec {
             && v@ == self.graph().regexes[id@ as int],
             self.errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             self.errors_are_non_invariant() && self.valid_store() && id@ < self.graph().regexes.len()
-                ==> r is Ok && no_internal_error(r),
+                ==> r is Ok && no_invariant_failure(r),
             self.errors_are_non_invalid_policy() && self.valid_store() && id@ < self.graph().regexes.len()
                 ==> !(r matches Err(HistoryError::InvalidPolicy { .. }));
     fn transition(&self, id: TransitionId) -> (r: KernelResult<TransitionView<'_>>)
@@ -533,7 +533,7 @@ pub trait KernelStore: KernelStoreSpec {
             && v@ == self.graph().transitions[id@ as int],
             self.errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             self.errors_are_non_invariant() && self.valid_store() && id@ < self.graph().transitions.len()
-                ==> r is Ok && no_internal_error(r),
+                ==> r is Ok && no_invariant_failure(r),
             self.errors_are_non_invalid_policy() && self.valid_store() && id@ < self.graph().transitions.len()
                 ==> !(r matches Err(HistoryError::InvalidPolicy { .. }));
     fn intern_test(&mut self, node: TestView<'_>) -> (r: KernelResult<TestId>)
@@ -543,7 +543,7 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
-            old(self).errors_are_non_invariant() ==> no_internal_error(r),
+            old(self).errors_are_non_invariant() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).restoration() == old(self).restoration(),
             final(self).valid_store(),
@@ -560,7 +560,7 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
-            old(self).errors_are_non_invariant() ==> no_internal_error(r),
+            old(self).errors_are_non_invariant() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).restoration() == old(self).restoration(),
             final(self).valid_store(),
@@ -576,7 +576,7 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
-            old(self).errors_are_non_invariant() ==> no_internal_error(r),
+            old(self).errors_are_non_invariant() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).restoration() == old(self).restoration(),
             final(self).valid_store(),
@@ -615,7 +615,7 @@ impl AtomSet {
         old(store).errors_are_non_invariant() && old(store).valid_store()
             && atom_ids_wf(old(store).graph(), ids@) && index < ids@.len()
             && previous == (if index == 0 { None } else { Some(ids@[index as int - 1]) })
-            ==> no_internal_error(result),
+            ==> no_invariant_failure(result),
         old(store).errors_are_non_invalid_policy() && old(store).valid_store()
             && atom_ids_wf(old(store).graph(), ids@) && index < ids@.len()
             && previous == (if index == 0 { None } else { Some(ids@[index as int - 1]) })
@@ -671,7 +671,7 @@ impl AtomSet {
         final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
         final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
         old(store).errors_are_non_invariant() && old(store).valid_store()
-            && atom_ids_wf(old(store).graph(), ids@) ==> no_internal_error(result),
+            && atom_ids_wf(old(store).graph(), ids@) ==> no_invariant_failure(result),
         old(store).errors_are_non_invalid_policy() && old(store).valid_store()
             && atom_ids_wf(old(store).graph(), ids@) ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
@@ -688,7 +688,7 @@ impl AtomSet {
                 store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
                 store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
                 old(store).errors_are_non_invariant() && old(store).valid_store()
-                    && atom_ids_wf(old(store).graph(), ids@) ==> no_internal_error(state),
+                    && atom_ids_wf(old(store).graph(), ids@) ==> no_invariant_failure(state),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store()
                     && atom_ids_wf(old(store).graph(), ids@) ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
@@ -746,7 +746,7 @@ impl TestId {
     #[verus_spec(result => ensures
         store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().tests.len()
-            ==> result is Ok && no_internal_error(result),
+            ==> result is Ok && no_invariant_failure(result),
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().tests.len()
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         match result {
@@ -772,7 +772,7 @@ impl RegexId {
     #[verus_spec(result => ensures
         store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().regexes.len()
-            ==> result is Ok && no_internal_error(result),
+            ==> result is Ok && no_invariant_failure(result),
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().regexes.len()
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         match result {
@@ -799,7 +799,7 @@ impl TransitionId {
     #[verus_spec(result => ensures
         store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().transitions.len()
-            ==> result is Ok && no_internal_error(result),
+            ==> result is Ok && no_invariant_failure(result),
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().transitions.len()
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         match result {
@@ -834,7 +834,7 @@ impl TestId {
         store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().tests.len()
             && test_node_child(store.graph().tests[self@ as int], index as nat) is Some
-            ==> result is Ok && no_internal_error(result),
+            ==> result is Ok && no_invariant_failure(result),
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().tests.len()
             && test_node_child(store.graph().tests[self@ as int], index as nat) is Some
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
@@ -863,7 +863,7 @@ impl RegexId {
         store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().regexes.len()
             && regex_node_child(store.graph().regexes[self@ as int].kind, index as nat) is Some
-            ==> result is Ok && no_internal_error(result),
+            ==> result is Ok && no_invariant_failure(result),
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().regexes.len()
             && regex_node_child(store.graph().regexes[self@ as int].kind, index as nat) is Some
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
@@ -894,7 +894,7 @@ impl TransitionId {
         store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().transitions.len()
             && transition_node_child(store.graph().transitions[self@ as int], index as nat) is Some
-            ==> result is Ok && no_internal_error(result),
+            ==> result is Ok && no_invariant_failure(result),
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().transitions.len()
             && transition_node_child(store.graph().transitions[self@ as int], index as nat) is Some
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
@@ -923,7 +923,7 @@ impl TransitionId {
         store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().transitions.len()
             && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) is Some
-            ==> result is Ok && no_internal_error(result),
+            ==> result is Ok && no_invariant_failure(result),
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().transitions.len()
             && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) is Some
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
@@ -1413,7 +1413,7 @@ pub mod verify {
     }
     pub open spec fn gsem(theta: Subst) -> spec_fn(Test, EventView) -> bool { |t: Test, e: EventView| test_holds(theta, t, e) }
     pub open spec fn regex_lang(g: Graph, theta: Subst, i: nat, word: Seq<EventView>) -> bool {
-        language::lang(gsem(theta), lift_regex(g, i), word)
+        language::numeric_lang(gsem(theta), lift_regex(g, i), word)
     }
     pub open spec fn atom_ids_wf(g: Graph, ids: Seq<TestId>) -> bool {
         strictly_increasing(test_ids(ids))

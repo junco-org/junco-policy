@@ -1,16 +1,22 @@
-//! Layer 0: policy semantics over typed component values (paper "Heads, tails, and
-//! policy decisions", `sec:rules`, Definition Rule status `def:status`; refinement, `sec:refinement`;
-//! coverage, redundancy, vacuity, appendix `app:policy-reduction`).
+//! Layer 0: proofs about the typed semantics and the policy questions of R2/R3
+//! (`junco_core::spec::{semantics, questions}`; paper `sec:rules`, `sec:policy`, appendix
+//! `app:policy-reduction`), plus the constants of a rule, which R6 reads.
 //!
 //! The valuation `θ` of the paper is the candidate itself; histories are oldest first and never
-//! contain the candidate. Tail and test semantics are the existing `junco_core::verify::dsl`
-//! semantics, whose component equality is `PartialEqSpec::eq_spec`. A policy is a finite sequence
-//! of rules; its order is irrelevant to every predicate below.
+//! contain the candidate. Component equality is `PartialEqSpec::eq_spec`. A policy is a finite
+//! sequence of rules; its order is irrelevant to every predicate below.
 use alloc::boxed::Box;
 use history_syntax::Comparison;
-use history_syntax::syntax::RuleMode;
-use history_syntax::verify::dsl::{HeadView, PatternView, RegexView, RuleView, TestView};
-use junco_core::verify::dsl as tdsl;
+use history_syntax::Event;
+use history_syntax::event::specs::EventSpec;
+use history_syntax::spec::events::{HeadView, PatternView, RegexView, RuleView, TestView};
+use junco_core::spec::questions::{
+    DomainsView, constants_union, covers, in_domains, pattern_constant, refines, regex_constant_at,
+    regex_constant_forest, regex_constants, rule_constants, test_constant_at, test_constant_forest,
+    test_constants,
+};
+use junco_core::spec::semantics as tdsl;
+use junco_core::spec::semantics::{policy_denies, rule_violated, rule_wf};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -18,179 +24,36 @@ verus! {
 
 broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
 
-/// The status of one rule for a candidate and a history (Definition Rule status, `def:status`).
-pub enum Status { NotFired, Satisfied, Violated }
-
-/// `mode = require` and the history is outside the tail, or `mode = forbid` and it is inside.
-pub open spec fn violated_by(mode: RuleMode, inside: bool) -> bool {
-    match mode { RuleMode::Require => !inside, RuleMode::Forbid => inside }
-}
-
-pub open spec fn rule_status<C: PartialEq>(
-    rule: RuleView<C>, candidate: Seq<C>, history: Seq<Seq<C>>,
-) -> Status {
-    if !tdsl::head_matches(rule.head, candidate) {
-        Status::NotFired
-    } else if violated_by(rule.mode, tdsl::lang(rule.tail, rule.head, candidate, history)) {
-        Status::Violated
-    } else {
-        Status::Satisfied
-    }
-}
-
-pub open spec fn rule_denies<C: PartialEq>(
-    rule: RuleView<C>, candidate: Seq<C>, history: Seq<Seq<C>>,
-) -> bool {
-    rule_status(rule, candidate, history) is Violated
-}
-
-/// A policy denies iff some rule is violated (`sec:rules`).
-pub open spec fn policy_denies<C: PartialEq>(
-    policy: Seq<RuleView<C>>, candidate: Seq<C>, history: Seq<Seq<C>>,
-) -> bool {
-    exists|i: int| 0 <= i < policy.len() && #[trigger] rule_denies(policy[i], candidate, history)
-}
-
-pub open spec fn policy_permits<C: PartialEq>(
-    policy: Seq<RuleView<C>>, candidate: Seq<C>, history: Seq<Seq<C>>,
-) -> bool {
-    !policy_denies(policy, candidate, history)
-}
-
-// ----- component domains -----
-
-/// The values a component ranges over: all values of its type (`None`), or a declared finite set.
-/// The paper assumes every domain infinite ("Product events and component tests", `sec:events`); declared finite domains are an
-/// implementation feature (`Domains::with_domain`) outside the paper's theorems.
-pub type DomainsView<C> = Seq<Option<Set<C>>>;
-
-pub open spec fn in_domain<T: PartialEq>(domain: Option<Set<T>>, value: T) -> bool {
-    match domain {
-        None => true,
-        Some(values) => exists|w: T| values.contains(w) && value.eq_spec(&w),
-    }
-}
-
-pub open spec fn event_in<C: PartialEq>(domains: DomainsView<C>, event: Seq<C>) -> bool {
-    1 <= domains.len() <= history_syntax::MAX_ARITY && event.len() == domains.len()
-        && forall|i: int| 0 <= i < domains.len() ==> in_domain(#[trigger] domains[i], event[i])
-}
-
-pub open spec fn history_in<C: PartialEq>(
-    domains: DomainsView<C>, history: Seq<Seq<C>>,
-) -> bool {
-    forall|i: int| 0 <= i < history.len() ==> #[trigger] event_in(domains, history[i])
-}
-
-/// Every domain is `None`: candidates and history events range over whole types.
-pub open spec fn all_unrestricted<C>(domains: DomainsView<C>) -> bool {
-    1 <= domains.len() <= history_syntax::MAX_ARITY
-        && forall|i: int| 0 <= i < domains.len() ==> #[trigger] domains[i] is None
-}
-
-/// `v` equals no member of `values`.
-pub open spec fn misses<T: PartialEq>(values: Set<T>, v: T) -> bool {
-    forall|w: T| values.contains(w) ==> !v.eq_spec(&w)
-}
-
-pub open spec fn has_missing<T: PartialEq>(values: Set<T>) -> bool {
-    exists|v: T| #[trigger] misses(values, v)
-}
-
-/// A type with infinitely many `eq_spec`-distinct values: every finite set misses one.
-pub open spec fn infinite_type<T: PartialEq>() -> bool {
-    forall|values: Set<T>| #[trigger] has_missing(values)
-}
-
-/// The paper's hypothesis (`sec:events`; assumed by Lemmas `lem:succ` and `lem:uniform` and
-/// Theorem Inclusion search correctness `thm:search`).
-pub open spec fn infinite_domains<C: PartialEq>(
-    domains: DomainsView<C>,
-) -> bool {
-    all_unrestricted(domains) && infinite_type::<C>()
-}
-
-// ----- well-formed rules -----
-
-/// Head variables have distinct names and every tail variable is the head variable of its own
-/// component (`sec:rules`, "a tail whose variables occur in h"; component-locality, `sec:events`).
-pub open spec fn rule_wf<C>(rule: RuleView<C>) -> bool {
-    1 <= rule.head.len() <= history_syntax::MAX_ARITY && tdsl::head_scoped(rule.head) && tdsl::regex_scoped(rule.tail, rule.head)
-}
-
-pub open spec fn head_tails_wf<C>(head: HeadView<C>, left: RegexView<C>, right: RegexView<C>) -> bool {
-    1 <= head.len() <= history_syntax::MAX_ARITY && tdsl::head_scoped(head) && tdsl::regex_scoped(left, head) && tdsl::regex_scoped(right, head)
-}
-
-// ----- policy questions (`sec:refinement`, appendix `app:policy-reduction`) -----
-
-/// `P ⊑ Q` over `domains`: every pair permitted by `P` is permitted by `Q`.
-pub open spec fn refines<C: PartialEq>(
-    domains: DomainsView<C>, p: Seq<RuleView<C>>, q: Seq<RuleView<C>>,
-) -> bool {
-    forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-        event_in(domains, candidate) && history_in(domains, history) && policy_permits(p, candidate, history)
-            ==> #[trigger] policy_permits(q, candidate, history)
-}
-
-/// `P` covers `rule`: every pair the rule denies is denied by some rule of `P`.
-pub open spec fn covers<C: PartialEq>(
-    domains: DomainsView<C>, p: Seq<RuleView<C>>, rule: RuleView<C>,
-) -> bool {
-    forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-        event_in(domains, candidate) && history_in(domains, history) && #[trigger] rule_denies(rule, candidate, history)
-            ==> policy_denies(p, candidate, history)
-}
-
-pub open spec fn never_denies<C: PartialEq>(
-    domains: DomainsView<C>, rule: RuleView<C>,
-) -> bool {
-    forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-        event_in(domains, candidate) && history_in(domains, history) ==> !#[trigger] rule_denies(rule, candidate, history)
-}
-
-/// The rule denies every candidate it matches, whatever the history.
-pub open spec fn always_denies<C: PartialEq>(
-    domains: DomainsView<C>, rule: RuleView<C>,
-) -> bool {
-    forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-        event_in(domains, candidate) && history_in(domains, history) && tdsl::head_matches(rule.head, candidate)
-            ==> #[trigger] rule_denies(rule, candidate, history)
-}
-
-/// For every candidate matching `head`, `L(left) ⊆ L(right)`; both tails read `head`'s variables.
-pub open spec fn tails_included<C: PartialEq>(
-    domains: DomainsView<C>, head: HeadView<C>, left: RegexView<C>, right: RegexView<C>,
-) -> bool {
-    forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-        event_in(domains, candidate) && history_in(domains, history) && tdsl::head_matches(head, candidate)
-            && #[trigger] tdsl::lang(left, head, candidate, history) ==> tdsl::lang(right, head, candidate, history)
-}
-
 // ----- theorem statements -----
 
 /// `P ⊑ Q` iff `P` covers every rule of `Q` (appendix `app:policy-reduction`).
-pub open spec fn stmt_refines_iff_covers<C: PartialEq>() -> bool {
-    forall|domains: DomainsView<C>, p: Seq<RuleView<C>>, q: Seq<RuleView<C>>|
-        #[trigger] refines(domains, p, q) <==> forall|i: int| 0 <= i < q.len() ==> covers(domains, p, #[trigger] q[i])
+pub open spec fn stmt_refines_iff_covers<E: Event>() -> bool {
+    forall|domains: DomainsView<E::Component>, p: Seq<RuleView<E::Component>>, q: Seq<RuleView<E::Component>>|
+        #[trigger] refines::<E>(domains, p, q) <==> forall|i: int| 0 <= i < q.len() ==> covers::<E>(domains, p, #[trigger] q[i])
 }
 
 /// Removing a covered rule changes no decision (appendix `app:policy-reduction`): with `others` the policy
 /// without the rule, the two policies deny the same pairs iff `others` covers the rule.
-pub open spec fn stmt_redundant_iff_covered<C: PartialEq>() -> bool {
-    forall|domains: DomainsView<C>, others: Seq<RuleView<C>>, rule: RuleView<C>|
-        #[trigger] covers(domains, others, rule) <==> forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-            event_in(domains, candidate) && history_in(domains, history)
-                ==> (#[trigger] policy_denies(others.push(rule), candidate, history) == policy_denies(others, candidate, history))
+pub open spec fn stmt_redundant_iff_covered<E: Event>() -> bool {
+    forall|domains: DomainsView<E::Component>, others: Seq<RuleView<E::Component>>, rule: RuleView<E::Component>|
+        #[trigger] covers::<E>(domains, others, rule) <==> forall|c: E, h: Seq<E>|
+            in_domains::<E>(domains, c, h)
+                ==> (#[trigger] policy_denies(others.push(rule), c, h) == policy_denies(others, c, h))
 }
 
 /// Genericity: semantics depends only on which values are equal and on equality with the
-/// rules' constants. Hence a property proved for every pair over an infinite domain holds for
-/// every pair over any type: map the finitely many values of a pair injectively into the infinite
-/// domain, fixing the constants. Stated for one rule; policies follow pointwise.
-pub open spec fn renaming_preserves<C: PartialEq>(f: spec_fn(C) -> C, fixed: Set<C>, values: ISet<C>) -> bool {
+/// rules' constants. Hence a property proved for every pair over one set of values holds for
+/// every pair over any other: map the finitely many values of a pair injectively, fixing the
+/// constants. Stated for one rule; policies follow pointwise.
+pub open spec fn renaming_preserves_eq<C: PartialEq>(f: spec_fn(C) -> C, fixed: Set<C>, values: ISet<C>) -> bool {
     &&& forall|x: C, y: C| values.contains(x) && values.contains(y) ==> (#[trigger] f(x).eq_spec(&#[trigger] f(y)) == x.eq_spec(&y))
     &&& forall|x: C, k: C| values.contains(x) && fixed.contains(k) ==> (#[trigger] f(x).eq_spec(&k) == #[trigger] x.eq_spec(&k))
+}
+
+/// A renaming that also keeps every value's coordinate tag.
+pub open spec fn renaming_preserves<E: Event>(f: spec_fn(E::Component) -> E::Component, fixed: Set<E::Component>, values: ISet<E::Component>) -> bool {
+    renaming_preserves_eq(f, fixed, values)
+        && forall|x: E::Component| values.contains(x) ==> E::coordinate_spec(#[trigger] f(x)) == E::coordinate_spec(x)
 }
 
 pub open spec fn rename_event<C>(f: Seq<spec_fn(C) -> C>, e: Seq<C>) -> Seq<C> {
@@ -208,26 +71,16 @@ pub open spec fn pair_values<C>(candidate: Seq<C>, history: Seq<Seq<C>>, coordin
             && #[trigger] history[i][coordinate] == x)
 }
 
-pub open spec fn stmt_genericity<C: PartialEq>() -> bool {
-    forall|rule: RuleView<C>, candidate: Seq<C>, history: Seq<Seq<C>>, f: Seq<spec_fn(C) -> C>|
+/// Rule violation (R2 `rule_violated_view`) is invariant under tag-preserving renamings of the
+/// pair's values that fix the rule's constants.
+pub open spec fn stmt_genericity<E: Event>() -> bool {
+    forall|rule: RuleView<E::Component>, candidate: Seq<E::Component>, history: Seq<Seq<E::Component>>, f: Seq<spec_fn(E::Component) -> E::Component>|
         rule_wf(rule) && candidate.len() == rule.head.len()
             && (forall|i: int| 0 <= i < history.len() ==> history[i].len() == candidate.len())
-            && renamings_preserve(f, rule_constants(rule),
+            && renamings_preserve::<E>(f, rule_constants(rule),
                 Seq::new(candidate.len(), |i: int| pair_values(candidate, history, i)))
-            ==> (rule_status(rule, candidate, history)
-                == #[trigger] rule_status(rule, rename_event(f, candidate), rename_history(f, history)))
-}
-
-pub open spec fn pattern_constant<C>(pattern: PatternView<C>) -> Set<C> {
-    match pattern { PatternView::Constant(c) => Set::empty().insert(c), PatternView::Variable(_) => Set::empty() }
-}
-
-/// A finite union, built from finite sets rather than an unrestricted comprehension.
-pub open spec fn constants_union<C>(sets: Seq<Set<C>>) -> Set<C>
-    decreases sets.len(),
-{
-    if sets.len() == 0 { Set::empty() }
-    else { constants_union(sets.drop_last()).union(sets.last()) }
+            ==> (tdsl::rule_violated_view(rule, candidate, history)
+                == #[trigger] tdsl::rule_violated_view(rule, rename_event(f, candidate), rename_history(f, history)))
 }
 
 pub proof fn lemma_constants_union<C>(sets: Seq<Set<C>>, i: int)
@@ -241,50 +94,6 @@ pub proof fn lemma_constants_union<C>(sets: Seq<Set<C>>, i: int)
     } else {
         assert(sets[i] == sets.last());
     }
-}
-
-pub open spec fn test_constant_at<C>(test: TestView<C>, coordinate: int) -> Set<C>
-    decreases test,
-{
-    match test {
-        TestView::True | TestView::False => Set::empty(),
-        TestView::Atom { pattern, .. } =>
-            if coordinate == pattern.component { pattern_constant(pattern.pattern) } else { Set::empty() },
-        TestView::And(cs) | TestView::Or(cs) => test_constant_forest(cs, coordinate),
-    }
-}
-
-pub open spec fn test_constant_forest<C>(tests: Seq<TestView<C>>, coordinate: int) -> Set<C>
-    decreases tests,
-{
-    if tests.len() == 0 { Set::empty() }
-    else { test_constant_forest(tests.drop_last(), coordinate).union(test_constant_at(tests.last(), coordinate)) }
-}
-
-pub open spec fn test_constants<C>(test: TestView<C>, arity: nat) -> Seq<Set<C>> {
-    Seq::new(arity, |j: int| test_constant_at(test, j))
-}
-
-pub open spec fn regex_constant_at<C>(regex: RegexView<C>, coordinate: int) -> Set<C>
-    decreases regex,
-{
-    match regex {
-        RegexView::Empty | RegexView::All | RegexView::Epsilon => Set::empty(),
-        RegexView::Test(test) => test_constant_at(test, coordinate),
-        RegexView::Union(cs) | RegexView::Concat(cs) | RegexView::Intersect(cs) => regex_constant_forest(cs, coordinate),
-        RegexView::Star(child) | RegexView::Not(child) => regex_constant_at(*child, coordinate),
-    }
-}
-
-pub open spec fn regex_constant_forest<C>(regexes: Seq<RegexView<C>>, coordinate: int) -> Set<C>
-    decreases regexes,
-{
-    if regexes.len() == 0 { Set::empty() }
-    else { regex_constant_forest(regexes.drop_last(), coordinate).union(regex_constant_at(regexes.last(), coordinate)) }
-}
-
-pub open spec fn regex_constants<C>(regex: RegexView<C>, arity: nat) -> Seq<Set<C>> {
-    Seq::new(arity, |j: int| regex_constant_at(regex, j))
 }
 
 proof fn lemma_test_constant_forest_index<C>(tests: Seq<TestView<C>>, arity: nat, j: int)
@@ -360,103 +169,90 @@ pub proof fn lemma_regex_constants_index<C>(regex: RegexView<C>, arity: nat, j: 
         _ => {},
     }
 }
-
-pub open spec fn head_constants<C>(head: HeadView<C>) -> Seq<Set<C>> {
-    head.map(|i: int, pattern: PatternView<C>| pattern_constant(pattern))
-}
-
-/// Exact finite constants of the head and tail, separately at every coordinate.
-pub open spec fn rule_constants<C>(rule: RuleView<C>) -> Seq<Set<C>> {
-    Seq::new(rule.head.len(), |i: int|
-        regex_constants(rule.tail, rule.head.len())[i].union(head_constants(rule.head)[i]))
-}
-
-
 // ----- proofs -----
 
-/// Appending a rule to a policy adds exactly that rule's denials.
-pub proof fn lemma_policy_denies_push<C: PartialEq>(
-    policy: Seq<RuleView<C>>, rule: RuleView<C>, candidate: Seq<C>, history: Seq<Seq<C>>,
+/// Appending a rule to a policy adds exactly that rule's violations.
+pub proof fn lemma_policy_denies_push<E: Event>(
+    policy: Seq<RuleView<E::Component>>, rule: RuleView<E::Component>, c: E, h: Seq<E>,
 )
     ensures
-        policy_denies(policy.push(rule), candidate, history)
-            == (policy_denies(policy, candidate, history) || rule_denies(rule, candidate, history)),
+        policy_denies(policy.push(rule), c, h)
+            == (policy_denies(policy, c, h) || rule_violated(rule, c, h)),
 {
     let q = policy.push(rule);
-    if policy_denies(policy, candidate, history) {
-        let i = choose|i: int| 0 <= i < policy.len() && #[trigger] rule_denies(policy[i], candidate, history);
+    if policy_denies(policy, c, h) {
+        let i = choose|i: int| 0 <= i < policy.len() && #[trigger] rule_violated(policy[i], c, h);
         assert(q[i] == policy[i]);
-        assert(rule_denies(q[i], candidate, history));
+        assert(rule_violated(q[i], c, h));
     }
-    if rule_denies(rule, candidate, history) {
+    if rule_violated(rule, c, h) {
         let n = policy.len() as int;
         assert(q[n] == rule);
-        assert(rule_denies(q[n], candidate, history));
+        assert(rule_violated(q[n], c, h));
     }
-    if policy_denies(q, candidate, history) {
-        let i = choose|i: int| 0 <= i < q.len() && #[trigger] rule_denies(q[i], candidate, history);
+    if policy_denies(q, c, h) {
+        let i = choose|i: int| 0 <= i < q.len() && #[trigger] rule_violated(q[i], c, h);
         if i < policy.len() {
             assert(q[i] == policy[i]);
-            assert(rule_denies(policy[i], candidate, history));
+            assert(rule_violated(policy[i], c, h));
         }
     }
 }
 
-pub proof fn theorem_refines_iff_covers<C: PartialEq>()
-    ensures stmt_refines_iff_covers::<C>(),
+pub proof fn theorem_refines_iff_covers<E: Event>()
+    ensures stmt_refines_iff_covers::<E>(),
 {
-    assert forall|domains: DomainsView<C>, p: Seq<RuleView<C>>, q: Seq<RuleView<C>>|
-        #[trigger] refines(domains, p, q) <==> forall|i: int| 0 <= i < q.len() ==> covers(domains, p, #[trigger] q[i])
+    assert forall|domains: DomainsView<E::Component>, p: Seq<RuleView<E::Component>>, q: Seq<RuleView<E::Component>>|
+        #[trigger] refines::<E>(domains, p, q) <==> forall|i: int| 0 <= i < q.len() ==> covers::<E>(domains, p, #[trigger] q[i])
     by {
-        if refines(domains, p, q) {
-            assert forall|i: int| 0 <= i < q.len() implies covers(domains, p, #[trigger] q[i]) by {
-                assert forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-                    event_in(domains, candidate) && history_in(domains, history)
-                        && #[trigger] rule_denies(q[i], candidate, history)
-                    implies policy_denies(p, candidate, history) by {
-                    assert(policy_denies(q, candidate, history));
-                    assert(!policy_permits(q, candidate, history));
+        if refines::<E>(domains, p, q) {
+            assert forall|i: int| 0 <= i < q.len() implies covers::<E>(domains, p, #[trigger] q[i]) by {
+                assert forall|c: E, h: Seq<E>|
+                    in_domains::<E>(domains, c, h) && #[trigger] rule_violated(q[i], c, h)
+                    implies policy_denies(p, c, h) by {
+                    assert(policy_denies(q, c, h));
+                    assert(!tdsl::policy_permits(q, c, h));
                 }
             }
         }
-        if forall|i: int| 0 <= i < q.len() ==> covers(domains, p, #[trigger] q[i]) {
-            assert forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-                event_in(domains, candidate) && history_in(domains, history) && policy_permits(p, candidate, history)
-                implies #[trigger] policy_permits(q, candidate, history) by {
-                if policy_denies(q, candidate, history) {
-                    let i = choose|i: int| 0 <= i < q.len() && #[trigger] rule_denies(q[i], candidate, history);
-                    assert(covers(domains, p, q[i]));
+        if forall|i: int| 0 <= i < q.len() ==> covers::<E>(domains, p, #[trigger] q[i]) {
+            assert forall|c: E, h: Seq<E>|
+                in_domains::<E>(domains, c, h) && tdsl::policy_permits(p, c, h)
+                implies #[trigger] tdsl::policy_permits(q, c, h) by {
+                if policy_denies(q, c, h) {
+                    let i = choose|i: int| 0 <= i < q.len() && #[trigger] rule_violated(q[i], c, h);
+                    assert(covers::<E>(domains, p, q[i]));
                 }
             }
         }
     }
 }
 
-pub proof fn theorem_redundant_iff_covered<C: PartialEq>()
-    ensures stmt_redundant_iff_covered::<C>(),
+pub proof fn theorem_redundant_iff_covered<E: Event>()
+    ensures stmt_redundant_iff_covered::<E>(),
 {
-    assert forall|domains: DomainsView<C>, others: Seq<RuleView<C>>, rule: RuleView<C>|
-        #[trigger] covers(domains, others, rule) <==> forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-            event_in(domains, candidate) && history_in(domains, history)
-                ==> (#[trigger] policy_denies(others.push(rule), candidate, history) == policy_denies(others, candidate, history))
+    assert forall|domains: DomainsView<E::Component>, others: Seq<RuleView<E::Component>>, rule: RuleView<E::Component>|
+        #[trigger] covers::<E>(domains, others, rule) <==> forall|c: E, h: Seq<E>|
+            in_domains::<E>(domains, c, h)
+                ==> (#[trigger] policy_denies(others.push(rule), c, h) == policy_denies(others, c, h))
     by {
-        if covers(domains, others, rule) {
-            assert forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-                event_in(domains, candidate) && history_in(domains, history)
-                implies (#[trigger] policy_denies(others.push(rule), candidate, history)
-                    == policy_denies(others, candidate, history)) by {
-                lemma_policy_denies_push(others, rule, candidate, history);
+        if covers::<E>(domains, others, rule) {
+            assert forall|c: E, h: Seq<E>|
+                in_domains::<E>(domains, c, h)
+                implies (#[trigger] policy_denies(others.push(rule), c, h)
+                    == policy_denies(others, c, h)) by {
+                lemma_policy_denies_push(others, rule, c, h);
             }
         }
-        if forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-            event_in(domains, candidate) && history_in(domains, history)
-                ==> (#[trigger] policy_denies(others.push(rule), candidate, history) == policy_denies(others, candidate, history))
+        if forall|c: E, h: Seq<E>|
+            in_domains::<E>(domains, c, h)
+                ==> (#[trigger] policy_denies(others.push(rule), c, h) == policy_denies(others, c, h))
         {
-            assert forall|candidate: Seq<C>, history: Seq<Seq<C>>|
-                event_in(domains, candidate) && history_in(domains, history) && #[trigger] rule_denies(rule, candidate, history)
-                implies policy_denies(others, candidate, history) by {
-                lemma_policy_denies_push(others, rule, candidate, history);
-                assert(policy_denies(others.push(rule), candidate, history) == policy_denies(others, candidate, history));
+            assert forall|c: E, h: Seq<E>|
+                in_domains::<E>(domains, c, h) && #[trigger] rule_violated(rule, c, h)
+                implies policy_denies(others, c, h) by {
+                lemma_policy_denies_push(others, rule, c, h);
+                assert(policy_denies(others.push(rule), c, h) == policy_denies(others, c, h));
             }
         }
     }
@@ -473,11 +269,18 @@ pub open spec fn word_values_in<C>(w: Seq<Seq<C>>, values: Seq<ISet<C>>) -> bool
     forall|i: int| 0 <= i < w.len() ==> #[trigger] values_in(w[i], values)
 }
 
-pub open spec fn renamings_preserve<C: PartialEq>(
+pub open spec fn renamings_preserve_eq<C: PartialEq>(
     f: Seq<spec_fn(C) -> C>, fixed: Seq<Set<C>>, values: Seq<ISet<C>>,
 ) -> bool {
     f.len() == fixed.len() && values.len() == fixed.len()
-        && forall|i: int| 0 <= i < f.len() ==> renaming_preserves(#[trigger] f[i], fixed[i], values[i])
+        && forall|i: int| 0 <= i < f.len() ==> renaming_preserves_eq(#[trigger] f[i], fixed[i], values[i])
+}
+
+pub open spec fn renamings_preserve<E: Event>(
+    f: Seq<spec_fn(E::Component) -> E::Component>, fixed: Seq<Set<E::Component>>, values: Seq<ISet<E::Component>>,
+) -> bool {
+    f.len() == fixed.len() && values.len() == fixed.len()
+        && forall|i: int| 0 <= i < f.len() ==> renaming_preserves::<E>(#[trigger] f[i], fixed[i], values[i])
 }
 
 pub open spec fn rename_parts<C>(f: Seq<spec_fn(C) -> C>, parts: Seq<Seq<Seq<C>>>) -> Seq<Seq<Seq<C>>> {
@@ -486,9 +289,9 @@ pub open spec fn rename_parts<C>(f: Seq<spec_fn(C) -> C>, parts: Seq<Seq<Seq<C>>
 
 pub proof fn lemma_renaming_mono<T: PartialEq>(f: spec_fn(T) -> T, small: Set<T>, big: Set<T>, values: ISet<T>)
     requires
-        renaming_preserves(f, big, values),
+        renaming_preserves_eq(f, big, values),
         forall|x: T| #[trigger] small.contains(x) ==> big.contains(x),
-    ensures renaming_preserves(f, small, values),
+    ensures renaming_preserves_eq(f, small, values),
 {
     assert forall|x: T, k: T| values.contains(x) && small.contains(k)
         implies (#[trigger] f(x).eq_spec(&k) == #[trigger] x.eq_spec(&k)) by {
@@ -499,11 +302,11 @@ pub proof fn lemma_renaming_mono<T: PartialEq>(f: spec_fn(T) -> T, small: Set<T>
 pub proof fn lemma_renamings_mono<C: PartialEq>(
     f: Seq<spec_fn(C) -> C>, small: Seq<Set<C>>, big: Seq<Set<C>>, values: Seq<ISet<C>>,
 )
-    requires renamings_preserve(f, big, values), small.len() == big.len(),
+    requires renamings_preserve_eq(f, big, values), small.len() == big.len(),
         forall|i: int| 0 <= i < small.len() ==> #[trigger] small[i].subset_of(big[i]),
-    ensures renamings_preserve(f, small, values),
+    ensures renamings_preserve_eq(f, small, values),
 {
-    assert forall|i: int| 0 <= i < f.len() implies renaming_preserves(#[trigger] f[i], small[i], values[i]) by {
+    assert forall|i: int| 0 <= i < f.len() implies renaming_preserves_eq(#[trigger] f[i], small[i], values[i]) by {
         assert(small[i].subset_of(big[i]));
         assert forall|x: C| #[trigger] small[i].contains(x) implies big[i].contains(x) by {}
         lemma_renaming_mono(f[i], small[i], big[i], values[i]);
@@ -512,7 +315,7 @@ pub proof fn lemma_renamings_mono<C: PartialEq>(
 
 pub proof fn lemma_head_pattern_rename<T: PartialEq>(pattern: PatternView<T>, f: spec_fn(T) -> T, fixed: Set<T>, values: ISet<T>, x: T)
     requires
-        renaming_preserves(f, fixed, values),
+        renaming_preserves_eq(f, fixed, values),
         values.contains(x),
         forall|k: T| #[trigger] pattern_constant(pattern).contains(k) ==> fixed.contains(k),
     ensures tdsl::head_pattern_matches(pattern, f(x)) == tdsl::head_pattern_matches(pattern, x),
@@ -528,7 +331,7 @@ pub proof fn lemma_comparison_rename<T: PartialEq>(
     fixed: Set<T>, values: ISet<T>, c: T, e: T,
 )
     requires
-        renaming_preserves(f, fixed, values),
+        renaming_preserves_eq(f, fixed, values),
         values.contains(c),
         values.contains(e),
         forall|k: T| #[trigger] pattern_constant(pattern).contains(k) ==> fixed.contains(k),
@@ -551,7 +354,7 @@ pub proof fn lemma_test_rename<C: PartialEq>(
     test: TestView<C>, head: HeadView<C>, candidate: Seq<C>, event: Seq<C>,
     f: Seq<spec_fn(C) -> C>, values: Seq<ISet<C>>,
 )
-    requires renamings_preserve(f, test_constants(test, head.len()), values),
+    requires renamings_preserve_eq(f, test_constants(test, head.len()), values),
         values_in(candidate, values), values_in(event, values),
     ensures tdsl::test_sem(test, head, rename_event(f, candidate), rename_event(f, event))
         == tdsl::test_sem(test, head, candidate, event),
@@ -686,7 +489,7 @@ pub proof fn lemma_lang_rename<C: PartialEq>(
     f: Seq<spec_fn(C) -> C>, values: Seq<ISet<C>>,
 )
     requires
-        renamings_preserve(f, regex_constants(regex, head.len()), values),
+        renamings_preserve_eq(f, regex_constants(regex, head.len()), values),
         values_in(candidate, values),
         word_values_in(w, values),
     ensures
@@ -710,7 +513,7 @@ pub proof fn lemma_lang_rename<C: PartialEq>(
         },
         RegexView::Union(cs) | RegexView::Concat(cs) | RegexView::Intersect(cs) => {
             assert forall|i: int| 0 <= i < cs.len() implies
-                #[trigger] renamings_preserve(f, regex_constants(cs[i], head.len()), values) by {
+                #[trigger] renamings_preserve_eq(f, regex_constants(cs[i], head.len()), values) by {
                 assert forall|j: int| 0 <= j < head.len() implies
                     #[trigger] regex_constants(cs[i], head.len())[j].subset_of(regex_constants(regex, head.len())[j]) by {
                     lemma_regex_constants_index(regex, head.len(), j);
@@ -728,7 +531,7 @@ pub proof fn lemma_lang_rename<C: PartialEq>(
                     lemma_flatten_rename(f, parts);
                     let rp = rename_parts(f, parts);
                     assert forall|i: int| 0 <= i < cs.len() implies tdsl::lang(cs[i], head, rc, rp[i]) by {
-                        assert(renamings_preserve(f, regex_constants(cs[i], head.len()), values));
+                        assert(renamings_preserve_eq(f, regex_constants(cs[i], head.len()), values));
                         assert(word_values_in(parts[i], values));
                         lemma_lang_rename(cs[i], head, candidate, parts[i], f, values);
                     }
@@ -740,7 +543,7 @@ pub proof fn lemma_lang_rename<C: PartialEq>(
                     let parts = lemma_unflatten_rename(f, rparts, w);
                     lemma_flatten_values_in(parts, values);
                     assert forall|i: int| 0 <= i < cs.len() implies tdsl::lang(cs[i], head, candidate, parts[i]) by {
-                        assert(renamings_preserve(f, regex_constants(cs[i], head.len()), values));
+                        assert(renamings_preserve_eq(f, regex_constants(cs[i], head.len()), values));
                         assert(word_values_in(parts[i], values));
                         assert(rename_history(f, parts[i]) == rparts[i]);
                         lemma_lang_rename(cs[i], head, candidate, parts[i], f, values);
@@ -749,7 +552,7 @@ pub proof fn lemma_lang_rename<C: PartialEq>(
             } else {
                 assert forall|i: int| 0 <= i < cs.len() implies
                     tdsl::lang(cs[i], head, rc, rw) == tdsl::lang(cs[i], head, candidate, w) by {
-                    assert(renamings_preserve(f, regex_constants(cs[i], head.len()), values));
+                    assert(renamings_preserve_eq(f, regex_constants(cs[i], head.len()), values));
                     lemma_lang_rename(cs[i], head, candidate, w, f, values);
                 }
             }
@@ -764,7 +567,7 @@ proof fn lemma_lang_rename_star_not<C: PartialEq>(
 )
     requires
         regex == RegexView::Star(Box::new(b)) || regex == RegexView::Not(Box::new(b)),
-        renamings_preserve(f, regex_constants(regex, head.len()), values),
+        renamings_preserve_eq(f, regex_constants(regex, head.len()), values),
         values_in(candidate, values),
         word_values_in(w, values),
     ensures
@@ -804,19 +607,19 @@ proof fn lemma_lang_rename_star_not<C: PartialEq>(
     }
 }
 
-/// Status is invariant under renamings that preserve equality on the given values and with the
-/// rule's constants.
-pub proof fn lemma_status_rename<C: PartialEq>(
+/// Violation is invariant under renamings that preserve equality on the given values and with
+/// the rule's constants.
+pub proof fn lemma_violation_rename<C: PartialEq>(
     rule: RuleView<C>, candidate: Seq<C>, history: Seq<Seq<C>>,
     f: Seq<spec_fn(C) -> C>, values: Seq<ISet<C>>,
 )
     requires
-        renamings_preserve(f, rule_constants(rule), values),
+        renamings_preserve_eq(f, rule_constants(rule), values),
         values_in(candidate, values),
         word_values_in(history, values),
     ensures
-        rule_status(rule, candidate, history)
-            == rule_status(rule, rename_event(f, candidate), rename_history(f, history)),
+        tdsl::rule_violated_view(rule, candidate, history)
+            == tdsl::rule_violated_view(rule, rename_event(f, candidate), rename_history(f, history)),
 {
     let k = rule_constants(rule);
     assert forall|i: int| 0 <= i < rule.head.len() implies
@@ -840,16 +643,16 @@ pub proof fn lemma_pair_values_contains<C>(candidate: Seq<C>, history: Seq<Seq<C
         && #[trigger] history[j][coordinate] == x);
 }
 
-pub proof fn theorem_genericity<C: PartialEq>()
-    ensures stmt_genericity::<C>(),
+pub proof fn theorem_genericity<E: Event>()
+    ensures stmt_genericity::<E>(),
 {
-    assert forall|rule: RuleView<C>, candidate: Seq<C>, history: Seq<Seq<C>>, f: Seq<spec_fn(C) -> C>|
+    assert forall|rule: RuleView<E::Component>, candidate: Seq<E::Component>, history: Seq<Seq<E::Component>>, f: Seq<spec_fn(E::Component) -> E::Component>|
         rule_wf(rule) && candidate.len() == rule.head.len()
             && (forall|i: int| 0 <= i < history.len() ==> history[i].len() == candidate.len())
-            && renamings_preserve(f, rule_constants(rule),
+            && renamings_preserve::<E>(f, rule_constants(rule),
                 Seq::new(candidate.len(), |i: int| pair_values(candidate, history, i)))
-        implies (rule_status(rule, candidate, history)
-            == #[trigger] rule_status(rule, rename_event(f, candidate), rename_history(f, history))) by {
+        implies (tdsl::rule_violated_view(rule, candidate, history)
+            == #[trigger] tdsl::rule_violated_view(rule, rename_event(f, candidate), rename_history(f, history))) by {
         let values = Seq::new(candidate.len(), |i: int| pair_values(candidate, history, i));
         assert(values_in(candidate, values));
         assert forall|i: int| 0 <= i < history.len() implies #[trigger] values_in(history[i], values) by {
@@ -857,7 +660,8 @@ pub proof fn theorem_genericity<C: PartialEq>()
                 lemma_pair_values_contains(candidate, history, j, i);
             }
         }
-        lemma_status_rename(rule, candidate, history, f, values);
+        assert(renamings_preserve_eq(f, rule_constants(rule), values));
+        lemma_violation_rename(rule, candidate, history, f, values);
     }
 }
 

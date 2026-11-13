@@ -11,9 +11,12 @@ use history_syntax::{
     AtomPattern, Comparison, Component, ComponentPattern, Event, Head, N1, N2, N3, N4, N8,
     RegexExpr, Rule, RuleMode, TestExpr,
 };
+use junco_core::{CompileError, HistoryError};
 
 use crate::constraint::{Atom, Constraint, Operand, Universes, steps};
-use crate::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, Value};
+use crate::{
+    Components, Counterexample, DomainError, Domains, Inclusion, PolicyAnalyzer, RuleId, Value,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Action {
@@ -63,7 +66,9 @@ impl Event for Access {
 const X: u32 = 10;
 
 fn finite_actions() -> Domains<Access> {
-    Domains::infinite().with_domain(Component(1), ACTIONS.map(AccessComponent::Action))
+    Domains::infinite()
+        .with_domain(Component(1), &ACTIONS.map(AccessComponent::Action))
+        .expect("domain")
 }
 
 fn head() -> Head<Access> {
@@ -502,10 +507,12 @@ where
             } else {
                 1
             };
-            domains = domains.with_domain(
-                Component(coordinate as u8),
-                (0..count).map(|value| IndexedComponent { coordinate, value }),
-            );
+            let values: Vec<_> = (0..count)
+                .map(|value| IndexedComponent { coordinate, value })
+                .collect();
+            domains = domains
+                .with_domain(Component(coordinate as u8), &values)
+                .expect("domain");
         }
         let different_axis = RegexExpr::test(TestExpr::atom(
             Comparison::Neq,
@@ -560,15 +567,18 @@ fn eight_coordinate_inclusion_and_counterexamples() {
 }
 
 #[test]
-fn overflowing_eight_coordinate_register_product_is_exhausted() {
+fn overflowing_eight_coordinate_register_product_is_an_index_error() {
     // 256^8 exceeds usize::MAX on both 32- and 64-bit targets. The analyzer must check
-    // the whole product before reserving or enumerating any of its rows.
+    // the whole product before reserving or enumerating any of its rows, and an overflow is
+    // `GraphIndex`, never the budget verdict `Exhausted`.
     let mut domains = Domains::<IndexedEvent<8>>::infinite();
     for coordinate in 0..8 {
-        domains = domains.with_domain(
-            Component(coordinate as u8),
-            (0..256).map(|value| IndexedComponent { coordinate, value }),
-        );
+        let values: Vec<_> = (0..256)
+            .map(|value| IndexedComponent { coordinate, value })
+            .collect();
+        domains = domains
+            .with_domain(Component(coordinate as u8), &values)
+            .expect("domain");
     }
     let head = Head::new(VARIABLES.map(ComponentPattern::variable));
     let tail = RegexExpr::test(TestExpr::and((0..8).map(|coordinate| {
@@ -582,10 +592,8 @@ fn overflowing_eight_coordinate_register_product_is_exhausted() {
     })));
     let mut analyzer = PolicyAnalyzer::new(domains);
     assert_eq!(
-        analyzer
-            .tail_included(&head, &tail, &RegexExpr::empty())
-            .unwrap(),
-        Inclusion::Exhausted,
+        analyzer.tail_included(&head, &tail, &RegexExpr::empty()),
+        Err(CompileError::Runtime(HistoryError::GraphIndex)),
     );
 }
 
@@ -634,8 +642,10 @@ fn constants_remain_coordinate_separated_when_equality_ignores_tags() {
     let constant = |coordinate, value| UntaggedEqualityComponent { coordinate, value };
     assert_eq!(constant(0, 7), constant(1, 7));
     let domains = Domains::<UntaggedEqualityEvent>::infinite()
-        .with_domain(Component(0), [constant(0, 7), constant(0, 9)])
-        .with_domain(Component(1), [constant(1, 7), constant(1, 9)]);
+        .with_domain(Component(0), &[constant(0, 7), constant(0, 9)])
+        .expect("domain")
+        .with_domain(Component(1), &[constant(1, 7), constant(1, 9)])
+        .expect("domain");
     let head =
         Head::new((0..2).map(|coordinate| ComponentPattern::constant(constant(coordinate, 7))));
     let tail = RegexExpr::test(TestExpr::and((0..2).map(|coordinate| {
@@ -683,5 +693,51 @@ fn constants_remain_coordinate_separated_when_equality_ignores_tags() {
         &[Rule::new(RuleMode::Forbid, head, RegexExpr::empty())],
         &counterexample,
         concrete,
+    ));
+}
+
+#[test]
+fn declared_domains_reject_empty_foreign_and_out_of_arity() {
+    let domains = Domains::<Access>::infinite();
+    assert_eq!(
+        domains.clone().with_domain(Component(1), &[]).err(),
+        Some(DomainError::Empty)
+    );
+    assert_eq!(
+        domains
+            .clone()
+            .with_domain(Component(1), &[AccessComponent::Resource(1)])
+            .err(),
+        Some(DomainError::WrongCoordinate)
+    );
+    assert_eq!(
+        domains
+            .with_domain(Component(3), &[AccessComponent::Resource(1)])
+            .err(),
+        Some(DomainError::OutOfArity)
+    );
+}
+
+#[test]
+fn rule_ids_belong_to_their_analyzer() {
+    let rule = forbid(head(), ever(action_is(Comparison::Eq, Action::Edit)));
+    let mut first = PolicyAnalyzer::new(Domains::infinite());
+    let mut second = PolicyAnalyzer::new(Domains::infinite());
+    let id = first.add_rule(&rule).unwrap();
+    second.add_rule(&rule).unwrap();
+    assert_eq!(first.covered(id, &[id]).unwrap(), Inclusion::Holds);
+    assert!(matches!(
+        second.covered(id, &[]),
+        Err(HistoryError::UnknownId {
+            domain: "rule",
+            id: 0
+        })
+    ));
+    assert!(matches!(
+        first.redundant(RuleId(1, id.1), &[id]),
+        Err(HistoryError::UnknownId {
+            domain: "rule",
+            id: 1
+        })
     ));
 }

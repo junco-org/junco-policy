@@ -1,4 +1,4 @@
-//! Finiteness of normalized derivative states (paper Lemma `lem:finite-states`, Appendix A).
+//! Finiteness of normalized derivative states (paper Lemma `lem:finite-states`, appendix `app:finiteness`).
 //!
 //! The development is abstract: a [`Model`] packages a set of states, their shapes, the
 //! normalizing constructors `N(ΣX)`, `N(&X)`, `N(¬p)`, `N(p₁⋯pₖ)`, the test combination of
@@ -9,10 +9,12 @@
 //! intersection of *literals*. `lit(p, v)` and `prod(p, v)` hold when `v` is the value of a literal
 //! or of a product of the transition of `p` under some valuation and event.
 //!
-//! [`Model::contract`] states (N0)–(N5) and the successor equations (S0)–(S6) behind the paper's finiteness argument (appendix `app:finiteness`);
-//! under it, [`lemma_finite_states`] builds the paper's `C(q)` and [`theorem_finite_reachable`]
-//! bounds every state reachable from a state. Proofs follow the paper's case analysis and
-//! invariants (C1)–(C4); [`lemma_uset_nset`] is the union-closure step, [`lemma_uset_closed`]
+//! [`Model::contract`] states (N0)–(N5) and the successor equations (S0)–(S6). These numbers, the
+//! invariants (C1)–(C4) and the set `C(q)` are this development's; the paper's appendix
+//! `app:finiteness` describes the conditions in prose and calls `C(q)` `Bound(q)`. The table in
+//! `refinement/finiteness.rs` names each condition and its predicate below. Under the
+//! contract, [`lemma_finite_states`] builds `C(q)` and [`theorem_finite_reachable`] bounds every
+//! state reachable from a state. [`lemma_uset_nset`] is the union-closure step, [`lemma_uset_closed`]
 //! and [`lemma_dnf_closed`] are the successor-closure step, and [`lemma_cat_assoc`] is (N4′).
 //! [`lemma_contract_satisfiable`] shows the contract is consistent.
 //!
@@ -317,7 +319,8 @@ impl<S> Model<S> {
         &&& forall|p: S, v: S| self.st(p) && #[trigger] (self.prod)(p, v) ==> self.st(v) && self.prod_shape(p, v)
     }
 
-    /// Language-independent structural contract: (N0)–(N5) and the successor equations.
+    /// Language-independent structural contract: (N0)–(N5) and the successor equations (S0)–(S6),
+    /// named in the table of `refinement/finiteness.rs`.
     pub open spec fn contract(self) -> bool {
         &&& self.constants_ok()
         &&& self.substates_ok()
@@ -340,7 +343,7 @@ impl<S> Model<S> {
         forall|p: S, v: S| r.contains(p) && #[trigger] (self.succ)(p, v) ==> r.contains(v)
     }
 
-    /// (C2) relative to a target set `u` (the paper uses `u == y`): successors, literals, and
+    /// (C2) relative to a target set `u` (`good` uses `u == y`): successors, literals, and
     /// products of members of `y` lie in `u`.
     pub open spec fn vals_into(self, y: ISet<S>, u: ISet<S>) -> bool {
         &&& forall|p: S, v: S| y.contains(p) && #[trigger] (self.succ)(p, v) ==> u.contains(v)
@@ -362,12 +365,12 @@ impl<S> Model<S> {
             ==> u.contains((self.ncat)(seq![a] + (self.elems)(p).skip(i + 1)))
     }
 
-    /// (C4) relative to a target set `u` (the paper uses `u == r`).
+    /// (C4) relative to a target set `u` (`good` uses `u == r`).
     pub open spec fn r_lists_in(self, r: ISet<S>, u: ISet<S>) -> bool {
         forall|p: S| r.contains(p) && self.k(p) == Kind::List ==> #[trigger] self.list_in(p, u)
     }
 
-    /// (C1)–(C4).
+    /// (C1)–(C4), named in the table of `refinement/finiteness.rs`.
     pub open spec fn good(self, r: ISet<S>, q: S) -> bool {
         &&& r.finite()
         &&& r.contains(q) && self.has_consts(r)

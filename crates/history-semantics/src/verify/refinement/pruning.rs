@@ -1,9 +1,13 @@
-//! Layer 4: pruning (`sec:antichains`, appendix `app:antichains`).
+//! Layer 4: pruning (appendix `app:pruning`, Definition Pruning checks `def:pruning`, Lemma
+//! `lem:prune`; simulation, appendix `app:simulation`).
 //!
 //! The search may discard an item at insertion when `search::may_discard` holds. This layer
 //! states that the implemented checks (dead items, domination up to a sound simulation) imply it.
-//! The simulation rules are those of the current code (`history-analysis/src/simulation.rs`,
-//! uncommitted version), which extend the paper's Figure `fig:simulation`.
+//! The simulation rules are those of `history-analysis/src/simulation.rs`. They differ from Figure
+//! `fig:simulation`: the code reads `SumL`, `SumR`, `AndL` and `AndR` on lifted tests only when both
+//! sides are lifted tests (`test_step`), so its relation is smaller than the Figure's. The side
+//! conditions `k ≥ 2` and `a + b ≥ 1` are dropped. Soundness is proved; that the recursion decides
+//! the Figure's relation is not.
 use super::encoding::*;
 use super::inclusion::*;
 use super::search::*;
@@ -112,7 +116,7 @@ pub open spec fn padding_ok(ys: Seq<Regex<model::Test>>, a: nat, b: nat, len: na
         && forall|i: int| (0 <= i < a || ys.len() - b <= i < ys.len()) ==> #[trigger] ys[i] is All
 }
 
-/// One rule of the code's test simulation (`simulation.rs:278-332`).
+/// One rule of the code's test simulation (`Simulation::test_le` in `history-analysis/src/simulation.rs`).
 pub open spec fn test_step(tle: spec_fn(model::Test, model::Test) -> bool, x: model::Test, y: model::Test) -> bool {
     ||| x == y
     ||| y is True
@@ -157,14 +161,14 @@ pub proof fn lemma_union_ops_lang(theta: Subst, v: Regex<model::Test>, w: Seq<Ev
         Regex::Union(cs) => {
             language::lemma_lang_union(sem, cs, w);
             if n_lang(theta, v, w) {
-                let i = choose|i: int| 0 <= i < cs.len() && language::lang(sem, cs[i], w);
+                let i = choose|i: int| 0 <= i < cs.len() && language::numeric_lang(sem, cs[i], w);
                 assert(union_ops(v).contains(cs[i]));
                 assert(n_lang(theta, cs[i], w));
             }
             if exists|n: Regex<model::Test>| #[trigger] union_ops(v).contains(n) && n_lang(theta, n, w) {
                 let n = choose|n: Regex<model::Test>| #[trigger] union_ops(v).contains(n) && n_lang(theta, n, w);
                 let i = choose|i: int| 0 <= i < cs.len() && cs[i] == n;
-                assert(language::lang(sem, cs[i], w));
+                assert(language::numeric_lang(sem, cs[i], w));
             }
         },
         _ => {
@@ -191,7 +195,7 @@ pub proof fn lemma_inter_ops_lang(theta: Subst, q: Regex<model::Test>, w: Seq<Ev
                 n_lang(theta, q, w) ==> #[trigger] n_lang(theta, cs[i], w) by {}
             if forall|i: int| 0 <= i < cs.len() ==> #[trigger] n_lang(theta, cs[i], w) {
                 assert forall|i: int| 0 <= i < cs.len() implies
-                    language::lang(model::gsem(theta), cs[i], w) by {
+                    language::numeric_lang(model::gsem(theta), cs[i], w) by {
                     assert(n_lang(theta, cs[i], w));
                 }
             }
@@ -333,7 +337,7 @@ proof fn lemma_cat_parts(le: spec_fn(Regex<model::Test>, Regex<model::Test>) -> 
     assert(post.flatten() =~= Seq::<EventView>::empty());
     assert(all.flatten() =~= w);
     assert(all.len() == ys.len());
-    assert forall|i: int| 0 <= i < ys.len() implies language::lang(model::gsem(theta), ys[i], all[i]) by {
+    assert forall|i: int| 0 <= i < ys.len() implies language::numeric_lang(model::gsem(theta), ys[i], all[i]) by {
         if i < a {
             assert(ys[i] is All);
         } else if i < a + xs.len() {
@@ -364,7 +368,7 @@ proof fn lemma_cat_padded_sound(le: spec_fn(Regex<model::Test>, Regex<model::Tes
     match x {
         Regex::Concat(cs) => {
             let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == cs.len() && w == parts.flatten()
-                && forall|i: int| 0 <= i < cs.len() ==> language::lang(sem, cs[i], parts[i]);
+                && forall|i: int| 0 <= i < cs.len() ==> language::numeric_lang(sem, cs[i], parts[i]);
             assert forall|i: int| 0 <= i < xs.len() implies #[trigger] n_lang(theta, xs[i], parts[i]) by {}
             lemma_cat_parts(le, xs, ys, a, b, parts, theta, w);
         },
@@ -394,7 +398,7 @@ pub proof fn lemma_sim_step_sound(le: spec_fn(Regex<model::Test>, Regex<model::T
         }
         if x matches Regex::Union(cs) && forall|i: int| 0 <= i < cs.len() ==> #[trigger] le(cs[i], y) {
             let cs = x->Union_0;
-            let i = choose|i: int| 0 <= i < cs.len() && language::lang(sem, cs[i], w);
+            let i = choose|i: int| 0 <= i < cs.len() && language::numeric_lang(sem, cs[i], w);
             assert(le(cs[i], y));
             assert(lang_le(cs[i], y));
             assert(n_lang(theta, cs[i], w));
@@ -410,12 +414,12 @@ pub proof fn lemma_sim_step_sound(le: spec_fn(Regex<model::Test>, Regex<model::T
             let cs = x->Intersect_0;
             let i = choose|i: int| 0 <= i < cs.len() && #[trigger] le(cs[i], y);
             assert(lang_le(cs[i], y));
-            assert(language::lang(sem, cs[i], w));
+            assert(language::numeric_lang(sem, cs[i], w));
             assert(n_lang(theta, cs[i], w));
         }
         if y matches Regex::Intersect(cs) && forall|i: int| 0 <= i < cs.len() ==> #[trigger] le(x, cs[i]) {
             let cs = y->Intersect_0;
-            assert forall|i: int| 0 <= i < cs.len() implies language::lang(sem, cs[i], w) by {
+            assert forall|i: int| 0 <= i < cs.len() implies language::numeric_lang(sem, cs[i], w) by {
                 assert(le(x, cs[i]));
                 assert(lang_le(x, cs[i]));
                 assert(n_lang(theta, cs[i], w));
@@ -440,8 +444,8 @@ pub proof fn lemma_sim_step_sound(le: spec_fn(Regex<model::Test>, Regex<model::T
             let b = *(y->Star_0);
             assert(lang_le(a, b));
             let parts = choose|parts: Seq<Seq<EventView>>| w == parts.flatten()
-                && forall|i: int| 0 <= i < parts.len() ==> language::lang(sem, a, parts[i]);
-            assert forall|i: int| 0 <= i < parts.len() implies language::lang(sem, b, parts[i]) by {
+                && forall|i: int| 0 <= i < parts.len() ==> language::numeric_lang(sem, a, parts[i]);
+            assert forall|i: int| 0 <= i < parts.len() implies language::numeric_lang(sem, b, parts[i]) by {
                 assert(n_lang(theta, a, parts[i]));
             }
         }

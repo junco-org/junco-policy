@@ -4,12 +4,18 @@
 //! reduction proved here is the equivalent rule-by-rule form that the analyzer uses.
 use super::encoding::*;
 use super::search::{Outcome, follows, outcome_ok};
-use super::semantics::violated_by;
 use crate::verify::finite_states::lemma_powerset_finite;
 use alloc::boxed::Box;
-use history_syntax::MAX_ARITY;
+use history_syntax::spec::events::{RegexView, RuleView, event_view};
 use history_syntax::syntax::{Component, RuleMode};
+use history_syntax::{Event, MAX_ARITY};
 use junco_core::kernel::verify as model;
+use junco_core::spec::questions::{
+    DomainsView, always_denies, forbid_all, in_domains, never_denies, refines,
+};
+use junco_core::spec::semantics::{
+    head_matches, history_view, lang, policy_denies, policy_permits, rule_violated, violated_by,
+};
 use junco_core::verify::history_specs as language;
 use junco_core::verify::history_specs::{EventView, Regex, Subst};
 use vstd::iset_lib::lemma_iset_subset_finite;
@@ -56,8 +62,9 @@ pub type Pairs = Set<(Component, nat)>;
 
 /// What every use of `Split(Γ; Π)` relies on (Definition Splitting, `def:split`): finitely many satisfiable
 /// cases, each entailing `Γ` and deciding `Π`, that partition the admissible valuations of `Γ`.
-/// The paper's `Split` (`paper_split`) is one such family; the implementation's `split` emits an
-/// equivalent one with at most `n + 1` cases per register (`constraint.rs:236-281`).
+/// The paper's `Split` (`paper_split`) is one such family; the implementation's `split`
+/// (`history-analysis/src/constraint.rs`) emits an equivalent one with at most `n + 1` cases per
+/// register.
 pub open spec fn split_ok(d: NDomains, g: Constraint, pi: Pairs, cases: Set<Constraint>) -> bool {
     &&& forall|g1: Constraint| #[trigger] cases.contains(g1) ==> satisfiable(d, g1) && entails(d, g1, g)
         && forall|p: (Component, nat)| pi.contains(p) ==> #[trigger] decides(d, g1, p.0, p.1)
@@ -84,7 +91,7 @@ pub open spec fn stmt_paper_split_ok() -> bool {
     forall|d: NDomains, g: Constraint, pi: Pairs| #[trigger] split_ok(d, g, pi, paper_split(d, g, pi))
 }
 
-// ----- constrained inclusion ("From policy refinement to constrained inclusion", `sec:policy`) -----
+// ----- constrained inclusion (not defined in the paper's body; used by appendix `app:mech-diff`, "Reducing refinement") -----
 
 /// `r ⊑_Γ s`.
 pub open spec fn included_under(d: NDomains, g: Constraint, r: Regex<model::Test>, s: Regex<model::Test>) -> bool {
@@ -103,7 +110,8 @@ pub open spec fn no_cex_shorter(d: NDomains, g: Constraint, r: Regex<model::Test
     forall|theta: Subst, w: Seq<EventView>| w.len() < n ==> !#[trigger] inclusion_cex(d, g, r, s, theta, w)
 }
 
-// ----- policy reduction (Proposition Policy reduction `prop:policy`, appendix `app:policy-reduction`) -----
+// ----- policy reduction, rule by rule over split cases. This replaces Proposition Refinement as
+// inclusion (`prop:policy`), which is not mechanized as stated; see appendix `app:mech-diff`. -----
 
 /// Head constraint `Γ_R`.
 pub open spec fn head_constraint(h: NHead) -> Constraint {
@@ -194,7 +202,9 @@ pub open spec fn stmt_policy_search_composition() -> bool {
 }
 
 /// `R` never denies iff `ρ_R ⊑_{Γ_R} ∅`; `R` denies every matching candidate and history iff
-/// `Univ ⊑_{Γ_R} ρ_R` (appendix `app:policy-reduction`; the vacuity checks in `analyzer.rs`).
+/// `Univ ⊑_{Γ_R} ρ_R`. These are constrained forms of the vacuity reductions of appendix
+/// `app:policy-reduction`, which use denial expressions. No executable vacuity query exists; the
+/// typed vacuity questions go through `at_least_as_strict` by `stmt_vacuity_via_refinement`.
 pub open spec fn stmt_vacuity_reductions() -> bool {
     forall|d: NDomains, rule: NRule| rule.head.len() == d.len() ==> {
         &&& (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) ==> !#[trigger] n_rule_denies(rule, theta, w))
@@ -202,6 +212,16 @@ pub open spec fn stmt_vacuity_reductions() -> bool {
         &&& (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) && n_head_matches(rule.head, theta)
                 ==> #[trigger] n_rule_denies(rule, theta, w))
             <==> #[trigger] included_under(d, head_constraint(rule.head), Regex::All, denial(rule))
+    }
+}
+
+/// Vacuity through refinement (decision 6, `app:policy-reduction`): a rule never denies iff the
+/// empty policy refines `[R]`, and denies every matching candidate iff `[R]` refines
+/// `[forbid head(R) Univ]`; both are `at_least_as_strict` queries.
+pub open spec fn stmt_vacuity_via_refinement<E: Event>() -> bool {
+    forall|d: DomainsView<E::Component>, r: RuleView<E::Component>| {
+        &&& #[trigger] never_denies::<E>(d, r) <==> refines::<E>(d, Seq::empty(), seq![r])
+        &&& #[trigger] always_denies::<E>(d, r) <==> refines::<E>(d, seq![r], seq![forbid_all(r.head)])
     }
 }
 
@@ -576,7 +596,7 @@ pub proof fn lemma_firing_lang(d: NDomains, p: Seq<NRule>, g1: Constraint, theta
     let ms = firing.map(|i: int, r: NRule| denial(r));
     assert(firing_denials(d, p, g1) == Regex::Union(ms));
     if n_lang(theta, firing_denials(d, p, g1), w) {
-        let i = choose|i: int| 0 <= i < ms.len() && language::lang(model::gsem(theta), ms[i], w);
+        let i = choose|i: int| 0 <= i < ms.len() && language::numeric_lang(model::gsem(theta), ms[i], w);
         let r = firing[i];
         assert(entails(d, g1, head_constraint(r.head)));
         assert(firing.contains(r));
@@ -589,7 +609,7 @@ pub proof fn lemma_firing_lang(d: NDomains, p: Seq<NRule>, g1: Constraint, theta
         assert(firing.contains(p[j]));
         let i = choose|i: int| 0 <= i < firing.len() && firing[i] == p[j];
         assert(ms[i] == denial(p[j]));
-        assert(language::lang(model::gsem(theta), ms[i], w));
+        assert(language::numeric_lang(model::gsem(theta), ms[i], w));
         language::lemma_lang_union(model::gsem(theta), ms, w);
     }
 }
@@ -855,6 +875,56 @@ pub proof fn theorem_vacuity_reductions()
                     ==> #[trigger] n_rule_denies(rule, theta, w))
                 <==> included_under(d, head_constraint(rule.head), Regex::All, denial(rule))) by {
         lemma_vacuity(d, rule);
+    }
+}
+
+pub proof fn theorem_vacuity_via_refinement<E: Event>()
+    ensures stmt_vacuity_via_refinement::<E>(),
+{
+    assert forall|d: DomainsView<E::Component>, r: RuleView<E::Component>|
+        #[trigger] never_denies::<E>(d, r) <==> refines::<E>(d, Seq::empty(), seq![r]) by {
+        let single = seq![r];
+        assert forall|c: E, h: Seq<E>| policy_denies(single, c, h) <==> rule_violated(r, c, h) by {
+            assert(single[0] == r);
+        }
+        assert(forall|c: E, h: Seq<E>| !policy_denies(Seq::<RuleView<E::Component>>::empty(), c, h));
+        if never_denies::<E>(d, r) {
+            assert forall|c: E, h: Seq<E>| in_domains::<E>(d, c, h) && policy_permits(Seq::empty(), c, h)
+                implies #[trigger] policy_permits(single, c, h) by {
+                assert(!rule_violated(r, c, h));
+            }
+        }
+        if refines::<E>(d, Seq::empty(), single) {
+            assert forall|c: E, h: Seq<E>| in_domains::<E>(d, c, h) implies !#[trigger] rule_violated(r, c, h) by {
+                assert(policy_permits(single, c, h));
+            }
+        }
+    }
+    assert forall|d: DomainsView<E::Component>, r: RuleView<E::Component>|
+        #[trigger] always_denies::<E>(d, r) <==> refines::<E>(d, seq![r], seq![forbid_all(r.head)]) by {
+        let single = seq![r];
+        let all = seq![forbid_all(r.head)];
+        assert forall|c: E, h: Seq<E>| policy_denies(single, c, h) <==> rule_violated(r, c, h) by {
+            assert(single[0] == r);
+        }
+        assert forall|c: E, h: Seq<E>| policy_denies(all, c, h) <==> head_matches(r.head, event_view(c)) by {
+            assert(all[0] == forbid_all(r.head));
+            assert(lang(RegexView::<E::Component>::All, r.head, event_view(c), history_view(h)));
+            assert(rule_violated(forbid_all(r.head), c, h) == head_matches(r.head, event_view(c)));
+        }
+        if always_denies::<E>(d, r) {
+            assert forall|c: E, h: Seq<E>| in_domains::<E>(d, c, h) && policy_permits(single, c, h)
+                implies #[trigger] policy_permits(all, c, h) by {
+                assert(!rule_violated(r, c, h));
+            }
+        }
+        if refines::<E>(d, single, all) {
+            assert forall|c: E, h: Seq<E>| in_domains::<E>(d, c, h) && head_matches(r.head, event_view(c))
+                implies #[trigger] rule_violated(r, c, h) by {
+                assert(policy_denies(all, c, h));
+                assert(!policy_permits(all, c, h));
+            }
+        }
     }
 }
 

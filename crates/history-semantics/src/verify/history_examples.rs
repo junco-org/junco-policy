@@ -10,6 +10,7 @@ use crate::runtime::RuleRuntime;
 use crate::runtime::verify::{self as cache, HistorySnapshots};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use history_store::cache::HistoryCursor;
 use history_store::history::StoredHistory;
 use history_store::store::{Event, HistoryStore};
@@ -93,10 +94,10 @@ pub proof fn prior_edit_grants_matching_release(principal: nat, resource: nat)
     assert(parts.flatten() =~= history);
     let children = prior_edit_tail()->Concat_0;
     assert forall|i: int| 0 <= i < children.len()
-        implies language::lang(src_sem(theta), children[i], parts[i]) by {
+        implies language::numeric_lang(src_sem(theta), children[i], parts[i]) by {
         assert(i == 0 || i == 1 || i == 2);
     }
-    assert(language::lang(src_sem(theta), prior_edit_tail(), history));
+    assert(language::numeric_lang(src_sem(theta), prior_edit_tail(), history));
     language::lemma_pair_lang_substitutions(release_head(), prior_edit_tail(),
         event(principal, 3, resource), history, theta);
 }
@@ -116,23 +117,23 @@ pub proof fn mandatory_field_neq_is_eq_complement(theta: Subst, field: Component
 { }
 
 pub proof fn empty_regex_lists_keep_their_identities(theta: Subst, history: Seq<EventView>)
-    ensures language::lang(src_sem(theta), Regex::Concat(Seq::empty()), history) == (history.len() == 0),
-        !language::lang(src_sem(theta), Regex::Union(Seq::empty()), history),
-        language::lang(src_sem(theta), Regex::Intersect(Seq::empty()), history),
+    ensures language::numeric_lang(src_sem(theta), Regex::Concat(Seq::empty()), history) == (history.len() == 0),
+        !language::numeric_lang(src_sem(theta), Regex::Union(Seq::empty()), history),
+        language::numeric_lang(src_sem(theta), Regex::Intersect(Seq::empty()), history),
 {
     algebra::lemma_parts_concat_nil(src_sem(theta), history);
 }
 
 pub proof fn regex_not_is_not_one_event_neq(theta: Subst, first: EventView, second: EventView)
-    ensures language::lang(src_sem(theta), Regex::Not(Box::new(Regex::Test(SrcTest::Bool(true)))), seq![first, second]),
-        !language::lang(src_sem(theta), Regex::Test(SrcTest::Bool(false)), seq![first, second]),
+    ensures language::numeric_lang(src_sem(theta), Regex::Not(Box::new(Regex::Test(SrcTest::Bool(true)))), seq![first, second]),
+        !language::numeric_lang(src_sem(theta), Regex::Test(SrcTest::Bool(false)), seq![first, second]),
 {
-    reveal_with_fuel(language::lang, 2);
+    reveal_with_fuel(language::numeric_lang, 2);
     assert(seq![first, second].len() == 2);
 }
 
 pub proof fn star_accepts_two_typed_events(theta: Subst, first: EventView, second: EventView)
-    ensures language::lang(src_sem(theta), Regex::Star(Box::new(Regex::Test(SrcTest::Bool(true)))), seq![first, second]),
+    ensures language::numeric_lang(src_sem(theta), Regex::Star(Box::new(Regex::Test(SrcTest::Bool(true)))), seq![first, second]),
 {
     let item = Regex::Test(SrcTest::Bool(true));
     algebra::lemma_parts_star_single(src_sem(theta), item, seq![first]);
@@ -153,7 +154,7 @@ pub(crate) fn fold_decision<L: Limits>(
         result matches Ok(answer) ==> answer == model::regex_lang(
             (*old(pair)).store.graph(), bindings@, residual@, history_store::store::verify::events_view(events@)),
 {
-    hide(language::lang);
+    hide(language::numeric_lang);
     hide(model::lift_regex);
     hide(model::test_holds);
     proof {
@@ -229,7 +230,7 @@ pub(crate) fn cached_decision<L: Limits>(
             old(runtime).pair.store.graph(), bindings@, old(runtime).pair.root@,
             stored@.events.take(target_len as int)),
 {
-    hide(language::lang);
+    hide(language::numeric_lang);
     hide(model::lift_regex);
     hide(model::test_holds);
     reveal(cache::runtime_wf);
@@ -298,7 +299,7 @@ pub(crate) fn template_cached_decision<L: Limits>(
         *template, template.root as nat, bindings@,
         stored@.events.take(target_len as int)),
 {
-    hide(language::lang);
+    hide(language::numeric_lang);
     hide(model::lift_regex);
     hide(model::test_holds);
     reveal(cache::constructor_result);
@@ -327,7 +328,7 @@ pub(crate) fn flat_template_cached_decision<L: Limits>(
             junco_core::verify::encoding::numeric_equality()),
         Some(accepted) => junco_core::flat::verify::head_matches(template.head@, candidate,
             junco_core::verify::encoding::numeric_equality())
-            && accepted == junco_core::flat::verify::lang(template.tests@, template.regexes@,
+            && accepted == junco_core::flat::verify::flat_lang(template.tests@, template.regexes@,
                 template.root as nat, candidate, word, junco_core::verify::encoding::numeric_equality()),
     },
 {
@@ -350,6 +351,57 @@ pub(crate) fn flat_template_cached_decision<L: Limits>(
             word, stored@.events.take(target_len as int), bindings@);
     }
     Ok(Some(accepted))
+}
+
+/// The crate-internal cursor API, driven once from a fresh store: resume, advance to the stored
+/// length, and read the answer against `runtime_accepts`.
+fn numeric_runtime_readiness<L: Limits>(bindings: &Bindings,
+    limits: &mut L, world: &mut ObservationWorld) -> Result<(), junco_core::HistoryError>
+    requires language::event_wf(bindings@, bindings@.len()),
+        1 <= bindings@.len() <= history_syntax::MAX_ARITY,
+{
+    let arity = bindings.arity();
+    let owner = HistoryStore::new(arity);
+    let store = history_store::store::borrow_numeric_owner(&owner);
+    let handle = owner.new_history(limits, world)?;
+    let record = store.history_record(&handle)?;
+    let guard = record.read();
+    let stored: &StoredHistory = &guard;
+    let target = stored.len();
+    let mut regexes = Vec::new();
+    regexes.push(junco_core::flat::FlatRegex::All);
+    let mut head = Vec::new();
+    while head.len() < arity
+        invariant head@.len() <= arity,
+            forall|i: int| 0 <= i < head@.len() ==> head@[i] == junco_core::flat::FlatHead::<u64>::Bind,
+        decreases arity - head@.len(),
+    {
+        head.push(junco_core::flat::FlatHead::<u64>::Bind);
+    }
+    let template = FlatPair {
+        head,
+        tests: Vec::new(), regexes, root: 0,
+    };
+    let mut state = RuleRuntime::new(&owner, &template, false, limits, world)?;
+    let ghost constructed = state;
+    proof {
+        cache::lemma_constructor_runtime_wf(state, owner, template);
+        cache::lemma_constructor_snapshot_compatible(state, owner, template, *stored);
+        cache::lemma_resume_requires(state, *bindings, *stored, target);
+    }
+    let mut cursor = state.resume_cursor(bindings, stored, target);
+    proof { cache::lemma_resume_can_advance(constructed, state, cursor, *bindings, *stored, target); }
+    let ghost before = state;
+    let ghost start = cursor;
+    let answer = state.advance_cursor(&mut cursor, bindings, stored, target, target, limits, world);
+    proof {
+        cache::lemma_advance_result_facts(before, state, start, cursor, *bindings, *stored, target, target, answer);
+        cache::lemma_runtime_frame_accepts(constructed, before, bindings@, stored@.events.take(target as int));
+        assert(answer matches Ok(Some(accepted)) ==>
+            accepted == cache::runtime_accepts(constructed, bindings@, stored@.events.take(target as int)));
+        assert(answer != Err(junco_core::HistoryError::WrongHistoryOwner));
+    }
+    Ok(())
 }
 
 }

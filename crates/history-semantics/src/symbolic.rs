@@ -24,7 +24,7 @@ use crate::verify::history_algebra as algebra;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use junco_core::bits::checked_shr;
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
 use junco_core::kernel::*;
@@ -46,7 +46,7 @@ broadcast use junco_core::kernel::verify::group_kernel_views;
 }
 
 #[verus_verify]
-#[verus_spec(result => ensures language::no_internal_error(result), !(result matches Err(HistoryError::InvalidPolicy { .. })),
+#[verus_spec(result => ensures language::no_invariant_failure(result), !(result matches Err(HistoryError::InvalidPolicy { .. })),
     match result {
         Ok(bytes) => bytes as int == count * vstd::layout::size_of::<Option<TransitionId>>(),
         Err(error) => error is AllocationFailed && count * vstd::layout::size_of::<Option<TransitionId>>() > usize::MAX,
@@ -87,7 +87,7 @@ impl DerivativeFactors {
             derivative_tasks_wf(store.graph(), old(tasks).view()),
         ensures derivative_tasks_wf(store.graph(), final(tasks).view()),
             store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-            store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+            store.errors_are_non_invariant() && store.valid_store() ==> language::no_invariant_failure(result),
             store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             old(tasks).view().is_prefix_of(final(tasks).view()),
             final(tasks).view().len() <= old(tasks).view().len() + self.count,
@@ -110,7 +110,7 @@ impl DerivativeFactors {
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant i <= self.count, derivative_tasks_wf(store.graph(), tasks.view()),
             model::graph_wf(store.graph()), derivative_factors_wf(store.graph(), self.root, self.count as nat, self.concat),
             store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
-            store.errors_are_non_invariant() && store.valid_store() ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+            store.errors_are_non_invariant() && store.valid_store() ==> (failure matches Some(error) ==> language::no_invariant_failure::<()>(Err(error))),
             store.errors_are_non_invalid_policy() && store.valid_store() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
             model::regex_node_wf_at(store.graph(), store.graph().regexes[self.root@ as int], self.root@),
             prefix == derivative_prefix(store.graph(), self.root, i as nat),
@@ -166,7 +166,7 @@ impl DerivativeFactors {
         requires model::graph_wf(store.graph()), start <= self.count,
             self.root@ < store.graph().regexes.len(), self.count == derivative_children_ids(store.graph(), self.root).len(),
         ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-            store.errors_are_non_invariant() && store.valid_store() ==> language::no_internal_error(result),
+            store.errors_are_non_invariant() && store.valid_store() ==> language::no_invariant_failure(result),
             store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(suffix) =>
             norm::regex_ids_valid(store.graph(), suffix.view())
@@ -181,7 +181,7 @@ impl DerivativeFactors {
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant start <= i <= self.count,
             model::graph_wf(store.graph()), self.root@ < store.graph().regexes.len(),
             store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
-            store.errors_are_non_invariant() && store.valid_store() ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+            store.errors_are_non_invariant() && store.valid_store() ==> (failure matches Some(error) ==> language::no_invariant_failure::<()>(Err(error))),
             store.errors_are_non_invalid_policy() && store.valid_store() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
             self.count == derivative_children_ids(store.graph(), self.root).len(),
             model::regex_node_wf_at(store.graph(), store.graph().regexes[self.root@ as int], self.root@),
@@ -230,7 +230,7 @@ impl DerivativeFactors {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-            old(store).errors_are_non_invariant() && derivative_dependencies_complete(old(store).graph(), self.root, cache@) ==> language::no_internal_error(result),
+            old(store).errors_are_non_invariant() && derivative_dependencies_complete(old(store).graph(), self.root, cache@) ==> language::no_invariant_failure(result),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), cache@),
@@ -328,7 +328,7 @@ impl DerivativeFactors {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-            old(store).errors_are_non_invariant() && derivative_dependencies_complete(old(store).graph(), self.root, cache@) ==> language::no_internal_error(result),
+            old(store).errors_are_non_invariant() && derivative_dependencies_complete(old(store).graph(), self.root, cache@) ==> language::no_invariant_failure(result),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), cache@),
@@ -357,7 +357,7 @@ impl DerivativeFactors {
                 store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
                 store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
                 old(store).errors_are_non_invalid_policy() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
-                old(store).errors_are_non_invariant() && derivative_dependencies_complete(entry, self.root, cache@) ==> language::no_internal_error(state),
+                old(store).errors_are_non_invariant() && derivative_dependencies_complete(entry, self.root, cache@) ==> language::no_invariant_failure(state),
                 old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
                 model::graph_wf(entry), self.root@ < entry.regexes.len(),
                 derivative_cache_wf(store.graph(), cache@), derivative_factors_wf(store.graph(), self.root, self.count as nat, self.concat),
@@ -418,7 +418,7 @@ impl DerivativeFactors {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-            old(store).errors_are_non_invariant() && (!finish || derivative_dependencies_complete(old(store).graph(), self.root, old(cache)@)) ==> language::no_internal_error(result),
+            old(store).errors_are_non_invariant() && (!finish || derivative_dependencies_complete(old(store).graph(), self.root, old(cache)@)) ==> language::no_invariant_failure(result),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(), final(cache)@ == old(cache)@,
             derivative_cache_wf(final(store).graph(), final(cache)@), derivative_tasks_wf(final(store).graph(), final(tasks).view()),
@@ -515,7 +515,7 @@ pub(crate) trait RegexDerivative: Sized {
             Ok(out) => id@ < cache@.len() && cache@[id@ as int] == Some(out), Err(_) => true,
         },
             result != Err(HistoryError::WrongHistoryOwner),
-            cache_complete(cache@, id@) ==> language::no_internal_error(result),
+            cache_complete(cache@, id@) ==> language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
     {
         match cache.get(id.index()?) {
@@ -539,7 +539,7 @@ pub(crate) trait RegexDerivative: Sized {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-            old(store).errors_are_non_invariant() && this@ < usize::MAX && (!finish || derivative_dependencies_complete(old(store).graph(), this, old(cache)@)) ==> language::no_internal_error(result),
+            old(store).errors_are_non_invariant() && this@ < usize::MAX && (!finish || derivative_dependencies_complete(old(store).graph(), this, old(cache)@)) ==> language::no_invariant_failure(result),
             cache_completions_preserved(old(cache)@, final(cache)@),
             old(cache)@.len() <= final(cache)@.len(),
             forall|i: int| #![trigger final(cache)@[i]]
@@ -570,7 +570,7 @@ pub(crate) trait RegexDerivative: Sized {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-            old(store).errors_are_non_invariant() && this@ < usize::MAX ==> language::no_internal_error(result),
+            old(store).errors_are_non_invariant() && this@ < usize::MAX ==> language::no_invariant_failure(result),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             derivative_cache_wf(final(store).graph(), final(cache)@),
@@ -597,7 +597,7 @@ fn grow_derivative_cache<G: KernelStore>(
         final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
         old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-        old(store).errors_are_non_invariant() && this@ < usize::MAX ==> language::no_internal_error(result),
+        old(store).errors_are_non_invariant() && this@ < usize::MAX ==> language::no_invariant_failure(result),
         derivative_cache_wf(final(store).graph(), final(cache)@),
         old(cache)@.is_prefix_of(final(cache)@),
         forall|i: int| 0 <= i < old(cache)@.len() ==> final(cache)@[i] == old(cache)@[i],
@@ -866,7 +866,7 @@ impl RegexDerivative for RegexId {
             store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
-            old(store).errors_are_non_invariant() && this@ < usize::MAX ==> language::no_internal_error(state),
+            old(store).errors_are_non_invariant() && this@ < usize::MAX ==> language::no_invariant_failure(state),
             state is Ok ==> derivative_tasks_ready(store.graph(), tasks.view(), cache@),
             state is Ok ==> cache_complete(cache@, this@) || tasks_contain(tasks.view(), this@),
             old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
@@ -899,7 +899,7 @@ impl RegexDerivative for RegexId {
 #[verus_verify]
 pub(crate) trait AtomTruth: Sized {
     #[verus_spec(result => ensures result.is_ok() == assignment_valid(this@.len(), words@),
-        result != Err(HistoryError::WrongHistoryOwner), assignment_valid(this@.len(), words@) ==> language::no_internal_error(result),
+        result != Err(HistoryError::WrongHistoryOwner), assignment_valid(this@.len(), words@) ==> language::no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })))]
     fn validate_assignment(this: &AtomSet, words: &[u64]) -> KernelResult<()>;
 
@@ -912,7 +912,7 @@ pub(crate) trait AtomTruth: Sized {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-            old(store).errors_are_non_invariant() && old(store).valid_store() && index < this@.len() ==> language::no_internal_error(result),
+            old(store).errors_are_non_invariant() && old(store).valid_store() && index < this@.len() ==> language::no_invariant_failure(result),
             result == Ok(None) ==> previous is None && !positive_atom_at(final(store).graph(), this@, primitive@, index),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             final(store).valid_store() == old(store).valid_store(),
@@ -937,7 +937,7 @@ pub(crate) trait AtomTruth: Sized {
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             old(store).errors_are_non_invariant() && old(store).valid_store() && model::graph_wf(old(store).graph())
-                && reach::has_positive(old(store).graph(), this@, primitive@) ==> language::no_internal_error(result),
+                && reach::has_positive(old(store).graph(), this@, primitive@) ==> language::no_invariant_failure(result),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             final(store).valid_store() == old(store).valid_store(),
             match result { Ok(i) => positive_atom_at(final(store).graph(), this@, primitive@, i), Err(_) => true },
@@ -953,7 +953,7 @@ pub(crate) trait AtomTruth: Sized {
     #[verus_spec(result => ensures match result {
         Ok(value) => index / 64 < words@.len() && value == truth_word_bit(words@, index as nat),
         Err(_) => index / 64 >= words@.len(),
-    }, result != Err(HistoryError::WrongHistoryOwner), index / 64 < words@.len() ==> language::no_internal_error(result),
+    }, result != Err(HistoryError::WrongHistoryOwner), index / 64 < words@.len() ==> language::no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })))]
     fn truth(words: &[u64], index: usize) -> KernelResult<bool>;
 }
@@ -1064,7 +1064,7 @@ impl AtomTruth for AtomSet {
                 store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
                 store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
-                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_internal_error(state),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(state),
                 index <= this@.len(), state == Ok(None) ==> forall|j: usize| j < index ==> !positive_atom_at(store.graph(), this@, primitive@, j),
                 old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
                 store.valid_store() == old(store).valid_store(), model::atom_ids_wf(store.graph(), this@),
@@ -1137,7 +1137,7 @@ pub(crate) trait TestEvaluate: Sized {
             count == test_children(store.graph(), id).len(), test_tasks_wf(store.graph(), old(tasks).view()),
         ensures test_tasks_wf(store.graph(), final(tasks).view()),
             store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-            store.errors_are_non_invariant() && store.valid_store() && (!finish || count <= old(values).view().len()) ==> language::no_internal_error(result),
+            store.errors_are_non_invariant() && store.valid_store() && (!finish || count <= old(values).view().len()) ==> language::no_invariant_failure(result),
             store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result is Ok ==> test_stack_result(store.graph(), old(tasks).view().push((id, finish)), old(values).view().len())
                 == test_stack_result(store.graph(), final(tasks).view(), final(values).view().len()),
@@ -1158,7 +1158,7 @@ pub(crate) trait TestEvaluate: Sized {
                 invariant i <= count, i <= old(values).view().len(),
                     store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
                     store.errors_are_non_invariant() && store.valid_store() && count <= old(values).view().len()
-                        ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+                        ==> (failure matches Some(error) ==> language::no_invariant_failure::<()>(Err(error))),
                     store.errors_are_non_invalid_policy() && store.valid_store() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
                     values.view() == old(values).view().take(old(values).view().len() - i),
                     out == bool_fold(old(values).view().skip(old(values).view().len() - i), and),
@@ -1208,7 +1208,7 @@ pub(crate) trait TestEvaluate: Sized {
             #[cfg_attr(verus_keep_ghost, verus_spec(
                 invariant remaining <= count, model::graph_wf(store.graph()), id@ < store.graph().tests.len(),
                     store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
-                    store.errors_are_non_invariant() && store.valid_store() ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+                    store.errors_are_non_invariant() && store.valid_store() ==> (failure matches Some(error) ==> language::no_invariant_failure::<()>(Err(error))),
                     store.errors_are_non_invalid_policy() && store.valid_store() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
                     count == test_children(store.graph(), id).len(), test_tasks_wf(store.graph(), scheduled_base),
                     test_tasks_wf(store.graph(), tasks.view()),
@@ -1294,7 +1294,7 @@ pub(crate) trait TestEvaluate: Sized {
             old(store).errors_are_non_invariant() && old(store).valid_store() && test_atoms_covered(old(store).graph(), this@, atoms@)
                 && assignment_valid(atoms@.len(), words@)
                 && test_stack_result(old(store).graph(), old(tasks).view().push((this, finish)), old(values).view().len()) is Some
-                ==> language::no_internal_error(result),
+                ==> language::no_invariant_failure(result),
             result is Ok ==> test_stack_result(old(store).graph(), old(tasks).view().push((this, finish)), old(values).view().len())
                 == test_stack_result(final(store).graph(), final(tasks).view(), final(values).view().len()),
             test_tasks_covered(old(store).graph(), old(tasks).view().push((this, finish)), atoms@) && result is Ok
@@ -1323,7 +1323,7 @@ pub(crate) trait TestEvaluate: Sized {
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             old(store).errors_are_non_invariant() && old(store).valid_store() && test_atoms_covered(old(store).graph(), this@, atoms@)
-                && assignment_valid(atoms@.len(), words@) ==> language::no_internal_error(result),
+                && assignment_valid(atoms@.len(), words@) ==> language::no_invariant_failure(result),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             result matches Ok(value) ==> forall|theta: Subst, event: EventView|
                 truth_words_realize(final(store).graph(), atoms@, words@, theta, event) ==>
@@ -1416,7 +1416,7 @@ impl TestEvaluate for TestId {
                 store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 old(store).errors_are_non_invariant() && old(store).valid_store() && test_atoms_covered(store.graph(), this@, atoms@)
-                    && assignment_valid(atoms@.len(), words@) ==> language::no_internal_error(state),
+                    && assignment_valid(atoms@.len(), words@) ==> language::no_invariant_failure(state),
                 state is Ok ==> test_stack_result(store.graph(), tasks.view(), values.view().len()) == Some(1),
                 test_atoms_covered(store.graph(), this@, atoms@) && state is Ok ==> test_tasks_covered(store.graph(), tasks.view(), atoms@),
                 old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
@@ -1454,7 +1454,7 @@ fn collect_append_factors<G: KernelStore>(
         count == transition_suffix(store.graph(), root).len(), old(xs).view().len() == 0,
     ensures norm::regex_ids_valid(store.graph(), final(xs).view()),
         store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-        store.errors_are_non_invariant() ==> language::no_internal_error(result),
+        store.errors_are_non_invariant() ==> language::no_invariant_failure(result),
         store.errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         result is Ok ==> model::regex_ids(final(xs).view()) == seq![head@] + transition_suffix(store.graph(), root),
 {
@@ -1468,7 +1468,7 @@ fn collect_append_factors<G: KernelStore>(
             head@ < store.graph().regexes.len(), count == transition_suffix(store.graph(), root).len(),
             model::transition_node_wf_at(store.graph(), store.graph().transitions[root@ as int], root@),
             store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
-            store.errors_are_non_invariant() ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+            store.errors_are_non_invariant() ==> (failure matches Some(error) ==> language::no_invariant_failure::<()>(Err(error))),
             store.errors_are_non_invalid_policy() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
             norm::regex_ids_valid(store.graph(), xs.view()),
             model::regex_ids(xs.view()) == seq![head@] + transition_suffix(store.graph(), root).take(i as int),
@@ -1509,7 +1509,7 @@ fn interpret_not<G: KernelStore>(
         final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
         old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-        old(store).errors_are_non_invariant() && (!finish || old(values).view().len() > 0) ==> language::no_internal_error(result),
+        old(store).errors_are_non_invariant() && (!finish || old(values).view().len() > 0) ==> language::no_invariant_failure(result),
         interp_tasks_wf(final(store).graph(), final(tasks).view()), norm::regex_ids_valid(final(store).graph(), final(values).view()),
         result is Ok ==> (if finish {
             final(tasks).view() == old(tasks).view() && final(values).view().len() == old(values).view().len()
@@ -1535,7 +1535,7 @@ fn interpret_not<G: KernelStore>(
 {
     hide(interp_run); hide(interp_stack_result); hide(interp_tasks_covered);
     hide(reach::atoms_wf); hide(test_atoms_covered);
-    hide(language::lang); hide(language::interp_transition);
+    hide(language::numeric_lang); hide(language::interp_transition);
     hide(model::test_holds); hide(model::lift_transition); hide(model::lift_regex);
     let ghost before = store.graph();
     let ghost pending = tasks.view();
@@ -1558,7 +1558,7 @@ fn interpret_not<G: KernelStore>(
                 interp_results_equiv(model::gsem(theta),
                     interp_run(store.graph(), pending.push((root, finish)), lifted_values(store.graph(), prior), theta, event),
                     interp_run(store.graph(), tasks.view(), lifted_values(store.graph(), values.view()), theta, event)) by {
-                assert forall|word: Seq<EventView>| language::lang(model::gsem(theta), language::Regex::Not(Box::new(model::lift_regex(store.graph(), value@))), word)
+                assert forall|word: Seq<EventView>| language::numeric_lang(model::gsem(theta), language::Regex::Not(Box::new(model::lift_regex(store.graph(), value@))), word)
                     == model::regex_lang(store.graph(), theta, values.view().last()@, word) by {
                     norm::regex_language_unfold(model::gsem(theta), language::Regex::Not(Box::new(model::lift_regex(store.graph(), value@))), word);
                 }
@@ -1638,7 +1638,7 @@ pub(crate) trait TransitionInterpret: Sized {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-            old(store).errors_are_non_invariant() && (!finish || count <= old(values).view().len()) ==> language::no_internal_error(result),
+            old(store).errors_are_non_invariant() && (!finish || count <= old(values).view().len()) ==> language::no_invariant_failure(result),
             result is Ok ==> interp_stack_result(old(store).graph(), old(tasks).view().push((id, finish)), old(values).view().len())
                 == interp_stack_result(final(store).graph(), final(tasks).view(), final(values).view().len()),
             forall|atoms: Seq<TestId>| interp_tasks_covered(old(store).graph(), old(tasks).view().push((id, finish)), atoms) && result is Ok
@@ -1679,19 +1679,19 @@ pub(crate) trait TransitionInterpret: Sized {
                         lifted_values(store.graph(), old(values).view().take(old(values).view().len() - count)).push(
                             regex_fold(lifted_values(store.graph(), old(values).view().skip(old(values).view().len() - count)), intersect))) by {
                     assert forall|word: Seq<EventView>| model::regex_lang(store.graph(), theta, out@, word)
-                        == language::lang(model::gsem(theta), regex_fold(lifted_values(store.graph(), selected), intersect), word) by {
+                        == language::numeric_lang(model::gsem(theta), regex_fold(lifted_values(store.graph(), selected), intersect), word) by {
                         regex_fold_ids(store.graph(), selected, intersect, theta, word);
                     }
                     assert(lifted_values(store.graph(), values.view())
                         =~= lifted_values(store.graph(), old(values).view().take(start as int)).push(model::lift_regex(store.graph(), out@)));
                     assert(selected =~= old(values).view().skip(start as int));
                     assert forall|i: int, word: Seq<EventView>| 0 <= i < values.view().len() implies
-                        language::lang(model::gsem(theta), lifted_values(store.graph(), values.view())[i], word)
-                            == language::lang(model::gsem(theta), lifted_values(store.graph(), old(values).view().take(start as int)).push(
+                        language::numeric_lang(model::gsem(theta), lifted_values(store.graph(), values.view())[i], word)
+                            == language::numeric_lang(model::gsem(theta), lifted_values(store.graph(), old(values).view().take(start as int)).push(
                                 regex_fold(lifted_values(store.graph(), selected), intersect))[i], word) by {
                         if i == start {
                             assert(model::regex_lang(store.graph(), theta, out@, word)
-                                == language::lang(model::gsem(theta), regex_fold(lifted_values(store.graph(), selected), intersect), word));
+                                == language::numeric_lang(model::gsem(theta), regex_fold(lifted_values(store.graph(), selected), intersect), word));
                         }
                     }
                 }
@@ -1730,7 +1730,7 @@ pub(crate) trait TransitionInterpret: Sized {
                     store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
                     store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
                     old(store).errors_are_non_invalid_policy() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
-                    old(store).errors_are_non_invariant() ==> (failure matches Some(error) ==> language::no_internal_error::<()>(Err(error))),
+                    old(store).errors_are_non_invariant() ==> (failure matches Some(error) ==> language::no_invariant_failure::<()>(Err(error))),
                     old(store).errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
                     norm::regex_ids_valid(store.graph(), values.view()),
                     count == transition_children(store.graph(), id).len(), interp_tasks_wf(store.graph(), scheduled_base),
@@ -1824,7 +1824,7 @@ pub(crate) trait TransitionInterpret: Sized {
             old(store).errors_are_non_invariant() && reach::atoms_wf(old(store).graph(), this@, atoms@)
                 && assignment_valid(atoms@.len(), words@)
                 && interp_stack_result(old(store).graph(), old(tasks).view().push((this, finish)), old(values).view().len()) is Some
-                ==> language::no_internal_error(result),
+                ==> language::no_invariant_failure(result),
             result is Ok ==> interp_stack_result(old(store).graph(), old(tasks).view().push((this, finish)), old(values).view().len())
                 == interp_stack_result(final(store).graph(), final(tasks).view(), final(values).view().len()),
             interp_tasks_covered(old(store).graph(), old(tasks).view().push((this, finish)), atoms@) && result is Ok
@@ -1852,7 +1852,7 @@ pub(crate) trait TransitionInterpret: Sized {
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             old(store).errors_are_non_invariant() && reach::atoms_wf(old(store).graph(), this@, atoms@)
-                && assignment_valid(atoms@.len(), truth_words@) ==> language::no_internal_error(result),
+                && assignment_valid(atoms@.len(), truth_words@) ==> language::no_invariant_failure(result),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             result matches Ok(id) ==> id@ < final(store).graph().regexes.len()
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>|
@@ -1880,7 +1880,7 @@ impl TransitionInterpret for TransitionId {
         hide(interp_stack_result); hide(interp_tasks_covered);
         hide(interp_run);
         hide(reach::atoms_wf); hide(test_atoms_covered);
-        hide(language::lang); hide(language::interp_transition);
+        hide(language::numeric_lang); hide(language::interp_transition);
         hide(model::test_holds); hide(model::lift_transition); hide(model::lift_regex);
         proof_decl! { let ghost before = store.graph(); let ghost pending = tasks.view(); let ghost prior = values.view(); }
         proof! { model::lemma_graph_transition_wf(store.graph(), this@); }
@@ -2064,7 +2064,7 @@ impl TransitionInterpret for TransitionId {
                 store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
                 store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
                 old(store).errors_are_non_invalid_policy() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
-                old(store).errors_are_non_invariant() && reach::atoms_wf(entry, this@, atoms@) ==> language::no_internal_error(state),
+                old(store).errors_are_non_invariant() && reach::atoms_wf(entry, this@, atoms@) ==> language::no_invariant_failure(state),
                 assignment_valid(atoms@.len(), truth_words@),
                 state is Ok ==> interp_stack_result(store.graph(), tasks.view(), values.view().len()) == Some(1),
                 reach::atoms_wf(entry, this@, atoms@) && state is Ok ==> interp_tasks_covered(store.graph(), tasks.view(), atoms@),
@@ -3248,7 +3248,7 @@ pub mod verify {
             let ctx = norm::TransitionContext { bindings: theta };
             norm::transition_lemma_context_sem(ctx);
             language::lemma_interp_intersect(model::gsem(theta), event, terms, word);
-            assert forall|i: int| 0 <= i < ids.len() implies language::lang(model::gsem(theta),
+            assert forall|i: int| 0 <= i < ids.len() implies language::numeric_lang(model::gsem(theta),
                 language::interp_transition(model::gsem(theta), event, terms[i]), word)
                     == norm::transition_lang(g, theta, ids[i], event, word) by {
                 assert(terms[i] == model::lift_transition(g, ids[i]@));
@@ -3272,9 +3272,9 @@ pub mod verify {
     pub proof fn lemma_derivative_correct_is_symbolic_derivative(g: model::Graph, root: nat, out: TransitionId, theta: Subst, event: EventView, word: Seq<EventView>)
         requires derivative_correct(g, root, out), language::event_wf(theta, theta.len()),
         ensures norm::transition_lang(g, theta, out, event, word)
-            == language::lang(model::gsem(theta), language::interp_transition(model::gsem(theta), event, algebra::symbolic_derivative(model::lift_regex(g, root))), word),
+            == language::numeric_lang(model::gsem(theta), language::interp_transition(model::gsem(theta), event, algebra::symbolic_derivative(model::lift_regex(g, root))), word),
     {
-        algebra::theorem_symbolic_derivative_correct(model::gsem(theta), event, model::lift_regex(g, root), word);
+        algebra::lemma_symbolic_derivative_correct(model::gsem(theta), event, model::lift_regex(g, root), word);
     }
 
     pub proof fn lemma_regex_graph_child_vocab(g: model::Graph, root: nat, child: nat)
@@ -3700,7 +3700,7 @@ pub mod verify {
         let cs = derivative_children_ids(g, root);
         let sem = model::gsem(theta);
         if concat {
-            language::lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, model::lift_regex(g, cs[index]))]
+            language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, model::lift_regex(g, cs[index]))]
                 + model::lift_regexes(g, cs.subrange(index + 1, cs.len() as int))), word)
         } else { model::regex_lang(g, theta, cs[index], seq![event] + word) }
     }
@@ -3736,7 +3736,7 @@ pub mod verify {
                     ==> derivative_factor_language(a, root, concat, i, theta, event, word)
                         == derivative_factor_language(b, root, concat, i, theta, event, word),
     {
-        hide(language::lang); hide(language::derivative); hide(language::interp_transition);
+        hide(language::numeric_lang); hide(language::derivative); hide(language::interp_transition);
         model::lemma_graph_wf_elim(a);
         model::lemma_graph_regex_wf(a, root@);
         model::lemma_lift_stable_under_extends(a, b);
@@ -3753,7 +3753,7 @@ pub mod verify {
             count <= derivative_children_ids(a, root).len(), derivative_results(a, root, concat, count, results),
         ensures derivative_results(b, root, concat, count, results),
     {
-        hide(language::lang); hide(language::derivative); hide(language::interp_transition);
+        hide(language::numeric_lang); hide(language::derivative); hide(language::interp_transition);
         hide(derivative_factor_language); hide(derivative_prefix);
         derivative_factor_stable(a, b, root);
         model::lemma_graph_wf_elim(a);
@@ -3775,7 +3775,7 @@ pub mod verify {
         requires model::graph_wf(a), model::graph_extends(a, b), derivative_correct(a, root, out),
         ensures derivative_correct(b, root, out),
     {
-        hide(language::lang); hide(language::interp_transition); hide(model::lift_regex); hide(model::lift_transition);
+        hide(language::numeric_lang); hide(language::interp_transition); hide(model::lift_regex); hide(model::lift_transition);
         model::lemma_graph_wf_elim(a);
         model::lemma_lift_regex_stable(a, b, root);
         model::lemma_lift_transition_stable(a, b, out@);
@@ -3802,7 +3802,7 @@ pub mod verify {
                 root@ < a.regexes.len() && count <= derivative_children_ids(a, root).len() && derivative_results(a, root, concat, count, results)
                     ==> derivative_results(b, root, concat, count, results),
     {
-        hide(language::lang); hide(language::derivative); hide(language::interp_transition);
+        hide(language::numeric_lang); hide(language::derivative); hide(language::interp_transition);
         hide(model::test_holds); hide(model::lift_regex); hide(model::lift_transition);
         hide(derivative_correct); hide(derivative_results); hide(derivative_prefix); hide(derivative_factor_language);
         model::lemma_graph_wf_elim(a);
@@ -3892,7 +3892,7 @@ pub mod verify {
                     == derivative_factor_language(g, root, concat, index as int, theta, event, word),
         ensures derivative_results(g, root, concat, index + 1, prior.push(out)),
     {
-        hide(language::lang); hide(language::derivative); hide(language::interp_transition);
+        hide(language::numeric_lang); hide(language::derivative); hide(language::interp_transition);
         hide(norm::transition_lang); hide(derivative_factor_language);
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>, intersect: bool|
             language::event_wf(theta, theta.len()) implies norm::transition_combo(g, theta, prior.push(out), event, word, intersect)
@@ -3956,7 +3956,7 @@ pub mod verify {
             ==> norm::transition_lang(g, theta, out, event, word)
                 == derivative_factor_language(g, root, true, index, theta, event, word),
     {
-        hide(language::lang); hide(language::derivative); hide(language::interp_transition);
+        hide(language::numeric_lang); hide(language::derivative); hide(language::interp_transition);
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             implies norm::transition_lang(g, theta, out, event, word)
                 == derivative_factor_language(g, root, true, index, theta, event, word) by {
@@ -3967,7 +3967,7 @@ pub mod verify {
             let tail = model::lift_regexes(g, model::regex_ids(suffix));
             language::lemma_concat_prepend(sem, actual, tail, word);
             language::lemma_concat_prepend(sem, expected, tail, word);
-            assert forall|w: Seq<EventView>| language::lang(sem, actual, w) == language::lang(sem, expected, w) by {
+            assert forall|w: Seq<EventView>| language::numeric_lang(sem, actual, w) == language::numeric_lang(sem, expected, w) by {
                 language::lemma_derivative_correct(sem, event, child, w);
                 assert(norm::transition_lang(g, theta, d, event, w)
                     == model::regex_lang(g, theta, derivative_children_ids(g, root)[index], seq![event] + w));
@@ -3978,13 +3978,13 @@ pub mod verify {
     pub open spec fn derivative_sum<L>(sem: spec_fn(L, EventView) -> bool, event: EventView, cs: Seq<language::Regex<L>>, word: Seq<EventView>) -> bool {
         exists|i: int| 0 <= i < cs.len()
             && (forall|j: int| 0 <= j < i ==> language::nullable(cs[j]))
-            && language::lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, cs[i])]
+            && language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, cs[i])]
                 + cs.subrange(i + 1, cs.len() as int)), word)
     }
 
     pub proof fn derivative_concat_sum<L>(sem: spec_fn(L, EventView) -> bool, event: EventView, bound: language::Regex<L>, cs: Seq<language::Regex<L>>, word: Seq<EventView>)
         requires forall|i: int| 0 <= i < cs.len() ==> is_smaller_than(cs[i], bound),
-        ensures language::lang(sem, language::derivative_concat(sem, event, bound, cs), word) == derivative_sum(sem, event, cs, word),
+        ensures language::numeric_lang(sem, language::derivative_concat(sem, event, bound, cs), word) == derivative_sum(sem, event, cs, word),
         decreases cs.len(),
     {
         if cs.len() > 0 {
@@ -3997,7 +3997,7 @@ pub mod verify {
             if derivative_sum(sem, event, cs, word) {
                 let i = choose|i: int| 0 <= i < cs.len()
                     && (forall|j: int| 0 <= j < i ==> language::nullable(cs[j]))
-                    && language::lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, cs[i])]
+                    && language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, cs[i])]
                         + cs.subrange(i + 1, cs.len() as int)), word);
                 if i > 0 {
                     assert(rest[i - 1] == cs[i]);
@@ -4006,11 +4006,11 @@ pub mod verify {
                     assert(derivative_sum(sem, event, rest, word));
                 }
             }
-            if language::lang(sem, head, word) { assert(derivative_sum(sem, event, cs, word)); }
+            if language::numeric_lang(sem, head, word) { assert(derivative_sum(sem, event, cs, word)); }
             if language::nullable(cs[0]) && derivative_sum(sem, event, rest, word) {
                 let i = choose|i: int| 0 <= i < rest.len()
                     && (forall|j: int| 0 <= j < i ==> language::nullable(rest[j]))
-                    && language::lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, rest[i])]
+                    && language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, rest[i])]
                         + rest.subrange(i + 1, rest.len() as int)), word);
                 assert(cs[i + 1] == rest[i]);
                 assert(cs.subrange(i + 2, cs.len() as int) =~= rest.subrange(i + 1, rest.len() as int));
@@ -4022,9 +4022,9 @@ pub mod verify {
 
     pub proof fn derivative_sum_correct<L>(sem: spec_fn(L, EventView) -> bool, event: EventView, root: language::Regex<L>, word: Seq<EventView>)
         requires root is Concat,
-        ensures derivative_sum(sem, event, root->Concat_0, word) == language::lang(sem, root, seq![event] + word),
+        ensures derivative_sum(sem, event, root->Concat_0, word) == language::numeric_lang(sem, root, seq![event] + word),
     {
-        hide(language::lang);
+        hide(language::numeric_lang);
         match root {
             language::Regex::Concat(cs) => {
                 assert forall|i: int| 0 <= i < cs.len() implies is_smaller_than(cs[i], root) by {}
@@ -4048,7 +4048,7 @@ pub mod verify {
                     == derivative_factor_combo(g, root, concat, derivative_children_ids(g, root).len(), intersect, theta, event, word),
         ensures derivative_correct(g, root@, out),
     {
-        hide(language::lang); hide(language::derivative); hide(language::interp_transition);
+        hide(language::numeric_lang); hide(language::derivative); hide(language::interp_transition);
         hide(model::lift_regex); hide(model::lift_transition);
         hide(language::nullable);
         norm::regex_unfold(g, root@);
@@ -4063,7 +4063,7 @@ pub mod verify {
                 == derivative_factor_combo(g, root, concat, cs.len(), intersect, theta, event, word));
             assert forall|i: int| 0 <= i < cs.len() implies
                 #[trigger] derivative_factor_language(g, root, false, i, theta, event, word)
-                    == language::lang(sem, rs[i], seq![event] + word) by {
+                    == language::numeric_lang(sem, rs[i], seq![event] + word) by {
                 assert(rs[i] == model::lift_regex(g, cs[i]));
             }
             if concat {
@@ -4090,7 +4090,7 @@ pub mod verify {
                 }
                 assert forall|i: int| 0 <= i < cs.len() implies
                     #[trigger] derivative_factor_language(g, root, true, i, theta, event, word)
-                        == language::lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, rs[i])]
+                        == language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, rs[i])]
                             + rs.subrange(i + 1, rs.len() as int)), word) by {
                     assert(rs[i] == model::lift_regex(g, cs[i]));
                     assert(model::lift_regexes(g, cs.subrange(i + 1, cs.len() as int)) == rs.subrange(i + 1, rs.len() as int));
@@ -4104,7 +4104,7 @@ pub mod verify {
                 if derivative_sum(sem, event, rs, word) {
                     let i = choose|i: int| 0 <= i < rs.len()
                         && (forall|j: int| 0 <= j < i ==> language::nullable(rs[j]))
-                        && language::lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, rs[i])]
+                        && language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, rs[i])]
                             + rs.subrange(i + 1, rs.len() as int)), word);
                     assert(0 <= i < cs.len());
                     assert(derivative_prefix(g, root, i as nat));
@@ -4121,17 +4121,17 @@ pub mod verify {
                 assert(derivative_factor_combo(g, root, false, cs.len(), true, theta, event, word)
                     == (forall|i: int| 0 <= i < cs.len() ==> derivative_factor_language(g, root, false, i, theta, event, word)));
                 if derivative_factor_combo(g, root, false, cs.len(), true, theta, event, word) {
-                    assert forall|i: int| 0 <= i < rs.len() implies language::lang(sem, rs[i], seq![event] + word) by {
+                    assert forall|i: int| 0 <= i < rs.len() implies language::numeric_lang(sem, rs[i], seq![event] + word) by {
                         assert(derivative_factor_language(g, root, false, i, theta, event, word));
                     }
                 }
-                if forall|i: int| 0 <= i < rs.len() ==> language::lang(sem, rs[i], seq![event] + word) {
+                if forall|i: int| 0 <= i < rs.len() ==> language::numeric_lang(sem, rs[i], seq![event] + word) {
                     assert forall|i: int| 0 <= i < cs.len() implies derivative_factor_language(g, root, false, i, theta, event, word) by {
-                        assert(language::lang(sem, rs[i], seq![event] + word));
+                        assert(language::numeric_lang(sem, rs[i], seq![event] + word));
                     }
                 }
                 assert(derivative_factor_combo(g, root, false, cs.len(), true, theta, event, word)
-                    == (forall|i: int| 0 <= i < rs.len() ==> language::lang(sem, rs[i], seq![event] + word)));
+                    == (forall|i: int| 0 <= i < rs.len() ==> language::numeric_lang(sem, rs[i], seq![event] + word)));
                 assert(norm::transition_lang(g, theta, out, event, word)
                     == model::regex_lang(g, theta, root@, seq![event] + word));
             } else {
@@ -4139,15 +4139,15 @@ pub mod verify {
                 assert(model::lift_regex(g, root@) == language::Regex::Union(rs));
                 if derivative_factor_combo(g, root, false, cs.len(), false, theta, event, word) {
                     let i = choose|i: int| 0 <= i < cs.len() && derivative_factor_language(g, root, false, i, theta, event, word);
-                    assert(language::lang(sem, rs[i], seq![event] + word));
+                    assert(language::numeric_lang(sem, rs[i], seq![event] + word));
                 }
-                if exists|i: int| 0 <= i < rs.len() && language::lang(sem, rs[i], seq![event] + word) {
-                    let i = choose|i: int| 0 <= i < rs.len() && language::lang(sem, rs[i], seq![event] + word);
+                if exists|i: int| 0 <= i < rs.len() && language::numeric_lang(sem, rs[i], seq![event] + word) {
+                    let i = choose|i: int| 0 <= i < rs.len() && language::numeric_lang(sem, rs[i], seq![event] + word);
                     assert(derivative_factor_language(g, root, false, i, theta, event, word));
                     assert(derivative_factor_combo(g, root, false, cs.len(), false, theta, event, word));
                 }
                 assert(derivative_factor_combo(g, root, false, cs.len(), false, theta, event, word)
-                    == (exists|i: int| 0 <= i < rs.len() && language::lang(sem, rs[i], seq![event] + word)));
+                    == (exists|i: int| 0 <= i < rs.len() && language::numeric_lang(sem, rs[i], seq![event] + word)));
                 assert(norm::transition_lang(g, theta, out, event, word)
                     == model::regex_lang(g, theta, root@, seq![event] + word));
             }
@@ -4187,7 +4187,7 @@ pub mod verify {
             out@ < g.transitions.len(), derivative_native_result(g, root, cache, out),
         ensures derivative_correct(g, root@, out),
     {
-        hide(language::lang); hide(language::derivative); hide(language::interp_transition);
+        hide(language::numeric_lang); hide(language::derivative); hide(language::interp_transition);
         hide(model::lift_regex); hide(model::lift_transition);
         norm::regex_unfold(g, root@);
         derivative_constants(g);
@@ -4209,7 +4209,7 @@ pub mod verify {
                     assert(model::lift_regexes(g, model::regex_ids(seq![root])) =~= tail);
                     language::lemma_concat_prepend(sem, actual, tail, word);
                     language::lemma_concat_prepend(sem, expected, tail, word);
-                    assert forall|w: Seq<EventView>| language::lang(sem, actual, w) == language::lang(sem, expected, w) by {
+                    assert forall|w: Seq<EventView>| language::numeric_lang(sem, actual, w) == language::numeric_lang(sem, expected, w) by {
                         language::lemma_derivative_correct(sem, event, model::lift_regex(g, inner), w);
                         assert(norm::transition_lang(g, theta, d, event, w)
                             == model::regex_lang(g, theta, inner, seq![event] + w));
@@ -4229,14 +4229,14 @@ pub mod verify {
                 assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     implies norm::transition_lang(g, theta, out, event, word)
                         == model::regex_lang(g, theta, root@, seq![event] + word) by {
-                    reveal(language::lang);
+                    reveal(language::numeric_lang);
                 }
             },
             model::RegexKindNode::Empty | model::RegexKindNode::All | model::RegexKindNode::Epsilon | model::RegexKindNode::Test(_) => {
                 assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     implies norm::transition_lang(g, theta, out, event, word)
                         == model::regex_lang(g, theta, root@, seq![event] + word) by {
-                    reveal(language::lang); reveal(language::interp_transition);
+                    reveal(language::numeric_lang); reveal(language::interp_transition);
                     assert((seq![event] + word).len() == 1 + word.len());
                     assert((seq![event] + word)[0] == event);
                 }
@@ -4730,7 +4730,7 @@ pub mod verify {
 
     pub open spec fn regex_stack_equiv(sem: spec_fn(model::Test, EventView) -> bool, left: Seq<InterpRegex>, right: Seq<InterpRegex>) -> bool {
         left.len() == right.len() && forall|i: int, word: Seq<EventView>| 0 <= i < left.len() ==>
-            language::lang(sem, left[i], word) == language::lang(sem, right[i], word)
+            language::numeric_lang(sem, left[i], word) == language::numeric_lang(sem, right[i], word)
     }
 
     pub open spec fn interp_results_equiv(sem: spec_fn(model::Test, EventView) -> bool, left: Option<Seq<InterpRegex>>, right: Option<Seq<InterpRegex>>) -> bool {
@@ -4790,31 +4790,31 @@ pub mod verify {
 
     pub proof fn regex_stack_fold_congruent(sem: spec_fn(model::Test, EventView) -> bool, left: Seq<InterpRegex>, right: Seq<InterpRegex>, intersect: bool)
         requires regex_stack_equiv(sem, left, right),
-        ensures forall|word: Seq<EventView>| language::lang(sem, regex_fold(left, intersect), word)
-            == language::lang(sem, regex_fold(right, intersect), word),
+        ensures forall|word: Seq<EventView>| language::numeric_lang(sem, regex_fold(left, intersect), word)
+            == language::numeric_lang(sem, regex_fold(right, intersect), word),
     {
-        assert forall|word: Seq<EventView>| language::lang(sem, regex_fold(left, intersect), word)
-            == language::lang(sem, regex_fold(right, intersect), word) by {
+        assert forall|word: Seq<EventView>| language::numeric_lang(sem, regex_fold(left, intersect), word)
+            == language::numeric_lang(sem, regex_fold(right, intersect), word) by {
             regex_fold_semantics(sem, left, intersect, word);
             regex_fold_semantics(sem, right, intersect, word);
             if !intersect {
-                if exists|i: int| 0 <= i < left.len() && language::lang(sem, left[i], word) {
-                    let i = choose|i: int| 0 <= i < left.len() && language::lang(sem, left[i], word);
-                    assert(language::lang(sem, right[i], word));
+                if exists|i: int| 0 <= i < left.len() && language::numeric_lang(sem, left[i], word) {
+                    let i = choose|i: int| 0 <= i < left.len() && language::numeric_lang(sem, left[i], word);
+                    assert(language::numeric_lang(sem, right[i], word));
                 }
-                if exists|i: int| 0 <= i < right.len() && language::lang(sem, right[i], word) {
-                    let i = choose|i: int| 0 <= i < right.len() && language::lang(sem, right[i], word);
-                    assert(language::lang(sem, left[i], word));
+                if exists|i: int| 0 <= i < right.len() && language::numeric_lang(sem, right[i], word) {
+                    let i = choose|i: int| 0 <= i < right.len() && language::numeric_lang(sem, right[i], word);
+                    assert(language::numeric_lang(sem, left[i], word));
                 }
             } else {
-                if language::lang(sem, regex_fold(left, true), word) {
-                    assert forall|i: int| 0 <= i < right.len() implies language::lang(sem, right[i], word) by {
-                        assert(language::lang(sem, left[i], word));
+                if language::numeric_lang(sem, regex_fold(left, true), word) {
+                    assert forall|i: int| 0 <= i < right.len() implies language::numeric_lang(sem, right[i], word) by {
+                        assert(language::numeric_lang(sem, left[i], word));
                     }
                 }
-                if language::lang(sem, regex_fold(right, true), word) {
-                    assert forall|i: int| 0 <= i < left.len() implies language::lang(sem, left[i], word) by {
-                        assert(language::lang(sem, right[i], word));
+                if language::numeric_lang(sem, regex_fold(right, true), word) {
+                    assert forall|i: int| 0 <= i < left.len() implies language::numeric_lang(sem, left[i], word) by {
+                        assert(language::numeric_lang(sem, right[i], word));
                     }
                 }
             }
@@ -4836,8 +4836,8 @@ pub mod verify {
                 },
                 model::TransitionNode::Not(_) => {
                     if left.len() > 0 {
-                        assert forall|word: Seq<EventView>| language::lang(sem, language::Regex::Not(Box::new(left.last())), word)
-                            == language::lang(sem, language::Regex::Not(Box::new(right.last())), word) by {
+                        assert forall|word: Seq<EventView>| language::numeric_lang(sem, language::Regex::Not(Box::new(left.last())), word)
+                            == language::numeric_lang(sem, language::Regex::Not(Box::new(right.last())), word) by {
                             norm::regex_language_unfold(sem, language::Regex::Not(Box::new(left.last())), word);
                             norm::regex_language_unfold(sem, language::Regex::Not(Box::new(right.last())), word);
                         }
@@ -4882,9 +4882,9 @@ pub mod verify {
     }
 
     pub proof fn regex_fold_semantics(sem: spec_fn(model::Test, EventView) -> bool, values: Seq<InterpRegex>, intersect: bool, word: Seq<EventView>)
-        ensures language::lang(sem, regex_fold(values, intersect), word) == if intersect {
-            forall|i: int| 0 <= i < values.len() ==> language::lang(sem, values[i], word)
-        } else { exists|i: int| 0 <= i < values.len() && language::lang(sem, values[i], word) },
+        ensures language::numeric_lang(sem, regex_fold(values, intersect), word) == if intersect {
+            forall|i: int| 0 <= i < values.len() ==> language::numeric_lang(sem, values[i], word)
+        } else { exists|i: int| 0 <= i < values.len() && language::numeric_lang(sem, values[i], word) },
     {
         reveal(regex_fold);
         if intersect {
@@ -4925,41 +4925,41 @@ pub mod verify {
     pub proof fn interpreted_fold(g: model::Graph, id: TransitionId, theta: Subst, event: EventView)
         requires model::graph_wf(g), id@ < g.transitions.len(),
             g.transitions[id@ as int] is Union || g.transitions[id@ as int] is Intersect,
-        ensures forall|word: Seq<EventView>| language::lang(model::gsem(theta), interpreted(g, id, theta, event), word)
-            == language::lang(model::gsem(theta), regex_fold(child_interp_values(g, id, theta, event), g.transitions[id@ as int] is Intersect), word),
+        ensures forall|word: Seq<EventView>| language::numeric_lang(model::gsem(theta), interpreted(g, id, theta, event), word)
+            == language::numeric_lang(model::gsem(theta), regex_fold(child_interp_values(g, id, theta, event), g.transitions[id@ as int] is Intersect), word),
     {
         model::lemma_graph_transition_wf(g, id@);
         let children = Seq::new(transition_children(g, id).len(), |i: int| TransitionId::from_view(transition_children(g, id)[i] as u32));
         assert(model::transition_ids(children) =~= transition_children(g, id));
         norm::transition_lemma_children_language(g, id, children, g.transitions[id@ as int] is Intersect);
         let vals = child_interp_values(g, id, theta, event);
-        assert forall|word: Seq<EventView>| language::lang(model::gsem(theta), interpreted(g, id, theta, event), word)
-            == language::lang(model::gsem(theta), regex_fold(vals, g.transitions[id@ as int] is Intersect), word) by {
+        assert forall|word: Seq<EventView>| language::numeric_lang(model::gsem(theta), interpreted(g, id, theta, event), word)
+            == language::numeric_lang(model::gsem(theta), regex_fold(vals, g.transitions[id@ as int] is Intersect), word) by {
             let sem = model::gsem(theta);
             reveal(norm::transition_combo);
             assert(norm::transition_lang(g, theta, id, event, word)
-                == language::lang(sem, interpreted(g, id, theta, event), word));
+                == language::numeric_lang(sem, interpreted(g, id, theta, event), word));
             assert forall|i: int| 0 <= i < children.len() implies
-                norm::transition_lang(g, theta, children[i], event, word) == language::lang(sem, vals[i], word) by {}
+                norm::transition_lang(g, theta, children[i], event, word) == language::numeric_lang(sem, vals[i], word) by {}
             regex_fold_semantics(sem, vals, g.transitions[id@ as int] is Intersect, word);
             if !(g.transitions[id@ as int] is Intersect) {
                 if norm::transition_lang(g, theta, id, event, word) {
                     let i = choose|i: int| 0 <= i < children.len() && norm::transition_lang(g, theta, children[i], event, word);
-                    assert(language::lang(sem, vals[i], word));
+                    assert(language::numeric_lang(sem, vals[i], word));
                 }
-                if language::lang(sem, regex_fold(vals, false), word) {
-                    let i = choose|i: int| 0 <= i < vals.len() && language::lang(sem, vals[i], word);
+                if language::numeric_lang(sem, regex_fold(vals, false), word) {
+                    let i = choose|i: int| 0 <= i < vals.len() && language::numeric_lang(sem, vals[i], word);
                     assert(norm::transition_lang(g, theta, children[i], event, word));
                 }
             } else {
                 if norm::transition_lang(g, theta, id, event, word) {
-                    assert forall|i: int| 0 <= i < vals.len() implies language::lang(sem, vals[i], word) by {
+                    assert forall|i: int| 0 <= i < vals.len() implies language::numeric_lang(sem, vals[i], word) by {
                         assert(norm::transition_lang(g, theta, children[i], event, word));
                     }
                 }
-                if language::lang(sem, regex_fold(vals, true), word) {
+                if language::numeric_lang(sem, regex_fold(vals, true), word) {
                     assert forall|i: int| 0 <= i < children.len() implies norm::transition_lang(g, theta, children[i], event, word) by {
-                        assert(language::lang(sem, vals[i], word));
+                        assert(language::numeric_lang(sem, vals[i], word));
                     }
                 }
             }
@@ -5058,32 +5058,32 @@ pub mod verify {
 
     pub proof fn regex_fold_ids(g: model::Graph, ids: Seq<RegexId>, intersect: bool, theta: Subst, word: Seq<EventView>)
         ensures norm::regex_combo(g, theta, ids, word, intersect)
-            == language::lang(model::gsem(theta), regex_fold(lifted_values(g, ids), intersect), word),
+            == language::numeric_lang(model::gsem(theta), regex_fold(lifted_values(g, ids), intersect), word),
     {
         let sem = model::gsem(theta);
         let vals = lifted_values(g, ids);
         reveal(norm::regex_combo);
         regex_fold_semantics(sem, vals, intersect, word);
         assert forall|i: int| 0 <= i < ids.len() implies
-            model::regex_lang(g, theta, ids[i]@, word) == language::lang(sem, vals[i], word) by {}
+            model::regex_lang(g, theta, ids[i]@, word) == language::numeric_lang(sem, vals[i], word) by {}
         if !intersect {
             if norm::regex_combo(g, theta, ids, word, false) {
                 let i = choose|i: int| 0 <= i < ids.len() && model::regex_lang(g, theta, ids[i]@, word);
-                assert(language::lang(sem, vals[i], word));
+                assert(language::numeric_lang(sem, vals[i], word));
             }
-            if language::lang(sem, regex_fold(vals, false), word) {
-                let i = choose|i: int| 0 <= i < vals.len() && language::lang(sem, vals[i], word);
+            if language::numeric_lang(sem, regex_fold(vals, false), word) {
+                let i = choose|i: int| 0 <= i < vals.len() && language::numeric_lang(sem, vals[i], word);
                 assert(model::regex_lang(g, theta, ids[i]@, word));
             }
         } else {
             if norm::regex_combo(g, theta, ids, word, true) {
-                assert forall|i: int| 0 <= i < vals.len() implies language::lang(sem, vals[i], word) by {
+                assert forall|i: int| 0 <= i < vals.len() implies language::numeric_lang(sem, vals[i], word) by {
                     assert(model::regex_lang(g, theta, ids[i]@, word));
                 }
             }
-            if language::lang(sem, regex_fold(vals, true), word) {
+            if language::numeric_lang(sem, regex_fold(vals, true), word) {
                 assert forall|i: int| 0 <= i < ids.len() implies model::regex_lang(g, theta, ids[i]@, word) by {
-                    assert(language::lang(sem, vals[i], word));
+                    assert(language::numeric_lang(sem, vals[i], word));
                 }
             }
         }
@@ -5181,7 +5181,7 @@ pub mod verify {
                     interp_run(before, pending.push((root, true)), lifted_values(before, prior), theta, event),
                     interp_run(after, pending, lifted_values(after, values), theta, event)),
     {
-        hide(language::lang); hide(language::interp_transition); hide(interp_run);
+        hide(language::numeric_lang); hide(language::interp_transition); hide(interp_run);
         hide(model::test_holds); hide(model::lift_transition); hide(model::lift_regex);
         after.transitions.lemma_prefix_index_eq(before.transitions);
         assert(before.transitions[root@ as int] == after.transitions[root@ as int]);
@@ -5202,7 +5202,7 @@ pub mod verify {
                 interp_run(after, pending, lifted_values(after, values), theta, event)) by {
             interp_same_configuration_extends(before, after, pending.push((root, true)), prior, theta, event);
             assert forall|word: Seq<EventView>| model::regex_lang(after, theta, values.last()@, word)
-                == language::lang(model::gsem(theta), language::Regex::Concat(seq![model::lift_regex(after, head@)]
+                == language::numeric_lang(model::gsem(theta), language::Regex::Concat(seq![model::lift_regex(after, head@)]
                     + model::lift_regexes(after, transition_suffix(after, root))), word) by {
                 reveal(norm::concat_combo);
                 assert(model::regex_lang(after, theta, values.last()@, word) == norm::concat_combo(after, theta, xs, word));
@@ -5212,11 +5212,11 @@ pub mod verify {
             assert(lifted_values(after, values) =~= lifted_values(after, prior).drop_last().push(model::lift_regex(after, values.last()@)));
             assert(lifted_values(after, prior).last() == model::lift_regex(after, head@));
             assert forall|i: int, word: Seq<EventView>| 0 <= i < prior.len() implies
-                language::lang(model::gsem(theta), interp_action(after, (root, true), lifted_values(after, prior), theta, event)->Some_0[i], word)
-                    == language::lang(model::gsem(theta), lifted_values(after, values)[i], word) by {
+                language::numeric_lang(model::gsem(theta), interp_action(after, (root, true), lifted_values(after, prior), theta, event)->Some_0[i], word)
+                    == language::numeric_lang(model::gsem(theta), lifted_values(after, values)[i], word) by {
                 if i == prior.len() - 1 {
                     assert(model::regex_lang(after, theta, values.last()@, word)
-                        == language::lang(model::gsem(theta), language::Regex::Concat(seq![model::lift_regex(after, head@)]
+                        == language::numeric_lang(model::gsem(theta), language::Regex::Concat(seq![model::lift_regex(after, head@)]
                             + model::lift_regexes(after, transition_suffix(after, root))), word));
                 }
             }

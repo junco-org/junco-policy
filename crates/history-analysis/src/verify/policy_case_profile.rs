@@ -4,9 +4,11 @@ use super::frontend::*;
 use super::{self as views, reconstruction as slots, typed_numeric as typed, verdict};
 use crate::analyzer::PolicyAnalyzer;
 use crate::constraint::Constraint;
-use history_semantics::verify::refinement::{analyzer, implementation, inclusion};
-use history_syntax::event::specs::{EventSpec, arity};
+use history_semantics::verify::refinement::{implementation, inclusion};
+use history_syntax::event::specs::EventSpec;
+use history_syntax::spec::events::arity;
 use history_syntax::{Component, Event};
+use junco_core::spec::questions::same_profile;
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -36,15 +38,16 @@ proof fn lemma_value_is_code<E: Event>(a: PolicyAnalyzer<E>, coding: typed::NatC
     typed::lemma_numeric_field::<E>(coding, event, field);
 }
 
-/// Equal constant profiles put a second typed candidate in the same numeric constraint case.
+/// Equal constant profiles put a second typed candidate in the same numeric constraint case
+/// (every register code is a known constant up to `eq_spec`, `stored_known`).
 pub(crate) proof fn lemma_same_profile_case<E: Event>(a: PolicyAnalyzer<E>, g: Constraint,
     first: Seq<E::Component>, second: Seq<E::Component>,
     first_coding: typed::NatCoding<E>, second_coding: typed::NatCoding<E>)
-    requires analyzer_state_wf(a), views::analyzer_obligations::<E>(),
+    requires analyzer_state_wf(a), views::analyzer_obligations::<E>(), stored_known(a),
         verdict::constraint_codes_wf(a.constants, g@),
         typed::fixes_book::<E>(a.constants, first_coding), typed::covered_event::<E>(first_coding, first),
         typed::fixes_book::<E>(a.constants, second_coding), typed::covered_event::<E>(second_coding, second),
-        analyzer::same_profile(a@, first, second),
+        same_profile(a@.known, first, second),
         inclusion::sat_by(typed::numeric_event::<E>(first_coding, first), implementation::constraint_of(g@)),
     ensures inclusion::sat_by(typed::numeric_event::<E>(second_coding, second), implementation::constraint_of(g@)),
 {
@@ -55,13 +58,15 @@ pub(crate) proof fn lemma_same_profile_case<E: Event>(a: PolicyAnalyzer<E>, g: C
         assert(views::register_codes(implementation::register_of(g@, l.component)).contains(l.value));
         let value = a.constants.values@[l.value as int - 1];
         slots::lemma_code_payload(a.constants, l.component, l.value);
-        assert(a.constants.values@.to_set().contains(value));
-        vstd::set::lemma_set_filter(a.constants.values@.to_set(),
-            |v: E::Component| E::coordinate_spec(v) == k, value);
-        assert(a@.known[k].contains(value));
+        assert(E::coordinate_spec(value) == k);
+        let w = choose|w: E::Component| #[trigger] a@.known[k].contains(w) && value.eq_spec(&w);
+        assert(first[k].eq_spec(&w) == second[k].eq_spec(&w));
+        assert(first[k].eq_spec(&value) == second[k].eq_spec(&value)) by {
+            assert(first[k].eq_spec(&value) == first[k].eq_spec(&w));
+            assert(second[k].eq_spec(&value) == second[k].eq_spec(&w));
+        }
         lemma_value_is_code(a, first_coding, first, l.component, l.value);
         lemma_value_is_code(a, second_coding, second, l.component, l.value);
-        assert(first[k].eq_spec(&value) == second[k].eq_spec(&value));
     }
 }
 } // verus!
