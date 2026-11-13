@@ -247,17 +247,6 @@ pub fn vec_into_boxed_slice(v: Vec<u32>) -> (r: Vec<u32>)
     v.clone().into_boxed_slice().into_vec()
 }
 
-/// `core::mem::replace`; returns the previous value and the destination's final value.
-#[vcheck]
-#[verifier::external_body]
-pub fn mem_replace(destination: u32, replacement: u32) -> (r: (u32, u32))
-    ensures r.0 == destination, r.1 == replacement,
-{
-    let mut target = destination;
-    let previous = core::mem::replace(&mut target, replacement);
-    (previous, target)
-}
-
 /// `String::try_reserve`: contents are unchanged on success and on failure.
 #[vcheck]
 #[verifier::external_body]
