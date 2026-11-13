@@ -8,20 +8,15 @@ use junco_core::HistoryError;
 use junco_core::spec::{questions as q, semantics as s};
 use vstd::prelude::*;
 
-/// A query's semantic result, including evidence of the actual failed graph charge.
+/// A query's semantic result; Exhausted deliberately carries no correctness claim.
 #[verus_verify]
 pub enum QueryResult<C> {
     /// The requested property holds.
     Holds,
     /// A symbolic pair interpreted by R3's real-event instance relation.
     Counterexample(q::Counterexample<C>),
-    /// A search failed to charge these requested bytes after the recorded prior charge.
-    Exhausted {
-        /// Graph charge before the failed request.
-        charged: nat,
-        /// Additional bytes the search attempted to charge.
-        requested: nat,
-    },
+    /// No verdict is claimed when the implementation exhausts its graph budget.
+    Exhausted,
     /// A non-invariant input or resource error.
     Error(HistoryError),
 }
@@ -62,10 +57,10 @@ pub open spec fn analyzer_frame<E: Event>(before: AnalyzerView<E>, after: Analyz
     after.domains == before.domains && after.rules == before.rules
 }
 
-/// Exhaustion records a failed charge above GRAPH_BYTES; errors exclude only invariant failures.
+/// Exhausted makes no claim; errors exclude only invariant failures.
 pub open spec fn escapes<C>(result: QueryResult<C>) -> bool {
     match result {
-        QueryResult::Exhausted { charged, requested } => charged + requested > GRAPH_BYTES,
+        QueryResult::Exhausted => true,
         QueryResult::Error(error) => !(error is Invariant),
         _ => true,
     }
@@ -76,6 +71,7 @@ pub open spec fn covered_spec<E: Event>(a: AnalyzerView<E>, rule: nat, by: Seq<n
     escapes(result) && match result {
         QueryResult::Holds => q::covers(a.domains, rules_of(a, by), a.rules[rule as int]),
         QueryResult::Counterexample(cex) => q::counterexample_wf::<E>(a.domains, cex)
+            && q::known_within(cex, q::knowable_constants(a.domains, a.rules))
             && q::every_instance::<E>(a.domains, cex, |candidate: E, history: Seq<E>|
                 s::rule_violated(a.rules[rule as int], candidate, history)
                     && !s::policy_denies(rules_of(a, by), candidate, history))
@@ -106,6 +102,7 @@ pub open spec fn at_least_as_strict_spec<E: Event>(a: AnalyzerView<E>, p: Seq<na
     escapes(result) && match result {
         QueryResult::Holds => q::refines(a.domains, rules_of(a, p), rules_of(a, other)),
         QueryResult::Counterexample(cex) => q::counterexample_wf::<E>(a.domains, cex)
+            && q::known_within(cex, q::knowable_constants(a.domains, a.rules))
             && (exists|j: int| 0 <= j < other.len()
                 && (#[trigger] other[j]) < a.rules.len()
                 && q::every_instance::<E>(a.domains, cex, |candidate: E, history: Seq<E>|
@@ -123,6 +120,7 @@ pub open spec fn tail_included_spec<E: Event>(before: AnalyzerView<E>, after: An
     analyzer_frame(before, after) && escapes(result) && match result {
         QueryResult::Holds => q::tails_included::<E>(after.domains, head, left, right),
         QueryResult::Counterexample(cex) => q::counterexample_wf::<E>(after.domains, cex)
+            && q::known_within(cex, q::tail_knowable_constants::<E>(after.domains, head, left, right))
             && q::every_instance::<E>(after.domains, cex, |candidate: E, history: Seq<E>|
                 s::head_matches(head, candidate) && s::lang(left, head, candidate, history)
                     && !s::lang(right, head, candidate, history))

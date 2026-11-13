@@ -22,7 +22,7 @@ pub open spec fn eq_equivalence<T>(
 }
 
 /// Faithfulness of the external hash containers for K: stable hashing coherent with modeled equality.
-/// Introductions are restricted to decision 4 and the explicitly approved primitive/tagged keys.
+/// Introductions are restricted to decision 4's library-internal key types.
 pub uninterp spec fn hash_coherent<K: Eq + Hash>() -> bool;
 
 /// The external hash-container contracts are faithful for K and its modeled equality.

@@ -5,7 +5,7 @@ use super::semantics::{head_matches, lang, policy_denies, rule_violated};
 use history_syntax::Event;
 use history_syntax::Rule;
 use history_syntax::event::specs::EventSpec;
-use history_syntax::spec::events::{HeadView, RegexView, arity, event_view};
+use history_syntax::spec::events::{HeadView, PatternView, RegexView, RuleView, TestView, arity, event_view};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -13,6 +13,111 @@ verus! {
 
 /// Each coordinate is unrestricted or has a nonempty declared finite domain.
 pub type Domains<C> = Seq<Option<Set<C>>>;
+
+/// The literal constants of one pattern (paper Section 3).
+pub open spec fn pattern_constant<C>(pattern: PatternView<C>) -> Set<C> {
+    match pattern { PatternView::Constant(c) => Set::empty().insert(c), PatternView::Variable(_) => Set::empty() }
+}
+
+/// A finite union, built from finite sets rather than an unrestricted comprehension.
+pub open spec fn constants_union<C>(sets: Seq<Set<C>>) -> Set<C>
+    decreases sets.len(),
+{
+    if sets.len() == 0 { Set::empty() }
+    else { constants_union(sets.drop_last()).union(sets.last()) }
+}
+
+/// Literals mentioned by a test at one coordinate (paper Section 3).
+pub open spec fn test_constant_at<C>(test: TestView<C>, coordinate: int) -> Set<C>
+    decreases test,
+{
+    match test {
+        TestView::True | TestView::False => Set::empty(),
+        TestView::Atom { pattern, .. } =>
+            if coordinate == pattern.component { pattern_constant(pattern.pattern) } else { Set::empty() },
+        TestView::And(cs) | TestView::Or(cs) => test_constant_forest(cs, coordinate),
+    }
+}
+
+/// Literals mentioned by a finite test family at one coordinate (paper Section 3).
+pub open spec fn test_constant_forest<C>(tests: Seq<TestView<C>>, coordinate: int) -> Set<C>
+    decreases tests,
+{
+    if tests.len() == 0 { Set::empty() }
+    else { test_constant_forest(tests.drop_last(), coordinate).union(test_constant_at(tests.last(), coordinate)) }
+}
+
+/// Test literals, separated by coordinate (paper Section 3).
+pub open spec fn test_constants<C>(test: TestView<C>, arity: nat) -> Seq<Set<C>> {
+    Seq::new(arity, |j: int| test_constant_at(test, j))
+}
+
+/// Literals mentioned by a tail at one coordinate (paper Section 3).
+pub open spec fn regex_constant_at<C>(regex: RegexView<C>, coordinate: int) -> Set<C>
+    decreases regex,
+{
+    match regex {
+        RegexView::Empty | RegexView::All | RegexView::Epsilon => Set::empty(),
+        RegexView::Test(test) => test_constant_at(test, coordinate),
+        RegexView::Union(cs) | RegexView::Concat(cs) | RegexView::Intersect(cs) => regex_constant_forest(cs, coordinate),
+        RegexView::Star(child) | RegexView::Not(child) => regex_constant_at(*child, coordinate),
+    }
+}
+
+/// Literals mentioned by a finite tail family at one coordinate (paper Section 3).
+pub open spec fn regex_constant_forest<C>(regexes: Seq<RegexView<C>>, coordinate: int) -> Set<C>
+    decreases regexes,
+{
+    if regexes.len() == 0 { Set::empty() }
+    else { regex_constant_forest(regexes.drop_last(), coordinate).union(regex_constant_at(regexes.last(), coordinate)) }
+}
+
+/// Tail literals, separated by coordinate (paper Section 3).
+pub open spec fn regex_constants<C>(regex: RegexView<C>, arity: nat) -> Seq<Set<C>> {
+    Seq::new(arity, |j: int| regex_constant_at(regex, j))
+}
+
+/// Head literals, separated by coordinate (paper Section 3).
+pub open spec fn head_constants<C>(head: HeadView<C>) -> Seq<Set<C>> {
+    head.map(|i: int, pattern: PatternView<C>| pattern_constant(pattern))
+}
+
+/// Exact finite constants of the head and tail, separately at every coordinate.
+pub open spec fn rule_constants<C>(rule: RuleView<C>) -> Seq<Set<C>> {
+    Seq::new(rule.head.len(), |i: int|
+        regex_constants(rule.tail, rule.head.len())[i].union(head_constants(rule.head)[i]))
+}
+
+/// A policy witness may exclude only registered-rule literals and declared domain values.
+pub open spec fn knowable_constants<E: Event>(
+    domains: Domains<E::Component>, rules: Seq<Rule<E>>,
+) -> Seq<Set<E::Component>> {
+    Seq::new(arity::<E>(), |i: int| {
+        let declared = if 0 <= i < domains.len() {
+            match domains[i] { Some(values) => values, None => Set::empty() }
+        } else { Set::empty() };
+        let registered = rules.map_values(|rule: Rule<E>| {
+            let literals = rule_constants(rule@);
+            if 0 <= i < literals.len() { literals[i] } else { Set::empty() }
+        });
+        declared.union(constants_union(registered))
+    })
+}
+
+/// A tail witness may exclude only this head, both tails, and declared domain values.
+pub open spec fn tail_knowable_constants<E: Event>(
+    domains: Domains<E::Component>, head: HeadView<E::Component>,
+    left: RegexView<E::Component>, right: RegexView<E::Component>,
+) -> Seq<Set<E::Component>> {
+    let heads = head_constants(head);
+    Seq::new(arity::<E>(), |i: int| {
+        let declared = if 0 <= i < domains.len() {
+            match domains[i] { Some(values) => values, None => Set::empty() }
+        } else { Set::empty() };
+        let literals = if 0 <= i < heads.len() { heads[i] } else { Set::empty() };
+        declared.union(literals).union(regex_constant_at(left, i)).union(regex_constant_at(right, i))
+    })
+}
 
 /// Declared values are nonempty and tagged for their own coordinate (implementation domains).
 pub open spec fn domains_wf<E: Event>(domains: Domains<E::Component>) -> bool {
@@ -109,6 +214,13 @@ pub open spec fn counterexample_wf<E: Event>(domains: Domains<E::Component>, cex
         && (forall|j: int| 0 <= j < cex.history.len() ==> symbolic_event_wf::<E>(domains, #[trigger] cex.history[j]))
         && (forall|i: int, value: E::Component| 0 <= i < cex.known.len() && #[trigger] cex.known[i].contains(value)
             ==> E::coordinate_spec(value) == i)
+}
+
+/// A counterexample cannot hide arbitrary carrier values in its excluded constant context.
+pub open spec fn known_within<C>(cex: Counterexample<C>, allowed: Seq<Set<C>>) -> bool {
+    cex.known.len() == allowed.len()
+        && forall|i: int| 0 <= i < cex.known.len()
+            ==> #[trigger] cex.known[i].subset_of(allowed[i])
 }
 
 /// Fresh names appearing in one coordinate of a finite symbolic word.

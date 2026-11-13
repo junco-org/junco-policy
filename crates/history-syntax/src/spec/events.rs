@@ -4,7 +4,6 @@
 use crate::Event;
 use crate::event::specs::{AritySpec, EventSpec};
 use vstd::prelude::*;
-use vstd::std_specs::cmp::PartialEqSpec;
 
 // Track B moves these declarations here and removes their former definitions.
 pub use crate::verify::dsl::{AtomView, HeadView, PatternView, RegexView, RuleView, TestView};
@@ -36,17 +35,6 @@ pub open spec fn surjectivity<E: Event>() -> bool {
         ==> exists|event: E| #[trigger] event_view(event) == values
 }
 
-/// The tagged values at one coordinate have exactly `count` equality classes (Section 3).
-pub open spec fn finite_coordinate<E: Event>(index: nat, count: nat) -> bool {
-    index < arity::<E>() && exists|values: Seq<E::Component>|
-        values.len() == count
-        && (forall|j: int| 0 <= j < values.len()
-            ==> E::coordinate_spec(#[trigger] values[j]) == index)
-        && (forall|j: int, k: int| #![trigger values[j], values[k]]
-            0 <= j < k < values.len() ==> !values[j].eq_spec(&values[k]))
-        && (forall|value: E::Component| #[trigger] E::coordinate_spec(value) == index
-            ==> exists|j: int| 0 <= j < values.len() && value.eq_spec(&values[j]))
-}
 
 /// Native projections obey their models, tags are correct, and all product tuples are realizable.
 pub open spec fn event_laws<E: Event>() -> bool {
