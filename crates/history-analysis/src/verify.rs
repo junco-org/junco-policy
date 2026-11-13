@@ -2059,10 +2059,6 @@ pub(crate) proof fn lemma_letters_contract(g: Constraint, operands: Operands, un
     }
 }
 
-pub(crate) proof fn lemma_constraint_key_obligations()
-    requires junco_core::spec::hypotheses::hash_coherent::<Constraint>(),
-    ensures junco_core::spec::hypotheses::key_laws::<Constraint>(),
-{}
 }
 
 verus! {
@@ -2534,11 +2530,9 @@ pub(crate) mod table {
 }
 
 verus! {
-/// Native Eq/hash correspondence and event projection laws required by analyzer proofs.
+/// What the analyzer assumes about its event type: exactly R4's `event_obligations`.
 pub open(crate) spec fn analyzer_obligations<E: Event>() -> bool {
-    1 <= history_syntax::spec::events::arity::<E>() <= history_syntax::MAX_ARITY
-        && E::obeys_projection_spec() && junco_core::spec::hypotheses::key_laws::<E::Component>()
-        && search_exec::search_obligations()
+    junco_core::spec::hypotheses::event_obligations::<E>()
 }
 }
 
