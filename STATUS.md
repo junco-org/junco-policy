@@ -2,17 +2,17 @@
 
 ## Current wave
 
-The complete attempt-A source plus optional numeric/finite-set hygiene is integrated at
-`b3c3646`. The new bounded-comprehension focus passed **32/0**; full Core **332/0**,
-semantics **1649/0**, and analyzer **626/0** passed downstream. The joined native batch
-passed **201 tests** and Clippy; final formatting passes. The final **default sequential**
-thirteen-configuration run is active with `--num-threads 144`. The earlier full thirteen
-gate at `00fbeed` passed every configuration with zero errors in **770.50 seconds**.
+Attempt-A source and optional hygiene are pushed through `a08f39d` (source `b3c3646`).
+The final default sequential run completed in **1173.54 seconds**: eleven configurations
+passed; no-std semantics hit one SMT resource limit in `normalize::pair_conditionals`,
+and no-std analysis failed through that dependency. This is not a green full gate.
+All std configurations and both reviewer targets passed; workspace **201 tests**, fuzz
+**8 tests**, Clippy, formatting and **18 spec-check tests** passed as recorded below.
 
-Concurrent upstream change: `main` merged the independent attempt B in **PR #11**
-(`7050ac3`). It has not been blindly merged or overwritten here. Two read-only comparisons
-are identifying actual guarantee/trust differences before reconciliation. The published
-attempt-A branch remains `refactor-reviewer-surface`; main/attempt-B source is untouched.
+`main` independently merged attempt B in **PR #11** (`7050ac3`). The user selected
+**Comparison PR**: publish A as a draft against main and leave B untouched. Read-only
+comparisons identify A's narrower hash-only trust and query-scoped known bounds, plus
+remaining A cursor-visibility work. No attempt-B implementation is overwritten here.
 Exhausted blocks nothing.
 
 ## Last checks actually run
@@ -20,32 +20,32 @@ Exhausted blocks nothing.
 - Pinned Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0`, Rust `1.98.1` reused from the previously
   checksum-verified installation.
 - Completed Wave 0 full matrix: all eleven configurations passed, zero errors.
-- Complete hash-only source and reviewer-client gate at `00fbeed`: all thirteen passed.
+- Latest default sequential gate at source `b3c3646`, `-- --num-threads 144 --triggers-mode silent`:
 
-  | Configuration | Verified functions | Errors |
-  |---|---:|---:|
-  | syntax no-default | 63 (cached; prior unchanged-source count) | 0 |
-  | syntax `serde,std` | 63 (cached; prior unchanged-source count) | 0 |
-  | core no-default | 239 | 0 |
-  | core `runtime,std,serde` | 332 | 0 |
-  | store `runtime` no-default | 306 | 0 |
-  | store `runtime,std` | 306 | 0 |
-  | semantics `runtime` no-default | 1641 | 0 |
-  | semantics `runtime,std,cache` | 1646 | 0 |
-  | semantics `public_specs` | 21 | 0 |
-  | analyzer `runtime` no-default | 627 | 0 |
-  | analyzer `runtime,std` no-default | 627 | 0 |
-  | monitor reviewer | 4 | 0 |
-  | analyzer reviewer | 9 | 0 |
-- Earlier atomic full-feature/all-eleven gates at `92f4e9d` / `e525e20` passed too;
-  the thirteen-configuration result above supersedes their pre-narrowing trust boundary.
+  | Configuration | Verified functions | Errors | Result |
+  |---|---:|---:|---|
+  | syntax no-default | 63 | 0 | pass |
+  | syntax `serde,std` | 63 | 0 | pass |
+  | core no-default | 239 | 0 | pass |
+  | core `runtime,std,serde` | 332 | 0 | pass |
+  | store `runtime` no-default | 306 | 0 | pass |
+  | store `runtime,std` | 306 | 0 | pass |
+  | semantics `runtime` no-default | 1643 | 1 | SMT resource limit |
+  | semantics `runtime,std,cache` | 1649 | 0 | pass |
+  | semantics `public_specs` | 21 | 0 | pass |
+  | analyzer `runtime` no-default | dependency: semantics 1643 | 1 | dependency failure |
+  | analyzer `runtime,std` no-default | 626 | 0 | pass |
+  | monitor reviewer | 4 | 0 | pass |
+  | analyzer reviewer | 9 | 0 | pass |
+- The earlier thirteen-configuration gate at `00fbeed` passed all rows, zero errors,
+  in **770.50 seconds**. It predates the optional namespace/finite-comprehension hygiene.
 - Reviewer-client integration gate: monitor **4 verified / 0 errors**, analyzer **9 / 0**;
   both configurations passed in **311.43 seconds**. Parent also ran both executable reviewer
   smoke tests: monitor grant/denial and all four analyzer query families' verdict cases passed.
 - Hash-only repair worker focuses: Core observation/internal keys **9/0**, analyzer pruning
   **39/0**, store native **3/0**, constraint **73/0**. Native repair suites passed **99 tests**,
   with Clippy `-D warnings`; the worker applied three wrapping-only formatting corrections.
-  Parent's combined verification and native CI gates now pass as recorded above.
+  These worker/earlier gates passed; they do not supersede the current no-std failure.
 
 - The first G/E gate found the removed finite-domain successor-theorem caller. Replacing it
   with the explicitly instantiated common theorem closed the downstream proof; no statement
