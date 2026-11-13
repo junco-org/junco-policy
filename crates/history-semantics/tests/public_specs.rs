@@ -254,7 +254,7 @@ fn trace_first_diagnostic<E: Event + 'static,
         }
         if let Ok(PolicyDecision::Deny { ref failed_precondition, ref allowed_fixes }) = answer {
             let index = trace::trace_selected_index(state) as int;
-            assert(compiled::least_violation(trace::trace_sources(before), value, *candidate, index));
+            assert(junco_core::spec::semantics::least_violation(trace::trace_sources(before), raw::raw_events(value), *candidate, index));
             assert(0 <= index < 2);
             if index != 0 {
                 assert(0 <= 0 < index);
@@ -320,10 +320,10 @@ fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: R
                 let index = choose|index: int| validator::denial_at(before, request, *denial, index)
                     && (books::native_obligations::<E>() ==>
                         denial.mode == validator::validator_sources(before)[index].mode
-                            && compiled::least_violation(validator::validator_sources(before),
-                                validator::validator_history(before), request.event, index));
-                assert(compiled::least_violation(validator::validator_sources(before),
-                    validator::validator_history(before), request.event, index));
+                            && junco_core::spec::semantics::least_violation(validator::validator_sources(before),
+                                raw::raw_events(validator::validator_history(before)), request.event, index));
+                assert(junco_core::spec::semantics::least_violation(validator::validator_sources(before),
+                    raw::raw_events(validator::validator_history(before)), request.event, index));
                 assert(index == 0);
                 assert(denial.mode == RuleMode::Require);
                 assert(!universal);
@@ -401,7 +401,7 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
                 assert(0 <= index < items.len());
                 assert(trace::trace_diagnostic_ids(before)[index] == trace::trace_rule_diagnostic_id(items[index]));
                 if books::native_obligations::<E>() {
-                    assert(compiled::least_violation(trace::trace_sources(before), value, *candidate, index));
+                    assert(junco_core::spec::semantics::least_violation(trace::trace_sources(before), raw::raw_events(value), *candidate, index));
                     assert(trace::trace_sources(before)[index] == trace::trace_rule_source(items[index]));
                     assert(dsl::rule_violated(trace::trace_rule_source(items[index]), *candidate, events@));
                     assert forall|i: int| 0 <= i < index implies

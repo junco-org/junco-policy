@@ -17,6 +17,12 @@ the integration owner. It does not redefine the interface locally.
 | R5 `history-semantics/src/spec/monitor.rs` | `ValidatorView`, `Validator::wf`, `validator_frame`, `check_step`, `permits_spec`, `rollback_spec`, `finish_spec`, `trace_safe` | Private monitor views and mixed semantic/storage clauses in `check_result` and policy wrappers. |
 | R6 `history-analysis/src/spec/analyzer.rs` | `GRAPH_BYTES`, `AnalyzerView`, `PolicyAnalyzer::wf`, `QueryResult`, `rules_of`, `valid_ids`, `analyzer_frame`, `escapes`, `covered_spec`, `redundant_spec`, `at_least_as_strict_spec`, `tail_included_spec` | Private analyzer views and repeated executable correctness clauses. PR #10's minimality/removal content is migrated exactly to this vocabulary; obsolete predicates and compatibility bridges are deleted before merge. |
 
+The separate least-violation move preserves the old typed denotation exactly and changes its
+history argument to `Seq<E>`; callers apply the storage history accessor. Its R2 body temporarily
+uses the old typed `rule_violated`. B cuts that body and every consumer over to the canonical R2
+denotation while deleting the old interpreter. No compatibility lemma or old-name re-export is
+introduced.
+
 ## Semantic state and result adapters
 
 - `ValidatorView<E>` has exactly `rules: Seq<Rule<E>>` and `history: Seq<E>`.
@@ -94,7 +100,8 @@ concurrently, with persistent per-configuration targets, plus workspace/fuzz nat
 The next wave starts after its prerequisite merge gates; the previous wave gate may continue
 concurrently. Only the integration owner runs the full verification script.
 
-All tracks preserve line endings and existing guarantees and add no trust outside decision 4.
+All tracks preserve line endings and existing guarantees and add no trust outside decision 4
+and the scoped key introductions explicitly approved above.
 PR #10 proves minimum history length within the returned case/profile, not across all cases for
 one rule. Its predicates/proofs may move or change representation, but their semantic content is
 preserved exactly. Same-concept equivalence lemmas are temporary migration aids only: remove

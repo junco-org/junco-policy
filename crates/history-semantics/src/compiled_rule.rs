@@ -184,15 +184,11 @@ pub mod verify {
     }
 
 
-    pub open spec fn least_violation<E: Event>(sources: Seq<Rule<E>>, history: History<E>, candidate: E, index: int) -> bool {
-        0 <= index < sources.len() && junco_core::verify::dsl::rule_violated(sources[index], candidate, raw::raw_events(history))
-            && forall|j: int| 0 <= j < index ==> !junco_core::verify::dsl::rule_violated(sources[j], candidate, raw::raw_events(history))
-    }
 
     pub open spec fn ordered_result<E: Event>(sources: Seq<Rule<E>>, history: History<E>, candidate: E,
         result: Result<Option<usize>, HistoryError>) -> bool {
         books::native_obligations::<E>() ==> match result {
-            Ok(Some(index)) => least_violation(sources, history, candidate, index as int),
+            Ok(Some(index)) => junco_core::spec::semantics::least_violation(sources, raw::raw_events(history), candidate, index as int),
             Ok(None) => forall|j: int| 0 <= j < sources.len() ==> !junco_core::verify::dsl::rule_violated(sources[j], candidate, raw::raw_events(history)),
             Err(_) => true,
         }

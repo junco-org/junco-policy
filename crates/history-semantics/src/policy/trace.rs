@@ -181,7 +181,7 @@ pub mod verify {
                         && trace_selected_source(after) == trace_sources(before)[trace_selected_index(after) as int]
                         && trace_selected_diagnostic_id(after) == trace_diagnostic_ids(before)[trace_selected_index(after) as int]
                         && (history_store::typed::verify::native_obligations::<E>() ==>
-                            crate::compiled_rule::verify::least_violation(trace_sources(before), history,
+                            junco_core::spec::semantics::least_violation(trace_sources(before), history_store::history::verify::raw_events(history),
                                 candidate, trace_selected_index(after) as int))
                         && diagnostic_output(trace_selected_diagnostic_id(after), candidate,
                             failed_precondition@, allowed_fixes.deep_view()),

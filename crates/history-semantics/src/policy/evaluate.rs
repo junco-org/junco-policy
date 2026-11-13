@@ -110,7 +110,7 @@ pub open(crate) spec fn policy_decision_result<E: Event, C>(before: CompiledPoli
                 after.callback_trace@.calls.len() == before.callback_trace@.calls.len() + 1
                     && 0 <= index < verify::policy_sources(before).len()
                     && (history_store::typed::verify::native_obligations::<E>() ==>
-                        crate::compiled_rule::verify::least_violation(verify::policy_sources(before), history, candidate, index))
+                        junco_core::spec::semantics::least_violation(verify::policy_sources(before), history_store::history::verify::raw_events(history), candidate, index))
                     && after.callback_trace@.calls == before.callback_trace@.calls.push(DiagnosticCall {
                         index: call.index, source: verify::policy_sources(before)[index],
                         diagnostic_id: verify::policy_diagnostic_ids(before)[index],
@@ -272,7 +272,7 @@ pub mod verify {
                 Ok(PolicyDecision::Deny { .. }) => policy_selected_index(after) < policy_sources(before).len()
                     && policy_selected_source(after) == policy_sources(before)[policy_selected_index(after) as int]
                     && policy_selected_diagnostic_id(after) == policy_diagnostic_ids(before)[policy_selected_index(after) as int]
-                    && (books::native_obligations::<E>() ==> compiled::least_violation(policy_sources(before), history,
+                    && (books::native_obligations::<E>() ==> junco_core::spec::semantics::least_violation(policy_sources(before), history_store::history::verify::raw_events(history),
                         candidate, policy_selected_index(after) as int))
                     && (policy_wf(before) ==> policy_context_calls(after) == policy_context_calls(before) + 1
                         && policy_diagnostic_calls(after) == policy_diagnostic_calls(before) + 1),
@@ -552,8 +552,8 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                     assert(verify::policy_wf(*self));
                     assert(verify::policy_frame(entry, *self));
                     assert(index < verify::policy_sources(entry).len());
-                    assert(books::native_obligations::<E>() ==> compiled::least_violation(
-                        verify::policy_sources(entry), *history, *probe, index as int));
+                    assert(books::native_obligations::<E>() ==> junco_core::spec::semantics::least_violation(
+                        verify::policy_sources(entry), history_store::history::verify::raw_events(*history), *probe, index as int));
                     let ghost observed_decision = decision;
                     if let PolicyDecision::Deny { failed_precondition, allowed_fixes } = observed_decision {
                         assert(self.callback_trace@.calls == entry.callback_trace@.calls.push(DiagnosticCall {

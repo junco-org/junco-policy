@@ -362,7 +362,7 @@ pub mod verify {
         0 <= index < before.rules@.len() && denial.mode == before.rules@[index].mode_spec()
             && denial.event == request.event
             && (books::native_obligations::<E>() ==> denial.mode == validator_sources(before)[index].mode
-                && compiled::least_violation(validator_sources(before), before.history, request.event, index))
+                && junco_core::spec::semantics::least_violation(validator_sources(before), raw::raw_events(before.history), request.event, index))
             && denial.message@ == match denial.mode {
                 RuleMode::Require => "committed history does not satisfy required past-regex rule"@,
                 RuleMode::Forbid => "committed history satisfies forbidden past-regex rule"@,
@@ -405,8 +405,8 @@ pub mod verify {
                     && exists|index: int| denial_at(before, request, denial, index)
                         && (books::native_obligations::<E>() ==>
                             denial.mode == validator_sources(before)[index].mode
-                                && compiled::least_violation(validator_sources(before),
-                                    validator_history(before), request.event, index)),
+                                && junco_core::spec::semantics::least_violation(validator_sources(before),
+                                    raw::raw_events(validator_history(before)), request.event, index)),
                 Ok(Decision::Grant(grant)) => grant.event == request.event && grant.metadata == request.metadata
                     && raw::push_result(validator_history(before), validator_history(after), request.event, Ok(()))
                     && raw::raw_events(validator_history(after)) == raw::raw_events(validator_history(before)).push(request.event)

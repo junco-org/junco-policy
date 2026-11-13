@@ -255,7 +255,7 @@ pub(crate) fn validator_require_empty_then_forbid_all_client<E: Event, M>(
     ensures result matches Ok((state, decision)) ==> validator::validator_wf(state)
         && validator::validator_sources(state) == seq![Rule { mode: RuleMode::Require, head: head, tail: RegexExpr::Empty }, Rule { mode: RuleMode::Forbid, head: second_head, tail: RegexExpr::All }]
         && raw::raw_events(validator::validator_history(state)) == Seq::<E>::empty()
-        && typed::least_violation(validator::validator_sources(state), validator::validator_history(state), request.event, 0)
+        && junco_core::spec::semantics::least_violation(validator::validator_sources(state), raw::raw_events(validator::validator_history(state)), request.event, 0)
         && decision is Denied && (decision matches Decision::Denied(denial) ==> denial.mode == RuleMode::Require && denial.event == request.event),
 {
     let mut rules = Vec::new();
@@ -265,7 +265,7 @@ pub(crate) fn validator_require_empty_then_forbid_all_client<E: Event, M>(
     let ghost before = state;
     proof {
         raw::lemma_empty_history(validator::validator_history(state), store);
-        assert(typed::least_violation(validator::validator_sources(state), validator::validator_history(state), request.event, 0));
+        assert(junco_core::spec::semantics::least_violation(validator::validator_sources(state), raw::raw_events(validator::validator_history(state)), request.event, 0));
     }
     let decision = validator_check_client(&mut state, request)?;
     proof { raw::lemma_history_frame_facts(validator::validator_history(before), validator::validator_history(state)); }
@@ -279,7 +279,7 @@ pub(crate) fn validator_forbid_all_then_require_empty_client<E: Event, M>(
     ensures result matches Ok((state, decision)) ==> validator::validator_wf(state)
         && validator::validator_sources(state) == seq![Rule { mode: RuleMode::Forbid, head: head, tail: RegexExpr::All }, Rule { mode: RuleMode::Require, head: second_head, tail: RegexExpr::Empty }]
         && raw::raw_events(validator::validator_history(state)) == Seq::<E>::empty()
-        && typed::least_violation(validator::validator_sources(state), validator::validator_history(state), request.event, 0)
+        && junco_core::spec::semantics::least_violation(validator::validator_sources(state), raw::raw_events(validator::validator_history(state)), request.event, 0)
         && decision is Denied && (decision matches Decision::Denied(denial) ==> denial.mode == RuleMode::Forbid && denial.event == request.event),
 {
     let mut rules = Vec::new();
@@ -289,7 +289,7 @@ pub(crate) fn validator_forbid_all_then_require_empty_client<E: Event, M>(
     let ghost before = state;
     proof {
         raw::lemma_empty_history(validator::validator_history(state), store);
-        assert(typed::least_violation(validator::validator_sources(state), validator::validator_history(state), request.event, 0));
+        assert(junco_core::spec::semantics::least_violation(validator::validator_sources(state), raw::raw_events(validator::validator_history(state)), request.event, 0));
     }
     let decision = validator_check_client(&mut state, request)?;
     proof { raw::lemma_history_frame_facts(validator::validator_history(before), validator::validator_history(state)); }
@@ -394,7 +394,7 @@ pub(crate) fn compiled_policy_require_empty_then_forbid_all_client<E: Event, C, 
     let mut state = compiled_policy_from_vec_client(store, rules)?;
     let ghost before = state;
     proof {
-        assert(typed::least_violation(policy::policy_sources(state), *history, *candidate, 0));
+        assert(junco_core::spec::semantics::least_violation(policy::policy_sources(state), raw::raw_events(*history), *candidate, 0));
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
     proof {
@@ -425,7 +425,7 @@ pub(crate) fn compiled_policy_forbid_all_then_require_empty_client<E: Event, C, 
     let mut state = compiled_policy_from_vec_client(store, rules)?;
     let ghost before = state;
     proof {
-        assert(typed::least_violation(policy::policy_sources(state), *history, *candidate, 0));
+        assert(junco_core::spec::semantics::least_violation(policy::policy_sources(state), raw::raw_events(*history), *candidate, 0));
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
     proof {
