@@ -2,12 +2,18 @@
 
 ## Current wave
 
-The complete monitor/analyzer source, both reviewer clients, and the hash-only trust repair
-are pushed through `8baaf29` (source `00fbeed`). **All thirteen Verus configurations passed,
-zero errors, in 770.50 seconds.** Workspace **201 tests**, fuzz **8 tests**, formatting,
-workspace/fuzz Clippy `-D warnings`, and **18 spec-check tests** also pass. Independent
-monitor/analyzer surface reviews found no blocking defect. Remaining work is optional internal
-numeric/finite-set hygiene and the final default sequential gate. Exhausted blocks nothing.
+The complete attempt-A source plus optional numeric/finite-set hygiene is integrated at
+`b3c3646`. The new bounded-comprehension focus passed **32/0**; full Core **332/0**,
+semantics **1649/0**, and analyzer **626/0** passed downstream. The joined native batch
+passed **201 tests** and Clippy; final formatting passes. The final **default sequential**
+thirteen-configuration run is active with `--num-threads 144`. The earlier full thirteen
+gate at `00fbeed` passed every configuration with zero errors in **770.50 seconds**.
+
+Concurrent upstream change: `main` merged the independent attempt B in **PR #11**
+(`7050ac3`). It has not been blindly merged or overwritten here. Two read-only comparisons
+are identifying actual guarantee/trust differences before reconciliation. The published
+attempt-A branch remains `refactor-reviewer-surface`; main/attempt-B source is untouched.
+Exhausted blocks nothing.
 
 ## Last checks actually run
 

@@ -174,20 +174,20 @@ proof functions only; it must not be mistaken for the total number of logical ax
 
 ### `unannotated_public_exec` (53)
 
-- `crates/history-semantics/src/compiled_rule.rs:706`: `impl<E: Event> CompiledRule<E> :: fn new_lazy`
-- `crates/history-semantics/src/compiled_rule.rs:710`: `impl<E: Event> CompiledRule<E> :: fn work_counters`
-- `crates/history-semantics/src/compiled_rule.rs:714`: `impl<E: Event> CompiledRule<E> :: fn work_events`
-- `crates/history-semantics/src/compiled_rule.rs:718`: `impl<E: Event> CompiledRule<E> :: fn reset_work_events`
-- `crates/history-semantics/src/compiled_rule.rs:722`: `impl<E: Event> CompiledRule<E> :: fn cursor_positions`
-- `crates/history-semantics/src/compiled_rule.rs:728`: `impl<E: Event> CompiledRule<E> :: fn replace_graph_byte_pressure`
-- `crates/history-semantics/src/compiled_rule.rs:732`: `impl<E: Event> CompiledRule<E> :: fn set_answer_checkpoint_failure`
-- `crates/history-semantics/src/compiled_rule.rs:754`: `impl Event for Probe :: fn component`
-- `crates/history-semantics/src/compiled_rule.rs:761`: `impl Event for Probe :: fn coordinate`
-- `crates/history-semantics/src/compiled_rule.rs:818`: `impl Limits for FailPublication :: fn checkpoint`
-- `crates/history-semantics/src/compiled_rule.rs:821`: `impl Limits for FailPublication :: fn publication_checkpoint`
-- `crates/history-semantics/src/compiled_rule.rs:824`: `impl Limits for FailPublication :: fn enforce_memory`
-- `crates/history-semantics/src/compiled_rule.rs:974`: `impl Event for Counted :: fn component`
-- `crates/history-semantics/src/compiled_rule.rs:978`: `impl Event for Counted :: fn coordinate`
+- `crates/history-semantics/src/compiled_rule.rs:707`: `impl<E: Event> CompiledRule<E> :: fn new_lazy`
+- `crates/history-semantics/src/compiled_rule.rs:711`: `impl<E: Event> CompiledRule<E> :: fn work_counters`
+- `crates/history-semantics/src/compiled_rule.rs:715`: `impl<E: Event> CompiledRule<E> :: fn work_events`
+- `crates/history-semantics/src/compiled_rule.rs:719`: `impl<E: Event> CompiledRule<E> :: fn reset_work_events`
+- `crates/history-semantics/src/compiled_rule.rs:723`: `impl<E: Event> CompiledRule<E> :: fn cursor_positions`
+- `crates/history-semantics/src/compiled_rule.rs:729`: `impl<E: Event> CompiledRule<E> :: fn replace_graph_byte_pressure`
+- `crates/history-semantics/src/compiled_rule.rs:733`: `impl<E: Event> CompiledRule<E> :: fn set_answer_checkpoint_failure`
+- `crates/history-semantics/src/compiled_rule.rs:755`: `impl Event for Probe :: fn component`
+- `crates/history-semantics/src/compiled_rule.rs:762`: `impl Event for Probe :: fn coordinate`
+- `crates/history-semantics/src/compiled_rule.rs:819`: `impl Limits for FailPublication :: fn checkpoint`
+- `crates/history-semantics/src/compiled_rule.rs:822`: `impl Limits for FailPublication :: fn publication_checkpoint`
+- `crates/history-semantics/src/compiled_rule.rs:825`: `impl Limits for FailPublication :: fn enforce_memory`
+- `crates/history-semantics/src/compiled_rule.rs:975`: `impl Event for Counted :: fn component`
+- `crates/history-semantics/src/compiled_rule.rs:979`: `impl Event for Counted :: fn coordinate`
 - `crates/history-semantics/src/policy/tests.rs:34`: `impl fmt::Display for Editor :: fn fmt`
 - `crates/history-semantics/src/policy/tests.rs:47`: `impl fmt::Display for SrcX :: fn fmt`
 - `crates/history-semantics/src/policy/tests.rs:78`: `impl Event for DocEvent :: fn component`
@@ -230,7 +230,7 @@ proof functions only; it must not be mistaken for the total number of logical ax
 
 ### `external_body` (14)
 
-- `crates/history-semantics/src/compiled_rule.rs:483`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
+- `crates/history-semantics/src/compiled_rule.rs:484`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
 - `crates/history-semantics/src/policy/evaluate.rs:69`: `fn render_denial`
 - `crates/history-semantics/src/policy/evaluate.rs:192`: `fn unpack_policy_rule`
 - `crates/history-semantics/src/policy/rule.rs:23`: `struct PolicyRule<E: Event, C>`
