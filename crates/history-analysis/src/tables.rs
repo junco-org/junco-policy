@@ -69,6 +69,7 @@ impl Tables {
             result matches Ok(root) ==> root < final(self).regexes@.len()
                 && root as nat == source.root as nat + old(self).regexes@.len()
                 && final(self).tests@.len() == old(self).tests@.len() + source.tests@.len()
+                && final(self).regexes@.len() == old(self).regexes@.len() + source.regexes@.len()
                 && tests_copied(*source, final(self)@, old(self).tests@.len(), source.tests@.len())
                 && regexes_copied(*source, final(self)@, old(self).tests@.len(),
                     old(self).regexes@.len(), source.regexes@.len())
@@ -182,6 +183,16 @@ impl Tables {
                     old(self).tests@.len(), source.tests@.len())
                 && regexes_copied(*source, final(self)@, old(self).tests@.len(),
                     old(self).regexes@.len(), source.regexes@.len())
+                && match mode {
+                    RuleMode::Forbid =>
+                        root as nat == old(self).regexes@.len() + source.root as nat
+                        && final(self).regexes@.len() == old(self).regexes@.len() + source.regexes@.len(),
+                    RuleMode::Require =>
+                        root as nat == old(self).regexes@.len() + source.regexes@.len()
+                        && final(self).regexes@.len() == root as nat + 1
+                        && final(self).regexes@[root as int] == FlatRegex::Complement(
+                            (old(self).regexes@.len() + source.root as nat) as u32),
+                }
                 && (forall|index: nat, theta: Subst, word: Seq<EventView>|
                     index < old(self).regexes@.len()
                         ==> numeric::source_regex(old(self)@, index, theta, word)
@@ -275,6 +286,14 @@ impl Tables {
             result matches Ok(pair) ==> dag(pair) && pair.root < pair.regexes@.len()
                 && frame(self@, pair)
                 && pair.tests@ == self.tests@
+                && pair.root as nat == self.regexes@.len() + 1
+                && pair.regexes@.len() == self.regexes@.len() + 2
+                && pair.regexes@[self.regexes@.len() as int] == FlatRegex::Complement(right)
+                && match pair.regexes@[pair.root as int] {
+                    FlatRegex::Intersect(children) =>
+                        children@ == seq![left, self.regexes@.len() as u32],
+                    _ => false,
+                }
                 && forall|theta: Subst, word: Seq<EventView>|
                     numeric::source_regex(pair, pair.root as nat, theta, word)
                         == (numeric::source_regex(self@, left as nat, theta, word)
