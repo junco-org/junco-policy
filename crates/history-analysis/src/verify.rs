@@ -24,12 +24,13 @@ use crate::constraint::{
 use crate::verify::constraint_unique::{product_size, row_rank, row_valid};
 use alloc::vec::Vec;
 use history_semantics::verify::refinement::*;
+use history_store::native::representatives;
 use history_syntax::Event;
-use history_syntax::event::specs::EventSpec;
-use history_syntax::event::specs::arity;
+use history_syntax::spec::events::{EventSpec, arity};
 use history_syntax::syntax::Component;
 use junco_core::kernel::verify as model;
 use junco_core::observation::SmallVecSpecFns;
+use junco_core::spec::hypotheses::analyzer_hypotheses;
 use junco_core::verify::history_specs::{self as language, EventView, Subst};
 use vstd::prelude::*;
 
@@ -516,7 +517,8 @@ verus! {
 
 
 pub(crate) open spec fn table_wf(table: ConstraintTable) -> bool {
-    let reps = crate::native::representatives(table.ids);
+    let reps = representatives(table.ids);
+    &&& junco_core::spec::hypotheses::key_laws::<Constraint>()
     &&& reps.len() == table.constraints@.len()
     &&& forall|i: int| #![trigger reps[i]] 0 <= i < reps.len() ==> reps[i].1 == i
         && constraint_wf(reps[i].0)
@@ -2004,7 +2006,7 @@ pub(crate) proof fn lemma_table_injective(table: ConstraintTable, i: int, j: int
     requires table_wf(table), 0 <= i < table@.len(), 0 <= j < table@.len(), table@[i] == table@[j],
     ensures i == j,
 {
-    let reps = crate::native::representatives(table.ids);
+    let reps = representatives(table.ids);
     lemma_constraint_view_injective(table.constraints@[i], table.constraints@[j]);
     assert(constraint_key(reps[i].0) == constraint_key(reps[j].0));
 }
@@ -2059,10 +2061,6 @@ pub(crate) proof fn lemma_letters_contract(g: Constraint, operands: Operands, un
     }
 }
 
-pub(crate) proof fn lemma_constraint_key_obligations()
-    requires crate::native::hash_coherent::<Constraint>(),
-    ensures crate::native::key_obligations::<Constraint>(),
-{}
 }
 
 verus! {
@@ -2533,15 +2531,6 @@ pub(crate) mod table {
     }
 }
 
-verus! {
-/// Native Eq/hash correspondence and event projection laws required by analyzer proofs.
-pub open(crate) spec fn analyzer_obligations<E: Event>() -> bool {
-    1 <= history_syntax::event::specs::arity::<E>() <= history_syntax::MAX_ARITY
-        && E::obeys_projection_spec() && crate::native::key_obligations::<E::Component>()
-        && search_exec::search_obligations()
-}
-}
-
 pub use frontend::{analyzer_state_wf, constructor_capacity, query_capacity};
 
 pub(crate) mod frontend {
@@ -2599,7 +2588,7 @@ pub(crate) mod frontend {
             &&& c.values@.len() <= u32::MAX
             &&& c.ids@.len() == arity::<E>()
             &&& forall|j: int| 0 <= j < c.values@.len() ==> E::coordinate_spec(c.values@[j]) < arity::<E>()
-            &&& forall|i: int| 0 <= i < c.ids@.len() ==> crate::native::representatives(c.ids@[i])
+            &&& forall|i: int| 0 <= i < c.ids@.len() ==> representatives(c.ids@[i])
                 == native_entries::<E>(c.values@, Component(i as u8))
             &&& forall|i: int, j: int| 0 <= i < j < c.values@.len()
                 && value_field::<E>(c.values@[i]) == value_field::<E>(c.values@[j])
@@ -2629,13 +2618,13 @@ pub(crate) mod frontend {
         }
 
         pub(crate) proof fn lemma_constant_lookup<E: Event>(c: Constants<E>, field: Component, value: E::Component, id: u32)
-            requires constants_wf(c), analyzer_obligations::<E>(), field.0 < arity::<E>(), value_field::<E>(value) == field,
-                exists|i: int| 0 <= i < crate::native::representatives(c.ids@[field.0 as int]).len()
-                    && crate::native::representatives(c.ids@[field.0 as int])[i].1 == id
-                    && value.eq_spec(&crate::native::representatives(c.ids@[field.0 as int])[i].0),
+            requires constants_wf(c), analyzer_hypotheses::<E>(), field.0 < arity::<E>(), value_field::<E>(value) == field,
+                exists|i: int| 0 <= i < representatives(c.ids@[field.0 as int]).len()
+                    && representatives(c.ids@[field.0 as int])[i].1 == id
+                    && value.eq_spec(&representatives(c.ids@[field.0 as int])[i].0),
             ensures stored_code(c, value, id),
         {
-            let reps = crate::native::representatives(c.ids@[field.0 as int]);
+            let reps = representatives(c.ids@[field.0 as int]);
             let i = choose|i: int| 0 <= i < reps.len() && reps[i].1 == id && value.eq_spec(&reps[i].0);
             lemma_native_entry_source::<E>(c.values@, field, i);
             let j = choose|j: int| 0 <= j < c.values@.len() && reps[i] == (c.values@[j], (j + 1) as u32);
@@ -2643,20 +2632,20 @@ pub(crate) mod frontend {
         }
 
         pub(crate) proof fn lemma_constants_insert<E: Event>(before: Constants<E>, after: Constants<E>, field: Component, value: E::Component, id: u32)
-            requires constants_wf(before), analyzer_obligations::<E>(), field.0 < arity::<E>(), value_field::<E>(value) == field,
+            requires constants_wf(before), analyzer_hypotheses::<E>(), field.0 < arity::<E>(), value_field::<E>(value) == field,
                 E::coordinate_spec(value) < arity::<E>(), before.values@.len() < u32::MAX,
                 id as nat == before.values@.len() + 1, after.values@ == before.values@.push(value),
                 after.ids@.len() == before.ids@.len(),
-                crate::native::representatives(after.ids@[field.0 as int])
-                    == crate::native::representatives(before.ids@[field.0 as int]).push((value, id)),
+                representatives(after.ids@[field.0 as int])
+                    == representatives(before.ids@[field.0 as int]).push((value, id)),
                 forall|i: int| 0 <= i < before.ids@.len() && i != field.0 ==> after.ids@[i] == before.ids@[i],
-                forall|i: int| 0 <= i < crate::native::representatives(before.ids@[field.0 as int]).len()
-                    ==> !value.eq_spec(&crate::native::representatives(before.ids@[field.0 as int])[i].0),
+                forall|i: int| 0 <= i < representatives(before.ids@[field.0 as int]).len()
+                    ==> !value.eq_spec(&representatives(before.ids@[field.0 as int])[i].0),
             ensures constants_wf(after), constants_frame(before, after), stored_code(after, value, id),
         {
             let source = before.values@.map(|i: int, v: E::Component| (v, (i + 1) as u32));
             assert(after.values@.map(|i: int, v: E::Component| (v, (i + 1) as u32)) =~= source.push((value, id)));
-            assert forall|i: int| 0 <= i < after.ids@.len() implies crate::native::representatives(after.ids@[i])
+            assert forall|i: int| 0 <= i < after.ids@.len() implies representatives(after.ids@[i])
                 == native_entries::<E>(after.values@, Component(i as u8)) by {
                 source.lemma_filter_push((value, id), |p: (E::Component, u32)| value_field::<E>(p.0) == Component(i as u8));
             }
@@ -2691,10 +2680,14 @@ pub(crate) mod frontend {
         }
 
         pub(crate) proof fn lemma_constants_maps<E: Event>(c: Constants<E>)
-            requires constants_wf(c), analyzer_obligations::<E>(),
+            requires constants_wf(c), analyzer_hypotheses::<E>(),
             ensures enc::maps_wf(constant_book(c), fl::component_equality::<E>(), fl::component_domain::<E>()),
         {
-            assert(enc::equality_laws(fl::component_equality::<E>(), fl::component_domain::<E>()));
+            assert forall|field: Component| junco_core::spec::hypotheses::eq_equivalence::<E::Component>(
+                enc::equality_at(fl::component_equality::<E>(), field),
+                enc::domain_at(fl::component_domain::<E>(), field)) by {
+                history_store::typed::verify::lemma_component_key_model::<E>(field);
+            }
             assert forall|f: int, i: int| 0 <= f < arity::<E>() && 0 <= i < constant_book(c)[f].len()
                 implies fl::component_domain::<E>()(enc::field_at(f), constant_book(c)[f][i].0) && constant_book(c)[f][i].1 > 0 by {
                 lemma_field_entry_source::<E>(c.values@, enc::field_at(f), i);
@@ -2975,7 +2968,7 @@ pub(crate) mod frontend {
 
         pub(crate) proof fn lemma_store_extends<E: Event>(before: Constants<E>, after: Constants<E>,
             us: Universes, rules: Seq<StoredRule<E>>)
-            requires constants_wf(before), constants_wf(after), analyzer_obligations::<E>(),
+            requires constants_wf(before), constants_wf(after), analyzer_hypotheses::<E>(),
                 enc::extends(constant_book(before), constant_book(after), fl::component_equality::<E>()),
                 forall|i: int| 0 <= i < rules.len() ==> stored_rule_wf(before, us, rules[i]),
             ensures forall|i: int| 0 <= i < rules.len() ==> stored_rule_wf(after, us, rules[i]),
@@ -3137,13 +3130,13 @@ pub(crate) mod frontend {
         pub(crate) proof fn lemma_empty_constants<E: Event>(c: Constants<E>)
             requires 1 <= arity::<E>() <= history_syntax::MAX_ARITY,
                 c.values@.len() == 0, c.ids@.len() == arity::<E>(),
-                forall|i: int| 0 <= i < c.ids@.len() ==> crate::native::representatives(c.ids@[i]).len() == 0,
+                forall|i: int| 0 <= i < c.ids@.len() ==> representatives(c.ids@[i]).len() == 0,
             ensures constants_wf(c),
         {
-            assert forall|i: int| 0 <= i < c.ids@.len() implies crate::native::representatives(c.ids@[i]) == native_entries::<E>(c.values@, Component(i as u8)) by {
+            assert forall|i: int| 0 <= i < c.ids@.len() implies representatives(c.ids@[i]) == native_entries::<E>(c.values@, Component(i as u8)) by {
                 assert(c.values@ =~= Seq::<E::Component>::empty());
                 reveal(Seq::filter);
-                assert(crate::native::representatives(c.ids@[i]) =~= Seq::<(E::Component,u32)>::empty());
+                assert(representatives(c.ids@[i]) =~= Seq::<(E::Component,u32)>::empty());
             }
         }
 
@@ -3205,7 +3198,7 @@ pub(crate) mod frontend {
         }
 
         proof fn lemma_declared_domain<E: Event>(c: Constants<E>, u: Universe, raw: Option<Vec<E::Component>>)
-            requires analyzer_obligations::<E>(), declared_universe(c, u, raw),
+            requires analyzer_hypotheses::<E>(), declared_universe(c, u, raw),
             ensures forall|x: E::Component| #[trigger] semantics::in_domain(selected_values(c, u), x)
                 == semantics::in_domain(match raw { None => None, Some(vs) => Some(vs@.to_set()) }, x),
         {
@@ -3244,7 +3237,7 @@ pub(crate) mod frontend {
         }
 
         pub(crate) proof fn lemma_constructor_domains<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
-            requires analyzer_obligations::<E>(), declared_domains_encoded(a, d), universes_wf(a.constants, a.universes),
+            requires analyzer_hypotheses::<E>(), declared_domains_encoded(a, d), universes_wf(a.constants, a.universes),
             ensures declared_domain_equivalence(a, d),
         {
             assert forall|i: int, x: E::Component| 0 <= i < d@.len() implies

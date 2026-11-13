@@ -1,6 +1,5 @@
 //! Policy coverage, redundancy, refinement, and tail inclusion through constrained search.
 
-use crate::native::NativeMap;
 #[cfg(verus_keep_ghost)]
 use crate::verify::constraint_wf;
 #[cfg(verus_keep_ghost)]
@@ -21,8 +20,9 @@ use history_semantics::verify::refinement::{
 };
 #[cfg(verus_keep_ghost)]
 use history_semantics::{compile_verify as numeric, symbolic_language_verify as facade};
+use history_store::native::NativeMap;
 #[cfg(verus_keep_ghost)]
-use history_syntax::event::specs::{EventSpec, arity};
+use history_syntax::spec::events::{EventSpec, arity};
 use history_syntax::{Arity, Component, Event, Head, MAX_ARITY, RegexExpr, Rule, RuleMode};
 use junco_core::compile::validate_component;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex};
@@ -33,6 +33,8 @@ use junco_core::limits::Unmetered;
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
 use junco_core::observation::SmallVecSpecFns;
+#[cfg(verus_keep_ghost)]
+use junco_core::spec::hypotheses::analyzer_hypotheses;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::{encoding as enc, flatten as fl};
 use junco_core::{CompileError, FlatEncoder, HistoryError, lower_flat};
@@ -284,7 +286,7 @@ pub(crate) struct Constants<E: Event> {
 verus! {
 impl<E: Event> Constants<E> {
     fn try_intern(&mut self, field: Component, value: E::Component) -> (result: Result<ConstId, core::num::TryFromIntError>)
-        requires constants_wf(*old(self)), crate::verify::analyzer_obligations::<E>(),
+        requires constants_wf(*old(self)), analyzer_hypotheses::<E>(),
             field.0 < arity::<E>(), E::coordinate_spec(value) == field.0 as nat,
         ensures constants_wf(*final(self)), constants_frame(*old(self), *final(self)),
             final(self).values@.len() <= old(self).values@.len() + 1,
@@ -305,7 +307,7 @@ impl<E: Event> Constants<E> {
     }
 
     fn intern(&mut self, field: Component, value: E::Component) -> (result: ConstId)
-        requires constants_wf(*old(self)), crate::verify::analyzer_obligations::<E>(),
+        requires constants_wf(*old(self)), analyzer_hypotheses::<E>(),
             old(self).values@.len() < u32::MAX,
             field.0 < arity::<E>(), E::coordinate_spec(value) == field.0 as nat,
         ensures constants_wf(*final(self)), constants_frame(*old(self), *final(self)),
@@ -317,7 +319,7 @@ impl<E: Event> Constants<E> {
 
     /// The universe of a declared finite component, in declaration order without repeats.
     fn universe(&mut self, field: Component, values: &[E::Component]) -> (result: Rc<Vec<ConstId>>)
-        requires constants_wf(*old(self)), crate::verify::analyzer_obligations::<E>(),
+        requires constants_wf(*old(self)), analyzer_hypotheses::<E>(),
             old(self).values@.len() + values@.len() <= u32::MAX,
             field.0 < arity::<E>(),
             forall|i: int| 0 <= i < values@.len() ==> E::coordinate_spec(values@[i]) == field.0 as nat,
@@ -331,7 +333,7 @@ impl<E: Event> Constants<E> {
         let mut i = 0;
         proof { lemma_universe_empty(*self); assert(values@.take(0) =~= Seq::<E::Component>::empty()); }
         while i < values.len()
-            invariant i <= values@.len(), constants_wf(*self), crate::verify::analyzer_obligations::<E>(),
+            invariant i <= values@.len(), constants_wf(*self), analyzer_hypotheses::<E>(),
                 field.0 < arity::<E>(),
                 forall|j: int| 0 <= j < values@.len() ==> E::coordinate_spec(values@[j]) == field.0 as nat,
                 constants_frame(before, *self), self.values@.len() <= before.values@.len() + i,
@@ -389,13 +391,13 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
     open(crate) spec fn maps(&self) -> enc::Codebook<E::Component> { crate::verify::constant_book(*self.constants) }
     open(crate) spec fn encoding_calls(&self) -> nat { self.calls@ }
     open(crate) spec fn state_wf(&self) -> bool {
-        constants_wf(*self.constants) && crate::verify::analyzer_obligations::<E>()
+        constants_wf(*self.constants) && analyzer_hypotheses::<E>()
             && self.constants.values@.len() <= self.calls@
             && (self.overflowed ==> u32::MAX < self.calls@)
             && self.initial_values@.is_prefix_of(self.constants.values@)
     }
     open(crate) spec fn obeys_encoding_spec(&self) -> bool {
-        constants_wf(*self.constants) && crate::verify::analyzer_obligations::<E>()
+        constants_wf(*self.constants) && analyzer_hypotheses::<E>()
     }
     open spec fn errors_are_non_invariant(&self) -> bool { true }
     #[verifier::prophetic]
@@ -456,7 +458,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     // Each match keeps the declared domain's exact vector view.
     #[allow(clippy::manual_map)]
     pub fn new(domains: Domains<E>) -> (result: Self)
-        requires crate::verify::analyzer_obligations::<E>(), domains.wf(), constructor_capacity(domains),
+        requires analyzer_hypotheses::<E>(), domains.wf(), constructor_capacity(domains),
         ensures constructor_result(result, domains), result.wf(),
     {
         reveal(Domains::wf);
@@ -466,9 +468,9 @@ impl<E: Event> PolicyAnalyzer<E> {
         let mut ids = Vec::with_capacity(arity);
         let mut index = 0;
         while index < arity
-            invariant index <= arity, arity == history_syntax::event::specs::arity::<E>(),
+            invariant index <= arity, arity == history_syntax::spec::events::arity::<E>(),
                 1 <= arity <= MAX_ARITY, ids@.len() == index,
-                forall|i: int| 0 <= i < index ==> crate::native::representatives(ids@[i]).len() == 0,
+                forall|i: int| 0 <= i < index ==> history_store::native::representatives(ids@[i]).len() == 0,
             decreases arity - index,
         {
             ids.push(NativeMap::new());
@@ -479,9 +481,9 @@ impl<E: Event> PolicyAnalyzer<E> {
         let mut universes = Vec::with_capacity(arity);
         index = 0;
         while index < arity
-            invariant index <= arity, arity == history_syntax::event::specs::arity::<E>(),
+            invariant index <= arity, arity == history_syntax::spec::events::arity::<E>(),
                 1 <= arity <= MAX_ARITY, domains == input, constructor_capacity(input),
-                crate::verify::analyzer_obligations::<E>(), domains_wf(input),
+                analyzer_hypotheses::<E>(), domains_wf(input),
                 constants_wf(constants), universes@.len() == index,
                 constants.values@.len() <= domain_values_count(input.components@.take(index as int)),
                 forall|i: int| 0 <= i < index ==>
@@ -532,7 +534,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// Validates and stores a rule. Indices remain stable when later rules add constants.
     /// The first successful registration obtains a checked owner identity; exhaustion is an error.
     pub fn add_rule(&mut self, rule: &Rule<E>) -> (result: Result<RuleId, CompileError>)
-        requires views::analyzer_obligations::<E>(), analyzer_state_wf(*old(self)),
+        requires analyzer_hypotheses::<E>(), analyzer_state_wf(*old(self)),
             add_rule_capacity(*old(self), *rule),
         ensures analyzer_state_wf(*final(self)),
             final(self)@.domains == old(self)@.domains,
@@ -580,7 +582,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// Whether `by` covers every denial of the stored rule.
     /// Every supplied id is checked at runtime; a foreign or unknown id returns `UnknownId`.
     pub fn covered(&self, rule: RuleId, by: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
-        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+        requires analyzer_state_wf(*self), analyzer_hypotheses::<E>(),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
             result is Ok ==> rule.belongs_to(self) && ids_belong_to(self, by@),
@@ -599,7 +601,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// removal changes a decision when `policy` contains `rule`; an absent rule retains the
     /// coverage-query interpretation.
     pub fn redundant(&self, rule: RuleId, policy: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
-        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+        requires analyzer_state_wf(*self), analyzer_hypotheses::<E>(),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
             result is Ok ==> rule.belongs_to(self) && ids_belong_to(self, policy@),
@@ -637,7 +639,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// Whether `stricter` denies everything denied by `than`.
     pub fn at_least_as_strict(&self, stricter: &[RuleId], than: &[RuleId])
         -> (result: Result<Inclusion<E>, HistoryError>)
-        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+        requires analyzer_state_wf(*self), analyzer_hypotheses::<E>(),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
             result is Ok ==> ids_belong_to(self, stricter@) && ids_belong_to(self, than@),
@@ -650,7 +652,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         self.check_ids(than)?;
         let mut index = 0;
         while index < than.len()
-            invariant index <= than@.len(), analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+            invariant index <= than@.len(), analyzer_state_wf(*self), analyzer_hypotheses::<E>(),
                 valid_ids(*self, stricter@), valid_ids(*self, than@),
                 ids_belong_to(self, stricter@), ids_belong_to(self, than@),
                 verdict::unrestricted_components_infinite(self@.domains),
@@ -709,7 +711,7 @@ impl<E: Event> PolicyAnalyzer<E> {
 
     fn covered_with(&self, rule: RuleId, by: &[RuleId], exclude: Option<RuleId>)
         -> (result: Result<Inclusion<E>, HistoryError>)
-        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+        requires analyzer_state_wf(*self), analyzer_hypotheses::<E>(),
             rule.0 < self.rules@.len(), valid_ids(*self, by@),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
@@ -754,7 +756,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         proof { firing::lemma_policy_split(*constraint, operands, self.universes, atoms@, cases@, policy); }
         let mut index = 0;
         while index < cases.len()
-            invariant index <= cases@.len(), analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+            invariant index <= cases@.len(), analyzer_state_wf(*self), analyzer_hypotheses::<E>(),
                 rule.0 < self.rules@.len(), valid_ids(*self, by@),
                 verdict::unrestricted_components_infinite(self@.domains),
                 policy == queries::numeric_policy(*self, by@, exclude),
@@ -898,7 +900,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         case: &Constraint,
         #[cfg(verus_keep_ghost)] start: &Constraint,
         #[cfg(verus_keep_ghost)] operands: &Operands) -> (result: Result<FlatPair<u64>, HistoryError>)
-        requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+        requires analyzer_state_wf(*self), analyzer_hypotheses::<E>(),
             rule.0 < self.rules@.len(), valid_ids(*self, by@),
             views::shape_wf(*start, *operands, self.universes),
             views::split_views(*start, *operands, self.universes).contains(case@),
@@ -939,7 +941,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         let mut matching: Vec<u32> = Vec::new();
         let mut index = 0;
         while index < by.len()
-            invariant index <= by@.len(), analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
+            invariant index <= by@.len(), analyzer_state_wf(*self), analyzer_hypotheses::<E>(),
                 valid_ids(*self, by@), rule.0 < self.rules@.len(), views::table::dag(tables@),
                 denial < tables.regexes@.len(), source_codes_wf(self.constants, tables@),
                 views::shape_wf(*start, *operands, self.universes),
@@ -1061,7 +1063,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     ///
     /// Both tails may refer to the head's variables. A counterexample is a matching candidate and
     /// a history in `left` but not in `right`.
-    #[verus_spec(result => requires views::analyzer_obligations::<E>(),
+    #[verus_spec(result => requires analyzer_hypotheses::<E>(),
         analyzer_state_wf(*old(self)), query_capacity(*old(self), *left, *right),
         ensures analyzer_state_wf(*final(self)),
             junco_core::verify::history_specs::no_internal_compile_error(result),
@@ -1183,7 +1185,7 @@ impl<E: Event> PolicyAnalyzer<E> {
 
     /// `source` with each constant replaced by its constant id.
     fn encode(&mut self, source: &FlatPair<E::Component>) -> (result: Result<FlatPair<u64>, HistoryError>)
-        requires constants_wf(old(self).constants), crate::verify::analyzer_obligations::<E>(), encode_capacity(*old(self), *source),
+        requires constants_wf(old(self).constants), analyzer_hypotheses::<E>(), encode_capacity(*old(self), *source),
         ensures constants_wf(final(self).constants), enc::extends(crate::verify::constant_book(old(self).constants), crate::verify::constant_book(final(self).constants), fl::component_equality::<E>()),
             constants_frame(old(self).constants, final(self).constants),
             final(self).universes == old(self).universes,
@@ -1357,7 +1359,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         let mut candidate = [Slot::Constant(0); MAX_ARITY];
         let mut component: usize = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            arity == self.universes@.len(), arity == history_syntax::event::specs::arity::<E>(),
+            arity == self.universes@.len(), arity == history_syntax::spec::events::arity::<E>(),
             1 <= arity <= MAX_ARITY,
             component <= arity, fresh <= component,
             reconstruction_input(self.constants, self.universes, *constraint, letters@, alphabets@),
@@ -1422,7 +1424,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         }
         let mut index: usize = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            arity == self.universes@.len(), arity == history_syntax::event::specs::arity::<E>(),
+            arity == self.universes@.len(), arity == history_syntax::spec::events::arity::<E>(),
             1 <= arity <= MAX_ARITY,
             index <= letters@.len(), values@.len() == index, slots_history.len() == index,
             candidate_values@ == components_of_slots(self.constants, slot_views(candidate@.take(arity as int))),
@@ -1452,7 +1454,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             let mut slots = [Slot::Constant(0); MAX_ARITY];
             let mut component: usize = 0;
             #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            arity == self.universes@.len(), arity == history_syntax::event::specs::arity::<E>(),
+            arity == self.universes@.len(), arity == history_syntax::spec::events::arity::<E>(),
             1 <= arity <= MAX_ARITY,
                 component <= arity, index < letters@.len(), values@.len() == index, slots_history.len() == index,
                 fresh <= arity * (index + 1) + component,
