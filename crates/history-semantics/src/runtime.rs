@@ -973,7 +973,7 @@ impl BatchCursor {
         proof! {
             model::lemma_graph_wf_elim(entry.store.graph());
             model::lemma_lift_regex_stable(entry.store.graph(), (*pair).store.graph(), entry.root@);
-            history_algebra::theorem_batch_extends_pinned_prefix(
+            history_algebra::lemma_batch_extends_pinned_prefix(
                 entry.store.graph(), (*pair).store.graph(), bindings@,
                 entry.root@, entry_cursor.residual@, residual@, history_store::store::verify::events_view(events@),
                 entry_cursor.consumed as nat, end as nat,

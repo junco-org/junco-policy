@@ -132,12 +132,29 @@ pub proof fn lemma_symbolic_derivative_interp<L>(sem: spec_fn(L, EventView) -> b
     }
 }
 
-/// Paper, Lemma One-step correctness (`lem:sderiv`), modulo language rather than normalization.
-pub proof fn theorem_symbolic_derivative_correct<L>(sem: spec_fn(L, EventView) -> bool, e: EventView, r: Regex<L>, w: Seq<EventView>)
+/// Lemma One-step correctness (`lem:sderiv`), modulo language rather than normalization: the
+/// interpreted symbolic derivative has the one-event derivative language.
+pub open spec fn stmt_symbolic_derivative_correct<L>() -> bool {
+    forall|sem: spec_fn(L, EventView) -> bool, e: EventView, r: Regex<L>, w: Seq<EventView>|
+        #[trigger] language::lang(sem, language::interp_transition(sem, e, symbolic_derivative(r)), w)
+            == language::lang(sem, r, seq![e] + w)
+}
+
+pub proof fn lemma_symbolic_derivative_correct<L>(sem: spec_fn(L, EventView) -> bool, e: EventView, r: Regex<L>, w: Seq<EventView>)
     ensures language::lang(sem, language::interp_transition(sem, e, symbolic_derivative(r)), w) == language::lang(sem, r, seq![e] + w),
 {
     lemma_symbolic_derivative_interp(sem, e, r);
     language::lemma_derivative_correct(sem, e, r, w);
+}
+
+pub proof fn theorem_symbolic_derivative_correct<L>()
+    ensures stmt_symbolic_derivative_correct::<L>(),
+{
+    assert forall|sem: spec_fn(L, EventView) -> bool, e: EventView, r: Regex<L>, w: Seq<EventView>|
+        #[trigger] language::lang(sem, language::interp_transition(sem, e, symbolic_derivative(r)), w)
+            == language::lang(sem, r, seq![e] + w) by {
+        lemma_symbolic_derivative_correct(sem, e, r, w);
+    }
 }
 
 /// The paper's state sequence q, consuming events oldest first.
@@ -158,29 +175,67 @@ pub proof fn lemma_symbolic_run_is_derive_word<L>(sem: spec_fn(L, EventView) -> 
     }
 }
 
-/// Paper, Theorem Symbolic derivative correctness (`thm:sderiv`), modulo language rather than
-/// normalization.
-pub proof fn theorem_matcher_correct<L>(sem: spec_fn(L, EventView) -> bool, u: Seq<EventView>, r: Regex<L>)
+/// Theorem Symbolic derivative correctness (`thm:sderiv`), modulo language rather than
+/// normalization: the symbolic run over a history is nullable iff the history is in the language.
+pub open spec fn stmt_symbolic_run_correct<L>() -> bool {
+    forall|sem: spec_fn(L, EventView) -> bool, u: Seq<EventView>, r: Regex<L>|
+        language::nullable(#[trigger] symbolic_run(sem, u, r)) == language::lang(sem, r, u)
+}
+
+pub proof fn lemma_symbolic_run_correct<L>(sem: spec_fn(L, EventView) -> bool, u: Seq<EventView>, r: Regex<L>)
     ensures language::nullable(symbolic_run(sem, u, r)) == language::lang(sem, r, u),
 {
     lemma_symbolic_run_is_derive_word(sem, u, r);
     language::lemma_derive_word_nullable(sem, u, r);
 }
 
-/// Paper, Theorem Matcher correctness (`thm:matcher`), steps 2–3: a fired rule uses its unique
-/// complete head substitution.
-pub proof fn theorem_rule_decision(head: Head, tail: Regex<SrcTest>, request: EventView, history: Seq<EventView>, theta: Subst)
+pub proof fn theorem_symbolic_run_correct<L>()
+    ensures stmt_symbolic_run_correct::<L>(),
+{
+    assert forall|sem: spec_fn(L, EventView) -> bool, u: Seq<EventView>, r: Regex<L>|
+        language::nullable(#[trigger] symbolic_run(sem, u, r)) == language::lang(sem, r, u) by {
+        lemma_symbolic_run_correct(sem, u, r);
+    }
+}
+
+/// Theorem Matcher correctness (`thm:matcher`), steps 2–3: a fired rule decides by the symbolic
+/// run of its tail under its unique complete head substitution.
+pub open spec fn stmt_rule_decision() -> bool {
+    forall|head: Head, tail: Regex<SrcTest>, request: EventView, history: Seq<EventView>, theta: Subst|
+        #![trigger language::head_match(head, request, theta), symbolic_run(src_sem(theta), history, tail)]
+        language::head_match(head, request, theta)
+            ==> language::pair_lang(head, tail, request, history) == language::nullable(symbolic_run(src_sem(theta), history, tail))
+}
+
+pub proof fn lemma_rule_decision(head: Head, tail: Regex<SrcTest>, request: EventView, history: Seq<EventView>, theta: Subst)
     requires language::head_match(head, request, theta),
     ensures language::pair_lang(head, tail, request, history) == language::nullable(symbolic_run(src_sem(theta), history, tail)),
 {
     language::lemma_pair_lang_substitutions(head, tail, request, history, theta);
-    theorem_matcher_correct(src_sem(theta), history, tail);
+    lemma_symbolic_run_correct(src_sem(theta), history, tail);
 }
 
-/// Paper, Theorem Matcher correctness (`thm:matcher`), step 1: without a complete matching substitution the rule is not fired.
-pub proof fn theorem_not_fired(head: Head, tail: Regex<SrcTest>, request: EventView, history: Seq<EventView>)
-    requires forall|theta: Subst| !(language::head_match(head, request, theta)),
-    ensures !language::pair_lang(head, tail, request, history),
+pub proof fn theorem_rule_decision()
+    ensures stmt_rule_decision(),
+{
+    assert forall|head: Head, tail: Regex<SrcTest>, request: EventView, history: Seq<EventView>, theta: Subst|
+        #![trigger language::head_match(head, request, theta), symbolic_run(src_sem(theta), history, tail)]
+        language::head_match(head, request, theta)
+        implies language::pair_lang(head, tail, request, history) == language::nullable(symbolic_run(src_sem(theta), history, tail)) by {
+        lemma_rule_decision(head, tail, request, history, theta);
+    }
+}
+
+/// Theorem Matcher correctness (`thm:matcher`), step 1: without a complete matching substitution
+/// the rule is not fired.
+pub open spec fn stmt_not_fired() -> bool {
+    forall|head: Head, tail: Regex<SrcTest>, request: EventView, history: Seq<EventView>|
+        (forall|theta: Subst| !language::head_match(head, request, theta))
+            ==> !#[trigger] language::pair_lang(head, tail, request, history)
+}
+
+pub proof fn theorem_not_fired()
+    ensures stmt_not_fired(),
 { }
 
 pub enum TestRule {
@@ -1487,8 +1542,15 @@ pub proof fn lemma_similar_preserves_lang(theta: Subst, d: Sim, w: Seq<EventView
     }
 }
 
-/// Paper, Proposition Similarity preserves language (`lem:similarity-language`).
-pub proof fn theorem_similarity_preserves_language(r: Regex<SrcTest>, s: Regex<SrcTest>, theta: Subst, w: Seq<EventView>)
+/// Proposition Similarity preserves language (`lem:similarity-language`): similar tails have the
+/// same language under every substitution.
+pub open spec fn stmt_similarity_preserves_language() -> bool {
+    forall|r: Regex<SrcTest>, s: Regex<SrcTest>, theta: Subst, w: Seq<EventView>|
+        #![trigger similar(r, s), language::lang(src_sem(theta), r, w)]
+        similar(r, s) ==> language::lang(src_sem(theta), r, w) == language::lang(src_sem(theta), s, w)
+}
+
+pub proof fn lemma_similarity_preserves_language(r: Regex<SrcTest>, s: Regex<SrcTest>, theta: Subst, w: Seq<EventView>)
     requires similar(r, s),
     ensures language::lang(src_sem(theta), r, w) == language::lang(src_sem(theta), s, w),
 {
@@ -1496,27 +1558,54 @@ pub proof fn theorem_similarity_preserves_language(r: Regex<SrcTest>, s: Regex<S
     lemma_similar_preserves_lang(theta, d, w);
 }
 
-/// Similar tails give identical policy-visible decisions under every head.
-pub proof fn theorem_similar_tails_same_decision(head: Head, r: Regex<SrcTest>, s: Regex<SrcTest>, request: EventView, history: Seq<EventView>)
+pub proof fn theorem_similarity_preserves_language()
+    ensures stmt_similarity_preserves_language(),
+{
+    assert forall|r: Regex<SrcTest>, s: Regex<SrcTest>, theta: Subst, w: Seq<EventView>|
+        #![trigger similar(r, s), language::lang(src_sem(theta), r, w)]
+        similar(r, s) implies language::lang(src_sem(theta), r, w) == language::lang(src_sem(theta), s, w) by {
+        lemma_similarity_preserves_language(r, s, theta, w);
+    }
+}
+
+/// Theorem Matcher correctness (`thm:matcher`), normalization step: similar tails give identical
+/// rule decisions under every head.
+pub open spec fn stmt_similar_tails_same_decision() -> bool {
+    forall|head: Head, r: Regex<SrcTest>, s: Regex<SrcTest>, request: EventView, history: Seq<EventView>|
+        #![trigger similar(r, s), language::pair_lang(head, r, request, history)]
+        similar(r, s) ==> language::pair_lang(head, r, request, history) == language::pair_lang(head, s, request, history)
+}
+
+pub proof fn lemma_similar_tails_same_decision(head: Head, r: Regex<SrcTest>, s: Regex<SrcTest>, request: EventView, history: Seq<EventView>)
     requires similar(r, s),
     ensures language::pair_lang(head, r, request, history) == language::pair_lang(head, s, request, history),
 {
     if language::pair_lang(head, r, request, history) {
         let theta = choose|theta: Subst| language::head_match(head, request, theta)
             && language::lang(src_sem(theta), r, history);
-        theorem_similarity_preserves_language(r, s, theta, history);
+        lemma_similarity_preserves_language(r, s, theta, history);
         assert(language::pair_lang(head, s, request, history));
     }
     if language::pair_lang(head, s, request, history) {
         let theta = choose|theta: Subst| language::head_match(head, request, theta)
             && language::lang(src_sem(theta), s, history);
-        theorem_similarity_preserves_language(r, s, theta, history);
+        lemma_similarity_preserves_language(r, s, theta, history);
         assert(language::pair_lang(head, r, request, history));
     }
 }
 
+pub proof fn theorem_similar_tails_same_decision()
+    ensures stmt_similar_tails_same_decision(),
+{
+    assert forall|head: Head, r: Regex<SrcTest>, s: Regex<SrcTest>, request: EventView, history: Seq<EventView>|
+        #![trigger similar(r, s), language::pair_lang(head, r, request, history)]
+        similar(r, s) implies language::pair_lang(head, r, request, history) == language::pair_lang(head, s, request, history) by {
+        lemma_similar_tails_same_decision(head, r, s, request, history);
+    }
+}
+
 /// Mandatory coordinates make Eq and Neq exact complements.
-pub proof fn theorem_eq_or_neq_is_true(theta: Subst, field: Component, term: Term, event: EventView)
+pub proof fn lemma_eq_or_neq_is_true(theta: Subst, field: Component, term: Term, event: EventView)
     ensures language::src_test_holds(theta,
         SrcTest::Or(seq![SrcTest::Eq(field, term), SrcTest::Neq(field, term)]), event),
 {
@@ -1595,7 +1684,7 @@ pub proof fn lemma_test_complement_involutive(t: model::Test)
 
 /// Extend the pinned graph; graph replacement requires a fresh root association.
 #[verifier::spinoff_prover]
-pub proof fn theorem_batch_extends_pinned_prefix(
+pub proof fn lemma_batch_extends_pinned_prefix(
     before: model::Graph, after: model::Graph, theta: Subst,
     root: nat, start: nat, out: nat, history: Seq<EventView>, consumed: nat, end: nat,
 )
