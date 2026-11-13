@@ -78,7 +78,9 @@ pub(crate) struct Refutation {
     ensures result matches Ok(outcome) ==> search_result(crate::verify::ndomains(*universes),
         paper_search::Item { constraint:implementation::constraint_of(constraint@),
             state:model::lift_regex(facade::graph(*old(language)),facade::root(*old(language))) },outcome_view(outcome))
-            && refutation_ready(outcome,*universes,root_vocabulary(*old(language),*universes,constraint@)))]
+            && refutation_ready(outcome,*universes,root_vocabulary(*old(language),*universes,constraint@)),
+        primitives_safe(symbolic::regex_primitives(model::lift_regex(facade::graph(*old(language)),facade::root(*old(language)))))
+            ==> junco_core::verify::history_specs::no_internal_error(result))]
 #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
 pub(crate) fn search(
     language: &mut SymbolicLanguage,
@@ -174,6 +176,7 @@ impl Search<'_> {
         requires running(*old(self),0,old(self).start@,old(self).vocabulary@),search_obligations(),
         ensures result matches Ok(outcome) ==> search_result(crate::verify::ndomains(*old(self).universes),old(self).start@,outcome_view(outcome))
             && refutation_ready(outcome,*old(self).universes,old(self).vocabulary@),
+            primitives_safe(symbolic::regex_primitives(old(self).start@.state)) ==> junco_core::verify::history_specs::no_internal_error(result),
     {
         proof_decl! { let ghost initial = *self; let ghost start = self.start@; let ghost vocabulary = self.vocabulary@; let ghost universes = *self.universes; }
         // Termination follows the finite item bound (Lemma Finitely many residuals, `lem:finite-states`, lifted to items) for the implementation's model: one finite item set,
@@ -204,6 +207,7 @@ impl Search<'_> {
                 lemma_running_items_bound(*self,next as nat,start,vocabulary,bound);
             }
             proof_decl! { let ghost before_nullable = *self; }
+            proof! { lemma_running_residual(*self,next as nat,start,vocabulary,next as int); }
             let nullable = self.language.nullable(self.items[next].residual)?;
             proof! {
                 lemma_running_language_frame(before_nullable,*self,next as nat,start,vocabulary);
@@ -263,6 +267,7 @@ impl Search<'_> {
         ensures result matches Ok(_) ==> running(*final(self),index as nat+1,old(self).start@,old(self).vocabulary@)
             && final(self).start@ == old(self).start@ && final(self).vocabulary@ == old(self).vocabulary@
             && *final(self).universes == *old(self).universes,
+            primitives_safe(symbolic::regex_primitives(old(self).start@.state)) ==> junco_core::verify::history_specs::no_internal_error(result),
     {
         hide(junco_core::verify::history_specs::lang);
         hide(model::lift_regex);hide(model::lift_test);hide(symbolic::regex_primitives);
@@ -288,6 +293,7 @@ impl Search<'_> {
                 start.state,archive_cases(self.archive@),trace(*self,index as nat),index as int);
         }
         let Item { constraint,residual,.. } = self.items[index];
+        proof! { lemma_running_residual(*self,index as nat,start,vocabulary,index as int); }
         let (transition, atoms) = derive_atoms(self.language, residual)?;
         proof! {
             lemma_state_frame(entry,*self);
@@ -419,6 +425,7 @@ impl Search<'_> {
                 }
                 let words = truth(&atoms,&letter);
                 proof_decl! { let ghost before_successor = *self; }
+                proof! { lemma_truth_ready(*self.language,transition,atoms@,words.view()); }
                 let successor = self.language.successor(transition, &words)?;
                 proof_decl! {
                     let ghost emitted = paper_search::Case {
@@ -527,7 +534,8 @@ impl Search<'_> {
         edges_wf(*old(self)),edge_ready(*old(self),constraint,parent),
         forall|j: int| 0 <= j < old(self).items@.len()
             ==> depth(old(self).items@,j) <= insertion_depth(old(self).items@,parent),
-        ensures result matches Ok(_) ==> state_wf(*final(self))
+        ensures junco_core::verify::history_specs::no_internal_error(result),
+            result matches Ok(_) ==> state_wf(*final(self))
             && queue_order(*final(self))
             && edges_wf(*final(self))
             && *final(self).language == *old(self).language
@@ -729,6 +737,8 @@ impl Search<'_> {
 #[verus_verify]
 #[verus_spec(result => requires facade::language_wf(*old(language)),
     ensures facade::language_wf(*final(language)), facade::frame(*old(language), *final(language)),
+        primitives_safe(facade::residual_primitives(*old(language), residual))
+            && residual@ < facade::graph(*old(language)).regexes.len() ==> junco_core::verify::history_specs::no_internal_error(result),
         result matches Ok((t, atoms)) ==> atoms_wf(atoms@)
             && paper_search::atoms_local(crate::verify::atom_set(atoms@))
             && facade::has_atoms(*final(language), t)
@@ -745,7 +755,21 @@ fn derive_atoms(
     residual: RegexId,
 ) -> Result<(TransitionId, Vec<Atom>), HistoryError> {
     let (transition, primitives) = language.derive(residual)?;
-    proof_decl! { let ghost original = primitives@; }
+    proof_decl! {
+        let ghost original = primitives@;
+        let ghost safe = primitives_safe(facade::residual_primitives(*old(language), residual))
+            && residual@ < facade::graph(*old(language)).regexes.len();
+    }
+    proof! {
+        if safe {
+            facade::lemma_residual_vocabulary_frame(*old(language), *language, residual);
+            assert forall|i: int| 0 <= i < primitives@.len() implies atom_valid(primitives@[i]) by {
+                assert(primitives@.map_values(|p: Primitive| p@)[i] == primitives@[i]@);
+                assert(primitives@.map_values(|p: Primitive| p@).contains(primitives@[i]@));
+                lemma_safe_atom(primitives@[i], facade::residual_primitives(*language, residual));
+            }
+        }
+    }
     // Validate first so the specified infallible collect can reuse the primitive allocation.
     let mut index = 0;
     #[cfg_attr(verus_keep_ghost, verus_spec(invariant
@@ -762,6 +786,9 @@ fn derive_atoms(
         forall|i: int| 0 <= i < primitives@.len() ==> model::lift_test(facade::graph(*language),
             facade::atom_ids(*language, transition)[i]@) == model::Test::Atom(primitives@[i]@, true),
         forall|i: int| 0 <= i < index ==> atom_valid(primitives@[i]),
+        safe == (primitives_safe(facade::residual_primitives(*old(language), residual))
+            && residual@ < facade::graph(*old(language)).regexes.len()),
+        safe ==> forall|i: int| 0 <= i < primitives@.len() ==> atom_valid(primitives@[i]),
         decreases primitives@.len()-index))]
     while index < primitives.len() {
         validate_atom(primitives[index])?;

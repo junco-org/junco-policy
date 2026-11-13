@@ -1151,6 +1151,32 @@ pub(crate) proof fn lemma_safe_atom(p: junco_core::kernel::Primitive,ps: Set<mod
     ensures atom_valid(p),
 {}
 
+/// A queued residual is a valid id whose primitives are among the root's.
+pub(crate) proof fn lemma_running_residual(s: Search<'_>,n: nat,start: paper::Item,v: [Set<nat>;3],j: int)
+    requires running(s,n,start,v),0 <= j < s.items@.len(),
+    ensures s.items@[j].residual@ < facade::graph(*old(s.language)).regexes.len(),
+        primitives_safe(symbolic::regex_primitives(s.start@.state))
+            ==> primitives_safe(facade::residual_primitives(*old(s.language),s.items@[j].residual)),
+{
+    lemma_running_evidence(s,n,start,v);
+    lemma_state_evidence(s);
+    reveal(vocabulary_wf);
+    if primitives_safe(symbolic::regex_primitives(s.start@.state)) {
+        lemma_primitives_safe_subset(facade::residual_primitives(*s.language,s.items@[j].residual),
+            symbolic::regex_primitives(s.start@.state));
+    }
+}
+
+/// The truth words of a derivative's atoms are a valid assignment of its atom ids.
+pub(crate) proof fn lemma_truth_ready(l: SymbolicLanguage,t: junco_core::kernel::TransitionId,
+    atoms: Seq<Atom>,words: Seq<u64>)
+    requires facade::language_wf(l),facade::has_atoms(l,t),facade::atom_ids(l,t).len() == atoms.len(),
+        atoms.len() + 63 <= usize::MAX ==> symbolic::assignment_valid(atoms.len(),words),
+    ensures symbolic::assignment_valid(facade::atom_ids(l,t).len(),words),
+{
+    facade::lemma_language_wf(l);
+}
+
 pub(crate) open spec fn queue_order(s: Search<'_>) -> bool {
     &&& forall|i: int,j: int| #![trigger s.items@[i],s.items@[j]] 0 <= i < j < s.items@.len()
         ==> depth(s.items@,i) <= depth(s.items@,j)
