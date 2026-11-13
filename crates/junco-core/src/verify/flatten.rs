@@ -175,9 +175,12 @@ pub open spec fn test_constants_bounded<C>(tests: Seq<FlatTest<C>>, id: nat, kno
     id < tests.len() && match tests[id as int] {
         FlatTest::Atom { field, term: FlatTerm::Constant(value), .. } =>
             (field.0 as nat) < known.len() && known[field.0 as int].contains(value),
-        FlatTest::And(children) | FlatTest::Or(children) => flat::references_before(children@, id)
+        FlatTest::And(children) => flat::references_before(children@, id)
             && forall|i: int| 0 <= i < children@.len() ==>
-                test_constants_bounded(tests, children@[i] as nat, known),
+                test_constants_bounded(tests, #[trigger] children@[i] as nat, known),
+        FlatTest::Or(children) => flat::references_before(children@, id)
+            && forall|i: int| 0 <= i < children@.len() ==>
+                test_constants_bounded(tests, #[trigger] children@[i] as nat, known),
         _ => true,
     }
 }
@@ -189,10 +192,15 @@ pub open spec fn regex_constants_bounded<C>(tests: Seq<FlatTest<C>>, regexes: Se
 {
     id < regexes.len() && match regexes[id as int] {
         FlatRegex::Test(test) => test_constants_bounded(tests, test as nat, known),
-        FlatRegex::Union(children) | FlatRegex::Concat(children) | FlatRegex::Intersect(children) =>
-            flat::references_before(children@, id)
+        FlatRegex::Union(children) => flat::references_before(children@, id)
             && forall|i: int| 0 <= i < children@.len() ==>
-                regex_constants_bounded(tests, regexes, children@[i] as nat, known),
+                regex_constants_bounded(tests, regexes, #[trigger] children@[i] as nat, known),
+        FlatRegex::Concat(children) => flat::references_before(children@, id)
+            && forall|i: int| 0 <= i < children@.len() ==>
+                regex_constants_bounded(tests, regexes, #[trigger] children@[i] as nat, known),
+        FlatRegex::Intersect(children) => flat::references_before(children@, id)
+            && forall|i: int| 0 <= i < children@.len() ==>
+                regex_constants_bounded(tests, regexes, #[trigger] children@[i] as nat, known),
         FlatRegex::Star(child) | FlatRegex::Complement(child) => child < id
             && regex_constants_bounded(tests, regexes, child as nat, known),
         _ => true,
