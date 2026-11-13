@@ -84,6 +84,9 @@ pub enum FlowComponent<P, V, L> {
     Label(L),
 }
 
+// This root crate is not a Verus target. Keeping the public tagged component enum
+// preserves callers' vocabulary; use of verified guarantees requires R1 projection
+// laws and R4 key laws for this implementation, including the action coordinate.
 impl<P, V, L> Event for FlowEvent<P, V, L>
 where
     P: Copy + Debug + Eq + Hash,

@@ -64,6 +64,9 @@ impl<P, R> LockEvent<P, R> {
     }
 }
 
+// This root crate is not a Verus target. The public tagged enum is retained for API
+// compatibility; guarantees require the R1 projection laws and R4 component key laws
+// for this implementation, rather than inheriting the verified tuple implementation.
 impl<P, R> Event for LockEvent<P, R>
 where
     P: Copy + Debug + Eq + Hash,

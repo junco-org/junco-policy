@@ -117,6 +117,9 @@ pub enum AgentComponent<P, C> {
     Class(C),
 }
 
+// This root crate is not a Verus target. Its public tagged component enum is not
+// replaced by the tuple enum: verified guarantees require R1 projection laws and
+// R4 component key laws for this implementation and the caller's classification.
 impl<P, C> Event for AgentEvent<P, C>
 where
     P: Copy + Debug + Eq + Hash,
