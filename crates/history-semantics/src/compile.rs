@@ -1460,14 +1460,14 @@ pub mod verify {
         let lifted = model::lift_regexes(g, model::regex_ids(selected));
         assert(lifted.len() == children.len());
         assert forall|i: int, piece: Seq<EventView>| 0 <= i < children.len() implies
-            language::lang(model::gsem(theta), lifted[i], piece)
+            language::numeric_lang(model::gsem(theta), lifted[i], piece)
                 == source_regex(template, children[i] as nat, theta, piece) by {
             assert(regex_correct(g, template, children[i] as nat, ids[children[i] as int]));
         }
         if norm::concat_combo(g, theta, selected, word) {
             let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == lifted.len() && word == parts.flatten()
                 && forall|i: int| 0 <= i < lifted.len()
-                    ==> language::lang(model::gsem(theta), lifted[i], parts[i]);
+                    ==> language::numeric_lang(model::gsem(theta), lifted[i], parts[i]);
             assert forall|i: int| 0 <= i < children.len() implies children[i] < index
                 && source_regex(template, children[i] as nat, theta, parts[i]) by {}
             assert(exists|parts: Seq<Seq<EventView>>| parts.len() == children.len() && parts.flatten() == word
@@ -1481,7 +1481,7 @@ pub mod verify {
                 && forall|i: int| 0 <= i < children.len()
                     ==> children[i] < index && source_regex(template, children[i] as nat, theta, parts[i]);
             assert forall|i: int| 0 <= i < lifted.len() implies
-                language::lang(model::gsem(theta), lifted[i], parts[i]) by {}
+                language::numeric_lang(model::gsem(theta), lifted[i], parts[i]) by {}
             assert(norm::concat_combo(g, theta, selected, word));
         }
     }
@@ -1489,16 +1489,16 @@ pub mod verify {
     pub(crate) proof fn regex_star_transfer(g: model::Graph, template: FlatPair<u64>,
         ids: Seq<RegexId>, child: nat, theta: Subst, word: Seq<EventView>)
         requires regex_maps(g, template, ids), child < ids.len(), language::event_wf(theta, theta.len()),
-        ensures language::lang(model::gsem(theta), language::Regex::Star(
+        ensures language::numeric_lang(model::gsem(theta), language::Regex::Star(
             alloc::boxed::Box::new(model::lift_regex(g, ids[child as int]@))), word)
             == (exists|parts: Seq<Seq<EventView>>| parts.flatten() == word
                 && forall|i: int| 0 <= i < parts.len() ==> source_regex(template, child, theta, parts[i])),
     {
         let regex = model::lift_regex(g, ids[child as int]@);
         assert(regex_correct(g, template, child, ids[child as int]));
-        if language::lang(model::gsem(theta), language::Regex::Star(alloc::boxed::Box::new(regex)), word) {
+        if language::numeric_lang(model::gsem(theta), language::Regex::Star(alloc::boxed::Box::new(regex)), word) {
             let parts = choose|parts: Seq<Seq<EventView>>| word == parts.flatten()
-                && forall|i: int| 0 <= i < parts.len() ==> language::lang(model::gsem(theta), regex, parts[i]);
+                && forall|i: int| 0 <= i < parts.len() ==> language::numeric_lang(model::gsem(theta), regex, parts[i]);
             assert forall|i: int| 0 <= i < parts.len() implies source_regex(template, child, theta, parts[i]) by {}
             assert(exists|parts: Seq<Seq<EventView>>| parts.flatten() == word
                 && forall|i: int| 0 <= i < parts.len() ==> source_regex(template, child, theta, parts[i]));
@@ -1507,8 +1507,8 @@ pub mod verify {
             && forall|i: int| 0 <= i < parts.len() ==> source_regex(template, child, theta, parts[i]) {
             let parts = choose|parts: Seq<Seq<EventView>>| parts.flatten() == word
                 && forall|i: int| 0 <= i < parts.len() ==> source_regex(template, child, theta, parts[i]);
-            assert forall|i: int| 0 <= i < parts.len() implies language::lang(model::gsem(theta), regex, parts[i]) by {}
-            assert(language::lang(model::gsem(theta), language::Regex::Star(alloc::boxed::Box::new(regex)), word));
+            assert forall|i: int| 0 <= i < parts.len() implies language::numeric_lang(model::gsem(theta), regex, parts[i]) by {}
+            assert(language::numeric_lang(model::gsem(theta), language::Regex::Star(alloc::boxed::Box::new(regex)), word));
         }
     }
 
@@ -1588,11 +1588,11 @@ pub mod verify {
             event_representation(candidate, request), word_representation(word, numeric),
             forall|i: int| 0 <= i < word.len() ==> word[i].len() == candidate.len(),
             language::head_match(head_view(template), request, theta),
-        ensures portable::lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality())
+        ensures portable::flat_lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality())
             == source_regex(template, id, theta, numeric),
         decreases id,
     {
-        reveal_with_fuel(portable::lang, 1);
+        reveal_with_fuel(portable::flat_lang, 1);
         reveal_with_fuel(source_regex, 1);
         assert(portable::regex_wf(template.regexes@[id as int], id, template.tests@.len()));
         assert forall|i: int| 0 <= i < word.len() implies portable::event_wf(word[i], candidate.len()) by {
@@ -1607,15 +1607,15 @@ pub mod verify {
             FlatRegex::Union(children) | FlatRegex::Intersect(children) => {
                 assert(portable::references_before(children@, id));
                 assert forall|i: int| 0 <= i < children@.len() implies
-                    portable::lang(template.tests@, template.regexes@, children@[i] as nat, candidate, word, numeric_equality())
+                    portable::flat_lang(template.tests@, template.regexes@, children@[i] as nat, candidate, word, numeric_equality())
                         == source_regex(template, children@[i] as nat, theta, numeric) by {
                     lemma_flat_regex(template, children@[i] as nat, candidate, request, word, numeric, theta);
                 }
             },
             FlatRegex::Concat(children) => {
-                if portable::lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()) {
+                if portable::flat_lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()) {
                     let parts = choose|parts: Seq<Seq<Seq<u64>>>| parts.len() == children@.len() && word == parts.flatten()
-                        && (forall|i: int| 0 <= i < parts.len() ==> portable::lang(template.tests@, template.regexes@, children@[i] as nat, candidate, parts[i], numeric_equality()));
+                        && (forall|i: int| 0 <= i < parts.len() ==> portable::flat_lang(template.tests@, template.regexes@, children@[i] as nat, candidate, parts[i], numeric_equality()));
                     junco_core::verify::flatten::lemma_partition_arity(parts, candidate.len());
                     let reverse = |n: EventView, e: Seq<u64>| event_representation(e, n);
                     assert(pointwise(numeric, word, reverse));
@@ -1639,16 +1639,16 @@ pub mod verify {
                         && forall|i: int| 0 <= i < parts.len() ==> pointwise(lifted[i], parts[i], event_relation());
                     junco_core::verify::flatten::lemma_partition_arity(lifted, candidate.len());
                     assert forall|i: int| 0 <= i < parts.len() implies
-                        portable::lang(template.tests@, template.regexes@, children@[i] as nat, candidate, lifted[i], numeric_equality()) by {
+                        portable::flat_lang(template.tests@, template.regexes@, children@[i] as nat, candidate, lifted[i], numeric_equality()) by {
                         lemma_flat_regex(template, children@[i] as nat, candidate, request, lifted[i], parts[i], theta);
                     }
-                    assert(portable::lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()));
+                    assert(portable::flat_lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()));
                 }
             },
             FlatRegex::Star(child) => {
-                if portable::lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()) {
+                if portable::flat_lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()) {
                     let parts = choose|parts: Seq<Seq<Seq<u64>>>| word == parts.flatten()
-                        && (forall|i: int| 0 <= i < parts.len() ==> portable::lang(template.tests@, template.regexes@, child as nat, candidate, parts[i], numeric_equality()));
+                        && (forall|i: int| 0 <= i < parts.len() ==> portable::flat_lang(template.tests@, template.regexes@, child as nat, candidate, parts[i], numeric_equality()));
                     junco_core::verify::flatten::lemma_partition_arity(parts, candidate.len());
                     let reverse = |n: EventView, e: Seq<u64>| event_representation(e, n);
                     assert(pointwise(numeric, word, reverse));
@@ -1672,10 +1672,10 @@ pub mod verify {
                         && forall|i: int| 0 <= i < parts.len() ==> pointwise(lifted[i], parts[i], event_relation());
                     junco_core::verify::flatten::lemma_partition_arity(lifted, candidate.len());
                     assert forall|i: int| 0 <= i < parts.len() implies
-                        portable::lang(template.tests@, template.regexes@, child as nat, candidate, lifted[i], numeric_equality()) by {
+                        portable::flat_lang(template.tests@, template.regexes@, child as nat, candidate, lifted[i], numeric_equality()) by {
                         lemma_flat_regex(template, child as nat, candidate, request, lifted[i], parts[i], theta);
                     }
-                    assert(portable::lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()));
+                    assert(portable::flat_lang(template.tests@, template.regexes@, id, candidate, word, numeric_equality()));
                 }
             },
             FlatRegex::Complement(child) => {

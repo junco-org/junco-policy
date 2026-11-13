@@ -142,7 +142,7 @@ pub mod verify {
         requires runtime_wf(before), runtime_frame(before, after),
         ensures runtime_accepts(before, bindings, events) == runtime_accepts(after, bindings, events),
     {
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(model::lift_regex);
         reveal(runtime_wf);
         reveal(runtime_frame);

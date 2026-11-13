@@ -601,9 +601,6 @@ pub(crate) open spec fn tail_failure<E: Event>(i: TailInput<E>) -> spec_fn(E, Se
         && !tdsl::lang(i.right.tail@, i.right.head@, c, h)
 }
 
-pub(crate) open spec fn tail_verdict<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, r: Inclusion<E>) -> bool {
-    analyzer::tail_included_spec(a@, a@, i.left.head@, i.left.tail@, i.right.tail@, r@)
-}
 
 pub(crate) proof fn lemma_numeric_head_sat(h: encoding::NHead, theta: Subst)
     requires h.len() == theta.len(), h.len() <= history_syntax::MAX_ARITY,
@@ -819,7 +816,7 @@ pub(crate) proof fn lemma_tail_decision<E: Event>(a: PolicyAnalyzer<E>, i: TailI
         implementation::constraint_of(g) == inclusion::head_constraint(typed::template_head(i.left_numeric)),
         numeric_decision_ok(a, n, g, decision,
             questions::tail_knowable_constants::<E>(a@.domains, i.left.head@, i.left.tail@, i.right.tail@)),
-    ensures tail_verdict(a, i, decision.inclusion),
+    ensures analyzer::tail_included_spec(a@, a@, i.left.head@, i.left.tail@, i.right.tail@, decision.inclusion@),
 {
     slots::lemma_inclusion_view(decision.inclusion);
     match decision.inclusion {
