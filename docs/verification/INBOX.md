@@ -4,6 +4,15 @@ The maintainer adds messages here, newest first, each with a UTC date and a shor
 message takes precedence over the handoff and over earlier messages where they conflict.
 Acknowledge each one in `STATUS.md` on your integration branch.
 
+## 2026-11-13: `Exhausted` is not a blocker
+
+The `Exhausted` items in earlier messages are not blockers. For Priority 1 it is enough that
+`Exhausted` makes no claim in every query spec and is documented honestly (budget or overflow).
+Do not hold a wave or a merge for it. An unforgeable "budget exceeded" statement is optional, after
+Priority 1; if you attempt it, its evidence must be something the implementation cannot choose.
+The handoff's target claims, decision 3, Track C and Track F now say this. Acknowledge in your next
+status entry.
+
 ## 2026-11-13: Surface review of `b18250c`
 
 1. **Run all eleven configurations now.** `hash_coherent` is defined as
