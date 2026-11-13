@@ -71,17 +71,20 @@ pinned Verus into `spec-check/vendor/` on first use (network access required).
 | `-p junco-core --features runtime,std,serde` | 248 verified, 0 errors |
 | `-p history-store --no-default-features --features runtime` | 287 verified, 0 errors |
 | `-p history-store --features runtime,std` | 287 verified, 0 errors |
-| `-p history-semantics --no-default-features --features runtime` | 1609 verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache` | 1614 verified, 0 errors |
+| `-p history-semantics --no-default-features --features runtime` | 1615 verified, 0 errors |
+| `-p history-semantics --features runtime,std,cache` | 1620 verified, 0 errors |
 | `-p history-semantics --features runtime,std,cache --test public_specs` | 21 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime` | 563 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime,std` | 563 verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime` | 570 verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime,std` | 570 verified, 0 errors |
 
 These counts are from the pinned toolchain with `-- --num-threads 144 --triggers-mode silent`.
 The full gate also passes on the completed model/firing and typed-policy bridge snapshots.
 `cargo test --workspace` passes (196 tests across 24 suites). The differential suite includes
 444 policy queries and 900 tail queries; separate executable smoke runs cover Alice/Bob,
 constant-book growth between queries, duplicate removal, and arities 1 and 8.
+The per-case minimality smoke also observes a two-event Alice witness even though Bob has a
+one-event witness: all three policy queries are shortest within the returned profile, not
+globally across candidate cases.
 
 ## Paper results and their mechanized statements
 
@@ -102,7 +105,7 @@ Results marked † assume infinite component domains (`n_unrestricted`, see belo
 | Equation decomposition (`eq:decomposition`) | `stmt_decomposition` | `refinement/pruning.rs` |
 | Lemma Pruning soundness (`lem:prune`) | `stmt_prune_sound`, `stmt_checks_discard` | `refinement/pruning.rs` |
 | Lemma Simulation soundness (`lem:simulation`) | `stmt_sim_rules_sound`, `stmt_test_rules_sound` | `refinement/pruning.rs` |
-| Executable analyzer (Section 6) | `covered`, `redundant`, and `at_least_as_strict` ensure their typed `*_correct` contracts; `tail_included` retains `tail_included_ok`; errors exclude internal invariant failures and search terminates by the implemented finite-item bound | `refinement/analyzer.rs`, `refinement/inclusion.rs`; `crates/history-analysis/src/analyzer.rs`, `verify/{verdict,policy_bridge,policy_queries}.rs` |
+| Executable analyzer (Section 6) | `covered`, `redundant`, and `at_least_as_strict` ensure typed correctness and per-case minimality (`*_ok`); `tail_included` retains `tail_included_ok`; errors exclude internal failures and search terminates by the implemented finite-item bound | `refinement/analyzer.rs`, `refinement/inclusion.rs`; `crates/history-analysis/src/analyzer.rs`, `verify/{verdict,policy_bridge,policy_queries,policy_case_profile,policy_minimality}.rs` |
 
 Each `stmt_X` above is proved by `theorem_X` in the same file. The remaining statements of the
 `refinement/` layer are auxiliary: `stmt_genericity` and `stmt_numeric_genericity` (renaming
@@ -193,12 +196,13 @@ All names are in `crates/history-semantics/src/verify/refinement/`.
    either side, `x ⊑ Star(b)` from `x ⊑ b`, and padding with several `All` factors.
    `sim_step` and `test_step` specify the implemented rules, and `stmt_sim_rules_sound` and
    `stmt_test_rules_sound` prove them sound.
-5. **Minimality** holds for the executable `tail_included` query (`shortest`). Policy-query
-   contracts separate `*_correct` from `*_minimal`, with `*_ok` their conjunction. The latter
-   specifies a shortest witness within the returned candidate's case (`shortest_in_case`,
-   `same_profile`), not globally across split cases. The numeric composition also transfers
-   per-case minimum length. The executable policy queries ensure `*_correct` only:
-   typed `*_minimal` guarantees are not attached in this change.
+5. **Minimality** is global for `tail_included` (`shortest`) and case-local for policy queries
+   (`shortest_in_case`, `same_profile`). `covered`, `redundant`, and `at_least_as_strict` ensure
+   `*_ok = *_correct && *_minimal`: every admissible counterexample instance has minimum history
+   length among failing pairs with its constant profile. Refinement uses the same denying rule
+   for correctness and shortestness. The proof transfers the initial search case's numeric
+   length bound through known-code equality reflection; it does not confuse the initial split
+   constraint with the stronger reconstructed refutation constraint.
 6. **Rule status and policy decisions.** Both are specified. For the analysis, `semantics.rs`
    defines `Status`, `rule_status` (`def:status`) and `policy_denies` (some rule is violated),
    over which `stmt_refines_iff_covers` and `stmt_redundant_iff_covered` are stated; the numeric
@@ -214,11 +218,18 @@ All names are in `crates/history-semantics/src/verify/refinement/`.
    rule's mode is a definition (`violated_by`, `rule_violated`), not a separate theorem.
 7. **Executable policy queries.** `add_rule` stores validated rules with stable `RuleId` indices,
    retaining verified encodings as the constant book grows. `covered`, `redundant`, and
-   `at_least_as_strict` return `Inclusion` and ensure `covered_correct`, `redundant_correct`, and
-   `at_least_as_strict_correct`, respectively, with explicit negated properties for
+   `at_least_as_strict` return `Inclusion` and ensure `covered_ok`, `redundant_ok`, and
+   `at_least_as_strict_ok`, respectively, including explicit negated properties for
    counterexamples under the stated nonvacuity hypothesis. `tail_included` remains available
    without registration. `never_fires` and `always_fires` remain specification-only and are
    outside this artifact's executable policy-query work.
+   `redundant` additionally ensures `policy_removal::redundant_decisions_ok`: `Holds` means
+   removing every target id preserves every deny/permit decision. `lemma_removal_iff_covered`
+   instantiates `stmt_redundant_iff_covered` after an exact id-filter denial lemma handles
+   arbitrary order and duplicate ids. When the target is present, every counterexample instance
+   is denied before removal and permitted afterward, explicitly refuting decision preservation.
+   If the target is absent, the API keeps its coverage-query meaning; a coverage counterexample
+   is not claimed to change an already target-free policy.
 8. **Similarity and normalization.** `theorem_symbolic_derivative_correct` and
    `theorem_matcher_correct` are stated for the symbolic derivative before normalization.
    `theorem_similarity_preserves_language` proves that the similarity equations preserve

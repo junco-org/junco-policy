@@ -3,17 +3,21 @@
 //!
 //! `history-analysis` is Verus-checked. This module fixes the *view* of its state and results
 //! and the predicates for query results. Policy-level correctness and per-case minimality are
-//! separate: `*_ok` is their conjunction, and an entry point can establish `*_correct` before
-//! minimality is proved. The policy-level contracts are
+//! separate predicates; the executable entry points ensure their conjunction `*_ok`.
+//! The policy-level contracts are
 //!
 //! ```text
-//! covered(&self, rule, by)            ensures r matches Ok(v) ==> covered_correct(self@, rule@, by@, v.inclusion@)
-//! redundant(&self, rule, policy)      ensures r matches Ok(v) ==> redundant_correct(self@, rule@, policy@, v.inclusion@)
-//! at_least_as_strict(&self, p, q)     ensures r matches Ok(v) ==> at_least_as_strict_correct(self@, p@, q@, v.inclusion@)
-//! tail_included(&mut self, h, l, r)   ensures r matches Ok(v) ==> tail_included_ok(final(self)@, h@, l@, r@, v.inclusion@)
+//! covered(&self, rule, by)            ensures r matches Ok(v) ==> covered_ok(self@, rule@, rule_ids(by@), v@)
+//! redundant(&self, rule, policy)      ensures r matches Ok(v) ==> redundant_ok(self@, rule@, rule_ids(policy@), v@)
+//! at_least_as_strict(&self, p, q)     ensures r matches Ok(v) ==> at_least_as_strict_ok(self@, rule_ids(p@), rule_ids(q@), v@)
+//! tail_included(&mut self, h, l, r)   ensures r matches Ok(v) ==> tail_included_ok(final(self)@, h@, l@, r@, v@)
 //! add_rule(&mut self, rule)           ensures r matches Ok(id) ==> final(self)@.rules == old(self)@.rules.push(rule@)
 //!                                         && id@ == old(self)@.rules.len() && semantics::rule_wf(rule@)
 //! ```
+//!
+//! `redundant` also ensures `policy_removal::redundant_decisions_ok`: Holds preserves every
+//! deny/permit decision under removal of all target ids. Counterexamples change a decision
+//! when the target occurs; arbitrary order and duplicate ids are handled explicitly.
 //!
 //! A policy counterexample explicitly negates the claimed property whenever it has an admissible
 //! instance (`cex_has_instance`). This condition preserves the original vacuous meaning on small

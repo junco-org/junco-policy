@@ -1,7 +1,7 @@
 # Specification of policy-refinement analysis
 
-Status: **frozen statements, executable search, and end-to-end policy-query correctness
-proved.** Policy counterexample minimality is not attached to the executable contracts.
+Status: **frozen statements, executable search, and end-to-end policy-query correctness and
+per-case counterexample minimality proved.**
 The trusted native hashbrown wrappers are described in §11; this end-to-end work adds no trust.
 Spec module: `crates/history-semantics/src/verify/refinement/` (registered in `verify/mod.rs`;
 compiled only under `verus_keep_ghost` + `runtime`, like the rest of `verify`). Every theorem is a
@@ -30,11 +30,10 @@ semantics of `refinement/semantics.rs`:
 | `tail_included(h, l, r)` | `tails_included(D, h, l, r)` | matches `h`, history in `l` not `r`; globally shortest | no claim |
 
 The executable policy queries use stable indices returned by `add_rule(&Rule<E>)`.
-`covered`, `redundant`, and `at_least_as_strict` ensure their `*_correct` contracts.
-The existing `*_ok` predicates factor correctness and the separate `*_minimal` predicates.
-The table above describes the full specification; the executable policy queries ensure only
-`*_correct`, not `*_minimal`. `never_fires` and `always_fires` remain specification-only and
-are outside this work.
+`covered`, `redundant`, and `at_least_as_strict` ensure their full `*_ok` contracts:
+the conjunction of `*_correct` and `*_minimal`. Counterexamples are shortest among failing
+pairs with the same constant profile, for the same denying rule used by the correctness
+witness. `never_fires` and `always_fires` remain specification-only and are outside this work.
 
 The policy-query preconditions include native equality/projection laws, valid stored-rule
 indices, and `unrestricted_components_infinite`: the tagged component model is infinite if
@@ -43,6 +42,14 @@ an admissible instance and explicitly implies `!covers` or `!refines`, in additi
 `every_instance` witness guarantee. Fully declared finite domains require no infinity premise.
 The general `*_correct` predicates retain the original vacuous meaning when no admissible
 instance exists; named counterexample-refutation corollaries make the nonvacuity step explicit.
+
+Redundancy additionally ensures `policy_removal::redundant_decisions_ok`. Its `Holds` case is
+`removal_preserves_decisions`: equality of original and filtered policy denial for every
+domain-admissible candidate/history. `lemma_removal_iff_covered` applies the existing
+append-shaped redundancy theorem to arbitrary id lists using order/duplicate-insensitive
+denial semantics. With target membership, counterexamples explicitly refute decision
+preservation and every admissible instance changes denial to permission. Without membership,
+the existing coverage semantics remain unchanged; no removal failure is claimed.
 
 All policy queries ensure `no_internal_error`. `tail_included` retains `tail_included_ok` and
 additionally ensures `no_internal_compile_error`; `add_rule` also excludes internal compile

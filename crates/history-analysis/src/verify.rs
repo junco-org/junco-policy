@@ -2,7 +2,9 @@
 
 pub(crate) mod constraint_unique;
 pub(crate) mod policy_bridge;
+pub(crate) mod policy_case_profile;
 pub(crate) mod policy_firing;
+pub(crate) mod policy_minimality;
 pub(crate) mod policy_operands;
 pub(crate) mod policy_queries;
 pub(crate) mod policy_source;
