@@ -331,15 +331,15 @@ impl Constraint {
 /// Index of an interned constraint.
 pub(crate) type ConstraintId = u32;
 
-/// Decision 4's exact internal-key introduction; not an axiom for user component types.
-/// Constraint's verified equality compares every ordered register key; derived Hash hashes it.
+/// Decision 4's hashing-only introduction for the exact internal Constraint key type.
+/// Equality and its laws are separate verified facts, never assumed here.
 #[inline(always)]
-fn native_constraint_key_laws() {}
+fn native_constraint_hash_coherent() {}
 
 #[cfg(verus_keep_ghost)]
 verus! {
-    assume_specification[native_constraint_key_laws]()
-        ensures junco_core::spec::hypotheses::key_laws::<Constraint>();
+    assume_specification[native_constraint_hash_coherent]()
+        ensures junco_core::spec::hypotheses::hash_coherent::<Constraint>();
 }
 
 /// Interned constraints, local to one search.
@@ -353,7 +353,7 @@ pub(crate) struct ConstraintTable {
 impl ConstraintTable {
     #[verus_spec(result => ensures table_wf(result), result@.len() == 0)]
     pub(crate) fn new() -> Self {
-        native_constraint_key_laws();
+        native_constraint_hash_coherent();
         Self {
             constraints: Vec::new(),
             ids: NativeMap::new(),

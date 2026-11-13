@@ -103,11 +103,11 @@ ASSUME_SPEC = re.compile(r"\bassume_specification\b")
 EXEC_DECL = re.compile(r"(?:(pub(?:\([^)]*\))?)\s+)?(?:(?:unsafe|async|const)\s+)*fn\s+(\w+)")
 
 AXIOM_JUSTIFICATIONS = {
-    "lemma_search_key_laws": "decision 4 internal key (u32, RegexId), where u32 is ConstraintId: stable structural id Eq/Hash",
-    "lemma_regex_pair_key_laws": "decision 4 internal key (RegexId, RegexId): stable ordered structural id Eq/Hash",
-    "lemma_test_pair_key_laws": "decision 4 internal key (TestId, TestId): stable ordered structural id Eq/Hash",
-    "lemma_parts_key_laws": "decision 4 internal SmallVec<[RegexId; 4]> key: stable ordered id Eq/Hash and native equality implies equal sequence views",
-    "native_constraint_key_laws": "decision 4 exact Constraint key: ordered register-key equality and derived structural Hash; assumed exec specification is a key-law axiom despite not being an external-body proof fn",
+    "lemma_search_key_hash_coherent": "decision 4 exact internal (u32, RegexId) key: only hash_coherent is assumed; equality laws are verified",
+    "lemma_regex_pair_hash_coherent": "decision 4 exact internal (RegexId, RegexId) key: only hash_coherent is assumed; equality laws are verified",
+    "lemma_test_pair_hash_coherent": "decision 4 exact internal (TestId, TestId) key: only hash_coherent is assumed; equality laws are verified",
+    "lemma_parts_hash_coherent": "decision 4 exact internal SmallVec<[RegexId; 4]> key: only hash_coherent is assumed; equality and view facts are verified",
+    "native_constraint_hash_coherent": "decision 4 exact internal Constraint key: only hash_coherent is assumed; its assumed exec specification is a hashing axiom, not an equality axiom",
 }
 def describe(text):
     """A short name for the declaration starting at `text`."""

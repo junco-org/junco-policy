@@ -154,37 +154,35 @@ pub mod internal_keys {
     use smallvec::SmallVec;
 
     verus! {
-    /// Decision 4: an internal search key pairs a constraint index with an exact regex id.
+    /// Hash faithfulness only for the exact internal search-key type.
     #[verifier::external_body]
-    pub broadcast proof fn lemma_search_key_laws()
-        ensures #[trigger] key_laws::<(u32, RegexId)>(),
+    pub broadcast proof fn lemma_search_key_hash_coherent()
+        ensures #[trigger] hash_coherent::<(u32, RegexId)>(),
     {}
 
-    /// Decision 4: the simulation memo compares and hashes both exact regex ids.
+    /// Hash faithfulness only for the exact internal regex-pair key type.
     #[verifier::external_body]
-    pub broadcast proof fn lemma_regex_pair_key_laws()
-        ensures #[trigger] key_laws::<(RegexId, RegexId)>(),
+    pub broadcast proof fn lemma_regex_pair_hash_coherent()
+        ensures #[trigger] hash_coherent::<(RegexId, RegexId)>(),
     {}
 
-    /// Decision 4: the test simulation memo compares and hashes both exact test ids.
+    /// Hash faithfulness only for the exact internal test-pair key type.
     #[verifier::external_body]
-    pub broadcast proof fn lemma_test_pair_key_laws()
-        ensures #[trigger] key_laws::<(TestId, TestId)>(),
+    pub broadcast proof fn lemma_test_pair_hash_coherent()
+        ensures #[trigger] hash_coherent::<(TestId, TestId)>(),
     {}
 
-    /// Decision 4: ordered internal part keys compare/hash the complete id sequence.
+    /// Hash faithfulness only for the exact internal ordered-parts key type.
     #[verifier::external_body]
-    pub broadcast proof fn lemma_parts_key_laws()
-        ensures #[trigger] key_laws::<SmallVec<[RegexId; 4]>>(),
-            forall|a: SmallVec<[RegexId; 4]>, b: SmallVec<[RegexId; 4]>|
-                #[trigger] a.eq_spec(&b) ==> a.view() == b.view(),
+    pub broadcast proof fn lemma_parts_hash_coherent()
+        ensures #[trigger] hash_coherent::<SmallVec<[RegexId; 4]>>(),
     {}
 
     pub broadcast group group_internal_key_laws {
-        lemma_search_key_laws,
-        lemma_regex_pair_key_laws,
-        lemma_test_pair_key_laws,
-        lemma_parts_key_laws,
+        lemma_search_key_hash_coherent,
+        lemma_regex_pair_hash_coherent,
+        lemma_test_pair_hash_coherent,
+        lemma_parts_hash_coherent,
     }
     }
 }
