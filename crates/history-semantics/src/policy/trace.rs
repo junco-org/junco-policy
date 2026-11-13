@@ -118,9 +118,8 @@ pub mod verify {
                 Ok(PolicyDecision::Grant) => trace_context_calls(after) == trace_context_calls(before)
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before)
                     && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
-                        forall|i: int| 0 <= i < trace_sources(before).len() ==>
-                            !sem::rule_violated(trace_sources(before)[i]@, candidate,
-                                history_store::history::verify::raw_events(history))),
+                        sem::policy_permits(sem::rule_views(trace_sources(before)), candidate,
+                            history_store::history::verify::raw_events(history))),
                 Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) =>
                     trace_context_calls(after) == trace_context_calls(before) + 1
                         && trace_diagnostic_calls(after) == trace_diagnostic_calls(before) + 1
@@ -169,10 +168,9 @@ pub mod verify {
                 Ok(PolicyDecision::Grant) => trace_callbacks_frame(before, after)
                     && trace_context_calls(after) == trace_context_calls(before)
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before)
-                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==> forall|i: int|
-                        0 <= i < trace_sources(before).len() ==>
-                            !sem::rule_violated(trace_sources(before)[i]@, candidate,
-                                history_store::history::verify::raw_events(history))),
+                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
+                        sem::policy_permits(sem::rule_views(trace_sources(before)), candidate,
+                            history_store::history::verify::raw_events(history))),
                 Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) =>
                     trace_context_calls(after) == trace_context_calls(before) + 1
                         && trace_diagnostic_calls(after) == trace_diagnostic_calls(before) + 1
@@ -302,7 +300,8 @@ impl<E: Event> TraceRule<E> {
 #[verus_verify]
 impl<E: Event> Clone for TraceRule<E> {
     #[verus_verify(external_body)]
-    #[verus_spec(result => ensures trace_rule_diagnostic_id(result) == trace_rule_diagnostic_id(*self))]
+    #[verus_spec(result => ensures trace_rule_source(result) == trace_rule_source(*self),
+        trace_rule_diagnostic_id(result) == trace_rule_diagnostic_id(*self))]
     fn clone(&self) -> Self {
         Self {
             rule: self.rule.clone(),

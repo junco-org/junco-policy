@@ -65,7 +65,7 @@ pub open spec fn rollback_step<E: Event>(
     before: ValidatorView<E>, after: ValidatorView<E>, result: Result<(), HistoryError>,
 ) -> bool {
     after.rules == before.rules && match result {
-        Ok(()) => after.history == before.history.take(after.history.len() as int),
+        Ok(()) => after.history.is_prefix_of(before.history),
         Err(_) => after.history == before.history,
     }
 }
