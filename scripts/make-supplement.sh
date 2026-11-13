@@ -253,7 +253,7 @@ import fnmatch, os, re, sys
 
 stage = sys.argv[1]
 pattern = re.compile(
-    r"\b(R[1-6]|A[1-6]|H[0-9]{1,2}|M[0-5]|S1[0-3])\b|\bdecision [0-9]|\bTrack [A-Z0-9]\b|\b[Ww]ave [0-9]"
+    r"\b(R[1-6]|A[1-6]|H[0-9]{1,2}|M[0-5]|S1[0-3])\b|\bdecision [0-9]|\bTrack [A-Z0-9]\b|\b[Ww]ave[- ][0-9]"
     r"|\battempt [AB]\b|\bPR #[0-9]+|\bhandoff\b|\bINBOX\b|STATUS\.md|plan §|docs/history|\bsubagent")
 # (path glob, allowed text, justification); applied as in the identifying-string scan.
 ALLOW = [

@@ -289,7 +289,7 @@ pub(crate) open spec fn tail_ready<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<
     analyzer_state_wf(a) && analyzer_obligations::<E>() && tail_input_wf(a.constants, i) && difference_language(i, q)
 }
 
-/// The wave-1 verdict of `tail_included`: Holds is inclusion; a counterexample has the arity, a
+/// The base verdict of `tail_included`: Holds is inclusion; a counterexample has the arity, a
 /// real instance under capacity, and minimum length (`tail_included_spec` minus the instance
 /// clauses, which `lemma_tail_decision_full` adds under `stored_known`).
 pub(crate) open spec fn tail_verdict<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, r: Inclusion<E>) -> bool {
@@ -389,7 +389,7 @@ pub(crate) proof fn lemma_no_candidates<E: Event>(a: PolicyAnalyzer<E>, i: TailI
     }
 }
 
-/// The wave-1 counterexample clause: arity, a real instance under capacity, minimum length.
+/// The base counterexample clause: arity, a real instance under capacity, minimum length.
 pub(crate) proof fn lemma_counterexample_shape<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, q: language::Regex<model::Test>,
     g: Constraint, letters: Seq<Letter>, alphabets: Seq<Set<model::Primitive>>, result: Counterexample<E>)
     requires tail_ready(a, i, q), slots::reconstructed(a.constants, a.universes, g, letters, alphabets, result),
@@ -506,7 +506,7 @@ pub(crate) proof fn lemma_outcome_difference(d: encoding::NDomains, start: searc
     reveal(exec::search_result);
 }
 
-/// The wave-1 verdict: Holds is inclusion; a counterexample has the arity, a real instance under
+/// The base verdict: Holds is inclusion; a counterexample has the arity, a real instance under
 /// capacity, and minimum length. `lemma_tail_decision_full` adds the instance clauses.
 pub(crate) proof fn lemma_tail_decision<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>,
     n: NumericInput, g: implementation::ConstraintView, decision: NumericDecision<E>)

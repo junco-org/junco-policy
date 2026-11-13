@@ -34,8 +34,8 @@
 //! Rules are validated and lowered from borrowed inputs by
 //! [`junco_core::flatten::flatten_rule_parts`] and [`junco_core::lower_flat`], without cloning
 //! caller-owned syntax. Each search compiles one graph that may be charged 16 MiB; a search that
-//! exceeds it, or whose index or case-product computation overflows, is reported as
-//! [`Inclusion::Exhausted`]. The executable query contracts relate results to typed policy
+//! exceeds it is reported as [`Inclusion::Exhausted`], and an index or case-product overflow as an
+//! error. The executable query contracts relate results to typed policy
 //! semantics under the documented native laws and sufficient resource-capacity preconditions.
 
 #![no_std]
