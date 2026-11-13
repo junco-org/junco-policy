@@ -8,9 +8,9 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 |---|---|---|
 | H1 | merged | [PR #13](https://github.com/junco-org/junco-policy/pull/13), merge commit `bce1df8511fc56919724e18bdbf5e610c8252bdb`; every CI check passed. Public statements detailed below. |
 | H3 | in progress | Local gates passed; [PR #15](https://github.com/junco-org/junco-policy/pull/15), rebased head `68743aa`, awaits CI. `Denial::index` and exact-index `check_step` added; paper/reviewer/public clients and root observations updated. |
-| H4 | in progress | Branch fix/audit-h4 from current main; `stmt_search_correct` and its theorem now require trace_steps_ok only for expanded nodes. Proof/native gates running. |
+| H4 | in progress | Local gates passed; [PR #17](https://github.com/junco-org/junco-policy/pull/17), head `06f0db5`, awaits CI. `stmt_search_correct` and its theorem require trace_steps_ok only for expanded nodes; public index uses the same statement. |
 | H6 | in progress | Local gates passed; [PR #14](https://github.com/junco-org/junco-policy/pull/14), rebased head `c6b5503`, awaits CI. Changed `PolicyAnalyzer::add_rule` (`crates/history-analysis/src/analyzer.rs`) and `ValidatorBuilder::add_rule` (`crates/history-semantics/src/validator.rs`): Ok implies rule_wf, exact event arity and correctly tagged head constants. Reviewer clients consume the clauses. Unused analyzer_wf/rule_constants_tagged removed. |
-| H5 | not started | Monitor first, analyzer second. |
+| H5 | in progress | Monitor half first: explicit resource_error predicate and propagation through core/store/evaluator/public monitor contracts staged. Native cargo check passed. Initial verifier parse issue in an ID macro repaired; integrated proof gates running. Analyzer half not started. |
 | H2 | not started | |
 | H7 | not started | |
 | H8 | not started | |
@@ -36,6 +36,10 @@ Verification: H1 library merge gate `history-analysis --no-default-features --fe
 H6 gates: monitor **1624**, public_specs **19**, monitor reviewer **7**, analyzer **603**, analyzer reviewer **14** verified, all **0 errors**. Ghost-erased clippy passed; package tests **73 passed**; fmt passed. Runtime smoke exercised both analyzer and builder: lawful pair rule accepted; wrong head arity and mistagged head constants rejected with corresponding errors.
 
 H3 gates before rebase: monitor **1624**, public_specs **19**, monitor reviewer **7**, analyzer **603**, analyzer reviewer **14** verified, all **0 errors**; ghost-erased clippy/fmt passed, **123 native tests passed**. Runtime smoke observed index=1 for the first of two same-mode violations after a nonviolating rule, committed history unchanged. Rebase resolved only additive interface-documentation conflict with H1; CI initially had no checks because of that conflict, now resolved.
+
+H4 gates: monitor **1624**, public_specs **19**, analyzer **603**, analyzer reviewer **17** verified, all **0 errors**; ghost-erased clippy/fmt passed, **73 tests passed**. Runtime search smoke: All ⊆ All returned Holds; All ⊆ Empty returned a constant-only counterexample with empty history.
+
+Rebased H6 composition gate passed: analyzer **603**, reviewer **17**, **0 errors**. Awaiting CI before merge.
 
 Toolchain: downloaded pinned Z3 cannot execute on host glibc 2.31. Existing `/ssd0/zkent/junco-proof-tools/compat-verus` and `z3-compat` pass the script's pinned version checks; these are used for verification.
 
