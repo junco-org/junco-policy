@@ -43,7 +43,7 @@ use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
 
-broadcast use vstd::seq::group_seq_lemmas;
+broadcast use {vstd::seq::group_seq_lemmas, vstd::array::group_array_axioms, vstd::slice::group_slice_axioms};
 
 // ----- A1: coverage decisions -----
 
@@ -53,10 +53,10 @@ pub open spec fn stmt_analyzer_a1<E: Event>() -> bool {
     forall|a: AnalyzerView<E::Component>, rule: nat, by: Seq<nat>, v: InclusionView<E::Component>|
         #[trigger] covered_spec::<E>(a, rule, by, v) ==> {
             &&& v is Holds ==> covers::<E>(a.domains, rules_of(a, by), a.rules[rule as int])
-            &&& v matches InclusionView::Counterexample(cex) && cex_has_instance::<E>(a.domains, a.known, cex)
-                ==> !covers::<E>(a.domains, rules_of(a, by), a.rules[rule as int])
-            &&& v matches InclusionView::Counterexample(cex) && capacity_for::<E>(a.domains, a.known, cex)
-                ==> !covers::<E>(a.domains, rules_of(a, by), a.rules[rule as int])
+            &&& v matches InclusionView::Counterexample(cex) ==> (cex_has_instance::<E>(a.domains, a.known, cex)
+                ==> !covers::<E>(a.domains, rules_of(a, by), a.rules[rule as int]))
+            &&& v matches InclusionView::Counterexample(cex) ==> (capacity_for::<E>(a.domains, a.known, cex)
+                ==> !covers::<E>(a.domains, rules_of(a, by), a.rules[rule as int]))
         }
 }
 
@@ -114,8 +114,8 @@ pub open spec fn stmt_analyzer_a3_refinement<E: Event>() -> bool {
     forall|a: AnalyzerView<E::Component>, p: Seq<nat>, q: Seq<nat>, v: InclusionView<E::Component>|
         #[trigger] at_least_as_strict_spec::<E>(a, p, q, v) ==> {
             &&& v is Holds ==> refines::<E>(a.domains, rules_of(a, p), rules_of(a, q))
-            &&& v matches InclusionView::Counterexample(cex) && cex_has_instance::<E>(a.domains, a.known, cex)
-                ==> !refines::<E>(a.domains, rules_of(a, p), rules_of(a, q))
+            &&& v matches InclusionView::Counterexample(cex) ==> (cex_has_instance::<E>(a.domains, a.known, cex)
+                ==> !refines::<E>(a.domains, rules_of(a, p), rules_of(a, q)))
         }
 }
 
@@ -126,9 +126,9 @@ pub open spec fn stmt_analyzer_a3_redundancy<E: Event>() -> bool {
         #[trigger] redundant_spec::<E>(a, rule, policy, v) ==> {
             &&& v is Holds ==> removal_preserves_decisions::<E>(a, rule, policy)
                 && covers::<E>(a.domains, rules_of(a, without_rule(policy, rule)), a.rules[rule as int])
-            &&& v matches InclusionView::Counterexample(cex) && policy.contains(rule)
+            &&& v matches InclusionView::Counterexample(cex) ==> (policy.contains(rule)
                 && cex_has_instance::<E>(a.domains, a.known, cex)
-                ==> !removal_preserves_decisions::<E>(a, rule, policy)
+                ==> !removal_preserves_decisions::<E>(a, rule, policy))
         }
 }
 
@@ -232,7 +232,7 @@ pub open spec fn stmt_analyzer_a6<E: Event>() -> bool {
         #[trigger] covered_spec::<E>(a, rule, by, InclusionView::Counterexample(cex)) ==>
         forall|f: FreshChoice<E::Component>, c: E, h: Seq<E>, c2: E, h2: Seq<E>|
             admissible::<E>(a.domains, a.known, cex, f) && #[trigger] instantiates::<E>(cex, f, c, h)
-            && in_domains::<E>(a.domains, c2, h2) && h2.len() < h.len()
+            && #[trigger] in_domains::<E>(a.domains, c2, h2) && h2.len() < h.len()
             && same_profile(a.known, event_view(c), event_view(c2))
             ==> !(rule_violated(a.rules[rule as int], c2, h2) && !policy_denies(rules_of(a, by), c2, h2))
 }
@@ -244,13 +244,13 @@ pub proof fn theorem_a6_minimality<E: Event>()
         #[trigger] covered_spec::<E>(a, rule, by, InclusionView::Counterexample(cex)) implies
         forall|f: FreshChoice<E::Component>, c: E, h: Seq<E>, c2: E, h2: Seq<E>|
             admissible::<E>(a.domains, a.known, cex, f) && #[trigger] instantiates::<E>(cex, f, c, h)
-            && in_domains::<E>(a.domains, c2, h2) && h2.len() < h.len()
+            && #[trigger] in_domains::<E>(a.domains, c2, h2) && h2.len() < h.len()
             && same_profile(a.known, event_view(c), event_view(c2))
             ==> !(rule_violated(a.rules[rule as int], c2, h2) && !policy_denies(rules_of(a, by), c2, h2)) by {
         let fails = uncovered::<E>(rules_of(a, by), a.rules[rule as int]);
         assert forall|f: FreshChoice<E::Component>, c: E, h: Seq<E>, c2: E, h2: Seq<E>|
             admissible::<E>(a.domains, a.known, cex, f) && #[trigger] instantiates::<E>(cex, f, c, h)
-            && in_domains::<E>(a.domains, c2, h2) && h2.len() < h.len()
+            && #[trigger] in_domains::<E>(a.domains, c2, h2) && h2.len() < h.len()
             && same_profile(a.known, event_view(c), event_view(c2))
             implies !(rule_violated(a.rules[rule as int], c2, h2) && !policy_denies(rules_of(a, by), c2, h2)) by {
             // instance length equals the symbolic history length
@@ -276,9 +276,20 @@ pub proof fn theorem_vacuity_corollaries<E: Event>(a: AnalyzerView<E::Component>
 {
     theorem_vacuity_via_refinement::<E>();
     let rule = a.rules[r as int];
-    assert(rules_of(a, Seq::<nat>::empty()) =~= Seq::<RuleView<E::Component>>::empty());
+    let none = Seq::<RuleView<E::Component>>::empty();
+    assert(rules_of(a, Seq::<nat>::empty()) =~= none);
     assert(rules_of(a, seq![r]) =~= seq![rule]);
     assert(rules_of(a, seq![f]) =~= seq![forbid_all(rule.head)]);
+    // the statement's trigger is the pair of vacuity predicates: name both so Z3 sees them together
+    let never = never_denies::<E>(a.domains, rule);
+    let always = always_denies::<E>(a.domains, rule);
+    assert(never == refines::<E>(a.domains, none, seq![rule]) && always == refines::<E>(a.domains, seq![rule], seq![forbid_all(rule.head)]));
+    if v_never is Holds {
+        assert(refines::<E>(a.domains, rules_of(a, Seq::<nat>::empty()), rules_of(a, seq![r])));
+    }
+    if v_always is Holds {
+        assert(refines::<E>(a.domains, rules_of(a, seq![r]), rules_of(a, seq![f])));
+    }
 }
 
 // ----- bridge to the monitor (S9) -----
@@ -302,10 +313,15 @@ pub proof fn theorem_analyzer_to_monitor<E: Event, M>(
         !(result_q matches Ok(Decision::Denied(_))),
 {
     assert(policy_permits(vp.rules, request.event, vp.history));
+    assert(refines::<E>(a.domains, vp.rules, vq.rules));
+    assert(policy_permits(vq.rules, request.event, vq.history));
     if let Ok(Decision::Denied(denial)) = result_q {
         let i = choose|i: int| #[trigger] least_violation(vq.rules, request.event, vq.history, i)
             && denial.mode == vq.rules[i].mode;
+        assert(least_violation(vq.rules, request.event, vq.history, i));
+        assert(rule_violated(vq.rules[i], request.event, vq.history));
         assert(policy_denies(vq.rules, request.event, vq.history));
+        assert(false);
     }
 }
 
@@ -372,15 +388,15 @@ fn analyzer_client<E: Event>(rule: &Rule<E>, head: &Head<E>, left: &RegexExpr<E>
     }
     let mut a = PolicyAnalyzer::new(domains);
     let id = a.add_rule(rule)?;
+    let ids: [history_analysis::RuleId; 1] = [id];
     proof {
         id.lemma_view_is_index();
         assert(a@.rules =~= seq![rule@]);
-        assert(seq![id]@ == seq![id]);
+        assert(ids@ =~= seq![id]);
         assert((seq![id] + seq![id])[0] == id);
         assert((seq![id] + seq![id])[1] == id);
         assert(ids_of(seq![id]) =~= seq![0nat]);
     }
-    let ids = [id];
     let covered = a.covered(id, &ids);
     let redundant = a.redundant(id, &ids);
     let strict = a.at_least_as_strict(&ids, &ids);
