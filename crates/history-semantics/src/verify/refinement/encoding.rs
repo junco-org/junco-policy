@@ -1,7 +1,7 @@
 //! Layer 1: typed rules and pairs as numeric ones.
 //!
 //! The typed-to-numeric bridge is the existing verified front end, which the analyzer already
-//! calls (`add_rule`, `analyzer.rs:301-312`): `flatten_rule` (`junco_core::verify::flatten`,
+//! calls (`PolicyAnalyzer::add_rule` and `tail_included`): `flatten_rule_parts` (`junco_core::verify::flatten`,
 //! `flattened`, `flattening_preserves_semantics`), `lower_flat` with the analyzer's encoder
 //! (`junco_core::verify::encoding`, `lowering`, `lemma_dsl_later_maps_preservation`), and the
 //! graph compiler (`crate::compile`, `lemma_flat_regex`, the `compile` contract). This layer only

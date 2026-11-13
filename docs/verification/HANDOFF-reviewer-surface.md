@@ -201,9 +201,11 @@ Files: `history-semantics/src/verify/paper.rs`, `history_algebra.rs`, `finite_st
 - Rename the (N0)–(S6) contract conditions to the paper's names; drop the unused
   `n_unrestricted` hypothesis of `stmt_search_correct`; factor the `*_finite_domains` duplicates;
   replace `Set::new(..).unwrap_or(Set::empty())` in stated definitions.
-- Delete `expansion_ok`; remove hard-coded line references from doc comments; rename the extra
-  `lang`s (`flat_lang`, `numeric_lang`) and split `history_specs.rs` (numeric regex algebra vs
-  error predicates).
+- Delete `expansion_ok` and `covered_with_ok` (both unused); rename the extra `lang`s
+  (`flat_lang`, `numeric_lang`) and split `history_specs.rs` (numeric regex algebra vs error
+  predicates). Stale comments (line references, missing paper labels, the `refinement/analyzer.rs`
+  header, the `Exhausted` docs, the pruning header) were already fixed on this branch; keep them
+  accurate as code moves, and do not reintroduce `file.rs:NNN` references.
 
 ### Track F — Analyzer surface (R6; S3, S6, S7, S9, S10, S11; integrates minimality)
 
@@ -248,8 +250,8 @@ Files: `history-semantics/tests/reviewer.rs`, `history-analysis/tests/reviewer.r
   register both test targets in `scripts/verify-all.sh` and CI.
 - Rewrite `VERIFY.md` as the single reviewer document (commands, one count table, reviewer map,
   hypotheses, differences, trust summary); move `SPEC.md`, `docs/verification/README.md`, both
-  `HANDOFF-*.md`, `finiteness-*.md` and the plan to `docs/history/`. Regenerate `TRUST.md` and
-  README anchors.
+  `HANDOFF-*.md`, `finiteness-*.md` and the plan to `docs/history/`. Regenerate `TRUST.md`, and
+  README line anchors after code moves (they were current at the start of this branch).
 - Add to the differences list: one tagged component type in the code vs. product domains in the
   paper (now hidden by R1), named scoped variables, equality up to `eq_spec`, require rules
   covered, declared domains as an assumption on runtime inputs, `GRAPH_BYTES`/`Exhausted`.

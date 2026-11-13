@@ -1,9 +1,13 @@
-//! Layer 4: pruning (`sec:antichains`, appendix `app:antichains`).
+//! Layer 4: pruning (appendix `app:pruning`, Definition Pruning checks `def:pruning`, Lemma
+//! `lem:prune`; simulation, appendix `app:simulation`).
 //!
 //! The search may discard an item at insertion when `search::may_discard` holds. This layer
 //! states that the implemented checks (dead items, domination up to a sound simulation) imply it.
-//! The simulation rules are those of the current code (`history-analysis/src/simulation.rs`,
-//! uncommitted version), which extend the paper's Figure `fig:simulation`.
+//! The simulation rules are those of `history-analysis/src/simulation.rs`. They differ from Figure
+//! `fig:simulation`: the code reads `SumL`, `SumR`, `AndL` and `AndR` on lifted tests only when both
+//! sides are lifted tests (`test_step`), so its relation is smaller than the Figure's. The side
+//! conditions `k ≥ 2` and `a + b ≥ 1` are dropped. Soundness is proved; that the recursion decides
+//! the Figure's relation is not.
 use super::encoding::*;
 use super::inclusion::*;
 use super::search::*;
@@ -112,7 +116,7 @@ pub open spec fn padding_ok(ys: Seq<Regex<model::Test>>, a: nat, b: nat, len: na
         && forall|i: int| (0 <= i < a || ys.len() - b <= i < ys.len()) ==> #[trigger] ys[i] is All
 }
 
-/// One rule of the code's test simulation (`simulation.rs:278-332`).
+/// One rule of the code's test simulation (`Simulation::test_le` in `history-analysis/src/simulation.rs`).
 pub open spec fn test_step(tle: spec_fn(model::Test, model::Test) -> bool, x: model::Test, y: model::Test) -> bool {
     ||| x == y
     ||| y is True

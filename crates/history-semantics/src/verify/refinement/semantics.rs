@@ -1,6 +1,7 @@
 //! Layer 0: policy semantics over typed component values (paper "Heads, tails, and
-//! policy decisions", `sec:rules`, Definition Rule status `def:status`; refinement, `sec:refinement`;
-//! coverage, redundancy, vacuity, appendix `app:policy-reduction`).
+//! policy decisions", `sec:rules`, Definitions Rule violation `def:violates` and Policy violation
+//! `def:policy-violates`; policy refinement, `sec:policy`; coverage, redundancy, vacuity, appendix
+//! `app:policy-reduction`).
 //!
 //! The valuation `θ` of the paper is the candidate itself; histories are oldest first and never
 //! contain the candidate. Tail and test semantics are the existing `junco_core::verify::dsl`
@@ -18,7 +19,8 @@ verus! {
 
 broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
 
-/// The status of one rule for a candidate and a history (Definition Rule status, `def:status`).
+/// The status of one rule for a candidate and a history. `Violated` is the paper's rule violation
+/// (Definition Rule violation, `def:violates`); `NotFired` is a head that does not unify.
 pub enum Status { NotFired, Satisfied, Violated }
 
 /// `mode = require` and the history is outside the tail, or `mode = forbid` and it is inside.
@@ -122,7 +124,7 @@ pub open spec fn head_tails_wf<C>(head: HeadView<C>, left: RegexView<C>, right: 
     1 <= head.len() <= history_syntax::MAX_ARITY && tdsl::head_scoped(head) && tdsl::regex_scoped(left, head) && tdsl::regex_scoped(right, head)
 }
 
-// ----- policy questions (`sec:refinement`, appendix `app:policy-reduction`) -----
+// ----- policy questions (`sec:policy`, Definition Policy refinement `def:policy-refinement`, appendix `app:policy-reduction`) -----
 
 /// `P ⊑ Q` over `domains`: every pair permitted by `P` is permitted by `Q`.
 pub open spec fn refines<C: PartialEq>(

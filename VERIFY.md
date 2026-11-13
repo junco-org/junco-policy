@@ -119,7 +119,7 @@ All names are in `crates/history-semantics/src/verify/refinement/`.
 | Paper | Specification | File |
 |---|---|---|
 | $\mathcal{L}_\theta(r)$ | `n_lang` | `encoding.rs` |
-| rule status, policy decision (`def:status`) | `Status`, `rule_status`, `rule_denies`, `policy_denies` | `semantics.rs` |
+| rule violation, policy violation (`def:violates`, `def:policy-violates`) | `Status`, `rule_status`, `rule_denies`, `policy_denies` | `semantics.rs` |
 | constraint $\Gamma$ | `Constraint` (a set of `Literal`s) | `inclusion.rs` |
 | $\Gamma' \models \Gamma$ | `entails` | `inclusion.rs` |
 | $\Gamma$ decides $x_c = v$ | `decides` | `inclusion.rs` |
@@ -200,7 +200,8 @@ All names are in `crates/history-semantics/src/verify/refinement/`.
    per-case minimum length. The executable policy queries ensure `*_correct` only:
    typed `*_minimal` guarantees are not attached in this change.
 6. **Rule status and policy decisions.** Both are specified. For the analysis, `semantics.rs`
-   defines `Status`, `rule_status` (`def:status`) and `policy_denies` (some rule is violated),
+   defines `Status`, `rule_status` (`def:violates`) and `policy_denies` (some rule is violated;
+   `def:policy-violates`),
    over which `stmt_refines_iff_covers` and `stmt_redundant_iff_covered` are stated; the numeric
    `n_rule_denies` and `n_policy_denies` (`encoding.rs`, related to the typed ones by
    `stmt_front_end_denies`) are used by `stmt_policy_reduction` and `stmt_vacuity_reductions`.

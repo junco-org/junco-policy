@@ -73,18 +73,20 @@ pub open spec fn letter_assignment(l: LetterView, atoms: Set<model::Primitive>) 
     Map::new(atoms, |p: model::Primitive| letter_holds(l, p))
 }
 
-/// The implementation's successor cases of an item: `steps(Γ, atoms)` (`constraint.rs:332-345`)
-/// with the successor ids returned by `CompiledPair::successor` for each letter. This is the
-/// `cases_of` of `search::trace_wf` for the analyzer, read through `abs_state`.
+/// The implementation's successor cases of an item: `steps(Γ, atoms)` (`history-analysis/src/constraint.rs`)
+/// with the successor ids returned by `CompiledPair::successor` for each letter, read through
+/// `abs_state`. Used only by `expansion_ok`.
 pub open spec fn impl_cases(g: model::Graph, atoms: Set<model::Primitive>,
     steps: Set<(ConstraintView, LetterView, nat)>) -> Set<Case> {
     steps.map(|s: (ConstraintView, LetterView, nat)| Case {
         constraint: constraint_of(s.0), alpha: letter_assignment(s.1, atoms), next: abs_state(g, s.2) })
 }
 
-/// Obligations on one expansion (`search.rs:159-184`), for the item `(Γ, q)` in graph `g`:
-/// the atoms are complete for `q` (`atoms_wf`, `progress.rs:1347`), the emitted cases satisfy
-/// `steps_ok`, and every case only adds literals over the atoms' codes or declared values.
+/// Obligations on one expansion (`Search::expand` in `history-analysis/src/search.rs`), for the
+/// item `(Γ, q)` in graph `g`: the atoms are complete for `q` (`atoms_wf` in
+/// `history-semantics/src/progress.rs`), the emitted cases satisfy `steps_ok`, and every case only
+/// adds literals over the atoms' codes or declared values. Unused: the executed search is proved
+/// against `steps_ok` directly by `lemma_emitted_steps` (`history-analysis/src/verify/search_exec.rs`).
 pub open spec fn expansion_ok(d: NDomains, g: model::Graph, gamma: ConstraintView, q: nat,
     atoms: Set<model::Primitive>, steps: Set<(ConstraintView, LetterView, nat)>) -> bool {
     let item = Item { constraint: constraint_of(gamma), state: abs_state(g, q) };
@@ -96,7 +98,7 @@ pub open spec fn expansion_ok(d: NDomains, g: model::Graph, gamma: ConstraintVie
     &&& steps_ok(d, item, impl_cases(g, atoms, steps))
 }
 
-// ----- counterexample reconstruction (`analyzer.rs:533-568`) -----
+// ----- counterexample reconstruction (`PolicyAnalyzer::counterexample` in `history-analysis/src/analyzer.rs`) -----
 
 /// Slot of a reconstructed component: a code, or a fresh number.
 pub enum SlotView { Code(nat), Fresh(nat) }
@@ -128,10 +130,12 @@ pub open spec fn slots_event(slots: Seq<SlotView>, fresh: spec_fn(nat) -> nat) -
     slots.map(|i: int, s: SlotView| slot_value(s, fresh))
 }
 
-// ----- the policy-level glue (`analyzer.rs:460-497`, `tables.rs`) -----
+// ----- the policy-level glue (`PolicyAnalyzer::covered_with` and `policy_difference`, `history-analysis/src/tables.rs`) -----
 
 /// `covered_with` searches `ρ_R & ¬Σ ρ_R'` per case of `split(Γ_R; Π_P)`; the cases satisfy
-/// `split_ok` and the searched expression has the language of `inclusion::firing_denials`.
+/// `split_ok` and the searched expression has the language of `inclusion::firing_denials`. Unused:
+/// the executable is proved through `stmt_policy_search_composition` and
+/// `history-analysis/src/verify/policy_*.rs`.
 pub open spec fn covered_with_ok(d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>,
     query: spec_fn(Constraint) -> (Regex<model::Test>, Regex<model::Test>)) -> bool {
     &&& rule.head.len() == d.len()

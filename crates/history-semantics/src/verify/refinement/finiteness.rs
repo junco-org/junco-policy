@@ -1,10 +1,11 @@
 //! Layer 5: finitely many states (Lemma Finitely many residuals, `lem:finite-states`;
-//! appendix `app:normalization`), and
-//! finitely many items, which makes termination of the search (`search::stmt_search_terminates`)
-//! unconditional.
+//! appendix `app:finiteness`), and finitely many items. `stmt_search_terminates` stays
+//! conditional on `finitely_many_items`; this layer discharges that hypothesis for the
+//! implementation's search (`theorem_impl_finitely_many_items`).
 //!
 //! The abstract development is `verify::finite_states` (`Model<S>`, `theorem_finite_reachable`,
-//! proved against the contract (N0)–(N5), (S0)–(S6)). The canonical-state abstraction maps a graph
+//! proved against the contract (N0)–(N5), (S0)–(S6); these numbers are the code's, the paper
+//! states the conditions in prose in appendix `app:finiteness`). The canonical-state abstraction maps a graph
 //! id to its lifted tree `model::lift_regex(g, id)`: within one well-formed graph, interning makes
 //! the lift injective, and graph extension preserves it (`model::lemma_lift_stable_under_extends`),
 //! so identity of ids in the search's visited set is identity of abstract states.
@@ -88,7 +89,7 @@ pub open spec fn atom_codes(atoms: Set<model::Primitive>) -> ISet<nat> {
 }
 
 /// Each successor case only adds literals about codes compared by the atoms of the parent's
-/// state, or about declared finite-domain values (`constraint.rs:236-281`).
+/// state, or about declared finite-domain values (`split` and `letters` in `history-analysis/src/constraint.rs`).
 pub open spec fn cases_from_atoms(d: NDomains, cases_of: spec_fn(Item) -> Set<Case>,
     atoms_of: spec_fn(Regex<model::Test>) -> Set<model::Primitive>) -> bool {
     forall|i: Item, c: Case, l: Literal| #[trigger] cases_of(i).contains(c) && #[trigger] c.constraint.contains(l)

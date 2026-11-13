@@ -122,7 +122,7 @@ up to eight coordinates inline.
 
 A rule has a head that matches the candidate and a tail that describes a language of
 committed histories. The pair-language specification is named
-[`pair_lang`](crates/junco-core/src/verify/history_specs.rs#L685-L688) in the source:
+[`pair_lang`](crates/junco-core/src/verify/history_specs.rs#L701-L704) in the source:
 
 $$
 \operatorname{pair\_lang}(H,R,q,w)
@@ -139,13 +139,13 @@ the values bound by the candidate, one slot per coordinate. A head constant must
 equal the corresponding candidate value; a bound variable captures that value for use
 in the same coordinate of a tail test. The numeric model uses zero for coordinates
 that do not bind. Head matching determines a unique substitution, as proved by
-[`lemma_head_match_unique_subst`](crates/junco-core/src/verify/history_specs.rs#L690-L697).
+[`lemma_head_match_unique_subst`](crates/junco-core/src/verify/history_specs.rs#L706-L714).
 
 The candidate supplies bindings. It is not added to the history being checked.
 
 $\mathcal{L}_{\theta}(R)$ is the set of complete histories accepted by $R$ after
 substituting those bindings. The
-[`lang` definition](crates/junco-core/src/verify/history_specs.rs#L56-L70) gives each
+[`lang` definition](crates/junco-core/src/verify/history_specs.rs#L91-L105) gives each
 operator its meaning:
 
 - `Empty` accepts no history. `Epsilon` accepts only the empty history.
@@ -157,7 +157,7 @@ operator its meaning:
 
 These distinctions matter: `All` is not a one-event wildcard, and `Test(true)` does
 not accept an empty history. Verus checks that empty-history distinction in
-[`epsilon_versus_test_true_on_empty_history`](crates/history-semantics/src/verify/history_examples.rs#L54-L60).
+[`epsilon_versus_test_true_on_empty_history`](crates/history-semantics/src/verify/history_examples.rs#L54-L62).
 
 ### A prior edit, expressed as a language
 
@@ -175,7 +175,7 @@ The rule therefore requires an earlier edit by the releasing principal on the sa
 resource. An empty history cannot satisfy it. An edit by another principal or on a
 different resource cannot serve as the witness.
 
-[`prior_edit_grants_matching_release`](crates/history-semantics/src/verify/history_examples.rs#L79-L101)
+[`prior_edit_grants_matching_release`](crates/history-semantics/src/verify/history_examples.rs#L80-L102)
 proves that a singleton matching-edit history satisfies `pair_lang` for the release
 candidate. That proof example assigns numeric action 2 to edit and 3 to release.
 This is an illustrative Require rule; the ownership-lock policy above has its own
@@ -184,7 +184,7 @@ seven-rule definition.
 ### From the specification to runtime answers
 
 The proof covers the running compiled-rule implementation. The
-[`public_compiled_decision`](crates/history-semantics/src/verify/typed_decision.rs#L66)
+[`public_compiled_decision`](crates/history-semantics/src/verify/typed_decision.rs#L121)
 verification endpoint calls the actual `CompiledRule::new` constructor and
 `accepts_history` method. Given a well-formed store and history, and the native-type
 obligations below, its successful result has this meaning:
@@ -204,7 +204,7 @@ a matching head whose tail rejects the history.
 Checked `CompiledPolicy` and `Validator` bodies skip nonmatching heads and select the
 first violating Require or Forbid rule. Their constructors preserve source order;
 policy construction also preserves each source's diagnostic pairing. The
-[composition clients](crates/history-semantics/src/verify/typed_decision.rs#L133)
+[composition clients](crates/history-semantics/src/verify/typed_decision.rs#L186)
 call the real constructors and decisions. A validator grant appends the exact request
 event and returns its metadata; denial and error preserve committed history.
 Only a selected policy denial calls context and diagnostic, once each, through a
@@ -213,7 +213,7 @@ native invocation leaf. Grants and errors call neither.
 The body proofs cover DSL structure and lowering, constant encoding as codebooks grow,
 numeric compilation and evaluation, raw-to-numeric history correspondence, and cached
 lifecycle and publication receipts. The
-[`retained_history_lifecycle` and `compiled_cached_decision` endpoints](crates/history-semantics/src/verify/typed_decision.rs#L86)
+[`retained_history_lifecycle` and `compiled_cached_decision` endpoints](crates/history-semantics/src/verify/typed_decision.rs#L137)
 exercise retained evaluation across append, rollback, replacement, truncation and a
 fresh-owner fork, and the same production method used by cached clients.
 
@@ -226,9 +226,9 @@ native signatures and trust boundaries are unchanged.
 Coordinate, history-key and store-ID issuance use checked successor, key-absence and
 map-insertion proofs over authorities retained in the process mutexes. Persistent
 receipts distinguish byte and typed issuers and independent typed registries.
-[Independent store construction](crates/history-store/src/typed.rs#L928) derives both
+[Independent store construction](crates/history-store/src/typed.rs#L1063) derives both
 registry and scalar owner inequality; the
-[foreign rollback client](crates/history-store/src/history.rs#L925) takes an actual
+[foreign rollback client](crates/history-store/src/history.rs#L1112) takes an actual
 source checkpoint and proves `WrongCheckpointOwner` without changing the target.
 Stale-frontier failures consume an ID; exhaustion does not. Later consumer failures
 do not remove issued IDs.
@@ -236,7 +236,7 @@ do not remove issued IDs.
 The theorem is conditional on stable `Event` projections and component equality and
 hashing that agree with their models. Modeled equality must be reflexive, symmetric
 and transitive; equal native keys must hash coherently. These obligations are explicit
-in [`native_obligations`](crates/history-store/src/typed.rs#L1039-L1042) and
+in [`native_obligations`](crates/history-store/src/typed.rs#L1135-L1138) and
 [`key_obligations`](crates/history-store/src/typed/map.rs#L21-L30), not universal proofs
 about arbitrary user types. Native field projections, callback invocation, const/static
 installation and reference identity, mutex/Arc/record adapters, container operations

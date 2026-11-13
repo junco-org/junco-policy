@@ -52,8 +52,8 @@ use crate::constraint::{
 use crate::search::{SearchOutcome, search};
 use crate::tables::Tables;
 
-/// Bytes of runtime graph one search may be charged before it is reported `Exhausted`;
-/// the runtime keeps `MAX_GRAPH_BYTES` per rule.
+/// Bytes of runtime graph one search may be charged; a search that exceeds it reports
+/// `Exhausted`. The runtime monitor keeps a separate budget, `MAX_GRAPH_BYTES`, per rule.
 #[verus_verify]
 const GRAPH_BYTES: usize = 16 * 1024 * 1024;
 
@@ -181,7 +181,10 @@ pub enum Inclusion<E: Event> {
     Holds,
     /// The inclusion fails; the counterexample witnesses it.
     Counterexample(Counterexample<E>),
-    /// A search exceeded its graph budget before deciding.
+    /// A search stopped before deciding with `HistoryError::GraphLimit`: it exceeded its graph
+    /// budget, or an index or case-product computation during the search overflowed. A policy
+    /// query returns the first non-`Holds` case, so `Exhausted` may hide a refutation in a later
+    /// case. No property is claimed.
     Exhausted,
 }
 

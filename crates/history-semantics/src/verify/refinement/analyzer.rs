@@ -2,36 +2,36 @@
 //! the typed semantics of `semantics`.
 //!
 //! `history-analysis` is Verus-checked. This module fixes the *view* of its state and results
-//! and the predicates for query results. Policy-level correctness and per-case minimality are
-//! separate: `*_ok` is their conjunction, and an entry point can establish `*_correct` before
-//! minimality is proved. The policy-level contracts are
+//! and the predicates for query results. Correctness (`*_correct`) and per-case minimality
+//! (`*_minimal`) are separate predicates; `*_ok` is their conjunction. The executable entry points
+//! ensure (abbreviated; see `history-analysis/src/analyzer.rs` for the full contracts):
 //!
 //! ```text
-//! covered(&self, rule, by)            ensures r matches Ok(v) ==> covered_correct(self@, rule@, by@, v.inclusion@)
-//! redundant(&self, rule, policy)      ensures r matches Ok(v) ==> redundant_correct(self@, rule@, policy@, v.inclusion@)
-//! at_least_as_strict(&self, p, q)     ensures r matches Ok(v) ==> at_least_as_strict_correct(self@, p@, q@, v.inclusion@)
-//! tail_included(&mut self, h, l, r)   ensures r matches Ok(v) ==> tail_included_ok(final(self)@, h@, l@, r@, v.inclusion@)
-//! add_rule(&mut self, rule)           ensures r matches Ok(id) ==> final(self)@.rules == old(self)@.rules.push(rule@)
-//!                                         && id@ == old(self)@.rules.len() && semantics::rule_wf(rule@)
+//! add_rule(&mut self, rule)          Ok(id) ==> final(self)@.rules == old(self)@.rules.push(rule_view(*rule))
+//!                                        && id@ == old(self)@.rules.len() && rule_wf(rule_view(*rule));
+//!                                    final(self)@.domains == old(self)@.domains
+//! covered(&self, rule, by)           Ok(v) ==> covered_correct(self@, rule@, rule_ids(by@), v@);
+//!                                    Ok(Counterexample(c)) ==> cex_has_instance(self@, c@) && !covers(..)
+//! redundant(&self, rule, policy)     Ok(v) ==> redundant_correct(self@, rule@, rule_ids(policy@), v@);
+//!                                    Ok(Counterexample(c)) ==> cex_has_instance(self@, c@) && !covers(..)
+//! at_least_as_strict(&self, p, q)    Ok(v) ==> at_least_as_strict_correct(self@, rule_ids(p@), rule_ids(q@), v@);
+//!                                    Ok(Counterexample(c)) ==> cex_has_instance(self@, c@) && !refines(..)
+//! tail_included(&mut self, h, l, r)  Ok(v) ==> tail_included_ok(final(self)@, h@, l@, r@, v@)
 //! ```
 //!
-//! A policy counterexample explicitly negates the claimed property whenever it has an admissible
-//! instance (`cex_has_instance`). This condition preserves the original vacuous meaning on small
-//! unrestricted types; declared finite domains remain supported.
+//! The three policy queries also require `unrestricted_components_infinite(self@.domains)` and
+//! ensure `no_internal_error`; `tail_included` ensures `no_internal_compile_error`. No entry point
+//! ensures `*_minimal`. `tail_included` does not ensure `cex_has_instance`, so its counterexample
+//! clause holds vacuously when no admissible instance exists.
 //!
-//! The remaining `never_fires_ok` and `always_fires_ok` predicates are specification-only.
-//! The contracts above describe the intended policy entry points; see the executable definitions
-//! for their actual postconditions.
+//! `never_fires_ok` and `always_fires_ok` are specification-only: no executable `never_fires` or
+//! `always_fires` exists.
 //!
-//! ```text
-//! never_fires(&self, rule)            ensures r matches Ok(v) ==> never_fires_ok(self@, rule@, v.inclusion@)
-//! always_fires(&self, rule)           ensures r matches Ok(v) ==> always_fires_ok(self@, rule@, v.inclusion@)
-//! ```
-//!
-//! `Exhausted` (the graph budget) and `Err` carry no claim; they are explicit, never a silent
-//! `Holds`. Termination of every query is part of verifying the exec code (loops with
-//! `decreases`). Finitely many reachable items, the hypothesis of
-//! `search::stmt_search_terminates`, is established for the executed search
+//! `Exhausted` and `Err` carry no claim; they are explicit, never a silent `Holds`. The analyzer
+//! returns `Exhausted` for any `HistoryError::GraphLimit` from a search, which covers both the
+//! graph budget and index or case-product overflow. Termination of every query is part of
+//! verifying the exec code (loops with `decreases`). Finitely many reachable items, the hypothesis
+//! of `search::stmt_search_terminates`, is established for the executed search
 //! (`theorem_retained_search_bounded` and `lemma_running_outcome` in
 //! `history-analysis/src/verify/search_exec.rs`), so every search trace is bounded independently
 //! of the budget.

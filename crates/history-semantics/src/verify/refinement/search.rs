@@ -56,7 +56,7 @@ pub open spec fn atom_pairs(atoms: Set<model::Primitive>) -> Pairs {
 }
 
 /// `next` is the successor of `q` for `α`: `L_θ(next) = e⁻¹ L_θ(q)` whenever `(θ, e)` realizes `α`
-/// (the implementation's `successor_entries_wf`, `progress.rs:1790`).
+/// (the implementation's `successor_entries_wf` in `history-semantics/src/progress.rs`).
 pub open spec fn successor_ok(q: Regex<model::Test>, alpha: Assignment, next: Regex<model::Test>) -> bool {
     forall|theta: Subst, e: EventView, w: Seq<EventView>| language::event_wf(theta, theta.len()) && #[trigger] realizes(theta, e, alpha)
         ==> (#[trigger] n_lang(theta, next, w) == n_lang(theta, q, seq![e] + w))
@@ -137,7 +137,8 @@ pub open spec fn stmt_successor_cases() -> bool {
 }
 
 /// Extension beyond the paper (declared finite domains): `Π` additionally pairs each register
-/// compared at a finite component with every declared value, as `constraint.rs:236-281` does.
+/// compared at a finite component with every declared value, as `split_register` in
+/// `history-analysis/src/constraint.rs` does.
 pub open spec fn domain_pairs(d: NDomains, atoms: Set<model::Primitive>) -> Pairs {
     Set::new(|p: (Component, nat)| atom_pairs(atoms).contains(p)
         || (atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Variable(p.0)))
@@ -269,7 +270,8 @@ pub open spec fn stmt_search_correct() -> bool {
             ==> outcome_ok(d, g0, r, s, outcome)
 }
 
-/// The same for declared finite domains, with `cases_of` built from `domain_pairs`.
+/// The same without the `n_unrestricted` hypothesis, so it also covers declared finite domains
+/// (whose successor cases split on `domain_pairs`; see `stmt_successor_cases_finite_domains`).
 pub open spec fn stmt_search_correct_finite_domains() -> bool {
     forall|d: NDomains, g0: Constraint, r: Regex<model::Test>, s: Regex<model::Test>, q0: Regex<model::Test>,
         cases_of: spec_fn(Item) -> Set<Case>, t: Trace, outcome: Outcome|
