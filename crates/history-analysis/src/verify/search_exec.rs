@@ -564,7 +564,7 @@ pub(crate) proof fn lemma_emitted_steps(g: crate::constraint::Constraint,atoms: 
     ensures paper::steps_ok(ndomains(universes),
         paper::Item { constraint: implementation::constraint_of(g@),state },emitted_cases(records)),
 {
-    hide(language::lang); hide(paper::successor_ok); hide(paper::realizes);
+    hide(language::numeric_lang); hide(paper::successor_ok); hide(paper::realizes);
     hide(crate::verify::split_views);
     hide(crate::verify::letters_views);
     hide(crate::verify::register_options);
@@ -822,7 +822,7 @@ pub(crate) proof fn lemma_partial_trace_complete(d: encoding::NDomains,start: pa
     requires partial_trace_wf(d,start,cases,t,false),
     ensures paper::trace_wf(d,start.constraint,start.state,cases,t),
 {
-    hide(language::lang); hide(language::nullable); hide(paper::may_discard);
+    hide(language::numeric_lang); hide(language::nullable); hide(paper::may_discard);
     reveal(partial_trace_wf);
     assert forall|j: int| 0 < j < t.nodes.len() implies #[trigger] paper::parent_ok(cases,t,j) by {
         reveal(partial_parent);
@@ -1523,7 +1523,7 @@ pub(crate) proof fn lemma_resolved_successor(l: SymbolicLanguage,q: RegexId,t: j
                     == history_semantics::normalize_verify::transition_lang(facade::graph(l),theta,t,e,w),
     ensures paper::successor_ok(facade::abs(l,q),implementation::letter_assignment(letter@,atom_set(atoms)),facade::abs(l,v)),
 {
-    hide(language::lang);hide(history_semantics::normalize_verify::transition_lang);
+    hide(language::numeric_lang);hide(history_semantics::normalize_verify::transition_lang);
     lemma_truth_realizes(facade::graph(l),facade::atom_ids(l,t),atoms,letter,words);
     assert forall|theta: Subst,e: EventView,w: Seq<EventView>| language::event_wf(theta,theta.len())
         && paper::realizes(theta,e,implementation::letter_assignment(letter@,atom_set(atoms))) implies
@@ -1811,7 +1811,7 @@ pub(crate) proof fn lemma_expansion_language_frame(a: Search<'_>,b: Search<'_>,i
     ensures expansion_state(b,index,records),trace(a,index).nodes == trace(b,index).nodes,
 {
     hide(paper::steps_ok);hide(paper::trace_steps_ok);hide(partial_trace_wf);hide(archive_follows);
-    hide(finiteness::cases_from_atoms);hide(language::lang);
+    hide(finiteness::cases_from_atoms);hide(language::numeric_lang);
     hide(state_wf);hide(queue_order);hide(edges_wf);
     reveal(expansion_state);
     lemma_state_evidence(a);lemma_queue_frame(a,b);
@@ -1834,7 +1834,7 @@ pub(crate) proof fn lemma_expansion_table_frame(a: Search<'_>,b: Search<'_>,inde
     ensures expansion_state(b,index,records),
 {
     hide(paper::steps_ok);hide(paper::trace_steps_ok);hide(partial_trace_wf);hide(archive_follows);
-    hide(finiteness::cases_from_atoms);hide(language::lang);
+    hide(finiteness::cases_from_atoms);hide(language::numeric_lang);
     hide(state_wf);hide(queue_order);hide(edges_wf);
     reveal(expansion_state);reveal(vocabulary_wf);
     lemma_state_evidence(a);lemma_queue_frame(a,b);
@@ -1852,7 +1852,7 @@ pub(crate) proof fn lemma_expansion_begin(a: Search<'_>,b: Search<'_>,index: nat
     ensures expansion_state(b,index,Seq::empty()),
 {
     hide(paper::steps_ok);hide(paper::trace_steps_ok);hide(archive_follows);hide(finiteness::cases_from_atoms);
-    hide(language::lang);
+    hide(language::numeric_lang);
     reveal(running);reveal(expansion_state);reveal(emitted_cases);
     assert(trace(a,index) == trace(b,index));
     assert(archive_cases(a.archive@)(trace(a,index).nodes[index as int].item) == Set::<paper::Case>::empty());
@@ -1980,7 +1980,7 @@ pub(crate) proof fn lemma_partial_clauses_frame(d: encoding::NDomains,cases: spe
     ensures partial_parent(cases,a,j,limit) == partial_parent(cases,b,j,limit),
         partial_coverage(d,cases,a,j) == partial_coverage(d,cases,b,j),
 {
-    hide(language::lang);hide(language::nullable);hide(paper::may_discard);
+    hide(language::numeric_lang);hide(language::nullable);hide(paper::may_discard);
     reveal(partial_parent);reveal(partial_coverage);
 }
 
