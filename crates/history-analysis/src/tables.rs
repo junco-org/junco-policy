@@ -327,6 +327,7 @@ impl Tables {
 
 #[verus_verify]
 #[verus_spec(result => ensures no_invariant_failure(result),
+    result matches Err(error) ==> error is IndexOverflow,
     result matches Ok(id) ==> id as nat == length as nat,
     result is Err ==> length > u32::MAX)]
 fn index(length: usize) -> Result<u32, HistoryError> {
@@ -338,6 +339,7 @@ fn index(length: usize) -> Result<u32, HistoryError> {
 
 #[verus_verify]
 #[verus_spec(result => ensures no_invariant_failure(result),
+    result matches Err(error) ==> error is IndexOverflow,
     result matches Ok(value) ==> value as nat == id as nat + by as nat,
     result is Err ==> id as nat + by as nat > u32::MAX)]
 fn offset(id: u32, by: u32) -> Result<u32, HistoryError> {

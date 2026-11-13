@@ -556,6 +556,7 @@ operands_members(operands, atoms@.subrange(0, index as int)),
 #[verus_verify]
 #[verus_spec(result => requires shape_wf(*constraint, *operands, *universes),
     ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        result matches Err(error) ==> error is IndexOverflow,
         result matches Ok(values) ==> constraint_views(values@) == split_views(*constraint, *operands, *universes)
         && split_contract(*constraint, *operands, *universes, values@)
         && (universes_distinct(*universes) ==> constraint_sequence(values@).no_duplicates())
@@ -627,6 +628,7 @@ forall|i: int| 0 <= i < index ==> *refs@[i] == choices@[i],
 #[verus_verify]
 #[verus_spec(result => requires shape_wf(*constraint, *operands, *universes),
     ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        result matches Err(error) ==> error is IndexOverflow,
         result matches Ok(values) ==> letter_views(values@) == letters_views(*constraint, *operands, *universes)
         && letters_contract(*constraint, *operands, *universes, values@)
         && letter_sequence(values@).no_duplicates()
@@ -713,6 +715,7 @@ fn register_classes(constraint: &Constraint) -> Vec<Class> {
     constraint@.len() == universes@.len(),
     inclusion::satisfiable(ndomains(*universes), implementation::constraint_of(constraint@)),
     ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        result matches Err(error) ==> error is IndexOverflow,
         result matches Ok(groups) ==> steps_result(*constraint, atoms@, *universes, groups@)
         && (universes_distinct(*universes) ==> constraint_sequence(group_constraints(groups@)).no_duplicates())
         && (forall|i: int| 0 <= i < groups@.len() ==> letter_sequence(groups@[i].1@).no_duplicates())
@@ -1105,6 +1108,7 @@ before == old(counters)@,
 #[verus_spec(result => requires 1 <= choices@.len() <= history_syntax::MAX_ARITY,
     forall|a: int, i: int| 0 <= a < choices@.len() && 0 <= i < choices@[a]@.len() ==> register_wf(choices@[a]@[i]),
     ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        result matches Err(error) ==> error is IndexOverflow,
         result matches Ok(values) ==> values@.len() == product_size(choices@.map_values(|c: &RegisterChoices| c@.len()))
         && constraint_views(values@) == register_product(choices@.map_values(|c: &RegisterChoices| register_views(c@)))
         && ((forall|a: int| 0 <= a < choices@.len() ==> register_sequence(choices@[a]@).no_duplicates())
@@ -1337,6 +1341,7 @@ fn class_choices(
 #[verus_spec(result => requires 1 <= choices@.len() <= history_syntax::MAX_ARITY,
     registers@.len() == choices@.len(),
     ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        result matches Err(error) ==> error is IndexOverflow,
         result matches Ok(values) ==> values@.len() == product_size(choices@.map_values(|c: &ClassChoices| c@.len()))
         && letter_views(values@) == letter_product(choices@.map_values(|c: &ClassChoices| option_views(c@)), registers@)
         && ((forall|a: int| 0 <= a < choices@.len() ==> class_sequence(choices@[a]@).no_duplicates())
@@ -1455,6 +1460,7 @@ pub(crate) struct RegisterChoices {
 #[verus_verify]
 impl RegisterChoices {
     #[verus_spec(result => ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        result matches Err(error) ==> error is IndexOverflow,
         result matches Ok(n) ==> n == self@.len())]
     fn len(&self) -> Result<usize, HistoryError> {
         match self
@@ -1497,6 +1503,7 @@ pub(crate) struct ClassChoices {
 #[verus_verify]
 impl ClassChoices {
     #[verus_spec(result => ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        result matches Err(error) ==> error is IndexOverflow,
         result matches Ok(n) ==> n == self@.len())]
     fn len(&self) -> Result<usize, HistoryError> {
         let extras = (if self.infinite { 1usize } else { 0 })
