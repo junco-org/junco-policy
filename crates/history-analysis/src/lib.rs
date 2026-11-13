@@ -26,17 +26,18 @@
 //!   and avoiding a piece above each of that state's pieces. Inserted states are never removed,
 //!   so the search returns a shortest history within its start constraint.
 //!
-//! A component is assumed to have more values than the rules mention, unless [`Domains`] declares
-//! its values. Counterexamples name each component either by a constant or by a numbered fresh
-//! value ([`Value`]), because a generic [`Event`](history_syntax::Event) cannot be built from
-//! components.
+//! `Holds` needs no infinity or fresh-capacity premise. Counterexamples name components by a
+//! constant or a numbered fresh value ([`Value`]); each shared fresh label denotes the same
+//! value throughout the candidate and history. Under the counterexample's query-local fresh
+//! capacity condition, it has real-event instances, and every admissible instance refutes the
+//! queried property.
 //!
 //! Rules are validated and lowered from borrowed inputs by
 //! [`junco_core::flatten::flatten_rule_parts`] and [`junco_core::lower_flat`], without cloning
-//! caller-owned syntax. Each search compiles one graph that may be charged 16 MiB; a search that
-//! exceeds it, or whose index or case-product computation overflows, is reported as
-//! [`Inclusion::Exhausted`]. The executable query contracts relate results to typed policy
-//! semantics under the documented native laws and sufficient resource-capacity preconditions.
+//! caller-owned syntax. Each search compiles one graph that may be charged 16 MiB; a failed
+//! graph charge is reported as [`Inclusion::Exhausted`], which makes no claim. Index and
+//! case-product overflow remain errors. The executable contracts use the public event laws and
+//! exact declared domains, not an infinity premise or a private-codebook capacity precondition.
 
 #![no_std]
 #![cfg_attr(not(verus_keep_ghost), forbid(unsafe_code))]
