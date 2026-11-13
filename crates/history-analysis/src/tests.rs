@@ -11,6 +11,7 @@ use history_syntax::{
     AtomPattern, Comparison, Component, ComponentPattern, Event, Head, N1, N2, N3, N4, N8,
     RegexExpr, Rule, RuleMode, TestExpr,
 };
+use junco_core::{CompileError, HistoryError};
 
 use crate::constraint::{Atom, Constraint, Operand, Universes, steps};
 use crate::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, Value};
@@ -560,9 +561,10 @@ fn eight_coordinate_inclusion_and_counterexamples() {
 }
 
 #[test]
-fn overflowing_eight_coordinate_register_product_is_exhausted() {
+fn overflowing_eight_coordinate_register_product_is_an_index_error() {
     // 256^8 exceeds usize::MAX on both 32- and 64-bit targets. The analyzer must check
-    // the whole product before reserving or enumerating any of its rows.
+    // the whole product before reserving or enumerating any of its rows, and an overflow is
+    // `GraphIndex`, never the budget verdict `Exhausted`.
     let mut domains = Domains::<IndexedEvent<8>>::infinite();
     for coordinate in 0..8 {
         domains = domains.with_domain(
@@ -582,10 +584,8 @@ fn overflowing_eight_coordinate_register_product_is_exhausted() {
     })));
     let mut analyzer = PolicyAnalyzer::new(domains);
     assert_eq!(
-        analyzer
-            .tail_included(&head, &tail, &RegexExpr::empty())
-            .unwrap(),
-        Inclusion::Exhausted,
+        analyzer.tail_included(&head, &tail, &RegexExpr::empty()),
+        Err(CompileError::Runtime(HistoryError::GraphIndex)),
     );
 }
 
