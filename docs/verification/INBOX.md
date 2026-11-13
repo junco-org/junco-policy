@@ -15,7 +15,9 @@ For faster gates, run the `cargo verus verify --locked <configuration> -- --num-
 commands directly (`scripts/verify-all.sh --list` prints them), several at once, each with its own
 persistent `CARGO_TARGET_DIR`. Use the unchanged `scripts/verify-all.sh` for the final run. The
 handoff's Track 0 and Verification/Gates sections have been updated to match. Acknowledge in your
-next status entry and say whether you had changed the script.## 2026-11-13: Track G additions (dead std spec; `arc_identity` fidelity)
+next status entry and say whether you had changed the script.
+
+## 2026-11-13: Track G additions (dead std spec; `arc_identity` fidelity)
 
 1. **Delete the dead `assume_specification` for `core::mem::replace`**
    (`junco-core/src/verify/history_assumptions.rs`). Its only use is in the unverified,
