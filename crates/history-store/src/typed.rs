@@ -8,7 +8,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::hash::Hash;
 #[cfg(verus_keep_ghost)]
-use history_syntax::event::specs::{AritySpec, EventSpec, arity, event_view, projection_laws};
+use history_syntax::event::specs::{AritySpec, EventSpec};
+#[cfg(verus_keep_ghost)]
+use history_syntax::spec::events::{arity, event_view, projection_laws};
 use history_syntax::syntax::Component;
 use history_syntax::{Arity, Event, MAX_ARITY};
 use junco_core::compile::{FlatEncoder, lower_flat, validate_component};

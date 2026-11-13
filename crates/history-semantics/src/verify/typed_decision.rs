@@ -160,9 +160,9 @@ pub(crate) fn retained_history_lifecycle<E: Event>(
     let accepted = compiled.accepts_history(&fork, candidate)?;
     proof {
         assert(raw::raw_word(*history) =~= raw::raw_events(*history).map(
-            |i: int, event: E| history_syntax::event::specs::event_view(event)));
+            |i: int, event: E| history_syntax::spec::events::event_view(event)));
         assert(raw::raw_word(fork) =~= raw::raw_events(fork).map(
-            |i: int, event: E| history_syntax::event::specs::event_view(event)));
+            |i: int, event: E| history_syntax::spec::events::event_view(event)));
     }
     Ok(accepted)
 }
@@ -251,7 +251,7 @@ pub(crate) fn compiled_policy_from_vec_client<E: Event, C>(
 pub(crate) fn validator_require_empty_then_forbid_all_client<E: Event, M>(
     store: Arc<Store<E>>, request: Request<E, M>, head: Head<E>, second_head: Head<E>,
 ) -> (result: Result<(Validator<E>, Decision<E, M>), CompileError>)
-    requires books::store_wf(*store), books::native_obligations::<E>(), dsl::head_matches(head@, history_syntax::event::specs::event_view(request.event)), second_head == head,
+    requires books::store_wf(*store), books::native_obligations::<E>(), dsl::head_matches(head@, history_syntax::spec::events::event_view(request.event)), second_head == head,
     ensures result matches Ok((state, decision)) ==> validator::validator_wf(state)
         && validator::validator_sources(state) == seq![Rule { mode: RuleMode::Require, head: head, tail: RegexExpr::Empty }, Rule { mode: RuleMode::Forbid, head: second_head, tail: RegexExpr::All }]
         && raw::raw_events(validator::validator_history(state)) == Seq::<E>::empty()
@@ -275,7 +275,7 @@ pub(crate) fn validator_require_empty_then_forbid_all_client<E: Event, M>(
 pub(crate) fn validator_forbid_all_then_require_empty_client<E: Event, M>(
     store: Arc<Store<E>>, request: Request<E, M>, head: Head<E>, second_head: Head<E>,
 ) -> (result: Result<(Validator<E>, Decision<E, M>), CompileError>)
-    requires books::store_wf(*store), books::native_obligations::<E>(), dsl::head_matches(head@, history_syntax::event::specs::event_view(request.event)), second_head == head,
+    requires books::store_wf(*store), books::native_obligations::<E>(), dsl::head_matches(head@, history_syntax::spec::events::event_view(request.event)), second_head == head,
     ensures result matches Ok((state, decision)) ==> validator::validator_wf(state)
         && validator::validator_sources(state) == seq![Rule { mode: RuleMode::Forbid, head: head, tail: RegexExpr::All }, Rule { mode: RuleMode::Require, head: second_head, tail: RegexExpr::Empty }]
         && raw::raw_events(validator::validator_history(state)) == Seq::<E>::empty()
@@ -299,7 +299,7 @@ pub(crate) fn validator_forbid_all_then_require_empty_client<E: Event, M>(
 pub(crate) fn validator_require_all_and_forbid_empty_client<E: Event, M>(
     store: Arc<Store<E>>, request: Request<E, M>, head: Head<E>, second_head: Head<E>,
 ) -> (result: Result<(Validator<E>, Decision<E, M>), CompileError>)
-    requires books::store_wf(*store), books::native_obligations::<E>(), dsl::head_matches(head@, history_syntax::event::specs::event_view(request.event)), second_head == head,
+    requires books::store_wf(*store), books::native_obligations::<E>(), dsl::head_matches(head@, history_syntax::spec::events::event_view(request.event)), second_head == head,
     ensures result matches Ok((state, decision)) ==> validator::validator_wf(state)
         && validator::validator_sources(state) == seq![Rule { mode: RuleMode::Require, head: head, tail: RegexExpr::All }, Rule { mode: RuleMode::Forbid, head: second_head, tail: RegexExpr::Empty }]
         && raw::raw_events(validator::validator_history(state)) == seq![request.event]
@@ -327,7 +327,7 @@ pub(crate) fn validator_require_all_and_forbid_empty_client<E: Event, M>(
 pub(crate) fn validator_head_mismatch_client<E: Event, M>(
     store: Arc<Store<E>>, request: Request<E, M>, head: Head<E>,
 ) -> (result: Result<(Validator<E>, Decision<E, M>), CompileError>)
-    requires books::store_wf(*store), books::native_obligations::<E>(), !dsl::head_matches(head@, history_syntax::event::specs::event_view(request.event)),
+    requires books::store_wf(*store), books::native_obligations::<E>(), !dsl::head_matches(head@, history_syntax::spec::events::event_view(request.event)),
     ensures result matches Ok((state, decision)) ==> validator::validator_wf(state)
         && validator::validator_sources(state) == seq![Rule { mode: RuleMode::Require, head: head, tail: RegexExpr::Empty }]
         && raw::raw_events(validator::validator_history(state)) == seq![request.event]
@@ -380,7 +380,7 @@ pub(crate) fn validator_empty_table_client<E: Event, M>(
 pub(crate) fn compiled_policy_require_empty_then_forbid_all_client<E: Event, C, F: FnOnce() -> C>(
     store: Arc<Store<E>>, rules: Vec<PolicyRule<E, C>>, history: &History<E>, candidate: &E, context: F, head: Ghost<Head<E>>, second_head: Ghost<Head<E>>,
 ) -> (result: Result<(CompiledPolicy<E, C>, PolicyDecision), CompileError>)
-    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::Empty }, Rule { mode: RuleMode::Forbid, head: second_head@, tail: RegexExpr::All }], dsl::head_matches(head@@, history_syntax::event::specs::event_view(*candidate)), second_head@ == head@,
+    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::Empty }, Rule { mode: RuleMode::Forbid, head: second_head@, tail: RegexExpr::All }], dsl::head_matches(head@@, history_syntax::spec::events::event_view(*candidate)), second_head@ == head@,
         call_requires(context, ()),
     ensures result matches Ok((state, decision)) ==> policy::policy_wf(state)
         && policy::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
@@ -411,7 +411,7 @@ pub(crate) fn compiled_policy_require_empty_then_forbid_all_client<E: Event, C, 
 pub(crate) fn compiled_policy_forbid_all_then_require_empty_client<E: Event, C, F: FnOnce() -> C>(
     store: Arc<Store<E>>, rules: Vec<PolicyRule<E, C>>, history: &History<E>, candidate: &E, context: F, head: Ghost<Head<E>>, second_head: Ghost<Head<E>>,
 ) -> (result: Result<(CompiledPolicy<E, C>, PolicyDecision), CompileError>)
-    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Forbid, head: head@, tail: RegexExpr::All }, Rule { mode: RuleMode::Require, head: second_head@, tail: RegexExpr::Empty }], dsl::head_matches(head@@, history_syntax::event::specs::event_view(*candidate)), second_head@ == head@,
+    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Forbid, head: head@, tail: RegexExpr::All }, Rule { mode: RuleMode::Require, head: second_head@, tail: RegexExpr::Empty }], dsl::head_matches(head@@, history_syntax::spec::events::event_view(*candidate)), second_head@ == head@,
         call_requires(context, ()),
     ensures result matches Ok((state, decision)) ==> policy::policy_wf(state)
         && policy::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
@@ -442,7 +442,7 @@ pub(crate) fn compiled_policy_forbid_all_then_require_empty_client<E: Event, C, 
 pub(crate) fn compiled_policy_require_all_and_forbid_empty_client<E: Event, C, F: FnOnce() -> C>(
     store: Arc<Store<E>>, rules: Vec<PolicyRule<E, C>>, history: &History<E>, candidate: &E, context: F, head: Ghost<Head<E>>, second_head: Ghost<Head<E>>,
 ) -> (result: Result<(CompiledPolicy<E, C>, PolicyDecision), CompileError>)
-    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::All }, Rule { mode: RuleMode::Forbid, head: second_head@, tail: RegexExpr::Empty }], dsl::head_matches(head@@, history_syntax::event::specs::event_view(*candidate)), second_head@ == head@,
+    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::All }, Rule { mode: RuleMode::Forbid, head: second_head@, tail: RegexExpr::Empty }], dsl::head_matches(head@@, history_syntax::spec::events::event_view(*candidate)), second_head@ == head@,
         call_requires(context, ()),
     ensures result matches Ok((state, decision)) ==> policy::policy_wf(state)
         && policy::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
@@ -462,7 +462,7 @@ pub(crate) fn compiled_policy_require_all_and_forbid_empty_client<E: Event, C, F
 pub(crate) fn compiled_policy_head_mismatch_client<E: Event, C, F: FnOnce() -> C>(
     store: Arc<Store<E>>, rules: Vec<PolicyRule<E, C>>, history: &History<E>, candidate: &E, context: F, head: Ghost<Head<E>>,
 ) -> (result: Result<(CompiledPolicy<E, C>, PolicyDecision), CompileError>)
-    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::Empty }], !dsl::head_matches(head@@, history_syntax::event::specs::event_view(*candidate)),
+    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::Empty }], !dsl::head_matches(head@@, history_syntax::spec::events::event_view(*candidate)),
         call_requires(context, ()),
     ensures result matches Ok((state, decision)) ==> policy::policy_wf(state)
         && policy::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))

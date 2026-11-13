@@ -11,8 +11,8 @@
 use super::semantics::*;
 use crate::compile::verify as numeric;
 use history_syntax::Event;
+use history_syntax::spec::events::RuleView;
 use history_syntax::syntax::{Component, Rule, RuleMode};
-use history_syntax::verify::dsl::RuleView;
 
 use junco_core::flat::verify as portable;
 use junco_core::flat::{FlatHead, FlatPair, FlatRule};

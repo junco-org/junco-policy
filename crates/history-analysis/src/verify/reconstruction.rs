@@ -9,7 +9,7 @@ use crate::analyzer::{Components, Constants, Counterexample, Inclusion, Slot, Va
 use crate::constraint::{Constraint, Letter, Universes};
 use history_semantics::verify::refinement::{analyzer, encoding, implementation};
 use history_semantics::verify::refinement::{inclusion, search};
-use history_syntax::event::specs::arity;
+use history_syntax::spec::events::arity;
 use history_syntax::{Event, syntax::Component};
 use junco_core::kernel::verify as model;
 use junco_core::verify::history_specs::{self as language};

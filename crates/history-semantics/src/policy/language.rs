@@ -4,7 +4,7 @@
 use alloc::boxed::Box;
 use alloc::vec;
 #[cfg(verus_keep_ghost)]
-use history_syntax::verify::dsl::RegexView;
+use history_syntax::spec::events::RegexView;
 use history_syntax::{Event, RegexExpr, TestExpr};
 use vstd::prelude::*;
 
@@ -25,7 +25,7 @@ pub fn last_state_change<E: Event>(setter: TestExpr<E>, stable: TestExpr<E>) -> 
         RegexExpr::star(RegexExpr::test(stable)),
     ]);
     proof! {
-        reveal_with_fuel(history_syntax::verify::dsl::regex_view, 3);
+        reveal_with_fuel(history_syntax::spec::events::regex_view, 3);
         broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
         assert(match result@ { RegexView::Concat(parts) => parts =~= expected, _ => false });
     }

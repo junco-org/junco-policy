@@ -9,11 +9,11 @@ use crate::observation::ObservationWorld;
 use crate::scope::VariableScope;
 use crate::verify::dsl;
 use history_syntax::Event;
-use history_syntax::event::specs::{EventSpec, arity};
+use history_syntax::event::specs::EventSpec;
+use history_syntax::spec::events::{AtomView, HeadView, PatternView, RegexView, TestView, arity};
 use history_syntax::syntax::{
     Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
-use history_syntax::verify::dsl::{AtomView, HeadView, PatternView, RegexView, TestView};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -824,8 +824,8 @@ pub fn named_variable_client<E: Event, L: Limits>(head: Head<E>, name: alloc::st
             history_syntax::syntax::AtomPattern::new(component, ComponentPattern::Variable(name)))));
     let result = crate::flatten::flatten_rule(&source, limits, world);
     proof {
-        reveal_with_fuel(history_syntax::verify::dsl::regex_view, 2);
-        reveal_with_fuel(history_syntax::verify::dsl::test_view, 2);
+        reveal_with_fuel(history_syntax::spec::events::regex_view, 2);
+        reveal_with_fuel(history_syntax::spec::events::test_view, 2);
         reveal_with_fuel(regex_represents, 2);
         reveal_with_fuel(test_represents, 2);
     }

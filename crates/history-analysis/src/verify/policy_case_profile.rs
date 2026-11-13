@@ -5,7 +5,8 @@ use super::{self as views, reconstruction as slots, typed_numeric as typed, verd
 use crate::analyzer::PolicyAnalyzer;
 use crate::constraint::Constraint;
 use history_semantics::verify::refinement::{analyzer, implementation, inclusion};
-use history_syntax::event::specs::{EventSpec, arity};
+use history_syntax::event::specs::EventSpec;
+use history_syntax::spec::events::arity;
 use history_syntax::{Component, Event};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;

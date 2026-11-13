@@ -81,7 +81,7 @@ pub fn validate_component<E: Event>(field: Component, value: &E::Component)
     ensures E::obeys_projection_spec() ==>
         result.is_ok() == (E::coordinate_spec(*value) == field.0 as nat),
     E::obeys_projection_spec() && result.is_ok() ==>
-        field.0 < history_syntax::event::specs::arity::<E>(),
+        field.0 < history_syntax::spec::events::arity::<E>(),
     result matches Err(error) ==> match error {
         HistoryError::InvalidPolicy { path, message } => path@ == "$"@
             && message == "constant belongs to another component",

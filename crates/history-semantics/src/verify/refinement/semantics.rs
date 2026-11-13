@@ -9,8 +9,8 @@
 //! of rules; its order is irrelevant to every predicate below.
 use alloc::boxed::Box;
 use history_syntax::Comparison;
+use history_syntax::spec::events::{HeadView, PatternView, RegexView, RuleView, TestView};
 use history_syntax::syntax::RuleMode;
-use history_syntax::verify::dsl::{HeadView, PatternView, RegexView, RuleView, TestView};
 use junco_core::verify::dsl as tdsl;
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;

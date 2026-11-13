@@ -10,8 +10,7 @@ use crate::constraint::{Constraint, Letter};
 use history_semantics::verify::refinement::{
     analyzer, encoding, implementation, inclusion, search, semantics,
 };
-use history_syntax::event::specs::arity;
-use history_syntax::verify::dsl::RuleView;
+use history_syntax::spec::events::{RuleView, arity};
 use history_syntax::{Event, Rule};
 use junco_core::flat::{FlatPair, FlatRule};
 use junco_core::kernel::verify as model;

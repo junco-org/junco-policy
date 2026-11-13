@@ -7,7 +7,7 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 use self::verify::{diagnostic_identity, policy_rule_diagnostic, policy_rule_source};
 use super::atoms::{PRINCIPAL_VAR, RESOURCE_VAR};
 #[cfg(verus_keep_ghost)]
-use history_syntax::verify::dsl::PatternView;
+use history_syntax::spec::events::PatternView;
 use history_syntax::{ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]

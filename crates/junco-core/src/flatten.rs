@@ -17,7 +17,9 @@ use crate::verify::flatten::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::history_specs::{no_invariant_compile_failure, no_invariant_failure};
 #[cfg(verus_keep_ghost)]
-use history_syntax::event::specs::{EventSpec, arity};
+use history_syntax::event::specs::EventSpec;
+#[cfg(verus_keep_ghost)]
+use history_syntax::spec::events::arity;
 
 #[cfg(verus_keep_ghost)]
 verus! {
@@ -135,7 +137,7 @@ fn flatten_head<'a, E: Event, L: Limits>(
     limits.enforce_memory().map_err(HistoryError::from)?;
     let mut index = 0;
     #[cfg_attr(verus_keep_ghost, verus_spec(
-        invariant index <= arity, arity == history_syntax::event::specs::arity::<E>(),
+        invariant index <= arity, arity == history_syntax::spec::events::arity::<E>(),
             1 <= arity <= history_syntax::MAX_ARITY,
             head@.len() == arity, slots@.len() == arity,
             forall|i: int| 0 <= i < arity ==> slots@[i]@ == head@[i],
@@ -147,7 +149,7 @@ fn flatten_head<'a, E: Event, L: Limits>(
                 None => i >= index || crate::verify::dsl::pattern_name(head@[i]) is None,
             },
             E::obeys_projection_spec() ==> forall|i: int| 0 <= i < index ==> match #[trigger] head@[i] {
-                history_syntax::verify::dsl::PatternView::Constant(value) => E::coordinate_spec(value) == i,
+                history_syntax::spec::events::PatternView::Constant(value) => E::coordinate_spec(value) == i,
                 _ => true,
             },
         decreases arity - index,
@@ -504,8 +506,8 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                 assert(work_scoped::<E>(work@, rule.head@));
             }
             reveal_with_fuel(work_cost, 2);
-            reveal_with_fuel(history_syntax::verify::dsl::regex_view, 2);
-            reveal_with_fuel(history_syntax::verify::dsl::test_view, 2);
+            reveal_with_fuel(history_syntax::spec::events::regex_view, 2);
+            reveal_with_fuel(history_syntax::spec::events::test_view, 2);
             reveal(regex_cost);
             reveal(test_cost);
         }
@@ -568,8 +570,8 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                 | RegexExpr::Union(children)
                 | RegexExpr::Intersect(children) => {
                     proof! { match regex@ {
-                        history_syntax::verify::dsl::RegexView::Concat(items) | history_syntax::verify::dsl::RegexView::Union(items)
-                            | history_syntax::verify::dsl::RegexView::Intersect(items) => assert(items =~= regex_views::<E>(children@)),
+                        history_syntax::spec::events::RegexView::Concat(items) | history_syntax::spec::events::RegexView::Union(items)
+                            | history_syntax::spec::events::RegexView::Intersect(items) => assert(items =~= regex_views::<E>(children@)),
                         _ => {},
                     } }
                     proof! {
@@ -638,13 +640,13 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                 }
                 TestExpr::And(children) | TestExpr::Or(children) => {
                     proof! { match test@ {
-                        history_syntax::verify::dsl::TestView::And(items) | history_syntax::verify::dsl::TestView::Or(items) =>
+                        history_syntax::spec::events::TestView::And(items) | history_syntax::spec::events::TestView::Or(items) =>
                             assert(items =~= test_views::<E>(children@)),
                         _ => {},
                     } }
                     proof! {
-                        assert(test@ == history_syntax::verify::dsl::TestView::And(test_views::<E>(children@))
-                            || test@ == history_syntax::verify::dsl::TestView::Or(test_views::<E>(children@)));
+                        assert(test@ == history_syntax::spec::events::TestView::And(test_views::<E>(children@))
+                            || test@ == history_syntax::spec::events::TestView::Or(test_views::<E>(children@)));
                         lemma_finish_test::<E>(work@, test, tests.len(), test_sources, regex_sources, test_views::<E>(children@), rule.head@);
                         if crate::verify::dsl::regex_scoped(rule.tail@, rule.head@) {
                             assert forall|i: int| 0 <= i < children@.len() implies
@@ -709,7 +711,7 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                     lemma_stack_extension::<E>(old_tests, builder.tests_view(), old_regexes, builder.regexes_view(),
                         old_test_ids, old_regex_ids, old_test_sources, old_regex_sources, rule.head@);
                     let sources = match test@ {
-                        history_syntax::verify::dsl::TestView::And(items) | history_syntax::verify::dsl::TestView::Or(items) => items,
+                        history_syntax::spec::events::TestView::And(items) | history_syntax::spec::events::TestView::Or(items) => items,
                         _ => arbitrary(),
                     };
                     assert(old_test_sources.subrange(start as int, old_test_sources.len() as int) == sources);
@@ -734,11 +736,11 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
             Work::FinishRegex(regex, start) => {
                 proof! {
                     assert(match regex@ {
-                        history_syntax::verify::dsl::RegexView::Test(_) => test_sources.len() == start + 1,
-                        history_syntax::verify::dsl::RegexView::Star(_) | history_syntax::verify::dsl::RegexView::Not(_)
+                        history_syntax::spec::events::RegexView::Test(_) => test_sources.len() == start + 1,
+                        history_syntax::spec::events::RegexView::Star(_) | history_syntax::spec::events::RegexView::Not(_)
                             => regex_sources.len() == start + 1,
-                        history_syntax::verify::dsl::RegexView::Concat(_) | history_syntax::verify::dsl::RegexView::Union(_)
-                            | history_syntax::verify::dsl::RegexView::Intersect(_) => start <= regex_sources.len(),
+                        history_syntax::spec::events::RegexView::Concat(_) | history_syntax::spec::events::RegexView::Union(_)
+                            | history_syntax::spec::events::RegexView::Intersect(_) => start <= regex_sources.len(),
                         _ => false,
                     });
                 }
@@ -819,16 +821,16 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                     lemma_stack_extension::<E>(old_tests, builder.tests_view(), old_regexes, builder.regexes_view(),
                         old_test_ids, old_regex_ids, old_test_sources, old_regex_sources, rule.head@);
                     match regex@ {
-                        history_syntax::verify::dsl::RegexView::Test(source) => {
+                        history_syntax::spec::events::RegexView::Test(source) => {
                             let child = match finished { FlatRegex::Test(id) => id, _ => arbitrary() };
                             assert(test_represents::<E>(builder.tests_view(), child as nat, source, rule.head@));
                         },
-                        history_syntax::verify::dsl::RegexView::Star(source) | history_syntax::verify::dsl::RegexView::Not(source) => {
+                        history_syntax::spec::events::RegexView::Star(source) | history_syntax::spec::events::RegexView::Not(source) => {
                             let child = match finished { FlatRegex::Star(id) | FlatRegex::Complement(id) => id, _ => arbitrary() };
                             assert(regex_represents::<E>(builder.tests_view(), builder.regexes_view(), child as nat, *source, rule.head@));
                         },
-                        history_syntax::verify::dsl::RegexView::Concat(sources) | history_syntax::verify::dsl::RegexView::Union(sources)
-                            | history_syntax::verify::dsl::RegexView::Intersect(sources) => {
+                        history_syntax::spec::events::RegexView::Concat(sources) | history_syntax::spec::events::RegexView::Union(sources)
+                            | history_syntax::spec::events::RegexView::Intersect(sources) => {
                             let ids = match finished {
                                 FlatRegex::Concat(ids) | FlatRegex::Union(ids) | FlatRegex::Intersect(ids) => ids@,
                                 _ => arbitrary(),

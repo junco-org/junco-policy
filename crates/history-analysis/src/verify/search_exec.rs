@@ -1158,7 +1158,7 @@ pub(crate) open spec fn letter_numeric_codes(v: Seq<Set<nat>>,u: Universes,
 pub(crate) proof fn lemma_letter_payload<E: history_syntax::Event>(constants: crate::analyzer::Constants<E>,
     v: Seq<Set<nat>>,u: Universes,l: implementation::LetterView,atoms: Set<model::Primitive>)
     requires letter_numeric_codes(v,u,l,atoms),
-        v.len() == history_syntax::event::specs::arity::<E>(),
+        v.len() == history_syntax::spec::events::arity::<E>(),
         forall|c: history_syntax::syntax::Component,code: nat| c.0 < v.len()
             && v[crate::verify::component_index(c) as int].contains(code)
             ==> crate::verify::reconstruction::code_field(constants,c,code),

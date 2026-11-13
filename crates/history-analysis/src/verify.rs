@@ -26,7 +26,7 @@ use alloc::vec::Vec;
 use history_semantics::verify::refinement::*;
 use history_syntax::Event;
 use history_syntax::event::specs::EventSpec;
-use history_syntax::event::specs::arity;
+use history_syntax::spec::events::arity;
 use history_syntax::syntax::Component;
 use junco_core::kernel::verify as model;
 use junco_core::observation::SmallVecSpecFns;
@@ -2535,7 +2535,7 @@ pub(crate) mod table {
 verus! {
 /// Native Eq/hash correspondence and event projection laws required by analyzer proofs.
 pub open(crate) spec fn analyzer_obligations<E: Event>() -> bool {
-    1 <= history_syntax::event::specs::arity::<E>() <= history_syntax::MAX_ARITY
+    1 <= history_syntax::spec::events::arity::<E>() <= history_syntax::MAX_ARITY
         && E::obeys_projection_spec() && crate::native::key_obligations::<E::Component>()
         && search_exec::search_obligations()
 }

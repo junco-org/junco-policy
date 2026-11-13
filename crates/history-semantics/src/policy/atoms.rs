@@ -5,7 +5,7 @@
 
 use alloc::string::String;
 #[cfg(verus_keep_ghost)]
-use history_syntax::verify::dsl::{AtomView, PatternView, TestView};
+use history_syntax::spec::events::{AtomView, PatternView, TestView};
 use history_syntax::{AtomPattern, Comparison, Component, ComponentPattern, Event, TestExpr};
 use vstd::prelude::*;
 

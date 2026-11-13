@@ -13,8 +13,10 @@ use history_semantics::validator::{Decision, Validator, verify as validator};
 use history_store::history::{History, verify as history};
 use history_store::store::{HistoryStore, verify as records};
 use history_store::typed::{Store, share_store, verify as books};
-use history_syntax::event::specs::{EventSpec, arity, event_view, projection_laws};
-use history_syntax::verify::dsl::{HeadView, RegexView, TestView};
+use history_syntax::event::specs::EventSpec;
+use history_syntax::spec::events::{
+    HeadView, RegexView, TestView, arity, event_view, projection_laws,
+};
 use history_syntax::{Component, Event, Head, MAX_ARITY, RegexExpr, Rule, RuleMode};
 use junco_core::event::Request;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex};

@@ -300,14 +300,14 @@ pub mod verify {
     {
         raw::lemma_history_wf(history);
         assert(raw::raw_word(history) =~= raw::raw_events(history).map(
-            |i: int, event: E| history_syntax::event::specs::event_view(event)));
+            |i: int, event: E| history_syntax::spec::events::event_view(event)));
         let flat = choose|flat: junco_core::flat::FlatRule<E::Component>|
             source::flattened::<E>(compiled.source@, flat)
                 && encoding::lowering(flat.source, compiled.template, compiled.maps@, source::component_equality::<E>())
                 && encoding::constants_in_domain(flat.source, books::domain::<E>());
-        assert(compiled.source@.head@.len() == history_syntax::event::specs::arity::<E>());
+        assert(compiled.source@.head@.len() == history_syntax::spec::events::arity::<E>());
         assert(compiled.template.head@.len() == compiled.source@.head@.len());
-        assert(history_syntax::event::specs::event_view(candidate).len() == compiled.source@.head@.len());
+        assert(history_syntax::spec::events::event_view(candidate).len() == compiled.source@.head@.len());
         let numeric_word = raw::stored_events(history.numeric()).map(|i: int, event: history_store::store::Event| books::numeric_values(event));
         assert forall|i: int| 0 <= i < raw::raw_events(history).len() implies
             books::event_encoded::<E>(maps, raw::raw_events(history)[i], raw::stored_events(history.numeric())[i]) by {
@@ -323,7 +323,7 @@ pub mod verify {
         assert(junco_core::verify::encoding::word_representation(numeric_word,
             history_store::store::verify::events_view(raw::stored_events(history.numeric()))));
         encoding::lemma_dsl_later_maps_preservation::<E>(compiled.source@, flat, compiled.template,
-            compiled.maps@, maps, books::domain::<E>(), history_syntax::event::specs::event_view(candidate), raw::raw_word(history),
+            compiled.maps@, maps, books::domain::<E>(), history_syntax::spec::events::event_view(candidate), raw::raw_word(history),
             books::numeric_values(request), numeric_word);
         crate::compile::verify::lemma_flat_head(compiled.template, books::numeric_values(request), request@);
         if let Ok(answer) = result {

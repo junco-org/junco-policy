@@ -621,7 +621,7 @@ impl<E: TypedEvent> Eq for History<E> {}
 #[cfg(verus_keep_ghost)]
 pub mod verify {
     use super::*;
-    use history_syntax::{Arity, event::specs::event_view};
+    use history_syntax::{Arity, spec::events::event_view};
     use junco_core::verify::history_specs::{
         HistoryStateView, history_mutation, lemma_revision_chain_preserves_prefix,
     };

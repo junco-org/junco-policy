@@ -289,17 +289,6 @@ pub mod specs {
                 && result < Self::Arity::value_spec();
     }
 
-    pub open spec fn arity<E: Event>() -> nat { E::Arity::value_spec() }
-
-    pub open spec fn projection_laws<E: Event>() -> bool {
-        forall|e: E, i: int| 0 <= i < arity::<E>() ==>
-            E::coordinate_spec(e.component_spec(i)) == i
-    }
-
-    pub open spec fn event_view<E: Event>(e: E) -> Seq<E::Component> {
-        Seq::new(arity::<E>(), |i: int| e.component_spec(i))
-    }
-
     impl<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash> EventSpecImpl for (A, B)
     where (A, B): Copy,
     {

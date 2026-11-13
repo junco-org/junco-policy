@@ -22,7 +22,9 @@ use history_semantics::verify::refinement::{
 #[cfg(verus_keep_ghost)]
 use history_semantics::{compile_verify as numeric, symbolic_language_verify as facade};
 #[cfg(verus_keep_ghost)]
-use history_syntax::event::specs::{EventSpec, arity};
+use history_syntax::event::specs::EventSpec;
+#[cfg(verus_keep_ghost)]
+use history_syntax::spec::events::arity;
 use history_syntax::{Arity, Component, Event, Head, MAX_ARITY, RegexExpr, Rule, RuleMode};
 use junco_core::compile::validate_component;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex};
@@ -381,7 +383,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         let mut ids = Vec::with_capacity(arity);
         let mut index = 0;
         while index < arity
-            invariant index <= arity, arity == history_syntax::event::specs::arity::<E>(),
+            invariant index <= arity, arity == history_syntax::spec::events::arity::<E>(),
                 1 <= arity <= MAX_ARITY, ids@.len() == index,
                 forall|i: int| 0 <= i < index ==> crate::native::representatives(ids@[i]).len() == 0,
             decreases arity - index,
@@ -394,7 +396,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         let mut universes = Vec::with_capacity(arity);
         index = 0;
         while index < arity
-            invariant index <= arity, arity == history_syntax::event::specs::arity::<E>(),
+            invariant index <= arity, arity == history_syntax::spec::events::arity::<E>(),
                 1 <= arity <= MAX_ARITY, domains == input, constructor_capacity(input),
                 crate::verify::analyzer_obligations::<E>(), domains_wf(input),
                 constants_wf(constants), universes@.len() == index,
@@ -1212,7 +1214,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         let mut candidate = [Slot::Constant(0); MAX_ARITY];
         let mut component: usize = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            arity == self.universes@.len(), arity == history_syntax::event::specs::arity::<E>(),
+            arity == self.universes@.len(), arity == history_syntax::spec::events::arity::<E>(),
             1 <= arity <= MAX_ARITY,
             component <= arity, fresh <= component,
             reconstruction_input(self.constants, self.universes, *constraint, letters@, alphabets@),
@@ -1277,7 +1279,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         }
         let mut index: usize = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            arity == self.universes@.len(), arity == history_syntax::event::specs::arity::<E>(),
+            arity == self.universes@.len(), arity == history_syntax::spec::events::arity::<E>(),
             1 <= arity <= MAX_ARITY,
             index <= letters@.len(), values@.len() == index, slots_history.len() == index,
             candidate_values@ == components_of_slots(self.constants, slot_views(candidate@.take(arity as int))),
@@ -1307,7 +1309,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             let mut slots = [Slot::Constant(0); MAX_ARITY];
             let mut component: usize = 0;
             #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            arity == self.universes@.len(), arity == history_syntax::event::specs::arity::<E>(),
+            arity == self.universes@.len(), arity == history_syntax::spec::events::arity::<E>(),
             1 <= arity <= MAX_ARITY,
                 component <= arity, index < letters@.len(), values@.len() == index, slots_history.len() == index,
                 fresh <= arity * (index + 1) + component,

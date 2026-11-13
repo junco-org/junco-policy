@@ -5,8 +5,9 @@
 
 use alloc::boxed::Box;
 use history_syntax::Event;
-use history_syntax::event::specs::event_view;
-use history_syntax::verify::dsl::{AtomView, HeadView, PatternView, RegexView, TestView};
+use history_syntax::spec::events::{
+    AtomView, HeadView, PatternView, RegexView, TestView, event_view,
+};
 use history_syntax::{Comparison, Component, Rule, RuleMode};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;

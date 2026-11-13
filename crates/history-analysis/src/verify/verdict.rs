@@ -12,7 +12,7 @@ use history_semantics::{
     symbolic_verify as symbolic,
 };
 use history_syntax::Rule;
-use history_syntax::event::specs::arity;
+use history_syntax::spec::events::arity;
 use junco_core::flat::FlatRule;
 use junco_core::flat::{FlatHead, FlatPair, FlatTerm, FlatTest};
 use junco_core::verify::dsl as tdsl;
