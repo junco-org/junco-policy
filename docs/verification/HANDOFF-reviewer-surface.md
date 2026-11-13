@@ -62,6 +62,22 @@ merge, cherry-pick, rebase onto, push to, or comment on them. Work as if they di
 PR #10 and `main` are not part of the other attempt; follow the coordination section below for
 them.
 
+## Communication
+
+The maintainer talks to you through this handoff branch; you report through your integration
+branch.
+
+- **Inbox:** poll the handoff branch for new commits at least every 30 minutes, and at every merge
+  gate and wave boundary (`git fetch origin <handoff branch>`, then read any new commits). Messages
+  are added to `docs/verification/INBOX.md`, newest first; the handoff or plan may also change. A
+  message takes precedence over the handoff and over earlier messages where they conflict. Apply
+  it at the next safe point (do not abandon a gate run halfway); if it invalidates in-flight work,
+  stop that work and say so. Never push to the handoff branch.
+- **Status:** keep `STATUS.md` at the root of your integration branch and push it at least every
+  30 minutes and at every gate: current wave and tracks, last gate results with counts, blockers,
+  decisions you deviated from, and an acknowledgement of each inbox message (its date and title,
+  and what you did). The file is removed before the final PR is opened.
+
 ## Coordination with PR #10 (minimality and removal semantics)
 
 PR #10 (`proof/policy-analyzer-minimality`, open at `52118c4`) is out of scope here. It makes
