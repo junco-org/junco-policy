@@ -37,16 +37,6 @@ pub open spec fn field_at(index: int) -> Component {
     Component(index as u8)
 }
 
-pub open spec fn equality_laws<C>(eq: Equality<C>, domain: Domain<C>) -> bool {
-    (forall|f: Component, a: C| #[trigger] domain(f, a) ==> eq(f, a, a))
-    && (forall|f: Component, a: C, b: C| domain(f, a) && domain(f, b)
-        ==> #[trigger] eq(f, a, b) == eq(f, b, a))
-    && (forall|f: Component, a: C, b: C, c: C|
-        domain(f, a) && domain(f, b) && domain(f, c)
-            && #[trigger] eq(f, a, b) && #[trigger] eq(f, b, c)
-        ==> eq(f, a, c))
-}
-
 pub open spec fn encoded<C>(maps: Codebook<C>, eq: Equality<C>, field: Component, value: C, id: u64) -> bool {
     1 <= maps.len() <= MAX_ARITY && 0 <= field_index(field) < maps.len()
         && id > 0 && exists|i: int|
@@ -56,7 +46,9 @@ pub open spec fn encoded<C>(maps: Codebook<C>, eq: Equality<C>, field: Component
 }
 
 pub open spec fn maps_wf<C>(maps: Codebook<C>, eq: Equality<C>, domain: Domain<C>) -> bool {
-    1 <= maps.len() <= MAX_ARITY && equality_laws(eq, domain)
+    1 <= maps.len() <= MAX_ARITY
+    && (forall|field: Component| #[trigger] crate::spec::hypotheses::eq_equivalence::<C>(
+        |a: C, b: C| eq(field, a, b), |a: C| domain(field, a)))
     && (forall|f: int, i: int| 0 <= f < maps.len() && 0 <= i < maps[f].len()
         ==> domain(field_at(f), maps[f][i].0) && maps[f][i].1 > 0)
     && (forall|f: int, i: int, j: int|
@@ -85,6 +77,8 @@ pub proof fn lemma_encoded_equality<C>(
     ensures eq(field, left, right) == (left_id == right_id),
 {
     let f = field_index(field);
+    assert(crate::spec::hypotheses::eq_equivalence::<C>(
+        |a: C, b: C| eq(field, a, b), |a: C| domain(field, a)));
     assert(field_at(f) == field);
     let i = choose|i: int| 0 <= i < maps[f].len() && maps[f][i].1 == left_id
         && eq(field, left, maps[f][i].0);
