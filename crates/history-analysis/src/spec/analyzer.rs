@@ -140,14 +140,25 @@ pub open spec fn tail_fails<E: Event>(
 
 // ----- verdicts (A1–A6) -----
 
+/// Only undeclared coordinates need values outside the known constants. Declared coordinates
+/// use constants exclusively, as required separately by `counterexample_spec`.
+pub open spec fn undeclared_capacity<E: Event>(
+    a: AnalyzerView<E::Component>, cex: CexView<E::Component>,
+) -> bool {
+    forall|i: int| 0 <= i < arity::<E>() && a.domains[i] is None
+        ==> #[trigger] fresh_capacity::<E>(a.domains, a.known, i, fresh_used(cex, i).len())
+}
+
 /// What a returned symbolic counterexample promises about `fails` (A2): every real instance is a
 /// real pair in the domains that fails; under capacity for its own fresh values an instance exists.
 pub open spec fn counterexample_spec<E: Event>(
     a: AnalyzerView<E::Component>, cex: CexView<E::Component>, fails: spec_fn(E, Seq<E>) -> bool,
 ) -> bool {
     &&& cex_arity(cex, arity::<E>())
+    &&& forall|i: int| 0 <= i < arity::<E>() && a.domains[i] is Some
+        ==> fresh_used(cex, i) =~= ISet::empty()
     &&& every_instance::<E>(a.domains, a.known, cex, fails)
-    &&& capacity_for::<E>(a.domains, a.known, cex) ==> cex_has_instance::<E>(a.domains, a.known, cex)
+    &&& undeclared_capacity::<E>(a, cex) ==> cex_has_instance::<E>(a.domains, a.known, cex)
 }
 
 /// A1/A2/A6 for `covered`: Holds is coverage; a counterexample is an uncovered pair, refutes

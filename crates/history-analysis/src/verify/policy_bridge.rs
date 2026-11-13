@@ -24,7 +24,8 @@ use junco_core::flat::{FlatPair, FlatRule};
 use junco_core::kernel::verify as model;
 use junco_core::spec::questions::{
     CexView, FreshChoice, InclusionView, ValueView, admissible, capacity_for, cex_arity,
-    cex_has_instance, covers, every_instance, in_domains, instantiates, refines,
+    cex_has_instance, covers, every_instance, fresh_capacity, fresh_used, in_domains, instantiates,
+    refines,
 };
 use junco_core::spec::semantics::{history_view, policy_denies, rule_violated};
 use junco_core::verify::capacity::{cex_constants_tagged, lemma_capacity_gives_instance};
@@ -291,6 +292,10 @@ pub(crate) proof fn lemma_reconstructed_has_instance<E: Event>(a: PolicyAnalyzer
     requires analyzer_state_wf(a), views::analyzer_obligations::<E>(),
         slots::reconstructed(a.constants, a.universes, g, letters, alphabets, result),
     ensures cex_arity(result@, arity::<E>()),
+        forall|i: int| 0 <= i < arity::<E>() && a@.domains[i] is Some
+            ==> fresh_used(result@, i) =~= ISet::empty(),
+        crate::spec::analyzer::undeclared_capacity::<E>(a@, result@)
+            ==> cex_has_instance::<E>(a@.domains, a@.known, result@),
         capacity_for::<E>(a@.domains, a@.known, result@) ==> cex_has_instance::<E>(a@.domains, a@.known, result@),
 {
     let (candidate, history) = choose|candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>|
@@ -299,6 +304,31 @@ pub(crate) proof fn lemma_reconstructed_has_instance<E: Event>(a: PolicyAnalyzer
             && implementation::reconstruction_ok(views::ndomains(a.universes), implementation::constraint_of(g@),
                 exec::chain_assignments(letters, alphabets), candidate, history, slots::known_codes(a.constants));
     lemma_reconstructed_shape::<E>(a, candidate, history);
+    assert forall|i: int| 0 <= i < arity::<E>() && a@.domains[i] is Some
+        implies fresh_used(result@, i) =~= ISet::empty() by {
+        assert(a.universes[i] is Some);
+        assert(slots::slot_domain(candidate[i], views::domain_view(a.universes[i])));
+        assert forall|n: nat| !fresh_used(result@, i).contains(n) by {
+            assert(result@.candidate[i] != ValueView::<E::Component>::Fresh(n));
+            assert forall|j: int| 0 <= j < history.len()
+                implies result@.history[j][i] != ValueView::<E::Component>::Fresh(n) by {
+                assert(slots::slot_domain(history[j][i], views::domain_view(a.universes[i])));
+                assert(result@.history[j] == slots::components_of_slots(a.constants, history[j]));
+            }
+        }
+    }
+    if crate::spec::analyzer::undeclared_capacity::<E>(a@, result@) {
+        assert forall|i: int| 0 <= i < arity::<E>()
+            implies fresh_capacity::<E>(a@.domains, a@.known, i, fresh_used(result@, i).len()) by {
+            if a@.domains[i] is Some {
+                let empty = Seq::<E::Component>::empty();
+                assert(fresh_used(result@, i) =~= ISet::empty());
+                assert(empty.len() == fresh_used(result@, i).len());
+                assert(fresh_capacity::<E>(a@.domains, a@.known, i, fresh_used(result@, i).len()));
+            }
+        }
+        lemma_capacity_gives_instance::<E>(a@.domains, a@.known, result@);
+    }
     if capacity_for::<E>(a@.domains, a@.known, result@) {
         lemma_capacity_gives_instance::<E>(a@.domains, a@.known, result@);
     }
