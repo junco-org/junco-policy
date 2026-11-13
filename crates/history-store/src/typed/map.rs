@@ -1,4 +1,9 @@
 //! Native hashbrown leaves; representatives model Eq classes, not Rust identity.
+//!
+//! Keys are user component types, so user `Hash`/`Eq` code runs under the store lock. A panic
+//! there unwinds through the lock and is outside the trusted base: Verus assumes the lock
+//! invariant on re-entry, and the contracts below hold only for `Hash`/`Eq` that return
+//! (`key_laws`, R4, states the faithfulness they must also have).
 
 use core::hash::Hash;
 use hashbrown::HashMap;
