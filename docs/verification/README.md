@@ -147,12 +147,15 @@ a product-capacity precondition. Constraint-id and fresh-value exhaustion remain
 ## Implementation links
 
 - `history-analysis/src/analyzer.rs`: `covered`, `redundant`, and `at_least_as_strict` ensure
-  their typed `*_correct` predicates, with every admissible counterexample instance witnessing
-  failure and explicit `!covers`/`!refines` under the unrestricted-component infinity premise.
+  their typed `*_ok` predicates: correctness plus shortest histories within the returned
+  candidate's constant profile, using the same denying-rule witness. Every admissible instance
+  witnesses failure, with explicit `!covers`/`!refines` under the infinity premise.
   `tail_included` retains `tail_included_ok`; all four queries exclude internal errors.
 - `history-analysis/src/verify/{policy_source,policy_bridge,policy_queries}.rs`: canonical
   numeric rules, whole-policy typed/numeric transport, and executable query composition.
 - `history-analysis/src/verify/policy_firing.rs`: exact head firing on split cases.
+- `history-analysis/src/verify/{policy_case_profile,policy_minimality}.rs`: known-code profile
+  transport and typed per-case shortestness from the initial search case's numeric length bound.
 - `history-semantics/src/verify/refinement/inclusion.rs`:
   `lemma_policy_search_composition` composes split-policy reduction with `outcome_ok`.
 - `history-analysis/src/verify/search_exec.rs`: actual result proof consumes the implementation bound.

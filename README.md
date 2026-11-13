@@ -491,11 +491,17 @@ denied by `rule`; `redundant(rule, policy)` checks coverage after removing every
 that rule; `at_least_as_strict(p, q)` checks whether every pair permitted by `p` is permitted by
 `q`. `tail_included(head, left, right)` remains available without registering rules.
 
+For redundancy, `Holds` also proves that removing all target ids leaves every deny/permit
+decision unchanged, regardless of policy order or duplicate ids. If the target occurs in the
+policy, each counterexample witnesses a decision changed by removal. An absent target retains
+the coverage-query interpretation; its coverage counterexample is not a removal witness.
+
 Queries return `Holds`, a symbolic `Counterexample` (a candidate and the history before it), or
 `Exhausted` once a search exceeds its 16 MiB graph budget. Registration and tail validation use
 `CompileError`; stored-policy queries use `HistoryError`. The query contracts exclude internal
-invariant errors. `tail_included` preserves its global shortest-history guarantee; policy-query
-minimality is specified separately, within the returned candidate's split case.
+invariant errors. `tail_included` preserves its global shortest-history guarantee. Policy
+queries guarantee shortest histories within the returned candidate's constant profile, for
+the rule whose coverage fails; they do not minimize globally across candidate cases or rules.
 
 Rules are validated and lowered from borrowed inputs by `junco_core::flatten_rule_parts` and
 `lower_flat`, as for the runtime. Each question reduces to inclusions between tails, decided by

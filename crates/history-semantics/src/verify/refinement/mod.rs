@@ -7,6 +7,7 @@
 //! Layers, top-down:
 //! - [`analyzer`]: what each analyzer query's verdict means, against [`semantics`].
 //! - [`semantics`]: rules, statuses, policies, refinement over typed component values.
+//! - [`policy_removal`]: arbitrary-id-list redundancy as preservation of deny/permit decisions.
 //! - [`encoding`]: typed rules as numeric rules, through the existing verified front end
 //!   (`flatten_rule`, `lower_flat`, `compile`), plus renaming invariance for fresh values.
 //! - [`inclusion`]: constraints, `Split`, constrained inclusion, and the policy reduction.
@@ -19,6 +20,7 @@ pub mod encoding;
 pub mod finiteness;
 pub mod implementation;
 pub mod inclusion;
+pub mod policy_removal;
 pub mod pruning;
 pub mod search;
 pub mod semantics;
