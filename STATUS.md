@@ -2,18 +2,18 @@
 
 ## Current wave
 
-The monitor and native analyzer proof tracks are closed. The atomic A/B/C/D/F source at
-`92f4e9d` passed all six full-feature merge configurations with zero errors and is being
-published on `refactor/reviewer-surface`. Native workspace/fuzz checks also passed.
-Latest inbox acknowledged: `baff915`; Exhausted is unit/no-claim and blocks nothing.
-Reviewer clients T, remaining naming hygiene, docs consolidation and final CI remain.
+The atomic monitor/analyzer source is pushed at `e525e20`; all eleven configurations passed
+with zero errors, as did workspace/fuzz native gates. The latest inbox (`bb1b19d`) correctly
+identifies overbroad internal-key axioms in that version. Their five trusted introductions are
+being narrowed to hash_coherent only; equality/equivalence/SmallVec view facts must be proved.
+Reviewer clients T continue independently. Exhausted remains unit/no-claim and blocks nothing.
 
 ## Last checks actually run
 
 - Pinned Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0`, Rust `1.98.1` reused from the previously
   checksum-verified installation.
 - Completed Wave 0 full matrix: all eleven configurations passed, zero errors.
-- Complete atomic full-feature merge gate: all six configurations passed.
+- Complete atomic full-feature merge gate at `92f4e9d` / published `e525e20`: all six passed.
 
   | Configuration | Verified functions | Errors |
   |---|---:|---:|
@@ -23,6 +23,9 @@ Reviewer clients T, remaining naming hygiene, docs consolidation and final CI re
   | semantics `runtime,std,cache` | 1646 | 0 |
   | semantics `public_specs` | 21 | 0 |
   | analyzer `runtime,std` | 626 | 0 |
+- The subsequent all-eleven-configuration wave gate passed, zero errors (**338.63 seconds**).
+  Those results predate the newly required hash-only trust narrowing; the repair gets a new
+  verification gate, rather than treating the old broader contracts as final evidence.
 
 - The first G/E gate found the removed finite-domain successor-theorem caller. Replacing it
   with the explicitly instantiated common theorem closed the downstream proof; no statement
@@ -118,6 +121,13 @@ passed with analyzer counts 570/570, semantics counts 1615/1620, and 196 workspa
 B/F migrate that content exactly to the new vocabulary and remove superseded predicates.
 
 ## Inbox acknowledgements
+
+**2026-11-13: Internal-key axioms may assert only hash_coherent** (`bb1b19d`): confirmed all
+five introductions were too broad. Parent is narrowing their frozen interface to exactly
+hash_coherent, removing the SmallVec view-equality assumption, and proving every equality
+and equivalence conjunct separately. No additional equality/view axiom will be introduced.
+No unprovable conjunct has yet been established; any genuine proof obstruction will be
+reported explicitly instead of assumed. Concrete user-type hashing axioms remain forbidden.
 
 **2026-11-13: Exhausted is not a blocker** (`baff915`): acknowledged. The unit/no-claim
 fallback is already implemented and pushed in `a3a0313`; no wave or merge waits for a token.
