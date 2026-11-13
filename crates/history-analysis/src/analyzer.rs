@@ -396,6 +396,54 @@ impl<E: Event> PolicyAnalyzer<E> {
         proof { lemma_declared_wf(result, input); lemma_constructor_domains(result, input); }
         result
     }
+
+    /// Validates `rule` and adds it to the analysis.
+    ///
+    /// # Errors
+    /// Fails if the rule is ill scoped, or if its constants do not fit the constant-id space.
+    pub fn add_rule(&mut self, rule: &Rule<E>) -> (result: Result<RuleId, CompileError>)
+        requires views::analyzer_obligations::<E>(), analyzer_state_wf(*old(self)),
+            crate::verify::policy::rule_capacity(*old(self), *rule),
+        ensures analyzer_state_wf(*final(self)),
+            junco_core::verify::history_specs::no_internal_compile_error(result),
+            match result {
+                Ok(id) => final(self)@.rules == old(self)@.rules.push(rule@) && id@ == old(self)@.rules.len()
+                    && history_semantics::verify::refinement::semantics::rule_wf(rule@),
+                Err(_) => final(self)@.rules == old(self)@.rules,
+            },
+    {
+        let ghost before = *self;
+        let flat = flatten_rule_parts(rule.mode, &rule.head, &rule.tail, &mut Unmetered, &mut ObservationWorld)?;
+        proof {
+            assert(Rule { mode: rule.mode, head: rule.head, tail: rule.tail } == *rule);
+            assert(encode_capacity(*self, flat.source));
+        }
+        let encoded = self.encode(&flat.source);
+        proof {
+            lemma_universes_extended(before.constants, self.constants, self.universes);
+            lemma_rules_extend(before.constants, self.constants, self.rules@);
+            assert(self@.rules == before@.rules);
+        }
+        let tail = match encoded {
+            Ok(tail) => tail,
+            Err(error) => return Err(CompileError::Runtime(error)),
+        };
+        let constants = Self::head_constants(&tail.head);
+        let ghost source = (*rule, flat);
+        let ghost prior = self.rules@;
+        self.rules.push(AnalyzedRule { constants, mode: rule.mode, tail, source: Ghost(source) });
+        proof {
+            assert(stored_rule_wf(self.constants, self.rules@.last()));
+            assert(rules_wf(self.constants, self.rules@)) by {
+                assert forall|i: int| 0 <= i < self.rules@.len() implies #[trigger] stored_rule_wf(self.constants, self.rules@[i]) by {
+                    if i < prior.len() { assert(self.rules@[i] == prior[i]); }
+                }
+            }
+            assert(self.rules@.map_values(|r: AnalyzedRule<E>| r.source@.0@)
+                =~= prior.map_values(|r: AnalyzedRule<E>| r.source@.0@).push(rule@));
+        }
+        Ok(RuleId(self.rules.len() - 1))
+    }
 }
 }
 
@@ -530,6 +578,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             final(self).constants.values@.len() <= old(self).constants.values@.len() + 3 + source.tests@.len(),
             result matches Ok(target) ==> enc::lowering(*source, target, crate::verify::constant_book(final(self).constants), fl::component_equality::<E>())
                 && junco_core::flat::verify::structural_wf(target) && numeric_head_wf(target.head@),
+            junco_core::verify::history_specs::no_internal_error(result),
     {
         let ghost initial_count = self.constants.values@.len();
         proof { assert(initial_count == old(self).constants.values@.len()); }
@@ -647,7 +696,8 @@ impl<E: Event> PolicyAnalyzer<E> {
         requires crate::verify::reconstruction::reconstruction_input(self.constants,
             self.universes, *constraint, letters@, alphabets@),
         ensures result matches Ok(c) ==> crate::verify::reconstruction::reconstructed(self.constants,
-            self.universes, *constraint, letters@, alphabets@, c))]
+            self.universes, *constraint, letters@, alphabets@, c),
+            result matches Err(e) ==> e matches HistoryError::IdExhausted { .. })]
     fn counterexample(
         &self,
         constraint: &Constraint,
