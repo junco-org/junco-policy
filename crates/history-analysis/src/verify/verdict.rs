@@ -600,3 +600,61 @@ pub(crate) proof fn lemma_decided_fresh<E: Event>(a: PolicyAnalyzer<E>, g: imple
     }
 }
 }
+
+verus! {
+/// The language of `firing_denials`: the denials of the rules whose head the case entails.
+pub(crate) proof fn lemma_firing_language(d: encoding::NDomains, p: Seq<encoding::NRule>, g: inclusion::Constraint,
+    theta: Subst, w: Seq<EventView>)
+    ensures encoding::n_lang(theta, inclusion::firing_denials(d, p, g), w)
+        == exists|k: int| 0 <= k < p.len() && #[trigger] inclusion::entails(d, g, inclusion::head_constraint(p[k].head))
+            && encoding::n_lang(theta, inclusion::denial(p[k]), w),
+{
+    let pred = |r: encoding::NRule| inclusion::entails(d, g, inclusion::head_constraint(r.head));
+    let firing = p.filter(pred);
+    let cs = firing.map(|i: int, r: encoding::NRule| inclusion::denial(r));
+    reveal_with_fuel(language::lang, 1);
+    assert(inclusion::firing_denials(d, p, g) == language::Regex::Union(cs));
+    if encoding::n_lang(theta, inclusion::firing_denials(d, p, g), w) {
+        let i = choose|i: int| 0 <= i < cs.len() && language::lang(model::gsem(theta), cs[i], w);
+        p.lemma_filter_contains_rev(pred, firing[i]);
+        let k = choose|k: int| 0 <= k < p.len() && p[k] == firing[i];
+        assert(inclusion::entails(d, g, inclusion::head_constraint(p[k].head)));
+    }
+    if exists|k: int| 0 <= k < p.len() && #[trigger] inclusion::entails(d, g, inclusion::head_constraint(p[k].head))
+        && encoding::n_lang(theta, inclusion::denial(p[k]), w) {
+        let k = choose|k: int| 0 <= k < p.len() && #[trigger] inclusion::entails(d, g, inclusion::head_constraint(p[k].head))
+            && encoding::n_lang(theta, inclusion::denial(p[k]), w);
+        p.lemma_filter_contains(pred, k);
+        let i = choose|i: int| 0 <= i < firing.len() && firing[i] == p[k];
+        assert(cs[i] == inclusion::denial(p[k]));
+        assert(language::lang(model::gsem(theta), cs[i], w));
+    }
+}
+
+/// A rule's denial: its tail, or the complement of its tail for `require`.
+pub(crate) proof fn lemma_denial_language(rule: encoding::NRule, theta: Subst, w: Seq<EventView>)
+    ensures encoding::n_lang(theta, inclusion::denial(rule), w) == match rule.mode {
+        history_syntax::RuleMode::Forbid => encoding::n_lang(theta, rule.tail, w),
+        history_syntax::RuleMode::Require => !encoding::n_lang(theta, rule.tail, w),
+    },
+{
+    reveal_with_fuel(language::lang, 1);
+}
+
+/// `policy_capacity` bounds the per-state products of every search over the book.
+pub(crate) proof fn lemma_policy_resources<E: Event>(a: PolicyAnalyzer<E>)
+    requires policy::policy_capacity(a),
+    ensures forall|v: [Set<nat>; 3]| v[0].len() <= a.constants.values@.len()
+        && v[1].len() <= a.constants.values@.len() && v[2].len() <= a.constants.values@.len()
+            ==> #[trigger] exec::resource_capacity(v),
+{
+    let count = a.constants.values@.len();
+    let m = count + 2;
+    assert forall|v: [Set<nat>; 3]| v[0].len() <= count && v[1].len() <= count && v[2].len() <= count
+        implies #[trigger] exec::resource_capacity(v) by {
+        let x = v[0].len() + 2; let y = v[1].len() + 2; let z = v[2].len() + 2;
+        assert(m <= m * m * m && x * y <= m * m * m && x * y * z <= m * m * m) by(nonlinear_arith)
+            requires x <= m, y <= m, z <= m, 2 <= x, 2 <= y, 2 <= z;
+    }
+}
+}
