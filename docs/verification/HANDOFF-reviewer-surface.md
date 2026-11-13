@@ -7,7 +7,8 @@ six files**, and fix the specification problems found by the audit. At the end, 
 able to see, without reading anything else:
 
 1. what the monitor and the analyzer guarantee, stated over real events;
-2. under which hypotheses, all of them dischargeable and shown satisfiable for a concrete event type;
+2. under which hypotheses, each one shown satisfiable for concrete event types except the single
+   uninterpreted hashing law, which is named and documented;
 3. what is trusted;
 4. which mechanized statement corresponds to which paper result.
 
@@ -38,7 +39,8 @@ Do not edit the paper. Produce the list of paper changes as part of the final re
   Proved as a Verus client in `history-analysis/tests/reviewer.rs`.
 - **Hypotheses** (R4): one bundle per guarantee, defined once, `pub open`, documented. A reviewer
   test proves the bundle for one concrete event type (e.g. `Component3<u8, u8, u8>`) and one event
-  type with a `u32` coordinate, from the axioms listed in `TRUST.md`.
+  type with a `u32` coordinate, assuming only `hash_coherent` for their component type. No axioms
+  for primitive or component types; only decision 4's internal-key axioms are added.
 - **Layout** (plan §2): R1–R6, P and T exist; every definition that a public `requires`/`ensures`
   mentions is `pub open` (or `pub closed` with `pub` revealing lemmas); old duplicates are deleted.
 
@@ -186,7 +188,8 @@ and `history-analysis/src/verify/typed_numeric.rs` (equivalence duplicates).
 - Replace `native_obligations` and `analyzer_obligations` with the R4 bundles; make the analyzer
   bundle include `projection_laws`.
 - Turn internal-key laws into listed axioms; remove them from public preconditions.
-- Prove the bundle for the two concrete event types (lemma used by T).
+- Prove the bundle for the two concrete event types, assuming only `hash_coherent` for their
+  component type (lemma used by T). Add no axioms for primitive or `ComponentN` types.
 
 ### Track B — Typed semantics over events (S1, S2, S12; R1–R3)
 
@@ -300,7 +303,8 @@ Files: `history-semantics/tests/reviewer.rs`, `history-analysis/tests/reviewer.r
 `docs/`, `README.md` verification sections.
 
 - Prove the monitor theorem with trace safety, and A1–A6 (A6 restating PR #10), as Verus
-  clients using only public items; prove the hypothesis bundles for the two concrete types;
+  clients using only public items; prove the hypothesis bundles for the two concrete types
+  assuming only `hash_coherent` for their component type;
   register both test targets in `scripts/verify-all.sh` and CI.
 - Rewrite `VERIFY.md` as the single reviewer document (commands, one count table, reviewer map,
   hypotheses, differences, trust summary); move `SPEC.md`, `docs/verification/README.md`, both
@@ -407,7 +411,8 @@ Priority 1:
 2. R1–R6 exist; no public contract mentions an `open(crate)`/`open(super)` definition; every
    definition that `INTERFACES.md` lists as replaced is gone, and no lemma mentions one.
 3. The monitor theorem with trace safety and A1–A5 are proved as Verus clients from public items
-   only, and the hypothesis bundles are proved for the two concrete event types.
+   only, and the hypothesis bundles are proved for the two concrete event types assuming only
+   `hash_coherent` for their component type.
 4. Differential tests pass, including the four new cases.
 
 Priority 2:
