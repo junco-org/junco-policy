@@ -150,8 +150,7 @@ pub proof fn lemma_u32_event_hypotheses()
 pub mod internal_keys {
     use super::*;
     use crate::kernel::{RegexId, TestId};
-    use crate::observation::SmallVecSpecFns;
-    use smallvec::SmallVec;
+    use crate::observation::PartsKey;
 
     verus! {
     /// Hash faithfulness only for the exact internal search-key type.
@@ -175,14 +174,44 @@ pub mod internal_keys {
     /// Hash faithfulness only for the exact internal ordered-parts key type.
     #[verifier::external_body]
     pub broadcast proof fn lemma_parts_hash_coherent()
-        ensures #[trigger] hash_coherent::<SmallVec<[RegexId; 4]>>(),
+        ensures #[trigger] hash_coherent::<PartsKey>(),
     {}
 
+    /// Native tuple equality is componentwise equality of the u32 and ID payloads.
+    pub broadcast proof fn lemma_search_key_laws()
+        ensures #[trigger] key_laws::<(u32, RegexId)>(),
+    {
+        broadcast use lemma_search_key_hash_coherent;
+    }
+
+    /// Regex IDs compare their verified numeric views in both tuple coordinates.
+    pub broadcast proof fn lemma_regex_pair_key_laws()
+        ensures #[trigger] key_laws::<(RegexId, RegexId)>(),
+    {
+        broadcast use lemma_regex_pair_hash_coherent;
+    }
+
+    /// Test IDs compare their verified numeric views in both tuple coordinates.
+    pub broadcast proof fn lemma_test_pair_key_laws()
+        ensures #[trigger] key_laws::<(TestId, TestId)>(),
+    {
+        broadcast use lemma_test_pair_hash_coherent;
+    }
+
+    /// Parts equality is the equality of sequence views, proved by its native implementation.
+    pub broadcast proof fn lemma_parts_key_laws()
+        ensures #[trigger] key_laws::<PartsKey>(),
+            forall|a: PartsKey, b: PartsKey|
+                #[trigger] a.eq_spec(&b) ==> a.view() == b.view(),
+    {
+        broadcast use lemma_parts_hash_coherent;
+    }
+
     pub broadcast group group_internal_key_laws {
-        lemma_search_key_hash_coherent,
-        lemma_regex_pair_hash_coherent,
-        lemma_test_pair_hash_coherent,
-        lemma_parts_hash_coherent,
+        lemma_search_key_laws,
+        lemma_regex_pair_key_laws,
+        lemma_test_pair_key_laws,
+        lemma_parts_key_laws,
     }
     }
 }
