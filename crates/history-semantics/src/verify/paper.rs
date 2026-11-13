@@ -1,0 +1,277 @@
+//! Paper index (P): one `stmt_<label>` per result of the paper, in paper order, each a
+//! proposition over the definitions of its layer and each proved by `theorem_<label>` from the
+//! layer that mechanizes it. [`theorem_paper_index`] proves every row at once, so a renamed or
+//! deleted statement breaks the index.
+//!
+//! Paths are relative to `crates/history-semantics/src/verify/`. Definitions (`def:*`) are
+//! reviewer-interface files (R1–R6, `docs/verification/INTERFACES.md`) and carry no `stmt_`.
+//!
+//! | Paper label | `stmt_` (this module) | Mechanized statement | Proof | File |
+//! |---|---|---|---|---|
+//! | `sec:events` (product events) | — (definition) | `event_view`, `event_laws` (R1) | Track A lemmas | `crates/history-syntax/src/spec/events.rs` |
+//! | `lem:similarity-language` | `stmt_lem_similarity_language` | `stmt_similarity_preserves_language` | `theorem_similarity_preserves_language` | `history_algebra.rs` |
+//! | `lem:sderiv` | `stmt_lem_sderiv` | `stmt_symbolic_derivative_correct` | `theorem_symbolic_derivative_correct` | `history_algebra.rs` |
+//! | `thm:sderiv` | `stmt_thm_sderiv` | `stmt_symbolic_run_correct` | `theorem_symbolic_run_correct` | `history_algebra.rs` |
+//! | `thm:matcher` | `stmt_thm_matcher` | `stmt_not_fired` (step 1), `stmt_rule_decision` (steps 2–3), `stmt_similar_tails_same_decision` (normalization); at the monitor level `check_step` (R5) | `theorem_not_fired`, `theorem_rule_decision`, `theorem_similar_tails_same_decision`; `tests/reviewer.rs` | `history_algebra.rs`; `crates/history-semantics/src/spec/monitor.rs` |
+//! | `def:violates`, `def:policy-violates` | — (definition) | `rule_violated`, `policy_denies`, `least_violation` (R2) | — | `crates/junco-core/src/spec/semantics.rs` |
+//! | `def:policy-refinement` | — (definition) | `refines`, `covers` (R3) | — | `crates/junco-core/src/spec/questions.rs` |
+//! | `app:policy-reduction` | `stmt_app_policy_reduction` | `stmt_refines_iff_covers`, `stmt_redundant_iff_covered`; `stmt_vacuity_reductions` (numeric, constrained form) | `theorem_refines_iff_covers`, `theorem_redundant_iff_covered`, `theorem_vacuity_reductions` | `refinement/semantics.rs`, `refinement/inclusion.rs` |
+//! | `prop:policy` | `stmt_prop_policy` | not mechanized as stated; the rule-by-rule reduction `stmt_policy_reduction` and its composition with search outcomes `stmt_policy_search_composition` replace it | `theorem_policy_reduction`, `theorem_policy_search_composition` | `refinement/inclusion.rs` |
+//! | `def:constraints`, `def:split` | — (definition) | `Constraint`, `paper_split`; `stmt_paper_split_ok` shows `Split` is a valid split family | `theorem_paper_split_ok` | `refinement/inclusion.rs` |
+//! | `def:atoms`, `def:realize`, `def:successors` | — (definition) | `Assignment`, `realizes`, `steps_ok` | — | `refinement/search.rs` |
+//! | `lem:succ`, `lem:uniform` | `stmt_lem_succ`, `stmt_lem_uniform` | `stmt_successor_cases` (one statement over successor cases; declared finite domains included) | `theorem_successor_cases` | `refinement/search.rs` |
+//! | `thm:search` | `stmt_thm_search` | `stmt_search_correct` (soundness, completeness, minimality), `stmt_search_terminates` (termination, conditional on finitely many items), `stmt_items_from_states` | `theorem_search_correct`, `theorem_search_terminates`, `theorem_items_from_states`; for the executable, `theorem_impl_search_bounded` and `search_exec::lemma_running_outcome` | `refinement/search.rs`, `refinement/finiteness.rs`, `refinement/implementation.rs` |
+//! | `eq:decomposition`, `def:decomposition` | `stmt_eq_decomposition` | `stmt_decomposition` | `theorem_decomposition` | `refinement/pruning.rs` |
+//! | `lem:prune`, `def:pruning` | `stmt_lem_prune` | `stmt_prune_sound`, `stmt_checks_discard` | `theorem_prune_sound`, `theorem_checks_discard` | `refinement/pruning.rs` |
+//! | `lem:simulation`, `fig:simulation` | `stmt_lem_simulation` | `stmt_sim_rules_sound`, `stmt_test_rules_sound` (the code's relation is smaller than the figure's) | `theorem_sim_rules_sound`, `theorem_test_rules_sound` | `refinement/pruning.rs` |
+//! | `lem:finite-states`, `app:finiteness` | `stmt_lem_finite_states` | `stmt_reachable_states_finite`, `stmt_lift_injective`; for the implementation `m_impl().contract()` and the parametric `theorem_impl_finitely_many_items` | `theorem_reachable_states_finite`, `theorem_lift_injective`, `theorem_impl_contract` | `refinement/finiteness.rs`, `finite_impl.rs` |
+//! | Executable analyzer (Section 6) | — | `covered_spec`, `redundant_spec`, `at_least_as_strict_spec`, `tail_included_spec` (R6), ensured by `PolicyAnalyzer`'s queries | `tests/reviewer.rs` | `crates/history-analysis/src/spec/analyzer.rs` |
+//!
+//! Auxiliary statements, not paper results but cited by `app:mech-diff`: `stmt_genericity`
+//! (`refinement/semantics.rs`), `stmt_numeric_genericity`, `stmt_source_regex_local`,
+//! `stmt_front_end_denies` (`refinement/encoding.rs`), `stmt_paper_split_ok`
+//! (`refinement/inclusion.rs`).
+//!
+//! Sections and algorithms, with the module whose definitions follow them: `sec:rules`,
+//! `sec:policy` (R2, R3; `refinement/semantics.rs`); `sec:search-state`, `sec:search`, `alg:succ`,
+//! `alg:search`, `app:cases`, `app:search-proof` (`refinement/search.rs`); `app:pruning`,
+//! `app:simulation` (`refinement/pruning.rs`); `app:mech-diff` (the differences, listed in
+//! `VERIFY.md`).
+use crate::verify::finite_impl;
+use crate::verify::history_algebra as algebra;
+use crate::verify::refinement::{encoding, finiteness, inclusion, pruning, search, semantics};
+use history_syntax::Event;
+use junco_core::kernel::verify as model;
+use junco_core::verify::history_specs::SrcTest;
+use vstd::prelude::*;
+
+verus! {
+
+/// Proposition Similarity preserves language (`lem:similarity-language`).
+pub open spec fn stmt_lem_similarity_language() -> bool {
+    algebra::stmt_similarity_preserves_language()
+}
+
+pub proof fn theorem_lem_similarity_language()
+    ensures stmt_lem_similarity_language(),
+{
+    algebra::theorem_similarity_preserves_language();
+}
+
+/// Lemma One-step correctness (`lem:sderiv`), for any letter type `L`.
+pub open spec fn stmt_lem_sderiv<L>() -> bool {
+    algebra::stmt_symbolic_derivative_correct::<L>()
+}
+
+pub proof fn theorem_lem_sderiv<L>()
+    ensures stmt_lem_sderiv::<L>(),
+{
+    algebra::theorem_symbolic_derivative_correct::<L>();
+}
+
+/// Theorem Symbolic derivative correctness (`thm:sderiv`), for any letter type `L`.
+pub open spec fn stmt_thm_sderiv<L>() -> bool {
+    algebra::stmt_symbolic_run_correct::<L>()
+}
+
+pub proof fn theorem_thm_sderiv<L>()
+    ensures stmt_thm_sderiv::<L>(),
+{
+    algebra::theorem_symbolic_run_correct::<L>();
+}
+
+/// Theorem Matcher correctness (`thm:matcher`) over the paper-shaped numeric rules: an unmatched
+/// head does not fire, a fired rule decides by the symbolic run under its head substitution, and
+/// similar tails decide alike. At the level of `Validator::check` the theorem is `check_step` (R5).
+pub open spec fn stmt_thm_matcher() -> bool {
+    &&& algebra::stmt_not_fired()
+    &&& algebra::stmt_rule_decision()
+    &&& algebra::stmt_similar_tails_same_decision()
+}
+
+pub proof fn theorem_thm_matcher()
+    ensures stmt_thm_matcher(),
+{
+    algebra::theorem_not_fired();
+    algebra::theorem_rule_decision();
+    algebra::theorem_similar_tails_same_decision();
+}
+
+/// Reductions of refinement, redundancy and vacuity (appendix `app:policy-reduction`): refinement
+/// is rule-by-rule coverage, redundancy is coverage by the rest, and the vacuity questions are
+/// constrained inclusions of denial expressions.
+pub open spec fn stmt_app_policy_reduction<C: PartialEq>() -> bool {
+    &&& semantics::stmt_refines_iff_covers::<C>()
+    &&& semantics::stmt_redundant_iff_covered::<C>()
+    &&& inclusion::stmt_vacuity_reductions()
+}
+
+pub proof fn theorem_app_policy_reduction<C: PartialEq>()
+    ensures stmt_app_policy_reduction::<C>(),
+{
+    semantics::theorem_refines_iff_covers::<C>();
+    semantics::theorem_redundant_iff_covered::<C>();
+    inclusion::theorem_vacuity_reductions();
+}
+
+/// Proposition Refinement as inclusion (`prop:policy`) is not mechanized as stated; what the
+/// analyzer uses and what is proved is the rule-by-rule reduction over split cases and its
+/// composition with the search outcomes.
+pub open spec fn stmt_prop_policy() -> bool {
+    &&& inclusion::stmt_policy_reduction()
+    &&& inclusion::stmt_policy_search_composition()
+}
+
+pub proof fn theorem_prop_policy()
+    ensures stmt_prop_policy(),
+{
+    inclusion::theorem_policy_reduction();
+    inclusion::theorem_policy_search_composition();
+}
+
+/// Lemma Computing successors (`lem:succ`): the successor cases of an item are finite, entail the
+/// item's constraint, and compute the derivative for every realizing valuation and event.
+pub open spec fn stmt_lem_succ() -> bool {
+    search::stmt_successor_cases()
+}
+
+pub proof fn theorem_lem_succ()
+    ensures stmt_lem_succ(),
+{
+    search::theorem_successor_cases();
+}
+
+/// Lemma Uniform reachability (`lem:uniform`): every valuation of a case's constraint realizes
+/// the case with some event in the domains, and every pair belongs to exactly one case. Stated
+/// together with `lem:succ` as `stmt_successor_cases`.
+pub open spec fn stmt_lem_uniform() -> bool {
+    search::stmt_successor_cases()
+}
+
+pub proof fn theorem_lem_uniform()
+    ensures stmt_lem_uniform(),
+{
+    search::theorem_successor_cases();
+}
+
+/// Theorem Inclusion search correctness (`thm:search`): soundness, completeness and minimality of
+/// every returned outcome, and termination given finitely many reachable items, which finitely
+/// many reachable states provide.
+pub open spec fn stmt_thm_search() -> bool {
+    &&& search::stmt_search_correct()
+    &&& search::stmt_search_terminates()
+    &&& finiteness::stmt_items_from_states()
+}
+
+pub proof fn theorem_thm_search()
+    ensures stmt_thm_search(),
+{
+    search::theorem_search_correct();
+    search::theorem_search_terminates();
+    finiteness::theorem_items_from_states();
+}
+
+/// Equation `eq:decomposition`: a state's language is the intersection of its required parts
+/// minus the union of its excluded parts.
+pub open spec fn stmt_eq_decomposition() -> bool {
+    pruning::stmt_decomposition()
+}
+
+pub proof fn theorem_eq_decomposition()
+    ensures stmt_eq_decomposition(),
+{
+    pruning::theorem_decomposition();
+}
+
+/// Lemma Pruning soundness (`lem:prune`): the implemented checks only discard items the search
+/// may discard.
+pub open spec fn stmt_lem_prune() -> bool {
+    &&& pruning::stmt_prune_sound()
+    &&& pruning::stmt_checks_discard()
+}
+
+pub proof fn theorem_lem_prune()
+    ensures stmt_lem_prune(),
+{
+    pruning::theorem_prune_sound();
+    pruning::theorem_checks_discard();
+}
+
+/// Lemma Simulation soundness (`lem:simulation`): the syntactic simulation rules on states and on
+/// tests imply language inclusion.
+pub open spec fn stmt_lem_simulation() -> bool {
+    &&& pruning::stmt_sim_rules_sound()
+    &&& pruning::stmt_test_rules_sound()
+}
+
+pub proof fn theorem_lem_simulation()
+    ensures stmt_lem_simulation(),
+{
+    pruning::theorem_sim_rules_sound();
+    pruning::theorem_test_rules_sound();
+}
+
+/// Lemma Finitely many residuals (`lem:finite-states`): under the normalizer contract every state
+/// reachable from a state lies in a finite set; the implementation's model satisfies the contract
+/// and its graph abstraction is injective.
+pub open spec fn stmt_lem_finite_states() -> bool {
+    &&& finiteness::stmt_reachable_states_finite()
+    &&& finiteness::stmt_lift_injective()
+    &&& finite_impl::m_impl().contract()
+}
+
+pub proof fn theorem_lem_finite_states()
+    ensures stmt_lem_finite_states(),
+{
+    finiteness::theorem_reachable_states_finite();
+    finiteness::theorem_lift_injective();
+    finite_impl::theorem_impl_contract();
+}
+
+/// Every row of the table above, plus the auxiliary statements, in one proof.
+pub proof fn theorem_paper_index<C: PartialEq, E: Event>()
+    ensures
+        stmt_lem_similarity_language(),
+        stmt_lem_sderiv::<SrcTest>(),
+        stmt_lem_sderiv::<model::Test>(),
+        stmt_thm_sderiv::<SrcTest>(),
+        stmt_thm_sderiv::<model::Test>(),
+        stmt_thm_matcher(),
+        stmt_app_policy_reduction::<C>(),
+        stmt_prop_policy(),
+        inclusion::stmt_paper_split_ok(),
+        stmt_lem_succ(),
+        stmt_lem_uniform(),
+        stmt_thm_search(),
+        stmt_eq_decomposition(),
+        stmt_lem_prune(),
+        stmt_lem_simulation(),
+        stmt_lem_finite_states(),
+        semantics::stmt_genericity::<C>(),
+        encoding::stmt_numeric_genericity(),
+        encoding::stmt_source_regex_local(),
+        encoding::stmt_front_end_denies::<E>(),
+{
+    theorem_lem_similarity_language();
+    theorem_lem_sderiv::<SrcTest>();
+    theorem_lem_sderiv::<model::Test>();
+    theorem_thm_sderiv::<SrcTest>();
+    theorem_thm_sderiv::<model::Test>();
+    theorem_thm_matcher();
+    theorem_app_policy_reduction::<C>();
+    theorem_prop_policy();
+    inclusion::theorem_paper_split_ok();
+    theorem_lem_succ();
+    theorem_lem_uniform();
+    theorem_thm_search();
+    theorem_eq_decomposition();
+    theorem_lem_prune();
+    theorem_lem_simulation();
+    theorem_lem_finite_states();
+    semantics::theorem_genericity::<C>();
+    encoding::theorem_numeric_genericity();
+    encoding::theorem_source_regex_local();
+    encoding::theorem_front_end_denies::<E>();
+}
+
+} // verus!

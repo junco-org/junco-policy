@@ -2,7 +2,7 @@
 //!
 //! Each layer holds definitions, the theorem statements (`stmt_*` spec functions returning the
 //! proposition), and their proofs (`theorem_*`, each with `ensures stmt_*(...)`). Every `stmt_*`
-//! is proved. The mapping to the paper's results is in `VERIFY.md` at the repository root.
+//! is proved. The mapping to the paper's results is the index `crate::verify::paper`.
 //!
 //! Layers, top-down:
 //! - [`analyzer`]: what each analyzer query's verdict means, against [`semantics`].
