@@ -3,7 +3,7 @@
 ## Current wave
 
 Wave 0, in progress. Integration branch: `refactor/reviewer-surface`.
-Latest handoff incorporated: `4be35d3` (after `649cd5d`). No Wave 1 tracks have started;
+Latest handoff incorporated: `83de803` (after `4be35d3`). No Wave 1 tracks have started;
 they will branch only from the frozen integration interfaces and mechanical commits.
 
 ## Last checks actually run
@@ -14,15 +14,21 @@ they will branch only from the frozen integration interfaces and mechanical comm
   **5 verified, 0 errors**. These are the recursive specification definitions.
 - Focused `history-analysis`, runtime without default features, module `spec::analyzer`:
   **1 verified, 0 errors**. All six surface files typecheck through this build.
-- No full matrix or native CI gate has yet been completed on this refactor branch.
+- Full parallel matrix: **all 11 configurations passed, 0 errors**, 476.16 seconds.
+- Full sequential baseline: **all 11 configurations passed, 0 errors**, 1075.16 seconds.
+  Counts match exactly: syntax **55/55**, core **169/253**, store **287/287**, semantics
+  **1609/1614**, public client **21**, analysis **564/564**.
+- Workspace tests: **196 passed**; fuzz library tests: **8 passed**. Workspace and fuzz
+  formatting and Clippy with `-D warnings` passed.
 
 ## Work in progress
 
 R1–R6 and `docs/verification/INTERFACES.md` are written locally. Existing executable contracts
-have not been migrated. The revised handoff now requires `verify-all.sh --jobs`, persistent
-per-configuration `--target-root`, and variadic `--only` first; that scheduler and its comparison
-with a sequential full run precede publication of the frozen interface commit. The invariant
-predicate rename and least-violation relocation will each be separate commits.
+have not been migrated. The verification driver now supports `--jobs`, persistent
+per-configuration `--target-root`, and variadic `--only`; its full parallel and sequential runs
+agree. The invariant-predicate rename is being completed in a separate parent-owned worktree
+while retaining its exact meaning. It and least-violation relocation get separate commits before
+the frozen interface surface is pushed and dependent tracks start.
 
 ## Decisions and checks
 
@@ -47,10 +53,19 @@ semantics counts 1615/1620, and 196 workspace tests. It is not assumed merged in
 
 ## Inbox acknowledgements
 
-`docs/verification/INBOX.md` at `4be35d3` contains no dated messages. The accompanying handoff
-changes were read in full: status/inbox communication, parallel/filterable gates, no retained
-compatibility lemmas, and exact migration of PR #10's clauses are adopted. STATUS.md will be
-updated and pushed at each gate and at least every 30 minutes, and removed before the final PR.
+**2026-11-13: Track G additions (dead std spec; `arc_identity` fidelity)**, received at `83de803`:
+read and acknowledged. G will first confirm the only `mem::replace` spec consumer is unverified
+test-util code, then remove that dead trusted item. G will inspect the pinned Verus model of
+`Arc<T>` and references and establish identity fidelity for every compared store/owner type.
+If distinct allocations can have equal spec values, it must report the false-contract risk here
+before changing an identity wrapper. No wrapper has been changed in response to this message.
+
+The handoff's `singleton_invariants` elimination is also adopted for G: retain its fact in
+`numeric_store_wf`, delete the axiom and its calls, and verify the store crate before merge.
+Earlier `4be35d3` changes remain adopted: status/inbox communication, parallel/filterable gates,
+no retained compatibility lemmas, and exact semantic migration of PR #10's clauses.
+STATUS.md is updated and pushed at each gate and at least every 30 minutes, and removed before
+the final PR.
 
 ## Publication
 
