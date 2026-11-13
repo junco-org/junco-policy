@@ -89,6 +89,20 @@ pub open spec fn policy_denies<E: Event>(rules: Seq<Rule<E>>, candidate: E, hist
     exists|i: int| 0 <= i < rules.len() && #[trigger] rule_violated(rules[i], candidate, history)
 }
 
+/// A singleton policy denies exactly the pairs denied by its sole rule.
+pub proof fn lemma_policy_denies_singleton<E: Event>(rule: Rule<E>, candidate: E, history: Seq<E>)
+    ensures policy_denies(seq![rule], candidate, history) == rule_violated(rule, candidate, history),
+{
+    let rules = seq![rule];
+    assert(rules[0] == rule);
+    if rule_violated(rule, candidate, history) {
+        assert(exists|i: int| 0 <= i < rules.len()
+            && #[trigger] rule_violated(rules[i], candidate, history)) by {
+            assert(rule_violated(rules[0], candidate, history));
+        }
+    }
+}
+
 /// The index identifies the first violated rule in source order (monitor theorem).
 pub open spec fn least_violation<E: Event>(rules: Seq<Rule<E>>, history: Seq<E>, candidate: E, index: int) -> bool {
     0 <= index < rules.len() && rule_violated(rules[index], candidate, history)

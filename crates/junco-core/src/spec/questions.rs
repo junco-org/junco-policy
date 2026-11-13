@@ -3,8 +3,12 @@
 
 use super::semantics::{head_matches, lang, policy_denies, rule_violated};
 use super::hypotheses::eq_equivalence;
+use core::fmt::Debug;
+use core::hash::Hash;
 use history_syntax::Event;
-use history_syntax::Rule;
+use history_syntax::{RegexExpr, Rule, RuleMode};
+use history_syntax::event::Component3;
+use history_syntax::spec::equality::lemma_component3_equality;
 use history_syntax::spec::events::EventSpec;
 use history_syntax::spec::events::{
     HeadView, PatternView, RegexView, RuleView, TestView, arity, event_view,
@@ -14,6 +18,163 @@ use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
+
+broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
+
+// Finite structural constants are shared by semantic genericity and the analyzer's
+// knowable-constant bound; none of these helpers interprets a candidate or history.
+pub open spec fn pattern_constant<C>(pattern: PatternView<C>) -> Set<C> {
+    match pattern { PatternView::Constant(c) => Set::empty().insert(c), PatternView::Variable(_) => Set::empty() }
+}
+
+/// A finite union, built from finite sets rather than an unrestricted comprehension.
+pub open spec fn constants_union<C>(sets: Seq<Set<C>>) -> Set<C>
+    decreases sets.len(),
+{
+    if sets.len() == 0 { Set::empty() }
+    else { constants_union(sets.drop_last()).union(sets.last()) }
+}
+
+pub proof fn lemma_constants_union<C>(sets: Seq<Set<C>>, i: int)
+    requires 0 <= i < sets.len(),
+    ensures sets[i].subset_of(constants_union(sets)),
+    decreases sets.len(),
+{
+    if i < sets.len() - 1 {
+        lemma_constants_union(sets.drop_last(), i);
+        assert(sets[i] == sets.drop_last()[i]);
+    } else {
+        assert(sets[i] == sets.last());
+    }
+}
+
+pub open spec fn test_constant_at<C>(test: TestView<C>, coordinate: int) -> Set<C>
+    decreases test,
+{
+    match test {
+        TestView::True | TestView::False => Set::empty(),
+        TestView::Atom { pattern, .. } =>
+            if coordinate == pattern.component { pattern_constant(pattern.pattern) } else { Set::empty() },
+        TestView::And(cs) | TestView::Or(cs) => test_constant_forest(cs, coordinate),
+    }
+}
+
+pub open spec fn test_constant_forest<C>(tests: Seq<TestView<C>>, coordinate: int) -> Set<C>
+    decreases tests,
+{
+    if tests.len() == 0 { Set::empty() }
+    else { test_constant_forest(tests.drop_last(), coordinate).union(test_constant_at(tests.last(), coordinate)) }
+}
+
+pub open spec fn test_constants<C>(test: TestView<C>, arity: nat) -> Seq<Set<C>> {
+    Seq::new(arity, |j: int| test_constant_at(test, j))
+}
+
+pub open spec fn regex_constant_at<C>(regex: RegexView<C>, coordinate: int) -> Set<C>
+    decreases regex,
+{
+    match regex {
+        RegexView::Empty | RegexView::All | RegexView::Epsilon => Set::empty(),
+        RegexView::Test(test) => test_constant_at(test, coordinate),
+        RegexView::Union(cs) | RegexView::Concat(cs) | RegexView::Intersect(cs) => regex_constant_forest(cs, coordinate),
+        RegexView::Star(child) | RegexView::Not(child) => regex_constant_at(*child, coordinate),
+    }
+}
+
+pub open spec fn regex_constant_forest<C>(regexes: Seq<RegexView<C>>, coordinate: int) -> Set<C>
+    decreases regexes,
+{
+    if regexes.len() == 0 { Set::empty() }
+    else { regex_constant_forest(regexes.drop_last(), coordinate).union(regex_constant_at(regexes.last(), coordinate)) }
+}
+
+pub open spec fn regex_constants<C>(regex: RegexView<C>, arity: nat) -> Seq<Set<C>> {
+    Seq::new(arity, |j: int| regex_constant_at(regex, j))
+}
+
+proof fn lemma_test_constant_forest_index<C>(tests: Seq<TestView<C>>, arity: nat, j: int)
+    requires 0 <= j < arity,
+    ensures test_constant_forest(tests, j) == constants_union(Seq::new(tests.len(), |i: int|
+        if 0 <= i < tests.len() { test_constants(tests[i], arity)[j] } else { Set::empty() })),
+    decreases tests.len(),
+{
+    if tests.len() > 0 {
+        let prior = tests.drop_last();
+        lemma_test_constant_forest_index(prior, arity, j);
+        let values = Seq::new(tests.len(), |i: int|
+            if 0 <= i < tests.len() { test_constants(tests[i], arity)[j] } else { Set::empty() });
+        let prefix = Seq::new(prior.len(), |i: int|
+            if 0 <= i < prior.len() { test_constants(prior[i], arity)[j] } else { Set::empty() });
+        assert(values.drop_last() =~= prefix);
+        assert(values.last() == test_constant_at(tests.last(), j));
+    }
+}
+
+proof fn lemma_regex_constant_forest_index<C>(regexes: Seq<RegexView<C>>, arity: nat, j: int)
+    requires 0 <= j < arity,
+    ensures regex_constant_forest(regexes, j) == constants_union(Seq::new(regexes.len(), |i: int|
+        if 0 <= i < regexes.len() { regex_constants(regexes[i], arity)[j] } else { Set::empty() })),
+    decreases regexes.len(),
+{
+    if regexes.len() > 0 {
+        let prior = regexes.drop_last();
+        lemma_regex_constant_forest_index(prior, arity, j);
+        let values = Seq::new(regexes.len(), |i: int|
+            if 0 <= i < regexes.len() { regex_constants(regexes[i], arity)[j] } else { Set::empty() });
+        let prefix = Seq::new(prior.len(), |i: int|
+            if 0 <= i < prior.len() { regex_constants(prior[i], arity)[j] } else { Set::empty() });
+        assert(values.drop_last() =~= prefix);
+        assert(values.last() == regex_constant_at(regexes.last(), j));
+    }
+}
+
+/// One coordinate of a test's constants, with recursive calls left at their own fuel level.
+pub proof fn lemma_test_constants_index<C>(test: TestView<C>, arity: nat, j: int)
+    requires 0 <= j < arity,
+    ensures test_constants(test, arity)[j] == match test {
+        TestView::True | TestView::False => Set::empty(),
+        TestView::Atom { pattern, .. } =>
+            if j == pattern.component { pattern_constant(pattern.pattern) } else { Set::empty() },
+        TestView::And(cs) | TestView::Or(cs) => constants_union(Seq::new(cs.len(), |i: int|
+            if 0 <= i < cs.len() { test_constants(cs[i], arity)[j] } else { Set::empty() })),
+    },
+{
+    reveal_with_fuel(test_constant_at, 2);
+    match test {
+        TestView::And(cs) | TestView::Or(cs) => lemma_test_constant_forest_index(cs, arity, j),
+        _ => {},
+    }
+}
+
+/// The analogous indexed unfolding for regex constants.
+pub proof fn lemma_regex_constants_index<C>(regex: RegexView<C>, arity: nat, j: int)
+    requires 0 <= j < arity,
+    ensures regex_constants(regex, arity)[j] == match regex {
+        RegexView::Empty | RegexView::All | RegexView::Epsilon => Set::empty(),
+        RegexView::Test(test) => test_constants(test, arity)[j],
+        RegexView::Union(cs) | RegexView::Concat(cs) | RegexView::Intersect(cs) =>
+            constants_union(Seq::new(cs.len(), |i: int|
+                if 0 <= i < cs.len() { regex_constants(cs[i], arity)[j] } else { Set::empty() })),
+        RegexView::Star(child) | RegexView::Not(child) => regex_constants(*child, arity)[j],
+    },
+{
+    reveal_with_fuel(regex_constant_at, 2);
+    match regex {
+        RegexView::Union(cs) | RegexView::Concat(cs) | RegexView::Intersect(cs) =>
+            lemma_regex_constant_forest_index(cs, arity, j),
+        _ => {},
+    }
+}
+
+pub open spec fn head_constants<C>(head: HeadView<C>) -> Seq<Set<C>> {
+    head.map(|i: int, pattern: PatternView<C>| pattern_constant(pattern))
+}
+
+/// Exact finite constants of the head and tail, separately at every coordinate.
+pub open spec fn rule_constants<C>(rule: RuleView<C>) -> Seq<Set<C>> {
+    Seq::new(rule.head.len(), |i: int|
+        regex_constants(rule.tail, rule.head.len())[i].union(head_constants(rule.head)[i]))
+}
 
 /// Each coordinate is unrestricted or has a nonempty declared finite domain.
 pub type Domains<C> = Seq<Option<Set<C>>>;
@@ -180,6 +341,63 @@ pub open spec fn never_denies<E: Event>(domains: Domains<E::Component>, rule: Ru
 pub open spec fn always_denies<E: Event>(domains: Domains<E::Component>, rule: Rule<E>) -> bool {
     forall|candidate: E, history: Seq<E>| in_domains(domains, candidate, history)
         && head_matches(rule.head@, candidate) ==> #[trigger] rule_violated(rule, candidate, history)
+}
+
+/// Never denying is refinement of the singleton rule by the empty policy (Section 5, vacuity).
+pub proof fn theorem_never_denies_refinement<E: Event>(
+    domains: Domains<E::Component>, rule: Rule<E>,
+)
+    ensures never_denies(domains, rule) == refines(domains, Seq::empty(), seq![rule]),
+{
+    if never_denies(domains, rule) {
+        assert forall|candidate: E, history: Seq<E>| in_domains(domains, candidate, history)
+            && !#[trigger] policy_denies(Seq::empty(), candidate, history)
+            implies !policy_denies(seq![rule], candidate, history) by {
+            super::semantics::lemma_policy_denies_singleton(rule, candidate, history);
+            assert(!rule_violated(rule, candidate, history));
+        }
+    }
+    if refines(domains, Seq::empty(), seq![rule]) {
+        assert forall|candidate: E, history: Seq<E>| in_domains(domains, candidate, history)
+            implies !#[trigger] rule_violated(rule, candidate, history) by {
+            assert(!policy_denies(Seq::empty(), candidate, history));
+            assert(!policy_denies(seq![rule], candidate, history));
+            super::semantics::lemma_policy_denies_singleton(rule, candidate, history);
+        }
+    }
+}
+
+/// Always denying reduces to refinement against the same head forbidding the universal tail.
+pub proof fn theorem_always_denies_refinement<E: Event>(
+    domains: Domains<E::Component>, rule: Rule<E>,
+)
+    ensures always_denies(domains, rule) == refines(domains, seq![rule],
+        seq![Rule { mode: RuleMode::Forbid, head: rule.head, tail: RegexExpr::All }]),
+{
+    let universal = Rule { mode: RuleMode::Forbid, head: rule.head, tail: RegexExpr::All };
+    if always_denies(domains, rule) {
+        assert forall|candidate: E, history: Seq<E>| in_domains(domains, candidate, history)
+            && !#[trigger] policy_denies(seq![rule], candidate, history)
+            implies !policy_denies(seq![universal], candidate, history) by {
+            super::semantics::lemma_policy_denies_singleton(rule, candidate, history);
+            super::semantics::lemma_policy_denies_singleton(universal, candidate, history);
+            if head_matches(rule.head@, candidate) {
+                assert(rule_violated(rule, candidate, history));
+                assert(policy_denies(seq![rule], candidate, history));
+            }
+        }
+    }
+    if refines(domains, seq![rule], seq![universal]) {
+        assert forall|candidate: E, history: Seq<E>| in_domains(domains, candidate, history)
+            && head_matches(rule.head@, candidate)
+            implies #[trigger] rule_violated(rule, candidate, history) by {
+            super::semantics::lemma_policy_denies_singleton(rule, candidate, history);
+            super::semantics::lemma_policy_denies_singleton(universal, candidate, history);
+            assert(rule_violated(universal, candidate, history));
+            assert(policy_denies(seq![universal], candidate, history));
+            assert(policy_denies(seq![rule], candidate, history));
+        }
+    }
 }
 
 /// The left tail's real-event language is included in the right tail under a matching head.
@@ -779,6 +997,98 @@ pub proof fn lemma_fresh_capacity_nat<E: Event>(
     let size = k + known[coordinate].len();
     assert(coordinate_embedding::<E>(coordinate, size, embed));
     lemma_fresh_capacity_from_embedding::<E>(domains, known, coordinate, k, size, embed);
+}
+
+/// A built-in u8 first coordinate supplies fresh capacity without an embedding premise.
+pub proof fn lemma_component3_u8_capacity<B: Copy + Debug + Eq + Hash, C: Copy + Debug + Eq + Hash>(
+    domains: Domains<Component3<u8, B, C>>, known: Seq<Set<Component3<u8, B, C>>>, k: nat,
+)
+    requires
+        domains.len() == arity::<(u8, B, C)>(), known.len() == arity::<(u8, B, C)>(),
+        domains[0] is None,
+        k + known[0].len() <= u8::MAX as nat + 1,
+        eq_equivalence::<Component3<u8, B, C>>(
+            |a: Component3<u8, B, C>, b: Component3<u8, B, C>| a.eq_spec(&b), |_: Component3<u8, B, C>| true),
+    ensures fresh_capacity::<(u8, B, C)>(domains, known, 0, k),
+{
+    let embed = |n: nat| Component3::<u8, B, C>::C0(n as u8);
+    assert forall|m: nat, n: nat| m < u8::MAX as nat + 1 && n < u8::MAX as nat + 1
+        && #[trigger] embed(m).eq_spec(&embed(n)) implies m == n by {
+        lemma_component3_equality(embed(m), embed(n));
+        assert((m as u8) as nat == m);
+        assert((n as u8) as nat == n);
+    }
+    assert(coordinate_embedding::<(u8, B, C)>(0, u8::MAX as nat + 1, embed));
+    lemma_fresh_capacity_u8::<(u8, B, C)>(domains, known, 0, k, embed);
+}
+
+/// A built-in u16 first coordinate supplies fresh capacity without an embedding premise.
+pub proof fn lemma_component3_u16_capacity<B: Copy + Debug + Eq + Hash, C: Copy + Debug + Eq + Hash>(
+    domains: Domains<Component3<u16, B, C>>, known: Seq<Set<Component3<u16, B, C>>>, k: nat,
+)
+    requires
+        domains.len() == arity::<(u16, B, C)>(), known.len() == arity::<(u16, B, C)>(),
+        domains[0] is None,
+        k + known[0].len() <= u16::MAX as nat + 1,
+        eq_equivalence::<Component3<u16, B, C>>(
+            |a: Component3<u16, B, C>, b: Component3<u16, B, C>| a.eq_spec(&b), |_: Component3<u16, B, C>| true),
+    ensures fresh_capacity::<(u16, B, C)>(domains, known, 0, k),
+{
+    let embed = |n: nat| Component3::<u16, B, C>::C0(n as u16);
+    assert forall|m: nat, n: nat| m < u16::MAX as nat + 1 && n < u16::MAX as nat + 1
+        && #[trigger] embed(m).eq_spec(&embed(n)) implies m == n by {
+        lemma_component3_equality(embed(m), embed(n));
+        assert((m as u16) as nat == m);
+        assert((n as u16) as nat == n);
+    }
+    assert(coordinate_embedding::<(u16, B, C)>(0, u16::MAX as nat + 1, embed));
+    lemma_fresh_capacity_u16::<(u16, B, C)>(domains, known, 0, k, embed);
+}
+
+/// A built-in u32 first coordinate supplies fresh capacity without an embedding premise.
+pub proof fn lemma_component3_u32_capacity<B: Copy + Debug + Eq + Hash, C: Copy + Debug + Eq + Hash>(
+    domains: Domains<Component3<u32, B, C>>, known: Seq<Set<Component3<u32, B, C>>>, k: nat,
+)
+    requires
+        domains.len() == arity::<(u32, B, C)>(), known.len() == arity::<(u32, B, C)>(),
+        domains[0] is None,
+        k + known[0].len() <= u32::MAX as nat + 1,
+        eq_equivalence::<Component3<u32, B, C>>(
+            |a: Component3<u32, B, C>, b: Component3<u32, B, C>| a.eq_spec(&b), |_: Component3<u32, B, C>| true),
+    ensures fresh_capacity::<(u32, B, C)>(domains, known, 0, k),
+{
+    let embed = |n: nat| Component3::<u32, B, C>::C0(n as u32);
+    assert forall|m: nat, n: nat| m < u32::MAX as nat + 1 && n < u32::MAX as nat + 1
+        && #[trigger] embed(m).eq_spec(&embed(n)) implies m == n by {
+        lemma_component3_equality(embed(m), embed(n));
+        assert((m as u32) as nat == m);
+        assert((n as u32) as nat == n);
+    }
+    assert(coordinate_embedding::<(u32, B, C)>(0, u32::MAX as nat + 1, embed));
+    lemma_fresh_capacity_u32::<(u32, B, C)>(domains, known, 0, k, embed);
+}
+
+/// A built-in u64 first coordinate supplies fresh capacity without an embedding premise.
+pub proof fn lemma_component3_u64_capacity<B: Copy + Debug + Eq + Hash, C: Copy + Debug + Eq + Hash>(
+    domains: Domains<Component3<u64, B, C>>, known: Seq<Set<Component3<u64, B, C>>>, k: nat,
+)
+    requires
+        domains.len() == arity::<(u64, B, C)>(), known.len() == arity::<(u64, B, C)>(),
+        domains[0] is None,
+        k + known[0].len() <= u64::MAX as nat + 1,
+        eq_equivalence::<Component3<u64, B, C>>(
+            |a: Component3<u64, B, C>, b: Component3<u64, B, C>| a.eq_spec(&b), |_: Component3<u64, B, C>| true),
+    ensures fresh_capacity::<(u64, B, C)>(domains, known, 0, k),
+{
+    let embed = |n: nat| Component3::<u64, B, C>::C0(n as u64);
+    assert forall|m: nat, n: nat| m < u64::MAX as nat + 1 && n < u64::MAX as nat + 1
+        && #[trigger] embed(m).eq_spec(&embed(n)) implies m == n by {
+        lemma_component3_equality(embed(m), embed(n));
+        assert((m as u64) as nat == m);
+        assert((n as u64) as nat == n);
+    }
+    assert(coordinate_embedding::<(u64, B, C)>(0, u64::MAX as nat + 1, embed));
+    lemma_fresh_capacity_u64::<(u64, B, C)>(domains, known, 0, k, embed);
 }
 
 }
