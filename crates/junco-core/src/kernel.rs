@@ -102,7 +102,7 @@ macro_rules! id {
                                                 no_invariant_failure(result),
                                                 match result {
                                                     Ok(id) => id@ == index as nat,
-                                                    Err(error) => index as nat > u32::MAX as nat && error is GraphLimit,
+                                                    Err(error) => index as nat > u32::MAX as nat && error is IndexOverflow,
                                                 },
                                             )]
             pub fn from_index(index: usize) -> KernelResult<Self> {

@@ -104,14 +104,12 @@ const _: () = assert!(
 #[verus_verify]
 #[verus_spec(result => ensures match result {
     Ok(bytes) => bytes as int == len * vstd::layout::size_of::<T>(),
-    Err(error) => error is GraphLimit,
+    Err(error) => error is IndexOverflow,
 })]
 pub fn sequence_bytes<T>(len: usize) -> KernelResult<usize> {
     vstd::layout::layout_for_type_is_valid::<T>();
     len.checked_mul(size_of::<T>())
-        .ok_or(HistoryError::GraphLimit {
-            limit: MAX_GRAPH_BYTES,
-        })
+        .ok_or(HistoryError::IndexOverflow)
 }
 
 // Crate visibility lets Verus retain these payload types in the open weight specs.
@@ -794,7 +792,7 @@ impl ArenaTables {
         result matches Ok(Some(id)) ==> id@ < verify::tables_graph(self).tests.len()
             && verify::tables_graph(self).tests[id@ as int] == view@,
         result matches Ok(None) ==> !verify::tables_graph(self).tests.contains(view@),
-        result matches Err(error) ==> error is GraphLimit)]
+        result matches Err(error) ==> error is IndexOverflow)]
     fn find_test(&self, view: TestView<'_>) -> KernelResult<Option<TestId>> {
         let node = match view {
             TestView::True => TestNode::True,
@@ -827,7 +825,7 @@ impl ArenaTables {
         result matches Ok(Some(id)) ==> id@ < verify::tables_graph(self).regexes.len()
             && verify::tables_graph(self).regexes[id@ as int] == view@,
         result matches Ok(None) ==> !verify::tables_graph(self).regexes.contains(view@),
-        result matches Err(error) ==> error is GraphLimit)]
+        result matches Err(error) ==> error is IndexOverflow)]
     fn find_regex(&self, view: RegexView<'_>) -> KernelResult<Option<RegexId>> {
         let kind = match view.kind {
             RegexKindView::Empty => RegexKind::Empty,
@@ -864,7 +862,7 @@ impl ArenaTables {
         result matches Ok(Some(id)) ==> id@ < verify::tables_graph(self).transitions.len()
             && verify::tables_graph(self).transitions[id@ as int] == view@,
         result matches Ok(None) ==> !verify::tables_graph(self).transitions.contains(view@),
-        result matches Err(error) ==> error is GraphLimit)]
+        result matches Err(error) ==> error is IndexOverflow)]
     fn find_transition(&self, view: TransitionView<'_>) -> KernelResult<Option<TransitionId>> {
         let node = match view {
             TransitionView::Const(id) => TransitionNode::Const(id),
@@ -914,7 +912,7 @@ impl ArenaTables {
         result is Err ==> verify::tables_graph(final(self)) == verify::tables_graph(old(self)),
         result matches Ok(id) ==> id@ == verify::tables_graph(old(self)).tests.len()
             && verify::tables_graph(final(self)).tests == verify::tables_graph(old(self)).tests.push(view@),
-        result matches Err(error) ==> error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
+        result matches Err(error) ==> error is IndexOverflow || error is ArenaExhausted || error is AllocationFailed,
         verify::tables_capacity(final(self)) == verify::tables_capacity(old(self)),
         result is Ok ==> verify::tables_slack(final(self)) >= verify::tables_slack(old(self)),
         result matches Err(error) ==> error is ArenaExhausted ==>
@@ -994,7 +992,7 @@ impl ArenaTables {
         result is Err ==> verify::tables_graph(final(self)) == verify::tables_graph(old(self)),
         result matches Ok(id) ==> id@ == verify::tables_graph(old(self)).regexes.len()
             && verify::tables_graph(final(self)).regexes == verify::tables_graph(old(self)).regexes.push(view@),
-        result matches Err(error) ==> error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
+        result matches Err(error) ==> error is IndexOverflow || error is ArenaExhausted || error is AllocationFailed,
         verify::tables_capacity(final(self)) == verify::tables_capacity(old(self)),
         result is Ok ==> verify::tables_slack(final(self)) >= verify::tables_slack(old(self)),
         result matches Err(error) ==> error is ArenaExhausted ==>
@@ -1084,7 +1082,7 @@ impl ArenaTables {
         result is Err ==> verify::tables_graph(final(self)) == verify::tables_graph(old(self)),
         result matches Ok(id) ==> id@ == verify::tables_graph(old(self)).transitions.len()
             && verify::tables_graph(final(self)).transitions == verify::tables_graph(old(self)).transitions.push(view@),
-        result matches Err(error) ==> error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
+        result matches Err(error) ==> error is IndexOverflow || error is ArenaExhausted || error is AllocationFailed,
         verify::tables_capacity(final(self)) == verify::tables_capacity(old(self)),
         result is Ok ==> verify::tables_slack(final(self)) >= verify::tables_slack(old(self)),
         result matches Err(error) ==> error is ArenaExhausted ==>
@@ -1236,7 +1234,7 @@ impl ArenaStorage {
         ensures r matches Ok(Some(id)) ==> id@ < self.graph().tests.len()
             && self.graph().tests[id@ as int] == view@,
             r matches Ok(None) ==> !self.graph().tests.contains(view@),
-            r matches Err(error) ==> error is Invariant || error is GraphLimit,
+            r matches Err(error) ==> error is Invariant || error is IndexOverflow,
             self.tables is Some ==> no_invariant_failure(r)
     )]
     fn find_test(&self, view: TestView<'_>) -> KernelResult<Option<TestId>> {
@@ -1247,7 +1245,7 @@ impl ArenaStorage {
         ensures r matches Ok(Some(id)) ==> id@ < self.graph().regexes.len()
             && self.graph().regexes[id@ as int] == view@,
             r matches Ok(None) ==> !self.graph().regexes.contains(view@),
-            r matches Err(error) ==> error is Invariant || error is GraphLimit,
+            r matches Err(error) ==> error is Invariant || error is IndexOverflow,
             self.tables is Some ==> no_invariant_failure(r)
     )]
     fn find_regex(&self, view: RegexView<'_>) -> KernelResult<Option<RegexId>> {
@@ -1258,7 +1256,7 @@ impl ArenaStorage {
         ensures r matches Ok(Some(id)) ==> id@ < self.graph().transitions.len()
             && self.graph().transitions[id@ as int] == view@,
             r matches Ok(None) ==> !self.graph().transitions.contains(view@),
-            r matches Err(error) ==> error is Invariant || error is GraphLimit,
+            r matches Err(error) ==> error is Invariant || error is IndexOverflow,
             self.tables is Some ==> no_invariant_failure(r)
     )]
     fn find_transition(&self, view: TransitionView<'_>) -> KernelResult<Option<TransitionId>> {
@@ -1276,7 +1274,7 @@ impl ArenaStorage {
             r is Err ==> final(self).graph() == old(self).graph(),
             r matches Ok(id) ==> id@ == old(self).graph().tests.len()
                 && final(self).graph().tests == old(self).graph().tests.push(view@),
-            r matches Err(error) ==> error is Invariant || error is GraphLimit
+            r matches Err(error) ==> error is Invariant || error is IndexOverflow
                 || error is ArenaExhausted || error is AllocationFailed,
             final(self).capacity() == old(self).capacity(),
             r is Ok ==> final(self).slack() >= old(self).slack(),
@@ -1317,7 +1315,7 @@ impl ArenaStorage {
             r is Err ==> final(self).graph() == old(self).graph(),
             r matches Ok(id) ==> id@ == old(self).graph().regexes.len()
                 && final(self).graph().regexes == old(self).graph().regexes.push(view@),
-            r matches Err(error) ==> error is Invariant || error is GraphLimit
+            r matches Err(error) ==> error is Invariant || error is IndexOverflow
                 || error is ArenaExhausted || error is AllocationFailed,
             final(self).capacity() == old(self).capacity(),
             r is Ok ==> final(self).slack() >= old(self).slack(),
@@ -1357,7 +1355,7 @@ impl ArenaStorage {
             r is Err ==> final(self).graph() == old(self).graph(),
             r matches Ok(id) ==> id@ == old(self).graph().transitions.len()
                 && final(self).graph().transitions == old(self).graph().transitions.push(view@),
-            r matches Err(error) ==> error is Invariant || error is GraphLimit
+            r matches Err(error) ==> error is Invariant || error is IndexOverflow
                 || error is ArenaExhausted || error is AllocationFailed,
             final(self).capacity() == old(self).capacity(),
             r is Ok ==> final(self).slack() >= old(self).slack(),
@@ -1456,7 +1454,7 @@ impl CanonicalStore {
     /// internal/owner errors.
     #[verus_spec(result => ensures match result {
         Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
-        Err(error) => error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
+        Err(error) => error is GraphBudget || error is IndexOverflow || error is ArenaExhausted || error is AllocationFailed,
     }, no_invariant_failure(result))]
     pub fn new() -> KernelResult<Self> {
         proof! {
@@ -1472,7 +1470,7 @@ impl CanonicalStore {
     /// multiple of 16 is; otherwise the arena layout check fails with an internal error.
     #[verus_spec(result => ensures match result {
         Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
-        Err(error) => error is GraphLimit || error is ArenaExhausted || error is AllocationFailed
+        Err(error) => error is GraphBudget || error is IndexOverflow || error is ArenaExhausted || error is AllocationFailed
             || error is Invariant,
     }, verify::construction_layout(budget) ==> no_invariant_failure(result))]
     pub fn with_budget(budget: usize) -> KernelResult<Self> {
@@ -1483,7 +1481,7 @@ impl CanonicalStore {
         requires storage.tables is Some, verify::empty_tables(storage.graph()),
         ensures match result {
             Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
-            Err(error) => error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
+            Err(error) => error is GraphBudget || error is IndexOverflow || error is ArenaExhausted || error is AllocationFailed,
         },
     )]
     fn from_storage(storage: ArenaStorage, budget: usize) -> KernelResult<Self> {
@@ -1517,7 +1515,7 @@ impl CanonicalStore {
             model::tables_wf(old(self).graph()),
         ensures final(self).valid_store(), match result {
             Ok(()) => model::graph_wf(final(self).graph()),
-            Err(error) => error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
+            Err(error) => error is GraphBudget || error is IndexOverflow || error is ArenaExhausted || error is AllocationFailed,
         },
     )]
     fn intern_constants(&mut self) -> KernelResult<()> {
@@ -1569,25 +1567,41 @@ impl CanonicalStore {
     }
     }
 
+    /// Projects this exact charge; an error records its actual operands without changing state.
     #[verus_spec(result => ensures match result {
         Ok(total) => total as int == self.charged() as int + bytes as int
             && total as int <= self.budget() as int,
-        Err(error) => error is GraphLimit,
+        Err(HistoryError::GraphBudget(evidence)) =>
+            evidence.view() == (self.budget(), self.charged(), bytes as nat)
+            && self.charged() + bytes as nat > self.budget(),
+        Err(_) => false,
     })]
     pub fn projected(&self, bytes: usize) -> KernelResult<usize> {
-        let total = self
-            .bytes
-            .checked_add(bytes)
-            .ok_or(HistoryError::GraphLimit { limit: self.budget })?;
+        let total = match self.bytes.checked_add(bytes) {
+            Some(total) => total,
+            None => return Err(HistoryError::GraphBudget(junco_core::error::BudgetExceeded::new(
+                self.budget, self.bytes, bytes,
+            ))),
+        };
         if total > self.budget {
-            return Err(HistoryError::GraphLimit { limit: self.budget });
+            return Err(HistoryError::GraphBudget(junco_core::error::BudgetExceeded::new(
+                self.budget, self.bytes, bytes,
+            )));
         }
         Ok(total)
     }
     #[verus_spec(result => ensures final(self).graph() == old(self).graph(),
         (final(self).bytes as nat) >= (old(self).bytes as nat),
         old(self).valid_store() ==> final(self).valid_store(),
-        result matches Err(error) ==> error is GraphLimit)]
+        match result {
+            Ok(()) => final(self).charged() == old(self).charged() + bytes as nat
+                && final(self).charged() <= old(self).budget(),
+            Err(HistoryError::GraphBudget(evidence)) =>
+                evidence.view() == (old(self).budget(), old(self).charged(), bytes as nat)
+                && old(self).charged() + bytes as nat > old(self).budget()
+                && final(self).charged() == old(self).charged(),
+            Err(_) => false,
+        })]
     pub(crate) fn charge(&mut self, bytes: usize) -> KernelResult<()> {
         self.bytes = self.projected(bytes)?;
         Ok(())
@@ -1628,7 +1642,7 @@ impl CanonicalStore {
                 Err(_) => final(self).graph() == old(self).graph()
                     && (final(self).bytes as nat) == (old(self).bytes as nat),
             },
-            result matches Err(error) ==> error is GraphLimit
+            result matches Err(error) ==> error is GraphBudget || error is IndexOverflow
                 || error is ArenaExhausted || error is AllocationFailed,
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
@@ -1646,7 +1660,7 @@ impl CanonicalStore {
         };
         let bytes = size_of::<TestNode>()
             .checked_add(sequence_bytes::<TestId>(len)?)
-            .ok_or(HistoryError::GraphLimit { limit: self.budget })?;
+            .ok_or(HistoryError::IndexOverflow)?;
         let projected = self.projected(bytes)?;
         proof! {
             assert(model::unique_nodes(original));
@@ -1681,7 +1695,7 @@ impl CanonicalStore {
                 Err(_) => final(self).graph() == old(self).graph()
                     && (final(self).bytes as nat) == (old(self).bytes as nat),
             },
-            result matches Err(error) ==> error is GraphLimit
+            result matches Err(error) ==> error is GraphBudget || error is IndexOverflow
                 || error is ArenaExhausted || error is AllocationFailed,
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
@@ -1706,7 +1720,7 @@ impl CanonicalStore {
         };
         let bytes = size_of::<RegexNode>()
             .checked_add(sequence_bytes::<RegexId>(len)?)
-            .ok_or(HistoryError::GraphLimit { limit: self.budget })?;
+            .ok_or(HistoryError::IndexOverflow)?;
         let projected = self.projected(bytes)?;
         proof! {
             assert(model::unique_nodes(original));
@@ -1740,7 +1754,7 @@ impl CanonicalStore {
                 Err(_) => final(self).graph() == old(self).graph()
                     && (final(self).bytes as nat) == (old(self).bytes as nat),
             },
-            result matches Err(error) ==> error is GraphLimit
+            result matches Err(error) ==> error is GraphBudget || error is IndexOverflow
                 || error is ArenaExhausted || error is AllocationFailed,
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
@@ -1764,7 +1778,7 @@ impl CanonicalStore {
         };
         let bytes = size_of::<TransitionNode>()
             .checked_add(children)
-            .ok_or(HistoryError::GraphLimit { limit: self.budget })?;
+            .ok_or(HistoryError::IndexOverflow)?;
         let projected = self.projected(bytes)?;
         proof! {
             assert(model::unique_nodes(original));
@@ -1820,7 +1834,7 @@ impl<L: Limits> KernelStore for RuntimeKernel<'_, L> {
         self.limits.checkpoint()?;
         Ok(())
     }
-    #[verus_spec(result => ensures result matches Err(error) ==> error is Limit || error is GraphLimit)]
+    #[verus_spec(result => ensures result matches Err(error) ==> error is Limit || error is GraphBudget)]
     fn charge_aux(&mut self, bytes: usize) -> KernelResult<()> {
         self.checkpoint()?;
         self.store.charge(bytes)
@@ -1853,7 +1867,7 @@ impl<L: Limits> KernelStore for RuntimeKernel<'_, L> {
         self.store.storage.transition(id)
     }
     #[verus_spec(result => ensures result matches Err(error) ==> error is Limit
-        || error is GraphLimit || error is ArenaExhausted || error is AllocationFailed)]
+        || error is GraphBudget || error is IndexOverflow || error is ArenaExhausted || error is AllocationFailed)]
     fn intern_test(&mut self, node: TestView<'_>) -> KernelResult<TestId> {
         self.checkpoint()?;
         let id = self.store.intern_test(node)?;
@@ -1861,7 +1875,7 @@ impl<L: Limits> KernelStore for RuntimeKernel<'_, L> {
         Ok(id)
     }
     #[verus_spec(result => ensures result matches Err(error) ==> error is Limit
-        || error is GraphLimit || error is ArenaExhausted || error is AllocationFailed)]
+        || error is GraphBudget || error is IndexOverflow || error is ArenaExhausted || error is AllocationFailed)]
     fn intern_regex(&mut self, kind: RegexKindView<'_>, nullable: bool) -> KernelResult<RegexId> {
         self.checkpoint()?;
         let id = self.store.intern_regex(kind, nullable)?;
@@ -1869,7 +1883,7 @@ impl<L: Limits> KernelStore for RuntimeKernel<'_, L> {
         Ok(id)
     }
     #[verus_spec(result => ensures result matches Err(error) ==> error is Limit
-        || error is GraphLimit || error is ArenaExhausted || error is AllocationFailed)]
+        || error is GraphBudget || error is IndexOverflow || error is ArenaExhausted || error is AllocationFailed)]
     fn intern_transition(&mut self, node: TransitionView<'_>) -> KernelResult<TransitionId> {
         self.checkpoint()?;
         let id = self.store.intern_transition(node)?;
@@ -1882,6 +1896,41 @@ impl<L: Limits> KernelStore for RuntimeKernel<'_, L> {
 mod storage_tests {
     #![allow(clippy::panic_in_result_fn)]
     use super::*;
+
+    #[test]
+    fn failed_charges_keep_exact_operands_and_overflows_stay_errors() -> KernelResult<()> {
+        let mut store = CanonicalStore::new()?;
+        let before = store.bytes;
+        let remaining = store.budget - before;
+        assert_eq!(store.projected(remaining)?, store.budget);
+        assert_eq!(store.bytes, before);
+        let request = remaining + 1;
+        let failed = store.charge(request);
+        assert!(matches!(
+            failed,
+            Err(HistoryError::GraphBudget(evidence))
+                if evidence.evidence() == (store.budget, before, request)
+        ));
+        assert_eq!(store.bytes, before);
+        // An overflowing sum is still an actual failed charge: its mathematical
+        // sum exceeds every representable budget, and its operands are not changed.
+        store.bytes = usize::MAX;
+        assert!(matches!(
+            store.projected(1),
+            Err(HistoryError::GraphBudget(evidence))
+                if evidence.evidence() == (store.budget, usize::MAX, 1)
+        ));
+        assert!(matches!(
+            sequence_bytes::<RegexId>(usize::MAX),
+            Err(HistoryError::IndexOverflow)
+        ));
+        #[cfg(target_pointer_width = "64")]
+        assert!(matches!(
+            RegexId::from_index(usize::MAX),
+            Err(HistoryError::IndexOverflow)
+        ));
+        Ok(())
+    }
 
     #[test]
     fn atom_key_equality_preserves_full_width_and_domains() {
@@ -1986,9 +2035,9 @@ mod storage_tests {
         });
         assert!(matches!(
             failed,
-            Err(HistoryError::GraphLimit {
-                limit: MAX_GRAPH_BYTES
-            })
+            Err(HistoryError::GraphBudget(evidence)) if evidence.evidence() == (
+                MAX_GRAPH_BYTES, MAX_GRAPH_BYTES, size_of::<TestNode>()
+            )
         ));
         assert_eq!(store.bytes, MAX_GRAPH_BYTES);
         assert_eq!(store.storage.lengths(), rows);
@@ -2012,7 +2061,7 @@ mod storage_tests {
         store.bytes = budget;
         assert!(matches!(
             store.intern_test(atom(1)),
-            Err(HistoryError::GraphLimit { limit }) if limit == budget
+            Err(HistoryError::GraphBudget(evidence)) if evidence.evidence().0 == budget
         ));
         assert!(CanonicalStore::with_budget(MAX_GRAPH_BYTES + 1).is_err());
         Ok(())
@@ -2429,7 +2478,7 @@ pub mod verify {
     // `graph_weight` is the byte charge `CanonicalStore::intern_*` levies for a graph
     // (`size_of::<ArenaX>()` per node plus `size_of::<Id>()` per child). `arena_live` is what the
     // six arenas actually hold. Their difference, `tables_slack`, never decreases on a successful
-    // push and is 0 for a fresh store, so exhaustion before `GraphLimit` is impossible.
+    // push and is 0 for a fresh store, so exhaustion before `GraphBudget` is impossible.
 
     pub open spec fn mul_bytes(count: nat, size: nat) -> nat { count * size }
     pub proof fn lemma_mul_bytes_succ(count: nat, size: nat)

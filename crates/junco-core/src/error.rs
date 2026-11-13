@@ -14,8 +14,12 @@ pub enum HistoryError {
     InvalidPolicy { path: String, message: &'static str },
     #[error("history variable {name:?} is not bound by request pattern")]
     UnboundVariable { name: String },
-    #[error("history symbolic graph payload exceeds {limit} bytes")]
-    GraphLimit { limit: usize },
+    /// An actual graph charge would exceed its byte budget.
+    #[error("history symbolic graph budget exceeded: {0}")]
+    GraphBudget(BudgetExceeded),
+    /// A graph index, payload-size calculation, or case product is not representable.
+    #[error("history graph index or product overflow")]
+    IndexOverflow,
     #[error("history allocation failed")]
     AllocationFailed,
     #[error("history arena exhausted")]
@@ -38,6 +42,85 @@ pub enum HistoryError {
     HistoryChanged { expected: u64, actual: u64 },
     #[error(transparent)]
     Limit(LimitError),
+}
+
+/// Exact accounting for a failed graph charge, kept valid across error propagation.
+#[verus_verify]
+#[verus_verify(external_derive)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("{charged} charged + {requested} requested exceeds {limit} bytes")]
+pub struct BudgetExceeded {
+    limit: usize,
+    charged: usize,
+    requested: usize,
+}
+
+#[verus_verify]
+impl BudgetExceeded {
+    #[cfg(verus_keep_ghost)]
+    verus! {
+        /// The recorded limit, prior charge, and failed request, respectively.
+        pub closed spec fn view(&self) -> (nat, nat, nat) {
+            (self.limit as nat, self.charged as nat, self.requested as nat)
+        }
+
+        #[verifier::type_invariant]
+        spec fn exceeded(&self) -> bool {
+            self.charged as nat + self.requested as nat > self.limit as nat
+        }
+    }
+
+    /// Records the inputs of a charge that cannot fit the given budget.
+    #[verus_spec(result =>
+        requires charged as nat + requested as nat > limit as nat,
+        ensures result.view() == (limit as nat, charged as nat, requested as nat),
+    )]
+    pub const fn new(limit: usize, charged: usize, requested: usize) -> Self {
+        Self { limit, charged, requested }
+    }
+
+    /// Byte limit of the graph whose charge failed.
+    #[verus_spec(result => ensures result as nat == self.view().0)]
+    pub const fn limit(&self) -> usize {
+        self.limit
+    }
+
+    /// Byte charge immediately before the failed request.
+    #[verus_spec(result => ensures result as nat == self.view().1)]
+    pub const fn charged(&self) -> usize {
+        self.charged
+    }
+
+    /// Additional bytes requested by the failed charge.
+    #[verus_spec(result => ensures result as nat == self.view().2)]
+    pub const fn requested(&self) -> usize {
+        self.requested
+    }
+
+    /// Returns the exact limit, prior charge, and failed request.
+    #[verus_spec(result => ensures
+        (result.0 as nat, result.1 as nat, result.2 as nat) == self.view(),
+        result.1 as nat + result.2 as nat > result.0 as nat,
+    )]
+    pub const fn evidence(&self) -> (usize, usize, usize) {
+        proof! { use_type_invariant(self); }
+        (self.limit, self.charged, self.requested)
+    }
+}
+
+/// Preserves a result while exposing the invariant of any propagated budget error.
+#[verus_verify]
+#[inline]
+#[verus_spec(output => ensures output == result, match output {
+    Err(HistoryError::GraphBudget(evidence)) =>
+        evidence.view().1 + evidence.view().2 > evidence.view().0,
+    _ => true,
+})]
+pub fn graph_budget_result<T>(result: Result<T, HistoryError>) -> Result<T, HistoryError> {
+    if let Err(HistoryError::GraphBudget(_evidence)) = &result {
+        proof! { use_type_invariant(_evidence); }
+    }
+    result
 }
 
 #[verus_verify]
@@ -104,12 +187,10 @@ impl HistoryError {
         }
     }
     #[verus_verify]
-    #[verus_spec(result => ensures result is GraphLimit)]
+    #[verus_spec(result => ensures result is IndexOverflow)]
     #[inline]
     pub const fn graph_index_overflow() -> HistoryError {
-        HistoryError::GraphLimit {
-            limit: crate::limits::MAX_GRAPH_BYTES,
-        }
+        HistoryError::IndexOverflow
     }
     #[cfg(feature = "runtime")]
     #[verus_verify]
