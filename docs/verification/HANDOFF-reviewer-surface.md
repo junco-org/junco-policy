@@ -34,7 +34,8 @@ Do not edit the paper. Produce the list of paper changes as part of the final re
   - every counterexample has an instance, and every instance is a pair of **real events** in the
     domains that witnesses the failure;
   - `Holds ⇒ property` needs no infinity or capacity hypothesis;
-  - `Exhausted ⇒` some search's graph charge exceeded `GRAPH_BYTES`;
+  - `Exhausted` makes no claim, and its documentation says so (non-blocking; a stronger statement
+    is optional, see decision 3);
   - `Err` is never an invariant failure; every call terminates.
   Proved as a Verus client in `history-analysis/tests/reviewer.rs`.
 - **Hypotheses** (R4): one bundle per guarantee, defined once, `pub open`, documented. A reviewer
@@ -126,10 +127,13 @@ implementation-to-model links against it, not new search or reduction proofs.
    conditional on capacity for the counterexample's own fresh count; `Holds` clauses are
    unconditional (genericity). Provide lemmas discharging capacity for `u8`…`u64` and `nat`
    coordinates when `k` is below the type's size minus the known constants.
-3. **Exhausted (S5).** Split `HistoryError::GraphLimit` into a budget error and an index/product
-   overflow error; `charge`/`projected` ensure `Err(budget) ⇒ charged + bytes > budget`; the
-   analyzer maps only the budget error to `Exhausted`. Fallback, only if this proves
-   disproportionate: rename the variant `Unknown`, document every source, and report it.
+3. **Exhausted (S5), non-blocking.** Priority 1 only requires that `Exhausted` makes no claim and
+   is documented honestly (it can come from the graph budget or from index/product overflow). Do
+   not let this item block a wave or a merge. Optional, after Priority 1: split
+   `HistoryError::GraphLimit` into a budget error and an overflow error, and state
+   `Exhausted ⇒ a search exceeded GRAPH_BYTES` with evidence the implementation cannot forge
+   (e.g. a ghost token only the store's failing budget charge constructs), never ghost numbers the
+   implementation chooses.
 4. **Hypotheses (S4).** One `hash_coherent<K>` (`uninterp`, documented as the faithfulness of the
    `external_body` hash containers). Laws about library-internal key types (`Constraint`,
    `(ConstraintId, RegexId)`, `(RegexId, RegexId)`, `(TestId, TestId)`, `SmallVec<[RegexId; 4]>`)
@@ -213,7 +217,9 @@ instance half of `refinement/analyzer.rs` (`choice_ok`, `admissible`, `every_ins
 Files: `junco-core/src/error.rs`, `history-store/src/graph.rs`, `junco-core/src/{kernel,flat}.rs`
 (error sites), `history-analysis/src/{constraint,tables,search}.rs` (error contracts only).
 
-- Split the error; specify `charge`/`projected`; carry "budget exceeded" through `search`'s error
+- Optional (decision 3, non-blocking): split the error; specify `charge`/`projected`; carry
+  "budget exceeded" through `search`'s error contract. Required: rename `no_internal_error` →
+  `no_invariant_failure` everywhere (mechanical; coordinate
   contract. Rename `no_internal_error` → `no_invariant_failure` everywhere (mechanical; coordinate
   the rename with all tracks by doing it first in this track, in one commit).
 
@@ -259,7 +265,7 @@ Files: `history-analysis/src/analyzer.rs`, `history-analysis/src/verify.rs` (`fr
 - Public view and opaque `wf`; `new` ensures `self@.domains == d@`; `Domains` constructors verified
   with postconditions; capacities over the public view with a growth lemma (S6).
 - Entry points ensure the R6 predicates (A1–A5): unconditional `Holds`, capacity-conditional
-  counterexamples, `Exhausted` meaning from track C.
+  counterexamples, and `Exhausted` documented as making no claim (decision 3).
 - `tail_included` gets the same counterexample shape, ensures `domains`/`rules` unchanged, and
   requires or ensures `head_tails_wf` (S3).
 - Redundancy, vacuity, domains, ownership per decisions 5–8.
