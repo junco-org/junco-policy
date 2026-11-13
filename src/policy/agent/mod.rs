@@ -117,6 +117,10 @@ pub enum AgentComponent<P, C> {
     Class(C),
 }
 
+// Hypothesis (D4): this crate is not verified, so `event_laws::<AgentEvent<P, C>>` (R1) is
+// assumed, not proved: arity 3; `coordinate(component(e, i)) == i`; every tuple tagged 0, 1, 2 is
+// the view of an `AgentEvent` with those fields. Converting to the verified tuple
+// `(P, AgentAction, C)` would drop the named `AgentComponent` variants, so the impl stays hand-written.
 impl<P, C> Event for AgentEvent<P, C>
 where
     P: Copy + Debug + Eq + Hash,

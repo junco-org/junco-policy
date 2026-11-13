@@ -16,22 +16,25 @@ Counted kinds:
 - `assume`: `assume(p)`: adds `p` as a fact without proof.
 - `exec_allows_no_decreases_clause`: an executable function whose termination is not proved (its loops/recursion have no `decreases`).
 - `axiom`: `axiom fn`: a proof fact stated without a body; justified in a comment beside it.
+- `uninterp`: `uninterp spec fn`: a specification function with no body; its meaning is fixed only by the trusted contracts that mention it. Items marked **meaning** carry a claim about the running code; the others abstract a native value (an identity, a lock invariant, a view).
+- `derived_eq_claim`: a `PartialEqSpecImpl`/`OrdSpecImpl`/`PartialOrdSpecImpl` impl: the claim of what a type's `PartialEq`/`Ord` computes (`eq_spec`, `obeys_eq_spec`); Verus does not check `derive`d impls (`external_derive`), so the claim is trusted for every derived impl.
+- `unannotated_pub_fn`: `pub fn` outside `verus!` with no `#[verus_verify]`/`#[verus_spec]`: executable code Verus ignores; callers get no contract (test-util mutators, `Domains` builders, trait impls).
 
 An `external_body` attribute on an external type specification makes that type opaque and
-is reported once, with the type. Not counted: `external_derive` (derived trait impls that
-Verus ignores), `opaque`/`rlimit`/`spinoff_prover` (proof-engineering controls), and the
-hypotheses of theorems (stated in each `requires`). Not scanned: `vstd`, Verus's standard
-library, which is part of the pinned toolchain.
-Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, which
-`history-store` takes as pinned git dependencies; Verus verifies them as dependencies.
+is reported once, with the type. Not counted: `external_derive` by itself (derived trait impls
+that Verus ignores; the equality claims made about them are counted), `opaque`/`rlimit`/
+`spinoff_prover` (proof-engineering controls), `pub fn`s in `#[cfg(test)]` modules and test
+files, and the hypotheses of theorems (stated in each `requires`). Not scanned: `vstd`,
+Verus's standard library, which is part of the pinned toolchain; the root crate `src/`, which
+is not verified at all (see Unverified glue below).
 
 ## Totals
 
 | kind | `history-analysis` | `history-semantics` | `history-store` | `history-syntax` | `junco-core` | total |
 |---|---:|---:|---:|---:|---:|---:|
-| `assume_specification` | 0 | 0 | 0 | 0 | 20 | 20 |
+| `assume_specification` | 0 | 0 | 0 | 0 | 19 | 19 |
 | `external_fn_specification` | 0 | 0 | 0 | 0 | 0 | 0 |
-| `external_body` | 11 | 14 | 42 | 1 | 3 | 71 |
+| `external_body` | 11 | 14 | 41 | 1 | 3 | 70 |
 | `external_type_specification` | 0 | 0 | 2 | 2 | 3 | 7 |
 | `external_trait_specification` | 0 | 0 | 0 | 2 | 1 | 3 |
 | `external` | 0 | 0 | 2 | 0 | 0 | 2 |
@@ -39,7 +42,10 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 | `assume` | 0 | 0 | 0 | 0 | 0 | 0 |
 | `exec_allows_no_decreases_clause` | 0 | 1 | 1 | 0 | 0 | 2 |
 | `axiom` | 5 | 0 | 0 | 3 | 0 | 8 |
-| **total** | **16** | **15** | **47** | **8** | **27** | **113** |
+| `uninterp` | 3 | 9 | 22 | 0 | 3 | 37 |
+| `derived_eq_claim` | 2 | 0 | 1 | 0 | 10 | 13 |
+| `unannotated_pub_fn` | 2 | 16 | 3 | 0 | 0 | 21 |
+| **total** | **23** | **40** | **72** | **8** | **39** | **182** |
 
 ## `crates/history-analysis`
 
@@ -65,6 +71,22 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 - `crates/history-analysis/src/verify/key_axioms.rs:31`: `fn axiom_regex_id_smallvec_key_model`
 - `crates/history-analysis/src/verify/key_axioms.rs:36`: `fn axiom_constraint_key_model`
 
+### `uninterp` (3)
+
+- `crates/history-analysis/src/native.rs:19`: `fn representatives` — **meaning**: the entries of an external_body hash map, as `eq_spec` classes under `key_laws`
+- `crates/history-analysis/src/native.rs:61`: `fn members` — **meaning**: the entries of an external_body hash set, as `eq_spec` classes under `key_laws`
+- `crates/history-analysis/src/native.rs:91`: `fn groups` — **meaning**: the entries of an external_body hash multimap, as `eq_spec` classes under `key_laws`
+
+### `derived_eq_claim` (2)
+
+- `crates/history-analysis/src/constraint.rs:866`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for RegisterConstraint`
+- `crates/history-analysis/src/constraint.rs:908`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for Constraint`
+
+### `unannotated_pub_fn` (2)
+
+- `crates/history-analysis/src/analyzer.rs:109`: `impl<E: Event> Domains<E> :: fn infinite`
+- `crates/history-analysis/src/analyzer.rs:119`: `impl<E: Event> Domains<E> :: fn with_domain`
+
 ## `crates/history-semantics`
 
 ### `external_body` (14)
@@ -88,9 +110,40 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 
 - `crates/history-semantics/src/policy/evaluate.rs:384`: `impl<E: Event, C> CompiledPolicy<E, C> :: fn from_iterator`
 
+### `uninterp` (9)
+
+- `crates/history-semantics/src/policy/rule.rs:45`: `fn id`
+- `crates/history-semantics/src/policy/rule.rs:51`: `fn policy_rule_source` — **meaning**: the source rule a policy rule was built from
+- `crates/history-semantics/src/policy/rule.rs:52`: `fn policy_rule_diagnostic` — **meaning**: the diagnostic callback a policy rule retains
+- `crates/history-semantics/src/policy/rule.rs:59`: `fn diagnostic_output` — **meaning**: what a policy rule's diagnostic callback returns for a denial
+- `crates/history-semantics/src/policy/trace.rs:51`: `fn trace_callback_identity`
+- `crates/history-semantics/src/policy/trace.rs:52`: `fn trace_diagnostic_identity`
+- `crates/history-semantics/src/policy/trace.rs:54`: `fn trace_arc_call` — **meaning**: the result of invoking a trace diagnostic callback
+- `crates/history-semantics/src/policy/trace.rs:56`: `fn trace_rule_source` — **meaning**: the source rule a trace rule was built from (`TraceRule::clone` preserves it)
+- `crates/history-semantics/src/policy/trace.rs:57`: `fn trace_rule_diagnostic` — **meaning**: the diagnostic callback a trace rule retains
+
+### `unannotated_pub_fn` (16)
+
+- `crates/history-semantics/src/compiled_rule.rs:634`: `impl<E: Event> CompiledRule<E> :: fn new_lazy`
+- `crates/history-semantics/src/compiled_rule.rs:638`: `impl<E: Event> CompiledRule<E> :: fn work_counters`
+- `crates/history-semantics/src/compiled_rule.rs:642`: `impl<E: Event> CompiledRule<E> :: fn work_events`
+- `crates/history-semantics/src/compiled_rule.rs:646`: `impl<E: Event> CompiledRule<E> :: fn reset_work_events`
+- `crates/history-semantics/src/compiled_rule.rs:650`: `impl<E: Event> CompiledRule<E> :: fn cursor_positions`
+- `crates/history-semantics/src/compiled_rule.rs:656`: `impl<E: Event> CompiledRule<E> :: fn replace_graph_byte_pressure`
+- `crates/history-semantics/src/compiled_rule.rs:660`: `impl<E: Event> CompiledRule<E> :: fn set_answer_checkpoint_failure`
+- `crates/history-semantics/src/progress.rs:2784`: `impl CompiledPair :: fn reset_work_events`
+- `crates/history-semantics/src/progress.rs:2788`: `impl CompiledPair :: fn work_events`
+- `crates/history-semantics/src/progress.rs:2792`: `impl CompiledPair :: fn set_answer_checkpoint_failure`
+- `crates/history-semantics/src/runtime.rs:828`: `impl RuleRuntime :: fn work_counters`
+- `crates/history-semantics/src/runtime.rs:832`: `impl RuleRuntime :: fn reset_work_events`
+- `crates/history-semantics/src/runtime.rs:836`: `impl RuleRuntime :: fn work_events`
+- `crates/history-semantics/src/runtime.rs:841`: `impl RuleRuntime :: fn cursor_positions`
+- `crates/history-semantics/src/runtime.rs:857`: `impl RuleRuntime :: fn replace_graph_byte_pressure`
+- `crates/history-semantics/src/runtime.rs:861`: `impl RuleRuntime :: fn set_answer_checkpoint_failure`
+
 ## `crates/history-store`
 
-### `external_body` (42)
+### `external_body` (41)
 
 - `crates/history-store/src/cache.rs:69`: `impl GraphCaches :: fn successor_cache`
 - `crates/history-store/src/cache.rs:79`: `impl GraphCaches :: fn successor_get`
@@ -112,14 +165,13 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 - `crates/history-store/src/store.rs:888`: `impl NativeRecord :: fn place_cell`
 - `crates/history-store/src/store.rs:899`: `impl NativeRecord :: fn with_record`
 - `crates/history-store/src/store.rs:920`: `impl Clone for NativeRecord :: fn clone`
-- `crates/history-store/src/store.rs:1285`: `fn singleton_invariants`
-- `crates/history-store/src/store.rs:1649`: `fn borrow_numeric_owner`
-- `crates/history-store/src/store.rs:1656`: `fn same_numeric_reference`
-- `crates/history-store/src/store.rs:1664`: `fn share_numeric_owner`
-- `crates/history-store/src/store.rs:1811`: `struct NativeRecordReadGuard<'a>`
-- `crates/history-store/src/store.rs:1818`: `impl<'a> NativeRecordReadGuard<'a> :: fn acquire`
-- `crates/history-store/src/store.rs:1827`: `impl<'a> NativeRecordReadGuard<'a> :: fn cell`
-- `crates/history-store/src/store.rs:1891`: `impl HistoryStore :: fn new`
+- `crates/history-store/src/store.rs:1644`: `fn borrow_numeric_owner`
+- `crates/history-store/src/store.rs:1651`: `fn same_numeric_reference`
+- `crates/history-store/src/store.rs:1659`: `fn share_numeric_owner`
+- `crates/history-store/src/store.rs:1806`: `struct NativeRecordReadGuard<'a>`
+- `crates/history-store/src/store.rs:1813`: `impl<'a> NativeRecordReadGuard<'a> :: fn acquire`
+- `crates/history-store/src/store.rs:1822`: `impl<'a> NativeRecordReadGuard<'a> :: fn cell`
+- `crates/history-store/src/store.rs:1886`: `impl HistoryStore :: fn new`
 - `crates/history-store/src/typed.rs:116`: `struct NativeStoreIds`
 - `crates/history-store/src/typed.rs:122`: `impl NativeStoreIds :: fn new`
 - `crates/history-store/src/typed.rs:129`: `impl NativeStoreIds :: fn with_state`
@@ -129,11 +181,11 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 - `crates/history-store/src/typed.rs:477`: `fn share_store`
 - `crates/history-store/src/typed.rs:487`: `fn borrow_store`
 - `crates/history-store/src/typed.rs:495`: `fn process_store_ids_ref`
-- `crates/history-store/src/typed/map.rs:12`: `struct NativeMap<K: Copy + Eq + Hash>`
-- `crates/history-store/src/typed/map.rs:22`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn new`
-- `crates/history-store/src/typed/map.rs:29`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn lookup`
-- `crates/history-store/src/typed/map.rs:42`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn reserve_one`
-- `crates/history-store/src/typed/map.rs:53`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn insert_fresh`
+- `crates/history-store/src/typed/map.rs:17`: `struct NativeMap<K: Copy + Eq + Hash>`
+- `crates/history-store/src/typed/map.rs:27`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn new`
+- `crates/history-store/src/typed/map.rs:34`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn lookup`
+- `crates/history-store/src/typed/map.rs:47`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn reserve_one`
+- `crates/history-store/src/typed/map.rs:58`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn insert_fresh`
 
 ### `external_type_specification` (2)
 
@@ -148,6 +200,41 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 ### `exec_allows_no_decreases_clause` (1)
 
 - `crates/history-store/src/history.rs:309`: `impl<E: TypedEvent> History<E> :: fn from_iterator`
+
+### `uninterp` (22)
+
+- `crates/history-store/src/cache.rs:257`: `fn successor_cache_view` — **meaning**: the entries of the LRU successor cache; contracts allow eviction, never a fabricated entry
+- `crates/history-store/src/store.rs:871`: `fn record_id`
+- `crates/history-store/src/store.rs:872`: `fn lifecycle_id`
+- `crates/history-store/src/store.rs:933`: `fn native_domain_valid`
+- `crates/history-store/src/store.rs:934`: `fn native_domain_index`
+- `crates/history-store/src/store.rs:935`: `fn native_domain_forward_authority`
+- `crates/history-store/src/store.rs:936`: `fn native_domain_reverse_authority`
+- `crates/history-store/src/store.rs:943`: `fn record_valid`
+- `crates/history-store/src/store.rs:1290`: `fn coordinate_ids`
+- `crates/history-store/src/store.rs:1291`: `fn coordinates_mutex_valid`
+- `crates/history-store/src/store.rs:1295`: `fn history_keys_id`
+- `crates/history-store/src/store.rs:1296`: `fn history_keys_mutex_valid`
+- `crates/history-store/src/store.rs:1497`: `fn singleton_store` — **meaning**: the process-wide numeric store of an arity (static installation)
+- `crates/history-store/src/store.rs:1498`: `fn numeric_authorities` — **meaning**: the process-wide coordinate and history-key allocators (static installation)
+- `crates/history-store/src/store.rs:1832`: `fn cell_view`
+- `crates/history-store/src/store.rs:1833`: `fn record_view`
+- `crates/history-store/src/typed.rs:975`: `fn store_ids_authority_id`
+- `crates/history-store/src/typed.rs:976`: `fn process_store_ids` — **meaning**: the process-wide store-id allocator (static installation)
+- `crates/history-store/src/typed.rs:980`: `fn store_ids_mutex_valid`
+- `crates/history-store/src/typed.rs:1164`: `fn snapshot_published` — **meaning**: persistent provenance of a codebook snapshot under the registry resource
+- `crates/history-store/src/typed.rs:1294`: `fn mutex_valid`
+- `crates/history-store/src/typed/map.rs:24`: `fn representatives` — **meaning**: the entries of an external_body hash map, as `eq_spec` classes under `key_laws`
+
+### `derived_eq_claim` (1)
+
+- `crates/history-store/src/store.rs:1513`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for Event`
+
+### `unannotated_pub_fn` (3)
+
+- `crates/history-store/src/graph.rs:1792`: `impl CanonicalStore :: fn replace_graph_byte_pressure`
+- `crates/history-store/src/graph.rs:1796`: `impl CanonicalStore :: fn charged_bytes`
+- `crates/history-store/src/graph.rs:1803`: `impl CanonicalStore :: fn table_counts`
 
 ## `crates/history-syntax`
 
@@ -173,28 +260,27 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 
 ## `crates/junco-core`
 
-### `assume_specification` (20)
+### `assume_specification` (19)
 
-- `crates/junco-core/src/verify/history_assumptions.rs:53`: `alloc::string::String::try_reserve`
-- `crates/junco-core/src/verify/history_assumptions.rs:61`: `SmallVec::<A>::new`
-- `crates/junco-core/src/verify/history_assumptions.rs:69`: `SmallVec::<A>::len`
-- `crates/junco-core/src/verify/history_assumptions.rs:78`: `SmallVec::<A>::is_empty`
-- `crates/junco-core/src/verify/history_assumptions.rs:82`: `SmallVec::<A>::push`
-- `crates/junco-core/src/verify/history_assumptions.rs:88`: `SmallVec::<A>::extend_from_slice`
-- `crates/junco-core/src/verify/history_assumptions.rs:94`: `SmallVec::<A>::remove`
-- `crates/junco-core/src/verify/history_assumptions.rs:101`: `SmallVec::<A>::pop`
-- `crates/junco-core/src/verify/history_assumptions.rs:108`: `SmallVec::<A>::truncate`
-- `crates/junco-core/src/verify/history_assumptions.rs:116`: `SmallVec::<A>::resize`
-- `crates/junco-core/src/verify/history_assumptions.rs:129`: `SmallVec::<A>::try_reserve_exact`
-- `crates/junco-core/src/verify/history_assumptions.rs:135`: `<SmallVec<A> as Deref>::deref`
-- `crates/junco-core/src/verify/history_assumptions.rs:142`: `SmallVec::<A>::as_mut_slice`
-- `crates/junco-core/src/verify/history_assumptions.rs:155`: `<[T]>::sort_unstable`
-- `crates/junco-core/src/verify/history_assumptions.rs:176`: `Vec::<T, A>::dedup`
-- `crates/junco-core/src/verify/history_assumptions.rs:180`: `<[T]>::binary_search`
-- `crates/junco-core/src/verify/history_assumptions.rs:188`: `Option::<&'a T>::copied`
-- `crates/junco-core/src/verify/history_assumptions.rs:193`: `Vec::<T, A>::into_boxed_slice`
-- `crates/junco-core/src/verify/history_assumptions.rs:198`: `core::mem::drop`
-- `crates/junco-core/src/verify/history_assumptions.rs:216`: `core::mem::replace`
+- `crates/junco-core/src/verify/history_assumptions.rs:63`: `alloc::string::String::try_reserve`
+- `crates/junco-core/src/verify/history_assumptions.rs:71`: `SmallVec::<A>::new`
+- `crates/junco-core/src/verify/history_assumptions.rs:79`: `SmallVec::<A>::len`
+- `crates/junco-core/src/verify/history_assumptions.rs:88`: `SmallVec::<A>::is_empty`
+- `crates/junco-core/src/verify/history_assumptions.rs:92`: `SmallVec::<A>::push`
+- `crates/junco-core/src/verify/history_assumptions.rs:98`: `SmallVec::<A>::extend_from_slice`
+- `crates/junco-core/src/verify/history_assumptions.rs:104`: `SmallVec::<A>::remove`
+- `crates/junco-core/src/verify/history_assumptions.rs:111`: `SmallVec::<A>::pop`
+- `crates/junco-core/src/verify/history_assumptions.rs:118`: `SmallVec::<A>::truncate`
+- `crates/junco-core/src/verify/history_assumptions.rs:126`: `SmallVec::<A>::resize`
+- `crates/junco-core/src/verify/history_assumptions.rs:139`: `SmallVec::<A>::try_reserve_exact`
+- `crates/junco-core/src/verify/history_assumptions.rs:145`: `<SmallVec<A> as Deref>::deref`
+- `crates/junco-core/src/verify/history_assumptions.rs:152`: `SmallVec::<A>::as_mut_slice`
+- `crates/junco-core/src/verify/history_assumptions.rs:165`: `<[T]>::sort_unstable`
+- `crates/junco-core/src/verify/history_assumptions.rs:186`: `Vec::<T, A>::dedup`
+- `crates/junco-core/src/verify/history_assumptions.rs:190`: `<[T]>::binary_search`
+- `crates/junco-core/src/verify/history_assumptions.rs:198`: `Option::<&'a T>::copied`
+- `crates/junco-core/src/verify/history_assumptions.rs:203`: `Vec::<T, A>::into_boxed_slice`
+- `crates/junco-core/src/verify/history_assumptions.rs:208`: `core::mem::drop`
 
 ### `external_body` (3)
 
@@ -212,3 +298,116 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 
 - `crates/junco-core/src/observation.rs:53`: `trait ExSmallVecArray`
 
+### `uninterp` (3)
+
+- `crates/junco-core/src/observation.rs:73`: `fn view`
+- `crates/junco-core/src/verify/history_assumptions.rs:59`: `fn arc_identity` — **meaning**: native allocation identity of an `Arc`; faithful because every compared type has a unique-per-allocation value (comment at the declaration)
+- `crates/junco-core/src/verify/history_assumptions.rs:60`: `fn reference_identity` — **meaning**: native identity of a `&T`; same fidelity argument as `arc_identity`
+
+### `derived_eq_claim` (10)
+
+- `crates/junco-core/src/kernel.rs:959`: `impl PartialEqSpecImpl for $id`
+- `crates/junco-core/src/kernel.rs:963`: `impl OrdSpecImpl for $id`
+- `crates/junco-core/src/kernel.rs:971`: `impl PartialOrdSpecImpl for $id`
+- `crates/junco-core/src/kernel.rs:1053`: `impl PartialEqSpecImpl for super::Term`
+- `crates/junco-core/src/kernel.rs:1057`: `impl PartialEqSpecImpl for super::Primitive`
+- `crates/junco-core/src/kernel.rs:1061`: `impl PartialEqSpecImpl for TestView<'_>`
+- `crates/junco-core/src/kernel.rs:1065`: `impl PartialEqSpecImpl for RegexKindView<'_>`
+- `crates/junco-core/src/kernel.rs:1069`: `impl PartialEqSpecImpl for RegexView<'_>`
+- `crates/junco-core/src/kernel.rs:1073`: `impl PartialEqSpecImpl for TransitionView<'_>`
+- `crates/junco-core/src/kernel.rs:1096`: `impl PartialEqSpecImpl for Bindings`
+
+## Helper crates (pinned git dependencies of `history-store`)
+
+Verus verifies `verus-bumpalo` and `hashconsius` as dependencies at the revisions pinned in
+`Cargo.lock`; their own trusted items are counted here, separately from the totals above.
+
+- `verus-bumpalo@888a698`: scanned `src/` of `$CARGO_HOME/git/checkouts/bumpus-9dda09cff3b3b5a3/888a698`
+- `hashconsius@d7c1748`: scanned `src/` of `$CARGO_HOME/git/checkouts/hashconsius-05f18a6e23d04ac5/d7c1748`
+
+| kind | `hashconsius@d7c1748` | `verus-bumpalo@888a698` | total |
+|---|---:|---:|---:|
+| `assume_specification` | 0 | 2 | 2 |
+| `external_fn_specification` | 0 | 0 | 0 |
+| `external_body` | 0 | 2 | 2 |
+| `external_type_specification` | 0 | 1 | 1 |
+| `external_trait_specification` | 0 | 0 | 0 |
+| `external` | 2 | 2 | 4 |
+| `admit` | 0 | 0 | 0 |
+| `assume` | 0 | 0 | 0 |
+| `exec_allows_no_decreases_clause` | 0 | 0 | 0 |
+| `axiom` | 0 | 0 | 0 |
+| `uninterp` | 0 | 2 | 2 |
+| `derived_eq_claim` | 6 | 0 | 6 |
+| `unannotated_pub_fn` | 0 | 0 | 0 |
+| **total** | **8** | **9** | **17** |
+
+## `hashconsius@d7c1748`
+
+### `external` (2)
+
+- `hashconsius@d7c1748/src/arena.rs:110`: `impl<T: HashKey + Send> Send for BHConsign<T>`
+- `hashconsius@d7c1748/src/arena.rs:115`: `impl<T: HashKey + Sync> Sync for BHConsign<T>`
+
+### `derived_eq_claim` (6)
+
+- `hashconsius@d7c1748/src/arena.rs:49`: `impl<T> vstd::std_specs::cmp::PartialEqSpecImpl for BHConsed<T>`
+- `hashconsius@d7c1748/src/arena.rs:68`: `impl<T> vstd::std_specs::cmp::PartialOrdSpecImpl for BHConsed<T>`
+- `hashconsius@d7c1748/src/arena.rs:88`: `impl<T> vstd::std_specs::cmp::OrdSpecImpl for BHConsed<T>`
+- `hashconsius@d7c1748/src/heap.rs:39`: `impl<T> vstd::std_specs::cmp::PartialEqSpecImpl for HConsed<T>`
+- `hashconsius@d7c1748/src/heap.rs:56`: `impl<T> vstd::std_specs::cmp::PartialOrdSpecImpl for HConsed<T>`
+- `hashconsius@d7c1748/src/heap.rs:76`: `impl<T> vstd::std_specs::cmp::OrdSpecImpl for HConsed<T>`
+
+## `verus-bumpalo@888a698`
+
+### `assume_specification` (2)
+
+- `verus-bumpalo@888a698/src/layout.rs:18`: `Layout::size`
+- `verus-bumpalo@888a698/src/layout.rs:25`: `Layout::align`
+
+### `external_body` (2)
+
+- `verus-bumpalo@888a698/src/arena.rs:578`: `fn slice_ref`
+- `verus-bumpalo@888a698/src/lib.rs:52`: `fn try_allocate`
+
+### `external_type_specification` (1)
+
+- `verus-bumpalo@888a698/src/layout.rs:10`: `struct ExLayout(Layout) (opaque)`
+
+### `external` (2)
+
+- `verus-bumpalo@888a698/src/arena.rs:604`: `impl<T: Copy + Send> Send for SliceArena<T>`
+- `verus-bumpalo@888a698/src/arena.rs:609`: `impl<T: Copy + Sync> Sync for SliceArena<T>`
+
+### `uninterp` (2)
+
+- `verus-bumpalo@888a698/src/layout.rs:14`: `fn layout_size`
+- `verus-bumpalo@888a698/src/layout.rs:15`: `fn layout_align`
+
+## Trusted leaves of the search
+
+- `crates/history-store/src/cache.rs`: the LRU successor cache behind `successor_cache_view`.
+  Its contracts allow any entry to be evicted and never a fabricated one; the search's
+  correctness does not depend on hits, only on the cached values being the ones once inserted.
+- The hash containers `NativeMap`/`NativeSet`/`NativeGroups` (`crates/history-store/src/typed/map.rs`,
+  `crates/history-analysis/src/native.rs`): external_body wrappers over hashbrown whose
+  contracts hold under `key_laws` (R4, `crates/junco-core/src/spec/hypotheses.rs`): the key's
+  `Hash`/`Eq` are faithful to `eq_spec` (`hash_coherent`, the single hashing hypothesis),
+  instantiated for the library's own key types by the `axiom` items above.
+- Identity of stores: `arc_identity`/`reference_identity` are functions of the pointee's spec
+  value (Verus erases `Arc<T>` and `&T` to `T`). The wrappers that equate them with pointer
+  comparison are faithful because `HistoryStore` is one static singleton per arity and
+  `Store<E>` carries a never-recycled id from the verified allocator; neither is `Clone`.
+
+## Unverified glue
+
+- The root crate `src/` is not verified. `RulePolicy::check` (`src/policy/rules.rs`) adds to
+  the verified `TracePolicy`/`History`: a `could_fire` head filter selecting the rules compiled
+  for each event; one `TracePolicy` per distinct event of a batch; decide-then-append of
+  granted events; audit mode, which also appends denied events; and error-to-deny (compile or
+  history errors become `Deny`). The verified `check_step` covers each `TracePolicy::decide`,
+  not this composition.
+- The root event types `LockEvent`, `FlowEvent`, `AgentEvent` implement `Event` by hand in the
+  unverified crate; `event_laws` (R1) is a hypothesis for them, stated at each impl.
+- User `Hash`/`Eq` code runs under the store lock; a panic there unwinds through the lock and
+  is outside the trusted base (the store assumes its lock invariant on re-entry).
