@@ -2,28 +2,39 @@
 
 ## Current wave
 
-Wave 1 is running in isolated worktrees. Latest maintainer inbox incorporated: `b8aee8a`.
-The critical surface review is being applied before B/F use the affected R6 contracts.
-A/B/D/G/F-prep continue unaffected work; C and E have completed local handoffs awaiting
-integration gates. The integration branch is `refactor/reviewer-surface`.
+Wave 1 proof engineering is active in isolated worktrees. Latest maintainer inbox incorporated:
+`baff915`. G and E are integrated and their full-feature downstream gate is green. A/B/C
+prerequisites are being assembled in an independent integration worktree while the monitor
+and native analyzer proof workers close their remaining obligations. The integration branch
+is `refactor/reviewer-surface`.
 
 ## Last checks actually run
 
 - Pinned Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0`, Rust `1.98.1` reused from the previously
   checksum-verified installation.
-- Completed Wave 0 full matrix: **all 11 configurations passed, 0 errors**. The full-feature
-  merge gate passed syntax **55**, core **253**, store **287**, semantics **1620**, analyzer
-  **571**, public client **21**. The all-config wave gate also passed no-default syntax **55**,
-  core **169**, store **287**, semantics **1615**, analyzer **571**; unchanged configurations
-  were cached. These counts precede the critical surface corrections below.
-- Default sequential crosscheck of the completed driver passed the original eleven
-  configurations in **1075.16 seconds**, matching the parallel run's counts exactly.
-- Critical correction: focused core `spec::{questions,hypotheses}` has
-  **6 verified, 0 errors**. R6's revised unit exhaustion/subset clauses are being checked.
-- Workspace tests: **196 passed**; fuzz library tests: **8 passed**. Workspace and fuzz
-  formatting and Clippy with `-D warnings` passed.
-- The final Wave 0 native gate passed workspace/fuzz fmt and Clippy with `-D warnings`,
-  **196 workspace tests** and **8 fuzz tests**. No subsequent native result is claimed yet.
+- Completed Wave 0 full matrix: all eleven configurations passed, zero errors.
+- Latest G/E full-feature merge gate, including the corrected executable successor bridge:
+
+  | Configuration | Verified functions | Errors |
+  |---|---:|---:|
+  | syntax `serde,std` | 55 | 0 |
+  | core `runtime,std,serde` | 258 | 0 |
+  | store `runtime,std` | 287 | 0 |
+  | semantics `runtime,std,cache` | 1631 | 0 |
+  | semantics `public_specs` | 21 | 0 |
+  | analyzer `runtime,std` | 571 | 0 |
+
+- The first G/E gate found the removed finite-domain successor-theorem caller. Replacing it
+  with the explicitly instantiated common theorem closed the downstream proof; no statement
+  was weakened. These are integrated G/E counts, not the unfinished native B/F cutover.
+- Default sequential driver crosscheck passed the original eleven configurations in
+  **1075.16 seconds**, matching the parallel run's counts exactly. Final confirmation remains.
+- Critical R6 correction: focused core questions/hypotheses **6/0**, analyzer spec **1/0**.
+  A throwaway proof rejected a fabricated out-of-source known set (**1/0**); removed afterward.
+- Latest native gate: **194 default workspace tests**, **2 explicit instrumentation tests**,
+  **8 fuzz tests**; workspace fmt, default and instrumentation Clippy, fuzz default and
+  replay-probe Clippy with `-D warnings` all passed. Instrumentation stays out of benchmarks.
+- `scripts/spec-check.sh`: **18 passed**, including the reduced assumed-spec boundary.
 
 ## Work in progress
 
@@ -36,10 +47,11 @@ The native analyzer view and its active callers require an atomic B/F cutover af
 the old view includes component-tuple rules and accumulated known values, while R6 does not.
 Retaining a compatibility view is not an acceptable workaround.
 
-Worker handoffs: C has the budget/index split, an actual overflow regression, and a proof-only
-derivative-cache helper. E has the thirteen-row paper index and independent hygiene. G has
-singleton-axiom removal and the expanded trust scan; A has canonical key/equality boundaries;
-B has actual-event lowering/capacity prerequisites. These are not claimed integration-complete.
+G's singleton-axiom/dead-std-spec removals, trust inventory, identity audit and instrumentation
+build split are integrated. E's thirteen-row paper index and independent hygiene are integrated,
+including its downstream successor caller. C's complete error split and caller migration are
+staged; A/B actual-event and equality prerequisites are being integrated together. Native B/F
+proofs remain an atomic cutover; dedicated monitor and analyzer workers own disjoint worktrees.
 
 ## Decisions and checks
 
@@ -94,14 +106,18 @@ B/F migrate that content exactly to the new vocabulary and remove superseded pre
 
 ## Inbox acknowledgements
 
+**2026-11-13: Exhausted is not a blocker** (`baff915`): acknowledged. The unit/no-claim
+fallback is already implemented and pushed in `a3a0313`; no wave or merge waits for a token.
+The implementation retains C's budget/index distinction, but R6 makes no exhaustion claim.
+
 **2026-11-13: No primitive or component-type key axioms** (`b8aee8a`): read, broadcast to every
 worker, and applied. The earlier approval is removed from INTERFACES/status/shared instructions;
 only decision 4's internal-key axioms remain. Concrete witnesses take only `hash_coherent`.
 
-**2026-11-13: Surface review — fix before Wave 1 builds on R6** (`ed3cf35`): read and affected
-work paused. Source-literal/domain bounds and R6 subset clauses are implemented, with focused
-checking in progress. Forgeable exhaustion numbers are removed using the explicit no-claim
-fallback. The Event hook is cancelled; B committed its removal on the prerequisite branch.
+**2026-11-13: Surface review — fix before Wave 1 builds on R6** (`ed3cf35`): implemented
+source-literal/domain bounds and R6 subset clauses, with focused checks passing. Forgeable
+exhaustion numbers are removed using the explicit no-claim fallback. The Event hook is
+cancelled; B committed its removal on the prerequisite branch.
 
 **2026-11-13: Keep completed verify-all.sh work**: adopted; `5f0523d` remains. No additional
 driver extension is allowed except registering the two reviewer targets. A final default-mode
@@ -116,8 +132,8 @@ named store wrappers, existing linear registry births/non-recycled ids and priva
 singleton construction prevent equal-content distinct live owners. G documents the restricted
 invariant; no generic injectivity claim or identity-wrapper weakening is introduced.
 
-G's singleton axiom removal is ready for its store-only merge gate. STATUS is pushed at gates
-and at least every 30 minutes, and removed before the final PR.
+G's singleton axiom removal passed the full-feature downstream merge gate. STATUS is pushed
+at gates and at least every 30 minutes, and removed before the final PR.
 
 ## Publication
 
