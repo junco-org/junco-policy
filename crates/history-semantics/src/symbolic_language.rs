@@ -89,6 +89,8 @@ impl SymbolicLanguage {
         result matches Ok(l) ==> language_wf(l)
         && finite_impl::regex_nf(model::lift_regex(graph(l), root(l)))
         && symbolic::regex_primitives(model::lift_regex(graph(l), root(l))).subset_of(numeric::source_primitives(*template))
+        && symbolic::regex_primitives(model::lift_regex(graph(l), root(l)))
+            .subset_of(numeric::reachable_regex_primitives(*template, template.root as nat))
         && forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta, theta.len())
             ==> model::regex_lang(graph(l), theta, root(l), word)
                 == numeric::source_regex(*template, template.root as nat, theta, word))]
