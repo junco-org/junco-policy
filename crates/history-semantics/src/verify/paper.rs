@@ -15,7 +15,7 @@
 //! | `thm:matcher` | `stmt_thm_matcher` | `stmt_not_fired` (step 1), `stmt_rule_decision` (steps 2–3), `stmt_similar_tails_same_decision` (normalization); at the monitor level `check_step` (R5) | `theorem_not_fired`, `theorem_rule_decision`, `theorem_similar_tails_same_decision`; `tests/reviewer.rs` | `history_algebra.rs`; `crates/history-semantics/src/spec/monitor.rs` |
 //! | `def:violates`, `def:policy-violates` | — (definition) | `rule_violated`, `policy_denies`, `least_violation` (R2) | — | `crates/junco-core/src/spec/semantics.rs` |
 //! | `def:policy-refinement` | — (definition) | `refines`, `covers` (R3) | — | `crates/junco-core/src/spec/questions.rs` |
-//! | `app:policy-reduction` | `stmt_app_policy_reduction` | `stmt_refines_iff_covers`, `stmt_redundant_iff_covered`; `stmt_vacuity_reductions` (numeric, constrained form) | `theorem_refines_iff_covers`, `theorem_redundant_iff_covered`, `theorem_vacuity_reductions` | `refinement/semantics.rs`, `refinement/inclusion.rs` |
+//! | `app:policy-reduction` | `stmt_app_policy_reduction` | `stmt_refines_iff_covers`, `stmt_redundant_iff_covered` (over events, R3); `stmt_vacuity_reductions` (numeric, constrained form); `stmt_vacuity_via_refinement` (typed vacuity through `at_least_as_strict`, decision 6) | `theorem_refines_iff_covers`, `theorem_redundant_iff_covered`, `theorem_vacuity_reductions`, `theorem_vacuity_via_refinement` | `refinement/semantics.rs`, `refinement/inclusion.rs` |
 //! | `prop:policy` | `stmt_prop_policy` | not mechanized as stated; the rule-by-rule reduction `stmt_policy_reduction` and its composition with search outcomes `stmt_policy_search_composition` replace it | `theorem_policy_reduction`, `theorem_policy_search_composition` | `refinement/inclusion.rs` |
 //! | `def:constraints`, `def:split` | — (definition) | `Constraint`, `paper_split`; `stmt_paper_split_ok` shows `Split` is a valid split family | `theorem_paper_split_ok` | `refinement/inclusion.rs` |
 //! | `def:atoms`, `def:realize`, `def:successors` | — (definition) | `Assignment`, `realizes`, `steps_ok` | — | `refinement/search.rs` |
@@ -100,18 +100,20 @@ pub proof fn theorem_thm_matcher()
 /// Reductions of refinement, redundancy and vacuity (appendix `app:policy-reduction`): refinement
 /// is rule-by-rule coverage, redundancy is coverage by the rest, and the vacuity questions are
 /// constrained inclusions of denial expressions.
-pub open spec fn stmt_app_policy_reduction<C: PartialEq>() -> bool {
-    &&& semantics::stmt_refines_iff_covers::<C>()
-    &&& semantics::stmt_redundant_iff_covered::<C>()
+pub open spec fn stmt_app_policy_reduction<E: Event>() -> bool {
+    &&& semantics::stmt_refines_iff_covers::<E>()
+    &&& semantics::stmt_redundant_iff_covered::<E>()
     &&& inclusion::stmt_vacuity_reductions()
+    &&& inclusion::stmt_vacuity_via_refinement::<E>()
 }
 
-pub proof fn theorem_app_policy_reduction<C: PartialEq>()
-    ensures stmt_app_policy_reduction::<C>(),
+pub proof fn theorem_app_policy_reduction<E: Event>()
+    ensures stmt_app_policy_reduction::<E>(),
 {
-    semantics::theorem_refines_iff_covers::<C>();
-    semantics::theorem_redundant_iff_covered::<C>();
+    semantics::theorem_refines_iff_covers::<E>();
+    semantics::theorem_redundant_iff_covered::<E>();
     inclusion::theorem_vacuity_reductions();
+    inclusion::theorem_vacuity_via_refinement::<E>();
 }
 
 /// Proposition Refinement as inclusion (`prop:policy`) is not mechanized as stated; what the
@@ -229,7 +231,7 @@ pub proof fn theorem_lem_finite_states()
 }
 
 /// Every row of the table above, plus the auxiliary statements, in one proof.
-pub proof fn theorem_paper_index<C: PartialEq, E: Event>()
+pub proof fn theorem_paper_index<E: Event>()
     ensures
         stmt_lem_similarity_language(),
         stmt_lem_sderiv::<SrcTest>(),
@@ -237,7 +239,7 @@ pub proof fn theorem_paper_index<C: PartialEq, E: Event>()
         stmt_thm_sderiv::<SrcTest>(),
         stmt_thm_sderiv::<model::Test>(),
         stmt_thm_matcher(),
-        stmt_app_policy_reduction::<C>(),
+        stmt_app_policy_reduction::<E>(),
         stmt_prop_policy(),
         inclusion::stmt_paper_split_ok(),
         stmt_lem_succ(),
@@ -247,7 +249,7 @@ pub proof fn theorem_paper_index<C: PartialEq, E: Event>()
         stmt_lem_prune(),
         stmt_lem_simulation(),
         stmt_lem_finite_states(),
-        semantics::stmt_genericity::<C>(),
+        semantics::stmt_genericity::<E>(),
         encoding::stmt_numeric_genericity(),
         encoding::stmt_source_regex_local(),
         encoding::stmt_front_end_denies::<E>(),
@@ -258,7 +260,7 @@ pub proof fn theorem_paper_index<C: PartialEq, E: Event>()
     theorem_thm_sderiv::<SrcTest>();
     theorem_thm_sderiv::<model::Test>();
     theorem_thm_matcher();
-    theorem_app_policy_reduction::<C>();
+    theorem_app_policy_reduction::<E>();
     theorem_prop_policy();
     inclusion::theorem_paper_split_ok();
     theorem_lem_succ();
@@ -268,7 +270,7 @@ pub proof fn theorem_paper_index<C: PartialEq, E: Event>()
     theorem_lem_prune();
     theorem_lem_simulation();
     theorem_lem_finite_states();
-    semantics::theorem_genericity::<C>();
+    semantics::theorem_genericity::<E>();
     encoding::theorem_numeric_genericity();
     encoding::theorem_source_regex_local();
     encoding::theorem_front_end_denies::<E>();

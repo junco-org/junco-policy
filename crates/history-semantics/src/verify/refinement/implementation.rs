@@ -3,7 +3,6 @@
 //! Views of `history-analysis` internals (verified against them in `history-analysis/src/verify/`) and of the
 //! verified runtime (`history-semantics`): interned constants and constraints, letters, items as
 //! graph ids, and the reconstruction of counterexamples.
-use super::analyzer::*;
 use super::encoding::*;
 use super::finiteness::*;
 use super::inclusion::*;
@@ -86,7 +85,7 @@ pub open spec fn slot_value(s: SlotView, fresh: spec_fn(nat) -> nat) -> nat {
 /// Reconstruction is sound: every numeric instantiation of the reconstructed slots (fresh numbers
 /// to distinct codes outside the known codes, within `u64` for the candidate) satisfies the
 /// refutation's constraint and follows its letters. With `search::outcome_ok` and
-/// `encoding::stmt_front_end_denies`, this gives the typed `analyzer::every_instance`.
+/// `encoding::stmt_front_end_denies`, this gives R3's `every_instance`.
 pub open spec fn reconstruction_ok(d: NDomains, gamma: Constraint, letters: Seq<Assignment>,
     candidate: Seq<SlotView>, history: Seq<Seq<SlotView>>, known: Set<nat>) -> bool {
     forall|fresh: spec_fn(nat) -> nat| #[trigger] fresh_codes_ok(fresh, known) ==> {

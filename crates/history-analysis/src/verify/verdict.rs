@@ -4,18 +4,23 @@ use super::frontend::*;
 use super::reconstruction::code_field;
 use super::search_exec::{self as exec, root_vocabulary};
 use super::*;
-use super::{reconstruction as slots, typed_numeric as typed};
+use super::{policy_bridge as bridge, reconstruction as slots, typed_numeric as typed};
 use crate::analyzer::{Constants, PolicyAnalyzer};
 use crate::analyzer::{Counterexample, Inclusion, NumericDecision};
+use crate::spec::analyzer::{tail_fails, tail_included_spec};
 use history_semantics::{
     SymbolicLanguage, compile_verify as numeric, symbolic_language_verify as facade,
     symbolic_verify as symbolic,
 };
 use history_syntax::Rule;
-use history_syntax::spec::events::arity;
+use history_syntax::spec::events::{arity, event_view};
 use junco_core::flat::FlatRule;
 use junco_core::flat::{FlatHead, FlatPair, FlatTerm, FlatTest};
-use junco_core::spec::semantics as tdsl;
+use junco_core::spec::questions::{
+    FreshChoice, InclusionView, admissible, capacity_for, cex_arity, cex_has_instance, in_domains,
+    instantiates, shortest, tails_included,
+};
+use junco_core::spec::semantics::history_view;
 use junco_core::verify::{encoding as enc, flatten as fl};
 use vstd::prelude::*;
 
@@ -284,8 +289,17 @@ pub(crate) open spec fn tail_ready<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<
     analyzer_state_wf(a) && analyzer_obligations::<E>() && tail_input_wf(a.constants, i) && difference_language(i, q)
 }
 
+/// The wave-1 verdict of `tail_included`: Holds is inclusion; a counterexample has the arity, a
+/// real instance under capacity, and minimum length (`tail_included_spec` minus the instance
+/// clauses, which `lemma_tail_decision_full` adds under `stored_known`).
 pub(crate) open spec fn tail_verdict<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, r: Inclusion<E>) -> bool {
-    analyzer::tail_included_ok(a@, i.left.head@, i.left.tail@, i.right.tail@, r@)
+    match r@ {
+        InclusionView::Holds => tails_included::<E>(a@.domains, i.left.head@, i.left.tail@, i.right.tail@),
+        InclusionView::Counterexample(cex) => cex_arity(cex, arity::<E>())
+            && (capacity_for::<E>(a@.domains, a@.known, cex) ==> cex_has_instance::<E>(a@.domains, a@.known, cex))
+            && shortest::<E>(a@.domains, cex.history.len(), tail_fails::<E>(i.left.head@, i.left.tail@, i.right.tail@)),
+        InclusionView::Exhausted => true,
+    }
 }
 
 pub(crate) proof fn lemma_numeric_head_sat(h: encoding::NHead, theta: Subst)
@@ -313,37 +327,32 @@ pub(crate) proof fn lemma_result_outcome(d: encoding::NDomains, start: search::I
     }
 }
 
+/// A failing real pair embeds into a numeric inclusion counterexample of the same length.
 proof fn lemma_embed_failure<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, q: language::Regex<model::Test>,
-    c: Seq<E::Component>, h: Seq<Seq<E::Component>>)
+    c: E, h: Seq<E>)
     -> (coding: typed::NatCoding<E>)
-    requires tail_ready(a, i, q), semantics::event_in(a@.domains, c), semantics::history_in(a@.domains, h),
-        analyzer::tail_fails(i.left.head@, i.left.tail@, i.right.tail@)(c, h),
+    requires tail_ready(a, i, q), in_domains::<E>(a@.domains, c, h),
+        tail_fails::<E>(i.left.head@, i.left.tail@, i.right.tail@)(c, h),
     ensures inclusion::inclusion_cex(ndomains(a.universes), inclusion::head_constraint(typed::template_head(i.left_numeric)),
-        q, language::Regex::Empty, typed::numeric_event::<E>(coding, c), typed::numeric_history::<E>(coding, h)),
-        typed::numeric_history::<E>(coding, h).len() == h.len(),
+        q, language::Regex::Empty, typed::numeric_event::<E>(coding, event_view(c)), typed::numeric_history::<E>(coding, history_view(h))),
+        typed::numeric_history::<E>(coding, history_view(h)).len() == h.len(),
 {
-    assert forall|j: int| #![trigger h[j]] 0 <= j < h.len() implies h[j].len() == c.len() by {
-        assert(semantics::event_in(a@.domains, h[j]));
-        assert(h[j].len() == a@.domains.len());
-    }
-    let coding = typed::lemma_pair_embedding(a.constants, c, h);
-    typed::lemma_analyzer_domain_embedding(a, coding, c, h);
+    let coding = bridge::lemma_pair_in_domains(a, c, h);
     typed::lemma_source_failure(i.left, i.right, i.left_flat, i.right_flat,
-        i.left_numeric, i.right_numeric, a.constants, coding, c, h);
-    lemma_numeric_head_sat(typed::template_head(i.left_numeric), typed::numeric_event::<E>(coding, c));
-    lemma_empty_language(typed::numeric_event::<E>(coding, c), typed::numeric_history::<E>(coding, h));
+        i.left_numeric, i.right_numeric, a.constants, coding, event_view(c), history_view(h));
+    lemma_numeric_head_sat(typed::template_head(i.left_numeric), typed::numeric_event::<E>(coding, event_view(c)));
+    lemma_empty_language(typed::numeric_event::<E>(coding, event_view(c)), typed::numeric_history::<E>(coding, history_view(h)));
     coding
 }
 
 pub(crate) proof fn lemma_holds<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, q: language::Regex<model::Test>)
     requires tail_ready(a, i, q), inclusion::included_under(ndomains(a.universes),
         inclusion::head_constraint(typed::template_head(i.left_numeric)), q, language::Regex::Empty),
-    ensures analyzer::tail_included_ok(a@, i.left.head@, i.left.tail@, i.right.tail@, analyzer::InclusionView::Holds),
+    ensures tails_included::<E>(a@.domains, i.left.head@, i.left.tail@, i.right.tail@),
 {
-    assert forall|c: Seq<E::Component>, h: Seq<Seq<E::Component>>|
-        semantics::event_in(a@.domains, c) && semantics::history_in(a@.domains, h)
-            implies !analyzer::tail_fails(i.left.head@, i.left.tail@, i.right.tail@)(c, h) by {
-        if analyzer::tail_fails(i.left.head@, i.left.tail@, i.right.tail@)(c, h) {
+    assert forall|c: E, h: Seq<E>| in_domains::<E>(a@.domains, c, h)
+        implies !tail_fails::<E>(i.left.head@, i.left.tail@, i.right.tail@)(c, h) by {
+        if tail_fails::<E>(i.left.head@, i.left.tail@, i.right.tail@)(c, h) {
             let coding = lemma_embed_failure(a, i, q, c, h);
         }
     }
@@ -352,12 +361,11 @@ pub(crate) proof fn lemma_holds<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>,
 pub(crate) proof fn lemma_shortest<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, q: language::Regex<model::Test>, n: nat)
     requires tail_ready(a, i, q), inclusion::no_cex_shorter(ndomains(a.universes),
         inclusion::head_constraint(typed::template_head(i.left_numeric)), q, language::Regex::Empty, n),
-    ensures analyzer::shortest(a@, n, analyzer::tail_fails(i.left.head@, i.left.tail@, i.right.tail@)),
+    ensures shortest::<E>(a@.domains, n, tail_fails::<E>(i.left.head@, i.left.tail@, i.right.tail@)),
 {
-    assert forall|c: Seq<E::Component>, h: Seq<Seq<E::Component>>|
-        semantics::event_in(a@.domains, c) && semantics::history_in(a@.domains, h) && h.len() < n
-            implies !analyzer::tail_fails(i.left.head@, i.left.tail@, i.right.tail@)(c, h) by {
-        if analyzer::tail_fails(i.left.head@, i.left.tail@, i.right.tail@)(c, h) {
+    assert forall|c: E, h: Seq<E>| in_domains::<E>(a@.domains, c, h) && h.len() < n
+        implies !tail_fails::<E>(i.left.head@, i.left.tail@, i.right.tail@)(c, h) by {
+        if tail_fails::<E>(i.left.head@, i.left.tail@, i.right.tail@)(c, h) {
             let coding = lemma_embed_failure(a, i, q, c, h);
         }
     }
@@ -366,67 +374,75 @@ pub(crate) proof fn lemma_shortest<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<
 pub(crate) proof fn lemma_no_candidates<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>)
     requires analyzer_state_wf(a), analyzer_obligations::<E>(), tail_input_wf(a.constants, i),
         !inclusion::satisfiable(ndomains(a.universes), inclusion::head_constraint(typed::template_head(i.left_numeric))),
-    ensures analyzer::tail_included_ok(a@, i.left.head@, i.left.tail@, i.right.tail@, analyzer::InclusionView::Holds),
+    ensures tails_included::<E>(a@.domains, i.left.head@, i.left.tail@, i.right.tail@),
 {
-    assert forall|c: Seq<E::Component>, h: Seq<Seq<E::Component>>|
-        semantics::event_in(a@.domains, c) && semantics::history_in(a@.domains, h)
-            implies !analyzer::tail_fails(i.left.head@, i.left.tail@, i.right.tail@)(c, h) by {
-        if analyzer::tail_fails(i.left.head@, i.left.tail@, i.right.tail@)(c, h) {
-            assert forall|j: int| #![trigger h[j]] 0 <= j < h.len() implies h[j].len() == c.len() by {
-                assert(semantics::event_in(a@.domains, h[j]));
-                assert(h[j].len() == a@.domains.len());
-            }
-            let coding = typed::lemma_pair_embedding(a.constants, c, h);
-            typed::lemma_analyzer_domain_embedding(a, coding, c, h);
+    assert forall|c: E, h: Seq<E>| in_domains::<E>(a@.domains, c, h)
+        implies !tail_fails::<E>(i.left.head@, i.left.tail@, i.right.tail@)(c, h) by {
+        if tail_fails::<E>(i.left.head@, i.left.tail@, i.right.tail@)(c, h) {
+            let coding = bridge::lemma_pair_in_domains(a, c, h);
             typed::lemma_source_failure(i.left, i.right, i.left_flat, i.right_flat,
-                i.left_numeric, i.right_numeric, a.constants, coding, c, h);
-            let theta = typed::numeric_event::<E>(coding, c);
+                i.left_numeric, i.right_numeric, a.constants, coding, event_view(c), history_view(h));
+            let theta = typed::numeric_event::<E>(coding, event_view(c));
             lemma_numeric_head_sat(typed::template_head(i.left_numeric), theta);
             assert(inclusion::satisfiable(ndomains(a.universes), inclusion::head_constraint(typed::template_head(i.left_numeric))));
         }
     }
 }
 
-pub(crate) proof fn lemma_counterexample<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, q: language::Regex<model::Test>,
+/// The wave-1 counterexample clause: arity, a real instance under capacity, minimum length.
+pub(crate) proof fn lemma_counterexample_shape<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, q: language::Regex<model::Test>,
     g: Constraint, letters: Seq<Letter>, alphabets: Seq<Set<model::Primitive>>, result: Counterexample<E>)
     requires tail_ready(a, i, q), slots::reconstructed(a.constants, a.universes, g, letters, alphabets, result),
         search::outcome_ok(ndomains(a.universes), inclusion::head_constraint(typed::template_head(i.left_numeric)), q,
             language::Regex::Empty, search::Outcome::Refuted(implementation::constraint_of(g@), exec::chain_assignments(letters, alphabets))),
-    ensures analyzer::tail_included_ok(a@, i.left.head@, i.left.tail@, i.right.tail@, analyzer::InclusionView::Counterexample(result@)),
+    ensures cex_arity(result@, arity::<E>()),
+        capacity_for::<E>(a@.domains, a@.known, result@) ==> cex_has_instance::<E>(a@.domains, a@.known, result@),
+        shortest::<E>(a@.domains, result@.history.len(), tail_fails::<E>(i.left.head@, i.left.tail@, i.right.tail@)),
+{
+    bridge::lemma_reconstructed_has_instance(a, g, letters, alphabets, result);
+    lemma_shortest(a, i, q, exec::chain_assignments(letters, alphabets).len());
+    let (candidate, history) = choose|candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>|
+        #[trigger] slots::constructed(a.constants, a.universes, g, letters, candidate, history)
+            && result@ == slots::cex_of_slots(a.constants, candidate, history)
+            && implementation::reconstruction_ok(ndomains(a.universes), implementation::constraint_of(g@),
+                exec::chain_assignments(letters, alphabets), candidate, history, slots::known_codes(a.constants));
+    assert(result@.history.len() == exec::chain_assignments(letters, alphabets).len());
+}
+
+/// A4's counterexample clause: real instances fail, an instance exists under capacity and refutes
+/// the inclusion, and no failing pair in the domains is shorter (needs every interned constant
+/// known, `stored_known`).
+pub(crate) proof fn lemma_counterexample<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, q: language::Regex<model::Test>,
+    g: Constraint, letters: Seq<Letter>, alphabets: Seq<Set<model::Primitive>>, result: Counterexample<E>)
+    requires tail_ready(a, i, q), stored_known(a), slots::reconstructed(a.constants, a.universes, g, letters, alphabets, result),
+        search::outcome_ok(ndomains(a.universes), inclusion::head_constraint(typed::template_head(i.left_numeric)), q,
+            language::Regex::Empty, search::Outcome::Refuted(implementation::constraint_of(g@), exec::chain_assignments(letters, alphabets))),
+    ensures tail_included_spec::<E>(a@, i.left.head@, i.left.tail@, i.right.tail@, InclusionView::Counterexample(result@)),
 {
     let (candidate, history) = choose|candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>|
         #[trigger] slots::constructed(a.constants, a.universes, g, letters, candidate, history)
             && result@ == slots::cex_of_slots(a.constants, candidate, history)
             && implementation::reconstruction_ok(ndomains(a.universes), implementation::constraint_of(g@),
                 exec::chain_assignments(letters, alphabets), candidate, history, slots::known_codes(a.constants));
-    assert forall|f: analyzer::FreshChoice<E::Component>|
-        analyzer::admissible(a@, result@, f) implies {
-            &&& semantics::event_in(a@.domains, analyzer::event_of(result@.candidate, f))
-            &&& semantics::history_in(a@.domains, analyzer::history_of(result@, f))
-            &&& analyzer::tail_fails(i.left.head@, i.left.tail@, i.right.tail@)(
-                analyzer::event_of(result@.candidate, f), analyzer::history_of(result@, f))
-        } by {
-        let coding = typed::lemma_slot_embedding(a, candidate, history, f);
-        let c = analyzer::event_of(result@.candidate, f);
-        let h = analyzer::history_of(result@, f);
-        let theta = typed::numeric_event::<E>(coding, c);
-        let w = typed::numeric_history::<E>(coding, h);
-        assert(inclusion::sat_by(theta, implementation::constraint_of(g@)));
-        assert(encoding::n_event_in(ndomains(a.universes), theta));
-        assert(search::follows(ndomains(a.universes), exec::chain_assignments(letters, alphabets), theta, w));
-        assert(encoding::n_history_in(ndomains(a.universes), w));
-        assert(w.len() == h.len());
-        typed::lemma_domain_event(a, coding, c);
-        assert forall|j: int| 0 <= j < h.len() implies semantics::event_in(a@.domains, h[j]) by {
-            assert(w[j] == typed::numeric_event::<E>(coding, h[j]));
-            assert(encoding::n_event_in(ndomains(a.universes), w[j]));
-            typed::lemma_domain_event(a, coding, h[j]);
-        }
+    let fails = tail_fails::<E>(i.left.head@, i.left.tail@, i.right.tail@);
+    assert forall|f: FreshChoice<E::Component>, c: E, h: Seq<E>|
+        admissible::<E>(a@.domains, a@.known, result@, f) && #[trigger] instantiates::<E>(result@, f, c, h)
+        implies in_domains::<E>(a@.domains, c, h) && fails(c, h) by {
+        let coding = bridge::lemma_instance_embedding(a, g, letters, alphabets, result, candidate, history, f, c, h);
+        let theta = typed::numeric_event::<E>(coding, event_view(c));
+        let w = typed::numeric_history::<E>(coding, history_view(h));
         assert(inclusion::inclusion_cex(ndomains(a.universes), inclusion::head_constraint(typed::template_head(i.left_numeric)),
             q, language::Regex::Empty, theta, w));
         lemma_numeric_head_sat(typed::template_head(i.left_numeric), theta);
         typed::lemma_source_failure(i.left, i.right, i.left_flat, i.right_flat,
-            i.left_numeric, i.right_numeric, a.constants, coding, c, h);
+            i.left_numeric, i.right_numeric, a.constants, coding, event_view(c), history_view(h));
+    }
+    bridge::lemma_reconstructed_has_instance(a, g, letters, alphabets, result);
+    if cex_has_instance::<E>(a@.domains, a@.known, result@) {
+        let (f, c, h) = choose|f: FreshChoice<E::Component>, c: E, h: Seq<E>|
+            admissible::<E>(a@.domains, a@.known, result@, f) && #[trigger] instantiates::<E>(result@, f, c, h);
+        assert(in_domains::<E>(a@.domains, c, h) && fails(c, h));
+        assert(!tails_included::<E>(a@.domains, i.left.head@, i.left.tail@, i.right.tail@));
     }
     lemma_shortest(a, i, q, exec::chain_assignments(letters, alphabets).len());
     assert(result@.history.len() == exec::chain_assignments(letters, alphabets).len());
@@ -490,12 +506,36 @@ pub(crate) proof fn lemma_outcome_difference(d: encoding::NDomains, start: searc
     reveal(exec::search_result);
 }
 
+/// The wave-1 verdict: Holds is inclusion; a counterexample has the arity, a real instance under
+/// capacity, and minimum length. `lemma_tail_decision_full` adds the instance clauses.
 pub(crate) proof fn lemma_tail_decision<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>,
     n: NumericInput, g: implementation::ConstraintView, decision: NumericDecision<E>)
     requires tail_ready(a, i, n.left), n.right == language::Regex::Empty,
         implementation::constraint_of(g) == inclusion::head_constraint(typed::template_head(i.left_numeric)),
         numeric_decision_ok(a, n, g, decision),
     ensures tail_verdict(a, i, decision.inclusion),
+{
+    match decision.inclusion {
+        Inclusion::Holds => lemma_holds(a, i, n.left),
+        Inclusion::Exhausted => {},
+        Inclusion::Counterexample(c) => {
+            let (refutation, letters, alphabets) = choose|refutation: Constraint, letters: Seq<Letter>,
+                alphabets: Seq<Set<model::Primitive>>|
+                decision.outcome@ == search::Outcome::Refuted(implementation::constraint_of(refutation@),
+                    exec::chain_assignments(letters, alphabets))
+                && slots::reconstructed(a.constants, a.universes, refutation, letters, alphabets, c);
+            lemma_counterexample_shape(a, i, n.left, refutation, letters, alphabets, c);
+        },
+    }
+}
+
+/// R6 `tail_included_spec` (A4), under `stored_known`.
+pub(crate) proof fn lemma_tail_decision_full<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>,
+    n: NumericInput, g: implementation::ConstraintView, decision: NumericDecision<E>)
+    requires tail_ready(a, i, n.left), stored_known(a), n.right == language::Regex::Empty,
+        implementation::constraint_of(g) == inclusion::head_constraint(typed::template_head(i.left_numeric)),
+        numeric_decision_ok(a, n, g, decision),
+    ensures tail_included_spec::<E>(a@, i.left.head@, i.left.tail@, i.right.tail@, decision.inclusion@),
 {
     match decision.inclusion {
         Inclusion::Holds => lemma_holds(a, i, n.left),

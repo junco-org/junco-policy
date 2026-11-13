@@ -2,9 +2,13 @@
 
 use crate::native::NativeMap;
 #[cfg(verus_keep_ghost)]
+use crate::spec::analyzer::{declared_sets, removal_preserves_decisions, rules_of, without_rule};
+#[cfg(verus_keep_ghost)]
 use crate::verify::constraint_wf;
 #[cfg(verus_keep_ghost)]
 use crate::verify::frontend::*;
+#[cfg(verus_keep_ghost)]
+use crate::verify::policy_removal as removal;
 #[cfg(verus_keep_ghost)]
 use crate::verify::verdict::*;
 #[cfg(verus_keep_ghost)]
@@ -15,10 +19,7 @@ use alloc::rc::Rc;
 use alloc::vec::Vec;
 use history_semantics::SymbolicLanguage;
 #[cfg(verus_keep_ghost)]
-use history_semantics::verify::refinement::{
-    analyzer as verdict, encoding, implementation, inclusion, policy_removal as removal,
-    search as paper, semantics,
-};
+use history_semantics::verify::refinement::{encoding, implementation, inclusion, search as paper};
 #[cfg(verus_keep_ghost)]
 use history_semantics::{compile_verify as numeric, symbolic_language_verify as facade};
 #[cfg(verus_keep_ghost)]
@@ -35,6 +36,10 @@ use junco_core::limits::Unmetered;
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
 use junco_core::observation::SmallVecSpecFns;
+#[cfg(verus_keep_ghost)]
+use junco_core::spec::questions::{
+    capacity_for, cex_arity, cex_has_instance, covers, refines, shortest, tails_included,
+};
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::{encoding as enc, flatten as fl};
 use junco_core::{CompileError, FlatEncoder, HistoryError, lower_flat};
@@ -543,6 +548,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             universes.push(universe);
             index += 1;
         }
+        proof { assert(input.components@.take(index as int) =~= input.components@); }
         let owner = match history_store::typed::issue_owner_id() { Ok(id) => id, Err(_) => 0 };
         let result = Self {
             constants, universes, rules: Vec::new(), owner,
@@ -605,15 +611,16 @@ impl<E: Event> PolicyAnalyzer<E> {
         Ok(id)
     }
 
-    /// Whether `by` covers every denial of the stored rule.
+    /// Whether `by` covers every violation of the stored rule (A1; R6 `covered_spec` minus the
+    /// instance clauses, which Track F adds once `known` is linked to the interned constants).
     pub fn covered(&self, rule: RuleId, by: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), views::analyzer_obligations::<E>(),
-            verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
             !ids_owned(self, seq![rule] + by@) ==> result matches Err(HistoryError::UnknownId { .. }),
-            result matches Ok(v) ==> verdict::covered_ok(self@, rule@, rule_ids(by@), v@),
-            result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
-                && !semantics::covers(self@.domains, verdict::rules_of(self@, rule_ids(by@)), self@.rules[rule@ as int]),
+            result matches Ok(Inclusion::Holds)
+                ==> covers::<E>(self@.domains, rules_of(self@, rule_ids(by@)), self@.rules[rule@ as int]),
+            result matches Ok(Inclusion::Counterexample(c)) ==> cex_arity(c@, arity::<E>())
+                && (capacity_for::<E>(self@.domains, self@.known, c@) ==> cex_has_instance::<E>(self@.domains, self@.known, c@)),
     {
         proof { lemma_ids_owned_concat(self, seq![rule], by@); }
         self.check_id(rule)?;
@@ -663,22 +670,16 @@ impl<E: Event> PolicyAnalyzer<E> {
 
     /// Checks coverage after excluding every occurrence of `rule`, without a filtered allocation.
     ///
-    /// `Holds` proves removal preserves every deny/permit decision. A counterexample proves
-    /// removal changes a decision when `policy` contains `rule`; an absent rule retains the
-    /// coverage-query interpretation.
+    /// `Holds` proves removal preserves every deny/permit decision (A3, decision 5).
     pub fn redundant(&self, rule: RuleId, policy: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), views::analyzer_obligations::<E>(),
-            verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
             !ids_owned(self, seq![rule] + policy@) ==> result matches Err(HistoryError::UnknownId { .. }),
-            result matches Ok(v) ==> verdict::redundant_ok(self@, rule@, rule_ids(policy@), v@),
-            result matches Ok(v) ==> removal::redundant_decisions_ok(self@, rule@, rule_ids(policy@), v@),
-            result matches Ok(Inclusion::Holds) ==> removal::removal_preserves_decisions(self@, rule@, rule_ids(policy@)),
-            result matches Ok(Inclusion::Counterexample(_)) ==> (rule_ids(policy@).contains(rule@)
-                ==> !removal::removal_preserves_decisions(self@, rule@, rule_ids(policy@))),
-            result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
-                && !semantics::covers(self@.domains,
-                    verdict::rules_of(self@, verdict::without_rule(rule_ids(policy@), rule@)), self@.rules[rule@ as int]),
+            result matches Ok(Inclusion::Holds)
+                ==> covers::<E>(self@.domains, rules_of(self@, without_rule(rule_ids(policy@), rule@)), self@.rules[rule@ as int])
+                    && removal_preserves_decisions::<E>(self@, rule@, rule_ids(policy@)),
+            result matches Ok(Inclusion::Counterexample(c)) ==> cex_arity(c@, arity::<E>())
+                && (capacity_for::<E>(self@.domains, self@.known, c@) ==> cex_has_instance::<E>(self@.domains, self@.known, c@)),
     {
         proof { lemma_ids_owned_concat(self, seq![rule], policy@); }
         self.check_id(rule)?;
@@ -691,34 +692,28 @@ impl<E: Event> PolicyAnalyzer<E> {
         let result = self.covered_with(rule, policy, Some(rule))?;
         proof {
             queries::lemma_selected_ids(*self, policy@, Some(rule));
-            assert(queries::selected_rule_ids(policy@, Some(rule)) == verdict::without_rule(rule_ids(policy@), rule@));
-            bridge::lemma_redundancy_result(self@, rule@, rule_ids(policy@), result@);
-            views::policy_minimality::lemma_redundancy_minimal_result(self@, rule@, rule_ids(policy@), result@);
+            assert(queries::selected_rule_ids(policy@, Some(rule)) == without_rule(rule_ids(policy@), rule@));
             assert forall|i: int| 0 <= i < rule_ids(policy@).len()
                 implies #[trigger] rule_ids(policy@)[i] < self@.rules.len() by {
                 assert(policy@[i].0 < self.rules@.len());
             }
-            removal::lemma_redundant_decisions(self@, rule@, rule_ids(policy@), result@);
-            if let verdict::InclusionView::Counterexample(c) = result@ {
-                if rule_ids(policy@).contains(rule@) {
-                    removal::lemma_redundant_counterexample_refutes(self@, rule@, rule_ids(policy@), c);
-                }
+            if result is Holds {
+                removal::lemma_redundant_decisions::<E>(self@, rule@, rule_ids(policy@), result@);
             }
         }
         Ok(result)
     }
 
-    /// Whether `stricter` denies everything denied by `than`.
+    /// Whether `stricter` denies everything denied by `than` (A3, `def:policy-refinement`).
     pub fn at_least_as_strict(&self, stricter: &[RuleId], than: &[RuleId])
         -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), views::analyzer_obligations::<E>(),
-            verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
             !ids_owned(self, stricter@ + than@) ==> result matches Err(HistoryError::UnknownId { .. }),
-            result matches Ok(v) ==> verdict::at_least_as_strict_ok(self@, rule_ids(stricter@), rule_ids(than@), v@),
-            result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
-                && !semantics::refines(self@.domains, verdict::rules_of(self@, rule_ids(stricter@)),
-                    verdict::rules_of(self@, rule_ids(than@))),
+            result matches Ok(Inclusion::Holds)
+                ==> refines::<E>(self@.domains, rules_of(self@, rule_ids(stricter@)), rules_of(self@, rule_ids(than@))),
+            result matches Ok(Inclusion::Counterexample(c)) ==> cex_arity(c@, arity::<E>())
+                && (capacity_for::<E>(self@.domains, self@.known, c@) ==> cex_has_instance::<E>(self@.domains, self@.known, c@)),
     {
         proof { lemma_ids_owned_concat(self, stricter@, than@); }
         self.check_ids(stricter)?;
@@ -729,9 +724,8 @@ impl<E: Event> PolicyAnalyzer<E> {
             invariant index <= than@.len(), analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
                 ids_owned(self, stricter@), ids_owned(self, than@),
                 valid_ids(*self, stricter@), valid_ids(*self, than@),
-                verdict::unrestricted_components_infinite(self@.domains),
-                forall|j: int| 0 <= j < index ==> semantics::covers(self@.domains,
-                    verdict::rules_of(self@, rule_ids(stricter@)), self@.rules[than@[j]@ as int]),
+                forall|j: int| 0 <= j < index ==> covers::<E>(self@.domains,
+                    rules_of(self@, rule_ids(stricter@)), self@.rules[than@[j]@ as int]),
             decreases than@.len() - index,
         {
             proof {
@@ -742,16 +736,13 @@ impl<E: Event> PolicyAnalyzer<E> {
             let inclusion = self.covered(than[index], stricter)?;
             match inclusion {
                 Inclusion::Holds => {},
-                _ => {
-                    proof { views::policy_minimality::lemma_refinement_minimal_result(self@, rule_ids(stricter@), rule_ids(than@), index as int, inclusion@); }
-                    return Ok(inclusion);
-                },
+                _ => return Ok(inclusion),
             }
             index += 1;
         }
         proof {
             lemma_ids_owned_concat(self, stricter@, than@);
-            bridge::lemma_refinement_holds(self@, rule_ids(stricter@), rule_ids(than@));
+            bridge::lemma_refinement_holds::<E>(self@, rule_ids(stricter@), rule_ids(than@));
         }
         Ok(Inclusion::Holds)
     }
@@ -760,12 +751,11 @@ impl<E: Event> PolicyAnalyzer<E> {
         -> (result: Result<Inclusion<E>, HistoryError>)
         requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
             rule.0 < self.rules@.len(), valid_ids(*self, by@),
-            verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
-            result matches Ok(v) ==> verdict::covered_ok(self@, rule@, queries::selected_rule_ids(by@, exclude), v@),
-            result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
-                && !semantics::covers(self@.domains, verdict::rules_of(self@, queries::selected_rule_ids(by@, exclude)),
-                    self@.rules[rule@ as int]),
+            result matches Ok(Inclusion::Holds)
+                ==> covers::<E>(self@.domains, rules_of(self@, queries::selected_rule_ids(by@, exclude)), self@.rules[rule@ as int]),
+            result matches Ok(Inclusion::Counterexample(c)) ==> cex_arity(c@, arity::<E>())
+                && (capacity_for::<E>(self@.domains, self@.known, c@) ==> cex_has_instance::<E>(self@.domains, self@.known, c@)),
     {
         let analyzed = &self.rules[rule.0];
         let ghost policy = queries::numeric_policy(*self, by@, exclude);
@@ -805,7 +795,6 @@ impl<E: Event> PolicyAnalyzer<E> {
         while index < cases.len()
             invariant index <= cases@.len(), analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
                 rule.0 < self.rules@.len(), valid_ids(*self, by@),
-                verdict::unrestricted_components_infinite(self@.domains),
                 policy == queries::numeric_policy(*self, by@, exclude),
                 left == queries::stored_numeric(self.rules@[rule.0 as int]),
                 stored_rule_wf(self.constants, self.universes, *analyzed),
@@ -845,7 +834,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             let decision = self.decide(case.copy(), difference, Ghost(input))?;
             #[cfg(not(verus_keep_ghost))]
             let decision = self.decide(case.copy(), difference)?;
-            proof { views::policy_minimality::lemma_covered_decision_minimal(*self, rule, by@, exclude, input, *case, decision); }
+            proof { queries::lemma_covered_decision(*self, rule, by@, exclude, input, case@, decision); }
             match decision.inclusion {
                 Inclusion::Holds => {},
                 _ => return Ok(decision.inclusion),
@@ -1106,10 +1095,12 @@ impl<E: Event> PolicyAnalyzer<E> {
         Ok(difference)
     }
 
-    /// Whether, for every candidate that `head` matches, every history in `left` is in `right`.
+    /// Whether, for every candidate that `head` matches, every history in `left` is in `right`
+    /// (A4; R6 `tail_included_spec` minus the instance clauses, which Track F adds once `known`
+    /// is linked to the interned constants).
     ///
     /// Both tails may refer to the head's variables. A counterexample is a matching candidate and
-    /// a history in `left` but not in `right`.
+    /// a history in `left` but not in `right`, of minimum length.
     #[verus_spec(result => requires views::analyzer_obligations::<E>(), old(self).wf(),
         crate::spec::analyzer::query_capacity::<E>(analyzer_view(*old(self)), left@, right@),
         ensures final(self).wf(), final(self).owner() == old(self).owner(),
@@ -1118,7 +1109,11 @@ impl<E: Event> PolicyAnalyzer<E> {
             analyzer_view(*final(self)).known == crate::spec::analyzer::known_with(
                 analyzer_view(*old(self)).known, crate::spec::analyzer::tail_constants(head@, left@, right@)),
             junco_core::verify::history_specs::no_invariant_compile_failure(result),
-            result matches Ok(v) ==> verdict::tail_included_ok(final(self)@, head@, left@, right@, v@))]
+            result matches Ok(Inclusion::Holds) ==> tails_included::<E>(final(self)@.domains, head@, left@, right@),
+            result matches Ok(Inclusion::Counterexample(c)) ==> cex_arity(c@, arity::<E>())
+                && (capacity_for::<E>(final(self)@.domains, final(self)@.known, c@)
+                    ==> cex_has_instance::<E>(final(self)@.domains, final(self)@.known, c@))
+                && shortest::<E>(final(self)@.domains, c@.history.len(), crate::spec::analyzer::tail_fails::<E>(head@, left@, right@)))]
     pub fn tail_included(
         &mut self,
         head: &Head<E>,
@@ -1279,6 +1274,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                 lemma_universes_extended(before.constants, self.constants, self.universes);
                 lemma_universes_frame(before.constants, self.constants, self.universes);
                 lemma_store_extends(before.constants, self.constants, self.universes, self.rules@);
+                lemma_view_links_frame(before, *self);
             }
         }
         result
