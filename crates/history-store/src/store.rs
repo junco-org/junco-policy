@@ -812,6 +812,7 @@ impl RecordCell {
         old(self).lifecycle@.state() == old(self).stored@, events@.len() > 0,
         ensures crate::history::verify::stored_append_result(old(self).stored, final(self).stored, events@, result),
             result != Err(HistoryError::WrongHistoryOwner),
+            result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
             final(self).lifecycle@.wf(), final(self).lifecycle@.state() == final(self).stored@,
             final(self).lifecycle@.id() == old(self).lifecycle@.id(),
             result is Err ==> final(self).lifecycle@ == old(self).lifecycle@)]
@@ -2280,6 +2281,7 @@ impl HistoryStore {
                 ensures record_acquired(*final(cell), record),
                     crate::history::verify::stored_append_result(old(cell).stored, final(cell).stored,
                         context.0@, result), result != Err(HistoryError::WrongHistoryOwner),
+                    result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
             { cell.append_events(context.0, context.1, context.2) }
         };
         let result = record.with_record(context, operation);

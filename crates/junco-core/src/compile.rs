@@ -45,6 +45,7 @@ pub trait FlatEncoder<C>: Sized {
 
     /// Opt in only when valid component requests cannot report structural failures.
     open spec fn errors_are_non_invariant(&self) -> bool { false }
+    open spec fn errors_are_resource(&self) -> bool { false }
 
     // Keep the original books valid when a nested mutable encoder borrow ends.
     #[verifier::prophetic]
@@ -55,6 +56,10 @@ pub trait FlatEncoder<C>: Sized {
         ensures final(self).state_wf(),
             final(self).restoration() == old(self).restoration(),
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
+            final(self).errors_are_resource() == old(self).errors_are_resource(),
+            old(self).errors_are_resource() && encoder_wf_clause!(Self, old(self))
+                && Self::domain()(field, *value)
+                ==> (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
             old(self).errors_are_non_invariant() && encoder_wf_clause!(Self, old(self))
                 ==> no_invariant_failure(result)
                     && (Self::domain()(field, *value)
@@ -111,6 +116,7 @@ fn copy_ids<L: Limits>(source: &[u32], limits: &mut L, world: &mut ObservationWo
     ensures result matches Ok(ids) ==> ids@ == source@,
         no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        result matches Err(error) ==> crate::spec::semantics::resource_error(error),
 {
     let mut ids = Vec::new();
     match world.try_reserve_vec_exact(&mut ids, source.len()) {
@@ -135,6 +141,10 @@ fn encode_head<C, M: FlatEncoder<C>>(source: &FlatHead<C>, field: Component, enc
         result matches Ok(head) ==> head_shape(*source, head),
         final(encoder).restoration() == old(encoder).restoration(),
         final(encoder).errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+        final(encoder).errors_are_resource() == old(encoder).errors_are_resource(),
+        old(encoder).errors_are_resource() && encoder_wf::<C, M>(*old(encoder))
+            && head_in_domain(*source, field, M::domain())
+            ==> (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         encoder_wf::<C, M>(*old(encoder)) ==>
             final(encoder).encoding_calls() <= old(encoder).encoding_calls() + 1,
         old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
@@ -168,6 +178,10 @@ fn encode_test<C, M: FlatEncoder<C>, L: Limits>(source: &FlatTest<C>, encoder: &
         result matches Ok(test) ==> test_shape(*source, test),
         final(encoder).restoration() == old(encoder).restoration(),
         final(encoder).errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+        final(encoder).errors_are_resource() == old(encoder).errors_are_resource(),
+        old(encoder).errors_are_resource() && encoder_wf::<C, M>(*old(encoder))
+            && test_in_domain(*source, M::domain())
+            ==> (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         encoder_wf::<C, M>(*old(encoder)) ==>
             final(encoder).encoding_calls() <= old(encoder).encoding_calls() + 1,
         old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
@@ -207,6 +221,7 @@ fn copy_regex<L: Limits>(source: &FlatRegex, limits: &mut L, world: &mut Observa
     ensures result matches Ok(regex) ==> regex_same(*source, regex),
         no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        result matches Err(error) ==> crate::spec::semantics::resource_error(error),
 {
     Ok(match source {
         FlatRegex::Empty => FlatRegex::Empty,
@@ -233,6 +248,10 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
             && crate::flat::verify::structural_wf(target),
         final(encoder).restoration() == old(encoder).restoration(),
         final(encoder).errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+        final(encoder).errors_are_resource() == old(encoder).errors_are_resource(),
+        old(encoder).errors_are_resource() && encoder_wf::<C, M>(*old(encoder))
+            && crate::flat::verify::structural_wf(*source) && constants_in_domain(*source, M::domain())
+            ==> (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         encoder_wf::<C, M>(*old(encoder)) ==>
             final(encoder).encoding_calls() <= old(encoder).encoding_calls()
                 + source.head@.len() + source.tests@.len(),
@@ -267,6 +286,7 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
             crate::flat::verify::structural_wf(*source),
             encoder.restoration() == old(encoder).restoration(),
             encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+            encoder.errors_are_resource() == old(encoder).errors_are_resource(),
             initial_maps == old(encoder).maps(), verified == encoder_wf::<C, M>(*old(encoder)),
             initial_calls == old(encoder).encoding_calls(),
             verified ==> encoder.encoding_calls() <= initial_calls + index,
@@ -313,6 +333,7 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
             crate::flat::verify::structural_wf(*source),
             encoder.restoration() == old(encoder).restoration(),
             encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+            encoder.errors_are_resource() == old(encoder).errors_are_resource(),
             initial_maps == old(encoder).maps(), verified == encoder_wf::<C, M>(*old(encoder)),
             initial_calls == old(encoder).encoding_calls(),
             verified ==> encoder.encoding_calls() <= initial_calls + source.head@.len() + index,
@@ -375,6 +396,7 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
             crate::flat::verify::structural_wf(*source),
             encoder.restoration() == old(encoder).restoration(),
             encoder.errors_are_non_invariant() == old(encoder).errors_are_non_invariant(),
+            encoder.errors_are_resource() == old(encoder).errors_are_resource(),
             initial_maps == old(encoder).maps(), verified == encoder_wf::<C, M>(*old(encoder)),
             initial_calls == old(encoder).encoding_calls(),
             verified ==> encoder.encoding_calls() <= initial_calls + source.head@.len() + source.tests@.len(),

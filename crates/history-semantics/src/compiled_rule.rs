@@ -377,6 +377,10 @@ impl<E: Event> CompiledRule<E> {
                 ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
                     && !(result matches Err(CompileError::UnboundVariable { .. }))
                     && !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
+            junco_core::spec::hypotheses::event_obligations::<E>() && dsl::rule_wf(rule@)
+                && rule@.head.len() == history_syntax::spec::events::arity::<E>()
+                && dsl::rule_constants_tagged::<E>(rule@)
+                ==> (result is Ok || (result matches Err(CompileError::Runtime(error)) && dsl::resource_error(error))),
     {
         let flat = flatten_rule(rule, limits, world)?;
         proof_decl! { let ghost flattened = flat; }
@@ -449,7 +453,11 @@ impl<E: Event> CompiledRule<E> {
                 && dsl::regex_scoped(rule.tail@, rule.head@)
                 ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
                     && !(result matches Err(CompileError::UnboundVariable { .. }))
-                    && !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))))]
+                    && !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
+            junco_core::spec::hypotheses::event_obligations::<E>() && dsl::rule_wf(rule@)
+                && rule@.head.len() == history_syntax::spec::events::arity::<E>()
+                && dsl::rule_constants_tagged::<E>(rule@)
+                ==> (result is Ok || (result matches Err(CompileError::Runtime(error)) && dsl::resource_error(error))))]
     pub fn new(store: Arc<Store<E>>, rule: Rule<E>) -> Result<Self, CompileError> {
         Self::new_with_limits(store, rule, &mut Unmetered, &mut ObservationWorld)
     }
@@ -461,7 +469,11 @@ impl<E: Event> CompiledRule<E> {
                 && dsl::regex_scoped(rule.tail@, rule.head@)
                 ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
                     && !(result matches Err(CompileError::UnboundVariable { .. }))
-                    && !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))))]
+                    && !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
+            junco_core::spec::hypotheses::event_obligations::<E>() && dsl::rule_wf(rule@)
+                && rule@.head.len() == history_syntax::spec::events::arity::<E>()
+                && dsl::rule_constants_tagged::<E>(rule@)
+                ==> (result is Ok || (result matches Err(CompileError::Runtime(error)) && dsl::resource_error(error))))]
     pub(crate) fn new_with_limits<L: Limits>(
         store: Arc<Store<E>>,
         rule: Rule<E>,
@@ -478,7 +490,11 @@ impl<E: Event> CompiledRule<E> {
                 && dsl::regex_scoped(rule.tail@, rule.head@)
                 ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
                     && !(result matches Err(CompileError::UnboundVariable { .. }))
-                    && !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))))]
+                    && !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
+            junco_core::spec::hypotheses::event_obligations::<E>() && dsl::rule_wf(rule@)
+                && rule@.head.len() == history_syntax::spec::events::arity::<E>()
+                && dsl::rule_constants_tagged::<E>(rule@)
+                ==> (result is Ok || (result matches Err(CompileError::Runtime(error)) && dsl::resource_error(error))))]
     fn construct<L: Limits>(
         store: Arc<Store<E>>,
         rule: Rule<E>,
@@ -520,7 +536,10 @@ impl<E: Event> CompiledRule<E> {
     /// Readiness excludes internal invariant failures on both matching and foreign-owner paths.
     #[verus_spec(result => requires decision_requires(*old(self), *history),
         ensures decision_result(*old(self), *final(self), *history, *candidate, result),
-            no_invariant_failure(result))]
+            no_invariant_failure(result),
+            junco_core::spec::hypotheses::event_obligations::<E>()
+                && compiled_store(*old(self)) == raw::store_of(*history)
+                ==> (result matches Err(error) ==> dsl::resource_error(error)))]
     pub fn accepts_history(
         &mut self,
         history: &History<E>,
@@ -531,7 +550,10 @@ impl<E: Event> CompiledRule<E> {
 
     #[verus_spec(result => requires decision_requires(*old(self), *history),
         ensures decision_result(*old(self), *final(self), *history, *candidate, result),
-            no_invariant_failure(result))]
+            no_invariant_failure(result),
+            junco_core::spec::hypotheses::event_obligations::<E>()
+                && compiled_store(*old(self)) == raw::store_of(*history)
+                ==> (result matches Err(error) ==> dsl::resource_error(error)))]
     pub(crate) fn accepts_history_with_limits<L: Limits>(
         &mut self,
         history: &History<E>,

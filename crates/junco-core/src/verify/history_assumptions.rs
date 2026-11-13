@@ -209,13 +209,15 @@ pub assume_specification<T>[ core::mem::drop ](value: T);
 
 
 /// Proof observations for checked kernel stores. Error exclusions are opt-in;
-/// custom stores that omit either capability retain arbitrary errors.
+/// custom stores that omit a capability retain arbitrary errors in that class.
 pub trait KernelStoreSpec {
     spec fn graph(&self) -> Graph;
     spec fn valid_store(&self) -> bool;
     open spec fn errors_are_non_owner(&self) -> bool { false }
     open spec fn errors_are_non_invariant(&self) -> bool { false }
     open spec fn errors_are_non_invalid_policy(&self) -> bool { false }
+    /// Valid operations report only graph, allocation, exhaustion, or host-limit errors.
+    open spec fn errors_are_resource(&self) -> bool { false }
 
     // Preserve the abstract store restored when a nested mutable borrow ends.
     #[verifier::prophetic]

@@ -44,6 +44,13 @@ import from them. The flow is strictly downward: R1 → R2 → R3/R4 → R5/R6 �
 - `stmt_search_correct` requires `trace_steps_ok`: complete successor cases for expanded
   trace nodes only. This is the premise `lemma_trace_query_ok` discharges for the executable;
   `stmt_thm_search` and `theorem_paper_index` use this same non-global search statement.
+- `resource_error` (`crates/junco-core/src/spec/semantics.rs`) admits graph budget, graph-index
+  overflow, allocation, arena, identifier, revision and configured time, memory or regex-size
+  limit exhaustion only.
+  Under the event laws, monitor `check`/`permits` return only these errors. Analyzer queries
+  provide the same classification for owned ids and well-formed inputs under their capacity
+  preconditions; valid, correctly tagged rules of the event arity have no input-error exit from
+  registration or tail inclusion. Invalid ids and invalid source rules retain their input errors.
 
 ## Reading order for a reviewer
 

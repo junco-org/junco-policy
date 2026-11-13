@@ -21,6 +21,8 @@ use junco_core::kernel::*;
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics::resource_error;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::history_assumptions::KernelStoreSpec;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs as language;
@@ -132,6 +134,8 @@ impl CompiledPair {
         result != Err(HistoryError::WrongHistoryOwner),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
         (id as nat) < values@.len() ==> language::no_invariant_failure(result),
+        (id as nat) < values@.len()
+            ==> (result matches Err(error) ==> resource_error(error)),
         result matches Ok(value) ==> (id as nat) < values@.len() && value == values@[id as int])]
     #[allow(
         clippy::option_if_let_else,
@@ -155,6 +159,8 @@ impl CompiledPair {
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
         (forall|i: int| 0 <= i < ids@.len() ==> #[trigger] ids@[i] < values@.len())
             ==> language::no_invariant_failure(result),
+        (forall|i: int| 0 <= i < ids@.len() ==> #[trigger] ids@[i] < values@.len())
+            ==> (result matches Err(error) ==> resource_error(error)),
         result matches Ok(found) ==> {
         found@.len() == ids@.len()
         && forall|i: int| 0 <= i < ids@.len()
@@ -215,6 +221,10 @@ impl CompiledPair {
             && (budget == junco_core::limits::MAX_GRAPH_BYTES
                 || history_store::graph::verify::construction_layout(budget))
             ==> language::no_invariant_failure(result),
+        (source_dag_wf(*template) || flat::structural_wf(*template))
+            && (budget == junco_core::limits::MAX_GRAPH_BYTES
+                || history_store::graph::verify::construction_layout(budget))
+            ==> (result matches Err(error) ==> resource_error(error)),
         result matches Ok(pair) ==> {
         crate::progress::verify::pair_wf(pair)
         && crate::verify::finite_impl::regex_nf(model::lift_regex(pair.store.graph(), pair.root@))
@@ -260,6 +270,7 @@ impl CompiledPair {
             invariant index <= template.tests@.len(), tests@.len() == index,
                 kernel.valid_store(), kernel.errors_are_non_invariant(), model::graph_wf(kernel.graph()),
                 kernel.errors_are_non_invalid_policy(),
+                kernel.errors_are_resource(),
                 kernel.restoration() == restoration,
                 test_maps(kernel.graph(), *template, tests@),
                 regex_maps(kernel.graph(), *template, regexes@), regexes@.len() == 0,
@@ -411,6 +422,7 @@ impl CompiledPair {
             invariant index <= template.regexes@.len(), regexes@.len() == index,
                 kernel.valid_store(), kernel.errors_are_non_invariant(), model::graph_wf(kernel.graph()),
                 kernel.errors_are_non_invalid_policy(),
+                kernel.errors_are_resource(),
                 kernel.restoration() == restoration,
                 test_maps(kernel.graph(), *template, tests@), tests@.len() == template.tests@.len(),
                 regex_maps(kernel.graph(), *template, regexes@),
@@ -604,6 +616,7 @@ impl CompiledPair {
         result != Err(HistoryError::WrongHistoryOwner),
         language::no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        result matches Err(error) ==> resource_error(error),
         result matches Ok(answer) ==> answer == model::primitive_holds(bindings@, primitive@, event@))]
 
     pub(crate) fn classify<L: Limits>(

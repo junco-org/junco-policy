@@ -12,7 +12,7 @@ use history_syntax::Event;
 use history_syntax::spec::events::RuleView;
 use junco_core::HistoryError;
 use junco_core::event::Request;
-use junco_core::spec::semantics::{least_violation, policy_permits};
+use junco_core::spec::semantics::{least_violation, policy_permits, resource_error};
 use vstd::prelude::*;
 
 verus! {
@@ -39,7 +39,7 @@ pub open spec fn check_frame<E: Event, M>(
 }
 
 /// Meaning of one `check` against the state before it (`thm:matcher`): Grant iff no rule is
-/// violated; Denied identifies the least violated rule and its mode; errors are never invariant failures.
+/// violated; Denied identifies the least violated rule and its mode; errors are operational resource failures.
 pub open spec fn check_step<E: Event, M>(
     before: ValidatorView<E>, request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>,
 ) -> bool {
@@ -48,7 +48,7 @@ pub open spec fn check_step<E: Event, M>(
         Ok(Decision::Denied(denial)) =>
             least_violation(before.rules, request.event, before.history, denial.index as int)
                 && denial.mode == before.rules[denial.index as int].mode,
-        Err(error) => !(error is Invariant),
+        Err(error) => resource_error(error),
     }
 }
 
@@ -57,7 +57,10 @@ pub open spec fn check_step<E: Event, M>(
 pub open spec fn permits_result<E: Event>(
     v: ValidatorView<E>, candidate: E, result: Result<bool, HistoryError>,
 ) -> bool {
-    result matches Ok(permitted) ==> permitted == policy_permits(v.rules, candidate, v.history)
+    match result {
+        Ok(permitted) => permitted == policy_permits(v.rules, candidate, v.history),
+        Err(error) => resource_error(error),
+    }
 }
 
 /// `rollback` only truncates to a prefix; on error nothing changes.
