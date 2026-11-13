@@ -509,7 +509,7 @@ impl RuleRuntime {
         if precompile {
             proof_decl! { let ghost compiled = pair; }
             if let Err(error) = pair.precompile(limits, world) {
-                if !matches!(error, HistoryError::GraphLimit { .. }) {
+                if !matches!(error, HistoryError::GraphBudget(_)) {
                     return Err(error);
                 }
                 drop(pair);

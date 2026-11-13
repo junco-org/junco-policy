@@ -66,7 +66,7 @@ broadcast use junco_core::kernel::verify::group_kernel_views;
 /// normal forms.
 ///
 /// The graph may be charged the budget given at compilation; an operation that would exceed it
-/// fails with [`HistoryError::GraphLimit`]. The runtime's budget is
+/// fails with [`HistoryError::GraphBudget`]. The runtime's budget is
 /// [`junco_core::limits::MAX_GRAPH_BYTES`] per compiled rule.
 #[verus_verify]
 #[verus_verify(external_derive)]

@@ -27,9 +27,9 @@
 //! `never_fires_ok` and `always_fires_ok` are specification-only: no executable `never_fires` or
 //! `always_fires` exists.
 //!
-//! `Exhausted` and `Err` carry no claim; they are explicit, never a silent `Holds`. The analyzer
-//! returns `Exhausted` for any `HistoryError::GraphLimit` from a search, which covers both the
-//! graph budget and index or case-product overflow. Termination of every query is part of
+//! `Exhausted` and `Err` are explicit, never a silent `Holds`. The analyzer returns `Exhausted`
+//! only for a failed graph charge (`HistoryError::GraphBudget`); index or case-product overflow
+//! remains an error. Termination of every query is part of
 //! verifying the exec code (loops with `decreases`). Finitely many reachable items, the hypothesis
 //! of `search::stmt_search_terminates`, is established for the executed search
 //! (`theorem_retained_search_bounded` and `lemma_running_outcome` in

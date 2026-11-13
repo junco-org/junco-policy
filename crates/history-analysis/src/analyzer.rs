@@ -183,10 +183,9 @@ pub enum Inclusion<E: Event> {
     Holds,
     /// The inclusion fails; the counterexample witnesses it.
     Counterexample(Counterexample<E>),
-    /// A search stopped before deciding with `HistoryError::GraphLimit`: it exceeded its graph
-    /// budget, or an index or case-product computation during the search overflowed. A policy
-    /// query returns the first non-`Holds` case, so `Exhausted` may hide a refutation in a later
-    /// case. No property is claimed.
+    /// A search stopped before deciding because an actual graph charge exceeded its budget.
+    /// Index and case-product overflow remain errors. A policy query returns the first
+    /// non-`Holds` case, so `Exhausted` may hide a refutation in a later case.
     Exhausted,
 }
 
@@ -1114,7 +1113,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         }
         let mut language = match SymbolicLanguage::compile(&difference, GRAPH_BYTES) {
             Ok(language) => language,
-            Err(HistoryError::GraphLimit { .. }) => return Ok(NumericDecision {
+            Err(HistoryError::GraphBudget(_)) => return Ok(NumericDecision {
                 inclusion: Inclusion::Exhausted,
                 #[cfg(verus_keep_ghost)]
                 outcome: Ghost(paper::Outcome::Exhausted) }),
@@ -1140,7 +1139,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         }
         let outcome = match search(&mut language, &self.universes, constraint) {
             Ok(outcome) => outcome,
-            Err(HistoryError::GraphLimit { .. }) => return Ok(NumericDecision {
+            Err(HistoryError::GraphBudget(_)) => return Ok(NumericDecision {
                 inclusion: Inclusion::Exhausted,
                 #[cfg(verus_keep_ghost)]
                 outcome: Ghost(paper::Outcome::Exhausted) }),

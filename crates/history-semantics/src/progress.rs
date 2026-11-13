@@ -85,14 +85,14 @@ impl CompiledPair {
     #[verus_verify]
     #[verus_spec(result => ensures language::no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
-        result matches Err(error) ==> error is AllocationFailed || error is GraphLimit,
+        result matches Err(error) ==> error is IndexOverflow,
         result matches Ok(bytes) ==> bytes as int ==
             growth * vstd::layout::size_of::<Option<AtomSet>>()
                 + count * vstd::layout::size_of::<TestId>())]
     fn atom_payload_bytes(growth: usize, count: usize) -> KernelResult<usize> {
         sequence_bytes::<Option<AtomSet>>(growth)?
             .checked_add(sequence_bytes::<TestId>(count)?)
-            .ok_or(HistoryError::AllocationFailed)
+            .ok_or(HistoryError::IndexOverflow)
     }
 
     // Borrow only the atom slice so callers can mutate the disjoint graph store.
@@ -579,7 +579,7 @@ impl CompiledPair {
             result matches Ok(mask) ==> guard_wf(final(self).store.graph(), final(self).caches.atoms@, residual@ as int, Guard { transition, mask }),
     )]
     /// Atoms true in every truth word whose successor leaves `residual`: each of the 2^k words
-    /// is interpreted once and the leaving words are intersected. `GraphLimit` yields mask 0.
+    /// is interpreted once and the leaving words are intersected. `GraphBudget` yields mask 0.
     fn guard_mask<L: Limits>(
         &mut self,
         residual: RegexId,
@@ -642,7 +642,7 @@ impl CompiledPair {
             }
             let successor = match successor {
                 Ok(successor) => successor,
-                Err(HistoryError::GraphLimit { .. }) => {
+                Err(HistoryError::GraphBudget(_)) => {
                     mask = 0;
                     break;
                 }
@@ -1093,7 +1093,7 @@ impl CompiledPair {
     /// Eagerly builds derivatives, atom sets and successor classes for up to `PRECOMPILE_STATES`
     /// residual states reachable from `root`, depth-first, within the successor cache's capacity;
     /// anything beyond the budget is left to the lazy path. Errors leave the pair well-formed;
-    /// `GraphLimit` means the caller should discard it.
+    /// `GraphBudget` means the caller should discard it.
     pub(crate) fn precompile<L: Limits>(
         &mut self,
         limits: &mut L,
@@ -2804,12 +2804,12 @@ mod tests {
     use junco_core::limits::{MAX_GRAPH_BYTES, Unmetered};
 
     #[test]
-    fn atom_payload_byte_sum_overflow_is_allocation_failure() {
+    fn atom_payload_byte_sum_overflow_is_index_overflow() {
         let growth = usize::MAX / core::mem::size_of::<Option<AtomSet>>();
         let count = usize::MAX / core::mem::size_of::<TestId>();
         assert!(matches!(
             CompiledPair::atom_payload_bytes(growth, count),
-            Err(HistoryError::AllocationFailed)
+            Err(HistoryError::IndexOverflow)
         ));
         assert_eq!(CompiledPair::atom_payload_bytes(0, 0), Ok(0));
     }
