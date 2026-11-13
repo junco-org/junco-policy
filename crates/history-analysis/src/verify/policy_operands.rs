@@ -3,11 +3,13 @@ use super::*;
 use super::{frontend::*, policy_firing, policy_queries as queries, reconstruction, verdict};
 use crate::analyzer::{PolicyAnalyzer, RuleId};
 use history_semantics::verify::refinement::{encoding, implementation, inclusion};
-use history_syntax::event::specs::arity;
+use history_syntax::spec::events::arity;
 use history_syntax::{Event, syntax::Component};
 use vstd::prelude::*;
 
 verus! {
+broadcast use {crate::verify::frontend::domain_view::lemma_analyzer_view,
+    crate::verify::frontend::domain_view::lemma_rule_id_view};
 
 /// Collected head atoms provide each policy comparison and contain only known codes.
 pub(crate) proof fn lemma_policy_operands<E: Event>(a: PolicyAnalyzer<E>, ids: Seq<RuleId>,
@@ -57,6 +59,36 @@ pub(crate) proof fn lemma_policy_operands<E: Event>(a: PolicyAnalyzer<E>, ids: S
     }
 }
 
+/// Every split operand is an interned representative of a registered source-head literal.
+pub(crate) proof fn lemma_policy_operands_known<E: Event>(a: PolicyAnalyzer<E>, ids: Seq<RuleId>,
+    exclude: Option<RuleId>, atoms: Seq<Atom>, operands: Operands)
+    requires analyzer_state_wf(a), junco_core::spec::hypotheses::analyzer_hypotheses::<E>(),
+        valid_ids(a, ids), verdict::head_atoms_ok(a, ids, exclude, atoms),
+        operands_of(operands, atoms), operands.register@.len() == arity::<E>(),
+    ensures forall|k: int, code: nat| 0 <= k < arity::<E>()
+        && codes(operands.constants[k].view()).contains(code)
+        ==> super::typed_numeric::known_value::<E>(
+            junco_core::spec::questions::knowable_constants::<E>(a@.domains, a@.rules),
+            k, a.constants.values@[code as int - 1]),
+{
+    let known = junco_core::spec::questions::knowable_constants::<E>(a@.domains, a@.rules);
+    assert forall|k: int, code: nat| 0 <= k < arity::<E>()
+        && codes(operands.constants[k].view()).contains(code)
+        implies super::typed_numeric::known_value::<E>(known, k, a.constants.values@[code as int - 1]) by {
+        lemma_codes(operands.constants[k].view());
+        let value = choose|value: u32| operands.constants[k].view().contains(value) && value as nat == code;
+        let j = choose|j: int| 0 <= j < atoms.len()
+            && atoms[j].component == k && atoms[j].operand == Operand::Constant(value);
+        let r = choose|r: int| 0 <= r < a.rules@.len() && a.rules@[r].constants@[k] == Some(value);
+        let record = a.rules@[r];
+        assert(stored_rule_wf(a.constants, a.universes, record));
+        junco_core::spec::questions::lemma_knowable_rule::<E>(a@.domains, a@.rules, r);
+        verdict::lemma_lowered_head_known(a.constants, record.original@, record.flat@, record.numeric, known);
+        assert(head_view(record.constants@)[k] == pins(record.numeric.head@)[k]);
+        assert(record.numeric.head@[k] == junco_core::flat::FlatHead::Constant(value as u64));
+    }
+}
+
 /// Every code introduced by split is from the existing case, operands, or a declared universe.
 pub(crate) proof fn lemma_known_split_case_codes<E: Event>(a: PolicyAnalyzer<E>, g: Constraint,
     operands: Operands, case: implementation::ConstraintView)
@@ -88,6 +120,30 @@ pub(crate) proof fn lemma_known_split_case_codes<E: Event>(a: PolicyAnalyzer<E>,
             let j = choose|j: int| 0 <= j < (*ids)@.len() && (*ids)@[j] as nat == v;
             assert(value_field::<E>(a.constants.values@[v as int - 1]) == field);
         }
+    }
+}
+
+/// The split preserves the query-local source/domain context, not the full native codebook.
+pub(crate) proof fn lemma_split_case_known<E: Event>(a: PolicyAnalyzer<E>, g: Constraint,
+    operands: Operands, case: implementation::ConstraintView, known: Seq<Set<E::Component>>)
+    requires analyzer_state_wf(a), shape_wf(g, operands, a.universes),
+        verdict::constraint_codes_known(a.constants, g@, known),
+        split_views(g, operands, a.universes).contains(case),
+        forall|k: int, code: nat| 0 <= k < arity::<E>()
+            && (codes(operands.constants[k].view()).contains(code)
+                || (domain_view(a.universes[k]) matches Some(values) && values.contains(code)))
+            ==> super::typed_numeric::known_value::<E>(known, k, a.constants.values@[code as int - 1]),
+    ensures verdict::constraint_codes_known(a.constants, case, known),
+{
+    policy_firing::lemma_split_case_codes(g, operands, a.universes, case);
+    assert forall|k: int, code: nat| 0 <= k < case.len() && register_codes(case[k]).contains(code)
+        implies super::typed_numeric::known_value::<E>(known, k, a.constants.values@[code as int - 1]) by {
+        let field = Component(k as u8);
+        assert(implementation::register_of(case, field) == case[k]);
+        assert(implementation::register_of(g@, field) == g@[k]);
+        assert(register_codes(g@[k]).contains(code)
+            || codes(operands.constants[k].view()).contains(code)
+            || (domain_view(a.universes[k]) matches Some(values) && values.contains(code)));
     }
 }
 

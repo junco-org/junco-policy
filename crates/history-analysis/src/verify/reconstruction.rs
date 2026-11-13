@@ -7,17 +7,20 @@ use super::{
 };
 use crate::analyzer::{Components, Constants, Counterexample, Inclusion, Slot, Value};
 use crate::constraint::{Constraint, Letter, Universes};
-use history_semantics::verify::refinement::{analyzer, encoding, implementation};
+use history_semantics::verify::refinement::{encoding, implementation};
 use history_semantics::verify::refinement::{inclusion, search};
-use history_syntax::event::specs::arity;
+use history_syntax::spec::events::{EventSpec, arity};
+use junco_core::spec::questions as q;
+use crate::spec::analyzer::QueryResult;
 use history_syntax::{Event, syntax::Component};
 use junco_core::kernel::verify as model;
 use junco_core::verify::history_specs::{self as language};
+use vstd::std_specs::cmp::PartialEqSpec;
 use vstd::prelude::*;
 
 verus! {
 broadcast use {vstd::seq::group_seq_lemmas, vstd::std_specs::vec::group_vec_axioms,
-    vstd::set::group_set_lemmas};
+    vstd::set::group_set_lemmas, crate::verify::frontend::domain_view::lemma_analyzer_view};
 
 pub(crate) open spec fn code_field<E: Event>(constants: Constants<E>, field: Component,
     code: nat) -> bool
@@ -99,57 +102,209 @@ impl View for Slot {
 }
 
 impl<T> View for Value<T> {
-    type V = analyzer::ValueView<T>;
-    open(crate) spec fn view(&self) -> Self::V {
-        match self { Value::Constant(v) => analyzer::ValueView::Constant(*v),
-            Value::Fresh(n) => analyzer::ValueView::Fresh(*n as nat) }
+    type V = q::SymbolicValue<T>;
+    closed spec fn view(&self) -> Self::V {
+        match self { Value::Constant(v) => q::SymbolicValue::Constant(*v),
+            Value::Fresh(n) => q::SymbolicValue::Fresh(*n as nat) }
     }
 }
 
 impl<E: Event> View for Components<E> {
-    type V = analyzer::ComponentsView<E::Component>;
-    open(crate) spec fn view(&self) -> Self::V {
+    type V = Seq<q::SymbolicValue<E::Component>>;
+    closed spec fn view(&self) -> Self::V {
         self.values@.map(|i: int, v: Value<E::Component>| v@)
     }
 }
 
 impl<E: Event> View for Counterexample<E> {
-    type V = analyzer::CexView<E::Component>;
-    open(crate) spec fn view(&self) -> Self::V {
-        analyzer::CexView { candidate: self.candidate@,
-            history: self.history@.map(|i: int, c: Components<E>| c@) }
+    type V = q::Counterexample<E::Component>;
+    closed spec fn view(&self) -> Self::V {
+        q::Counterexample { candidate: self.candidate@,
+            history: self.history@.map(|i: int, c: Components<E>| c@),
+            known: self.known@ }
     }
 }
 
 impl<E: Event> View for Inclusion<E> {
-    type V = analyzer::InclusionView<E::Component>;
-    open(crate) spec fn view(&self) -> Self::V {
-        match self { Inclusion::Holds => analyzer::InclusionView::Holds,
-            Inclusion::Exhausted => analyzer::InclusionView::Exhausted,
-            Inclusion::Counterexample(c) => analyzer::InclusionView::Counterexample(c@) }
+    type V = QueryResult<E::Component>;
+    closed spec fn view(&self) -> Self::V {
+        match self { Inclusion::Holds => QueryResult::Holds,
+            Inclusion::Exhausted => QueryResult::Exhausted,
+            Inclusion::Counterexample(c) => QueryResult::Counterexample(c@) }
     }
 }
+
+pub(crate) proof fn lemma_value_view<T>(value: Value<T>)
+    ensures value@ == match value {
+        Value::Constant(v) => q::SymbolicValue::Constant(v),
+        Value::Fresh(n) => q::SymbolicValue::Fresh(n as nat),
+    },
+{ reveal(<Value<_> as View>::view); }
+
+pub(crate) proof fn lemma_components_view<E: Event>(values: Components<E>)
+    ensures values@ == values.values@.map(|i: int, value: Value<E::Component>| value@),
+{ reveal(<Components<_> as View>::view); }
+
+pub(crate) proof fn lemma_counterexample_view<E: Event>(cex: Counterexample<E>)
+    ensures cex@ == (q::Counterexample {
+        candidate: cex.candidate@,
+        history: cex.history@.map(|i: int, values: Components<E>| values@),
+        known: cex.known@,
+    }),
+{ reveal(<Counterexample<_> as View>::view); }
+
+pub(crate) proof fn lemma_inclusion_view<E: Event>(result: Inclusion<E>)
+    ensures result@ == match result {
+        Inclusion::Holds => QueryResult::Holds,
+        Inclusion::Exhausted => QueryResult::Exhausted,
+        Inclusion::Counterexample(cex) => QueryResult::Counterexample(cex@),
+    },
+{ reveal(<Inclusion<_> as View>::view); }
 
 pub(crate) open spec fn slot_views(slots: Seq<Slot>) -> Seq<implementation::SlotView> {
     slots.map(|i: int, slot: Slot| slot@)
 }
 
 pub(crate) open spec fn components_of_slots<E: Event>(constants: Constants<E>,
-    slots: Seq<implementation::SlotView>) -> analyzer::ComponentsView<E::Component>
+    slots: Seq<implementation::SlotView>) -> Seq<q::SymbolicValue<E::Component>>
 {
     slots.map(|i: int, slot: implementation::SlotView| match slot {
-        implementation::SlotView::Fresh(n) => analyzer::ValueView::Fresh(n),
-        implementation::SlotView::Code(v) => analyzer::ValueView::Constant(constants.values@[v as int - 1]),
+        implementation::SlotView::Fresh(n) => q::SymbolicValue::Fresh(n),
+        implementation::SlotView::Code(v) => q::SymbolicValue::Constant(constants.values@[v as int - 1]),
     })
 }
 
 pub(crate) open spec fn cex_of_slots<E: Event>(constants: Constants<E>,
-    candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>)
-    -> analyzer::CexView<E::Component>
+    candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>, known: Seq<Set<E::Component>>)
+    -> q::Counterexample<E::Component>
 {
-    analyzer::CexView { candidate: components_of_slots(constants, candidate),
+    q::Counterexample { candidate: components_of_slots(constants, candidate),
         history: history.map(|i: int, slots: Seq<implementation::SlotView>|
-            components_of_slots(constants, slots)) }
+            components_of_slots(constants, slots)),
+        known }
+}
+
+pub(crate) open spec fn context_wf<E: Event>(known: Seq<Set<E::Component>>) -> bool {
+    known.len() == arity::<E>() && forall|k: int, value: E::Component|
+        0 <= k < known.len() && #[trigger] known[k].contains(value) ==> E::coordinate_spec(value) == k
+}
+
+pub(crate) open spec fn literals_known<E: Event>(cex: q::Counterexample<E::Component>) -> bool {
+    forall|j: int, k: int, value: E::Component|
+        0 <= j < (seq![cex.candidate] + cex.history).len()
+        && 0 <= k < (seq![cex.candidate] + cex.history)[j].len()
+        && (seq![cex.candidate] + cex.history)[j][k] == q::SymbolicValue::Constant(value)
+        ==> super::typed_numeric::known_value::<E>(cex.known, k, value)
+}
+
+/// Every code reconstruction can emit comes from this query or a declared domain.
+pub(crate) open spec fn reconstruction_known<E: Event>(constants: Constants<E>, universes: Universes,
+    constraint: Constraint, letters: Seq<Letter>, known: Seq<Set<E::Component>>) -> bool {
+    &&& context_wf::<E>(known)
+    &&& forall|k: int, v: nat| 0 <= k < arity::<E>()
+        && super::register_codes(constraint@[k]).contains(v)
+        ==> super::typed_numeric::known_value::<E>(known, k, constants.values@[v as int - 1])
+    &&& forall|k: int, v: nat| 0 <= k < arity::<E>()
+        && (domain_view(universes[k]) matches Some(values) && values.contains(v))
+        ==> #[trigger] super::typed_numeric::known_value::<E>(known, k, constants.values@[v as int - 1])
+    &&& forall|j: int, k: int, v: nat| 0 <= j < letters.len() && 0 <= k < arity::<E>()
+        && letters[j]@.classes[k] == Some(implementation::ClassView::Constant(v))
+        ==> super::typed_numeric::known_value::<E>(known, k, constants.values@[v as int - 1])
+}
+
+/// This is a consequence of the real slot-construction branches, not a new assumption.
+pub(crate) proof fn lemma_constructed_known<E: Event>(constants: Constants<E>, universes: Universes,
+    constraint: Constraint, letters: Seq<Letter>, candidate: Seq<implementation::SlotView>,
+    history: Seq<Seq<implementation::SlotView>>, known: Seq<Set<E::Component>>)
+    requires constructed(constants, universes, constraint, letters, candidate, history),
+        reconstruction_known(constants, universes, constraint, letters, known),
+    ensures literals_known::<E>(cex_of_slots(constants, candidate, history, known)),
+{
+    assert forall|k: int, v: nat| 0 <= k < arity::<E>() && candidate[k] == implementation::SlotView::Code(v)
+        implies super::typed_numeric::known_value::<E>(known, k, constants.values@[v as int - 1]) by {
+        if let implementation::RegisterView::Equals(code) = constraint@[k] {
+            assert(code == v);
+            assert(super::register_codes(constraint@[k]).contains(v));
+        } else {
+            assert(domain_view(universes[k]) matches Some(values) && values.contains(v));
+        }
+    }
+    let cex = cex_of_slots(constants, candidate, history, known);
+    assert forall|j: int, k: int, value: E::Component|
+        0 <= j < (seq![cex.candidate] + cex.history).len()
+        && 0 <= k < (seq![cex.candidate] + cex.history)[j].len()
+        && (seq![cex.candidate] + cex.history)[j][k] == q::SymbolicValue::Constant(value)
+        implies super::typed_numeric::known_value::<E>(known, k, value) by {
+        if j == 0 {
+            let code = candidate[k]->Code_0;
+            assert(value == constants.values@[code as int - 1]);
+        } else {
+            let slot = history[j - 1][k];
+            let code = slot->Code_0;
+            match implementation::letter_class(letters[j - 1]@, component_at(k as usize)) {
+                Some(implementation::ClassView::Constant(v)) => { assert(code == v); },
+                Some(implementation::ClassView::Register) => { assert(slot == candidate[k]); },
+                None => { assert(false); },
+            }
+        }
+    }
+}
+
+/// A reconstructed symbolic row respects the declared domains, not merely interned ids.
+proof fn lemma_symbolic_row_wf<E: Event>(a: crate::analyzer::PolicyAnalyzer<E>,
+    row: Seq<implementation::SlotView>)
+    requires super::frontend::analyzer_state_wf(a), junco_core::spec::hypotheses::analyzer_hypotheses::<E>(),
+        slot_wf(a.constants, row),
+        forall|k: int| 0 <= k < arity::<E>() ==> slot_domain(row[k], domain_view(a.universes[k])),
+    ensures q::symbolic_event_wf::<E>(a@.domains, components_of_slots(a.constants, row)),
+{
+    super::frontend::lemma_analyzer_semantic_wf(a);
+    assert(a@.domains.len() == arity::<E>());
+    assert(components_of_slots(a.constants, row).len() == arity::<E>());
+    assert forall|k: int| #![trigger components_of_slots(a.constants, row)[k]]
+        0 <= k < arity::<E>() implies match components_of_slots(a.constants, row)[k] {
+        q::SymbolicValue::Constant(value) => E::coordinate_spec(value) == k && match a@.domains[k] {
+            None => true,
+            Some(domain) => exists|member: E::Component| domain.contains(member) && value.eq_spec(&member),
+        },
+        q::SymbolicValue::Fresh(_) => a@.domains[k] is None,
+    } by {
+        super::frontend::lemma_declared_coordinate(a, k);
+        match row[k] {
+            implementation::SlotView::Code(code) => {
+                let value = a.constants.values@[code as int - 1];
+                assert(code_field(a.constants, component_at(k as usize), code));
+                assert(E::coordinate_spec(value) < arity::<E>());
+                assert(E::coordinate_spec(value) == k);
+                q::lemma_native_eq_reflexive(value);
+                if let Some(ids) = a.universes[k] {
+                    super::lemma_codes((*ids)@);
+                    let j = choose|j: int| 0 <= j < (*ids)@.len() && (*ids)@[j] as nat == code;
+                    assert(super::frontend::selected_values(a.constants, a.universes[k])->Some_0.contains(value));
+                    assert(super::frontend::domain_member(
+                        super::frontend::selected_values(a.constants, a.universes[k]), value));
+                    assert(super::frontend::domain_member(a@.domains[k], value));
+                }
+            },
+            implementation::SlotView::Fresh(_) => {},
+        }
+    }
+}
+
+/// Slot construction establishes the complete canonical R3 well-formedness contract.
+pub(crate) proof fn lemma_counterexample_wf<E: Event>(a: crate::analyzer::PolicyAnalyzer<E>,
+    constraint: Constraint, letters: Seq<Letter>, candidate: Seq<implementation::SlotView>,
+    history: Seq<Seq<implementation::SlotView>>, known: Seq<Set<E::Component>>)
+    requires super::frontend::analyzer_state_wf(a), junco_core::spec::hypotheses::analyzer_hypotheses::<E>(),
+        constructed(a.constants, a.universes, constraint, letters, candidate, history),
+        context_wf::<E>(known),
+    ensures q::counterexample_wf::<E>(a@.domains, cex_of_slots(a.constants, candidate, history, known)),
+{
+    lemma_symbolic_row_wf(a, candidate);
+    assert forall|j: int| 0 <= j < history.len() implies
+        q::symbolic_event_wf::<E>(a@.domains, components_of_slots(a.constants, history[j])) by {
+        lemma_symbolic_row_wf(a, history[j]);
+    }
 }
 
 pub(crate) open spec fn used_at(candidate: Seq<implementation::SlotView>,
@@ -216,6 +371,7 @@ pub(crate) open spec fn candidate_field_ok<E: Event>(constants: Constants<E>,
     &&& 0 <= field < arity::<E>() && universes@.len() == arity::<E>() && constraint.0@.len() == arity::<E>()
     &&& slot_register(slot, constraint.0[field]@, known_codes(constants))
     &&& slot_domain(slot, domain_view(universes[field]))
+    &&& (universes[field] is None && constraint.0[field]@ is Differs ==> slot is Fresh)
     &&& match slot {
         implementation::SlotView::Code(v) => code_field(constants, component_at(field as usize), v),
         implementation::SlotView::Fresh(n) => n < arity::<E>(),
@@ -250,9 +406,10 @@ pub(crate) open spec fn reconstructed<E: Event>(constants: Constants<E>, univers
     constraint: Constraint, letters: Seq<Letter>, alphabets: Seq<Set<model::Primitive>>,
     result: Counterexample<E>) -> bool
 {
-    exists|candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>|
+    context_wf::<E>(result@.known) && literals_known::<E>(result@)
+        && exists|candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>|
         constructed(constants, universes, constraint, letters, candidate, history)
-        && result@ == cex_of_slots(constants, candidate, history)
+        && result@ == cex_of_slots(constants, candidate, history, result@.known)
         && implementation::reconstruction_ok(ndomains(universes),
             implementation::constraint_of(constraint@),
             super::search_exec::chain_assignments(letters, alphabets), candidate, history,
@@ -429,26 +586,37 @@ pub(crate) proof fn lemma_reconstruction<E: Event>(constants: Constants<E>, univ
 }
 
 pub(crate) proof fn lemma_used_at<E: Event>(constants: Constants<E>,
-    candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>)
+    candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>, known: Seq<Set<E::Component>>)
     requires slot_wf(constants, candidate),
         forall|i: int| 0 <= i < history.len() ==> slot_wf(constants, history[i]),
     ensures forall|k: int| 0 <= k < candidate.len() ==> used_at(candidate, history, k)
-        == analyzer::fresh_used(cex_of_slots(constants, candidate, history), k),
+        == q::fresh_names(seq![cex_of_slots(constants, candidate, history, known).candidate]
+            + cex_of_slots(constants, candidate, history, known).history, k).to_iset(),
 {
-    let cex = cex_of_slots(constants, candidate, history);
+    let cex = cex_of_slots(constants, candidate, history, known);
+    let word = seq![cex.candidate] + cex.history;
     assert forall|k: int| 0 <= k < candidate.len() implies used_at(candidate, history, k)
-        == analyzer::fresh_used(cex, k) by {
+        == q::fresh_names(word, k).to_iset() by {
         assert forall|n: nat| used_at(candidate, history, k).contains(n)
-            == analyzer::fresh_used(cex, k).contains(n) by {
-            assert((cex.candidate[k] == analyzer::ValueView::Fresh(n))
-                == (candidate[k] == implementation::SlotView::Fresh(n)));
-            assert forall|i: int| 0 <= i < history.len() implies
-                (cex.history[i][k] == analyzer::ValueView::Fresh(n))
-                    == (history[i][k] == implementation::SlotView::Fresh(n)) by {
-                assert(cex.history[i] == components_of_slots(constants, history[i]));
+            == q::fresh_names(word, k).contains(n) by {
+            q::lemma_fresh_names_member(word, k, n);
+            if used_at(candidate, history, k).contains(n) {
+                if candidate[k] == implementation::SlotView::Fresh(n) {
+                    assert(word[0][k] == q::SymbolicValue::Fresh(n));
+                } else {
+                    let j = choose|j: int| 0 <= j < history.len()
+                        && history[j][k] == implementation::SlotView::Fresh(n);
+                    assert(word[j + 1][k] == q::SymbolicValue::Fresh(n));
+                }
+            }
+            if q::fresh_names(word, k).contains(n) {
+                let j = choose|j: int| 0 <= j < word.len()
+                    && word[j][k] == q::SymbolicValue::Fresh(n);
+                if j == 0 { assert(candidate[k] == implementation::SlotView::Fresh(n)); }
+                else { assert(history[j - 1][k] == implementation::SlotView::Fresh(n)); }
             }
         }
-        assert(used_at(candidate, history, k) =~= analyzer::fresh_used(cex, k));
+        assert(used_at(candidate, history, k) =~= q::fresh_names(word, k).to_iset());
     }
 }
 
