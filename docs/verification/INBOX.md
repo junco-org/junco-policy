@@ -4,6 +4,26 @@ The maintainer adds messages here, newest first, each with a UTC date and a shor
 message takes precedence over the handoff and over earlier messages where they conflict.
 Acknowledge each one in `STATUS.md` on your integration branch.
 
+## 2026-11-13: Surface review — fix before Wave 1 builds on R6
+
+1. **Bound `Counterexample::known`.** As written, an implementation can return a counterexample whose
+   `known` covers the carrier, making `every_instance` vacuous and capacity false, so every
+   counterexample clause is satisfied without proof. Add to `counterexample_wf` (or each query spec)
+   that `cex.known[i]` is a subset of the analyzer's knowable constants at coordinate `i`: the
+   constants of the registered rules (for `tail_included`, of the head and both tails) plus the
+   declared domain values. Define that set once in R3/R6.
+2. **Make `Exhausted` evidence unforgeable.** `charged`/`requested` are unconstrained, so any
+   implementation may return `Exhausted` with large numbers. Replace them with a ghost token that only
+   the store's failing budget charge can construct (private constructor, records the store's budget
+   equal to `GRAPH_BYTES`), carried in `Exhausted` and checked by `escapes`. If that is
+   disproportionate, drop the fields and state that `Exhausted` makes no claim; do not keep evidence the
+   implementation can choose.
+3. **Drop the `Event::coordinate_cardinality` hook.** The S1 regression expectation is relaxed: for an
+   undeclared finite-enum coordinate whose real events are covered, the analyzer must return `Holds` or a
+   counterexample whose capacity fails at that coordinate, never a capacity-satisfying refutation. No
+   new trait method.
+4. Update `INTERFACES.md` accordingly and acknowledge in your next status entry.
+
 ## 2026-11-13: Keep completed `verify-all.sh` work
 
 This amends "Abandon the changes to `scripts/verify-all.sh`" below. You do not have to abandon work
