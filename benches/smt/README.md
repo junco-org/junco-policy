@@ -4,8 +4,9 @@
 `history_analysis::PolicyAnalyzer::tail_included(head, left, right)` for each RegExLib Subset
 inclusion instance. These tails have no candidate variables, so an inhabited constant head
 preserves ordinary language inclusion. Criterion IDs are
-`regexlib_subset/{sat,unsat}/notsubset_i_j`; head, regex and analyzer construction and verdict
-preflight checks are outside the timed call. No memory measurement is performed.
+`regexlib_subset/{sat,unsat}/notsubset_i_j`. Construction and concrete validation of every
+returned counterexample are outside the timed intervals; query execution and result destruction
+are timed. No memory measurement is performed.
 
 ## Credits
 
@@ -50,9 +51,15 @@ the SMT query asks for a string in the left language but not the right language.
 
 The dataset's 29 distinct ranges partition all 256 bytes into 47 classes that no range splits.
 `ALPHABET` contains one representative byte per class and is declared as the entire action
-universe with `Domains::infinite().with_domain(Component(1), &ALPHABET.map(Component3::C1))`. No fresh action characters exist.
-Every character test is a union of whole classes, so inclusion over the representatives is
-identical to inclusion over the full 8-bit alphabet. The dataset has no complement,
+universe. The principal and resource coordinates both declare the singleton domain `{()}`.
+Every returned counterexample must contain only correctly tagged constants at all three
+declared coordinates, and every action must belong to `ALPHABET`. Its decoded candidate must
+match the head; the existing concrete regex matcher must accept its history on the left and
+reject it on the right. Matchers and a resettable history are reused outside the timed query.
+`Exhausted` is rejected rather than counted as non-inclusion.
+
+Every character test is a union of whole alphabet classes, so inclusion over the representatives
+is identical to inclusion over the full 8-bit alphabet. The dataset has no complement,
 intersection, `re.allchar`, or `re.all`; loop upper bounds are at most 67.
 
 ## Regenerate
