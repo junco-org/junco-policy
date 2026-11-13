@@ -2,15 +2,15 @@
 
 ## Current wave
 
-Draft comparison **PR #12** is open: https://github.com/junco-org/junco-policy/pull/12.
-Source/results were pushed at `c441afd`. The no-std `pair_conditionals` obligation now
-passes its isolated check (**1 verified / 0 errors**) with the existing local isolated-prover
-convention and `rlimit(20)` instead of the default 10; no contract or algorithm was weakened.
-Cursor continuation methods are now crate-private and their obsolete external-only proof
-client is removed; production internal proofs and native cursor regressions remain.
-The affected semantics native batch passed **47 tests**, Clippy and formatting pass.
-A complete default thirteen-configuration rerun follows; the earlier failed full gate is
-retained below rather than being silently called green.
+Draft comparison **PR #12**: https://github.com/junco-org/junco-policy/pull/12.
+Source **`ee5be8e`** passed the complete default sequential gate: **all thirteen
+configurations, zero errors**, in **758.15 seconds**. Exact counts are in `VERIFY.md`.
+The repaired no-std obligation uses an isolated prover and local `rlimit(20)` rather than
+default 10; no contract or runtime algorithm was weakened. Cursor continuation is
+crate-private; the obsolete external-only proof client is removed.
+Final native workspace: **201 tests / 27 suites**; fuzz: **8 / 2 suites**; instrumentation
+and replay Clippy builds pass. The final inbox still contains the acknowledged hash-only
+directive: five internal Hash-only introductions, with non-hash laws proved separately.
 
 `main` / attempt B remains untouched. The user selected this comparison PR, not a port or
 replacement of the independently merged PR #11. Exhausted blocks nothing.
@@ -20,7 +20,7 @@ replacement of the independently merged PR #11. Exhausted blocks nothing.
 - Pinned Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0`, Rust `1.98.1` reused from the previously
   checksum-verified installation.
 - Completed Wave 0 full matrix: all eleven configurations passed, zero errors.
-- Latest default sequential gate at source `b3c3646`, `-- --num-threads 144 --triggers-mode silent`:
+- Earlier default sequential gate at source `b3c3646`, superseded by the successful `ee5be8e` gate above:
 
   | Configuration | Verified functions | Errors | Result |
   |---|---:|---:|---|

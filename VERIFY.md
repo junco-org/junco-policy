@@ -41,53 +41,54 @@ Native tests are distinct evidence from Verus proofs. CI also runs workspace/fuz
 formatting, clippy, and `scripts/spec-check.sh`. The latter exercises assumed std/smallvec
 contracts against real implementations; it is not a proof of those assumptions.
 
-## Verification evidence baseline
+## Verification evidence
 
-The original eleven rows below are a **Main-reported pre-reviewer baseline at `e525e20`**;
-the two reviewer rows are Track T's directly exercised results on that source plus its public
-clients. This is not the final thirteen-configuration gate. The integration owner replaces
-this table after integration. All these observations predate the narrowing of internal-key
-introductions to hashing-only assumptions and are not final approval of that trust boundary.
-
-| Configuration (`cargo verus verify --locked ...`) | Evidence before final integration |
-|---|---|
-| `-p history-syntax --no-default-features` | 63 verified, 0 errors |
-| `-p history-syntax --features serde,std` | 63 verified, 0 errors |
-| `-p junco-core --no-default-features` | 239 verified, 0 errors |
-| `-p junco-core --features runtime,std,serde` | 323 verified, 0 errors |
-| `-p history-store --no-default-features --features runtime` | 306 verified, 0 errors |
-| `-p history-store --features runtime,std` | 306 verified, 0 errors |
-| `-p history-semantics --no-default-features --features runtime` | 1641 verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache` | 1646 verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache --test public_specs` | 21 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime` | 626 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime,std` | 626 verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache --test reviewer` | Track T: 4 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime,std --test reviewer` | Track T: 9 verified, 0 errors |
-
-The same handoff reports 198 workspace tests across 25 suites, two explicit instrumentation
-counter tests, eight fuzz tests, and workspace/fuzz formatting and clippy passing; spec-check
-reported 18 passing earlier at the same reduced assumed-spec boundary. These are historical
-reported observations, not newly exercised checks or final reviewer-target evidence.
-
-Track T also directly ran the affected-package native batch: **71 tests passed across ten
-suites** (including zero-test ghost/doc suites), clippy `--all-targets -- -D warnings`
-passed, and affected-package `cargo fmt -- --check` passed. This includes the permanent
-`public_monitor_grant_and_denial` and `public_queries_have_both_verdicts` smoke cases:
-the latter constructs two registered rules and exercises all four query families, including
-both `Holds` and `Counterexample`. The S1 capacity-at-bool regression remains a proof client,
-because erased `known`/capacity cannot honestly be checked by native Rust.
-
-The native batch used:
+The integration owner ran the default `scripts/verify-all.sh` on source `ee5be8e`:
+**all thirteen configurations passed, zero errors**, in **758.15 seconds**. The original
+eleven configurations ran sequentially in their existing order, followed by the two
+reviewer targets. Pinned tools: Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0`, Rust `1.98.1`.
 
 ```sh
-cargo test --locked -p history-semantics -p history-analysis --no-default-features \
-  --features history-semantics/runtime,history-semantics/std,history-semantics/cache,history-analysis/runtime,history-analysis/std
-cargo clippy --locked -p history-semantics -p history-analysis --no-default-features \
-  --features history-semantics/runtime,history-semantics/std,history-semantics/cache,history-analysis/runtime,history-analysis/std \
-  --all-targets -- -D warnings
-cargo fmt -p history-semantics -p history-analysis -- --check
+scripts/verify-all.sh -- --num-threads 144 --triggers-mode silent
 ```
+
+| Configuration (`cargo verus verify --locked ...`) | Verified | Errors |
+|---|---:|---:|
+| `-p history-syntax --no-default-features` | 63 | 0 |
+| `-p history-syntax --features serde,std` | 63 | 0 |
+| `-p junco-core --no-default-features` | 239 | 0 |
+| `-p junco-core --features runtime,std,serde` | 332 | 0 |
+| `-p history-store --no-default-features --features runtime` | 306 | 0 |
+| `-p history-store --features runtime,std` | 306 | 0 |
+| `-p history-semantics --no-default-features --features runtime` | 1644 | 0 |
+| `-p history-semantics --features runtime,std,cache` | 1649 | 0 |
+| `-p history-semantics --features runtime,std,cache --test public_specs` | 19 | 0 |
+| `-p history-analysis --no-default-features --features runtime` | 626 | 0 |
+| `-p history-analysis --no-default-features --features runtime,std` | 626 | 0 |
+| `-p history-semantics --features runtime,std,cache --test reviewer` | 4 | 0 |
+| `-p history-analysis --no-default-features --features runtime,std --test reviewer` | 9 | 0 |
+
+The first six rows were cached in the final run; their counts are from the preceding
+full run of the unchanged crates. The remaining seven counts were emitted in the final
+run. The no-std `normalize::pair_conditionals` proof uses the established isolated-prover
+convention and local `rlimit(20)` instead of the default 10; this changes no contract or
+runtime algorithm. The obsolete external numeric-cursor proof client was removed when
+cursor continuation became crate-private; production internal proofs remain.
+
+The integration owner also exercised:
+
+- `cargo test --workspace`: **201 tests passed across 27 suites**.
+- `cargo test --manifest-path fuzz/Cargo.toml --workspace`: **8 tests across 2 suites**.
+- Workspace/fuzz Clippy with `--all-targets -- -D warnings`, including the explicit
+  `test-util` instrumentation and `work-probe` replay builds; workspace/fuzz formatting.
+- `scripts/spec-check.sh`: **18 tests passed**; explicit instrumentation counters:
+  **2 tests passed**.
+
+The permanent native `public_monitor_grant_and_denial` and
+`public_queries_have_both_verdicts` smoke cases exercise the public monitor and all four
+query families, including both `Holds` and `Counterexample`. The S1 finite-bool capacity
+regression is a verified client: erased `known`/capacity cannot honestly be checked by
+native Rust.
 
 ## Reviewer map and semantic definition counts
 
