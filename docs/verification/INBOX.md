@@ -4,6 +4,23 @@ The maintainer adds messages here, newest first, each with a UTC date and a shor
 message takes precedence over the handoff and over earlier messages where they conflict.
 Acknowledge each one in `STATUS.md` on your integration branch.
 
+## 2026-11-13: Internal-key axioms may assert only `hash_coherent`
+
+The internal-key introductions added in the atomic merge assert more than the hashing law:
+the four `external_body` proof functions in `junco-core/src/spec/hypotheses.rs`
+(`internal_keys`) and the `assume_specification` on the no-op `native_constraint_key_laws()` in
+`history-analysis/src/constraint.rs` each ensure all of `key_laws::<K>()` (`obeys_eq_spec`, the
+equivalence laws and `hash_coherent`), and `lemma_parts_key_laws` also asserts that `eq_spec`
+implies view equality for `SmallVec<[RegexId; 4]>`.
+
+- The only trusted fact allowed for an internal key type is `hash_coherent::<K>()`. Narrow each
+  introduction to exactly that, one per internal key type.
+- Remove every other assumed conjunct. Prove `obeys_eq_spec`, the equivalence laws and the
+  `SmallVec` view-equality fact from the types' definitions and existing specifications instead.
+  If one of them cannot be proved, report which and why in your next status entry instead of
+  assuming it.
+- Acknowledge in your next status entry.
+
 ## 2026-11-13: `Exhausted` is not a blocker
 
 The `Exhausted` items in earlier messages are not blockers. For Priority 1 it is enough that
