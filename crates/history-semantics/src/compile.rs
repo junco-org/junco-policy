@@ -219,6 +219,8 @@ impl CompiledPair {
         crate::progress::verify::pair_wf(pair)
         && crate::verify::finite_impl::regex_nf(model::lift_regex(pair.store.graph(), pair.root@))
         && vocab::regex_primitives(model::lift_regex(pair.store.graph(), pair.root@)).subset_of(source_primitives(*template))
+        && vocab::regex_primitives(model::lift_regex(pair.store.graph(), pair.root@))
+            .subset_of(reachable_regex_primitives(*template, template.root as nat))
         && forall|theta: language::Subst, word: Seq<language::EventView>| language::event_wf(theta, theta.len())
             ==> model::regex_lang(pair.store.graph(), theta, pair.root@, word)
                 == source_regex(*template, template.root as nat, theta, word)
@@ -265,6 +267,8 @@ impl CompiledPair {
                 regex_maps(kernel.graph(), *template, regexes@), regexes@.len() == 0,
                 crate::verify::finite_compile::compiled_nf(kernel.graph(), tests@, regexes@),
                 tests_vocabulary(kernel.graph(), *template, tests@), regexes_vocabulary(kernel.graph(), *template, regexes@),
+                tests_reachable_vocabulary(kernel.graph(), *template, tests@),
+                regexes_reachable_vocabulary(kernel.graph(), *template, regexes@),
             decreases template.tests@.len() - index,
         ))]
             while index < template.tests.len() {
@@ -358,6 +362,7 @@ impl CompiledPair {
                         }
                     }
                     lemma_vocabulary_stable(before, kernel.graph(), *template, tests@, regexes@);
+                    lemma_reachable_vocabulary_stable(before, kernel.graph(), *template, tests@, regexes@);
                     model::lemma_graph_wf_elim(kernel.graph());
                     assert forall|p: model::Primitive| vocab::test_primitives(model::lift_test(kernel.graph(), id@)).contains(p)
                         implies source_primitives(*template).contains(p) by {
@@ -393,6 +398,37 @@ impl CompiledPair {
                             },
                         }
                     }
+                    assert forall|p: model::Primitive| vocab::test_primitives(model::lift_test(kernel.graph(), id@)).contains(p)
+                        implies reachable_test_primitives(*template, index as nat).contains(p) by {
+                        match test {
+                            FlatTest::Bool(_) => {
+                                reveal_with_fuel(model::lift_test, 1);
+                                reveal_with_fuel(vocab::test_primitives, 1);
+                            },
+                            FlatTest::Atom { field, term, .. } => {
+                                reveal_with_fuel(model::lift_test, 1);
+                                reveal_with_fuel(vocab::test_primitives, 1);
+                                assert(p == model::Primitive::Eq(*field, term_view(*term)));
+                            },
+                            FlatTest::And(children) | FlatTest::Or(children) => {
+                                vocab::lemma_test_connective_primitives(before, kernel.graph(), selected_ids,
+                                    *test is And, id@, p);
+                                let j = choose|j: int| 0 <= j < selected_ids.len()
+                                    && vocab::test_primitives(model::lift_test(before, selected_ids[j]@)).contains(p);
+                                assert(selected_ids[j] == tests@[children@[j] as int]);
+                                lemma_reachable_test_child(*template, index as nat, children@.len(), j);
+                            },
+                        }
+                    }
+                    assert(tests_reachable_vocabulary(kernel.graph(), *template, tests@.push(id))) by {
+                        assert forall|i: int| 0 <= i < tests@.push(id).len() implies
+                            tests@.push(id)[i]@ < kernel.graph().tests.len()
+                            && vocab::test_primitives(model::lift_test(kernel.graph(), tests@.push(id)[i]@))
+                                .subset_of(reachable_test_primitives(*template, i as nat)) by {
+                            if i < tests@.len() { assert(tests@.push(id)[i] == tests@[i]); }
+                            else { assert(tests@.push(id)[i] == id); }
+                        }
+                    }
                     assert(tests_vocabulary(kernel.graph(), *template, tests@.push(id))) by {
                         assert forall|i: int| 0 <= i < tests@.push(id).len() implies tests@.push(id)[i]@ < kernel.graph().tests.len()
                             && vocab::test_primitives(model::lift_test(kernel.graph(), tests@.push(id)[i]@)).subset_of(source_primitives(*template)) by {
@@ -416,6 +452,8 @@ impl CompiledPair {
                 regex_maps(kernel.graph(), *template, regexes@),
                 crate::verify::finite_compile::compiled_nf(kernel.graph(), tests@, regexes@),
                 tests_vocabulary(kernel.graph(), *template, tests@), regexes_vocabulary(kernel.graph(), *template, regexes@),
+                tests_reachable_vocabulary(kernel.graph(), *template, tests@),
+                regexes_reachable_vocabulary(kernel.graph(), *template, regexes@),
             decreases template.regexes@.len() - index,
         ))]
             while index < template.regexes.len() {
@@ -557,6 +595,18 @@ impl CompiledPair {
                     }
                     lemma_vocabulary_stable(before, kernel.graph(), *template, tests@, regexes@);
                     lemma_regex_vocabulary(before, kernel.graph(), *template, tests@, regexes@, *regex, selected_ids, id@);
+                    lemma_reachable_vocabulary_stable(before, kernel.graph(), *template, tests@, regexes@);
+                    lemma_regex_reachable_vocabulary(before, kernel.graph(), *template, tests@, regexes@,
+                        *regex, selected_ids, id@);
+                    assert(regexes_reachable_vocabulary(kernel.graph(), *template, regexes@.push(id))) by {
+                        assert forall|i: int| 0 <= i < regexes@.push(id).len() implies
+                            regexes@.push(id)[i]@ < kernel.graph().regexes.len()
+                            && vocab::regex_primitives(model::lift_regex(kernel.graph(), regexes@.push(id)[i]@))
+                                .subset_of(reachable_regex_primitives(*template, i as nat)) by {
+                            if i < regexes@.len() { assert(regexes@.push(id)[i] == regexes@[i]); }
+                            else { assert(regexes@.push(id)[i] == id); }
+                        }
+                    }
                     assert(regexes_vocabulary(kernel.graph(), *template, regexes@.push(id))) by {
                         assert forall|i: int| 0 <= i < regexes@.push(id).len() implies regexes@.push(id)[i]@ < kernel.graph().regexes.len()
                             && vocab::regex_primitives(model::lift_regex(kernel.graph(), regexes@.push(id)[i]@)).subset_of(source_primitives(*template)) by {
@@ -576,6 +626,7 @@ impl CompiledPair {
                 assert(regex_maps(kernel.graph(), *template, regexes@));
                 assert(crate::verify::finite_compile::compiled_nf(kernel.graph(), tests@, regexes@));
                 assert(regexes_vocabulary(kernel.graph(), *template, regexes@));
+                assert(regexes_reachable_vocabulary(kernel.graph(), *template, regexes@));
             }
         }
         proof! {
@@ -591,6 +642,8 @@ impl CompiledPair {
             assert(regex_correct(store.graph(), *template, template.root as nat, root));
             crate::verify::finite_compile::lemma_compiled_regex(store.graph(), tests@, regexes@, template.root as int);
             assert(vocab::regex_primitives(model::lift_regex(store.graph(), root@)).subset_of(source_primitives(*template)));
+            assert(vocab::regex_primitives(model::lift_regex(store.graph(), root@))
+                .subset_of(reachable_regex_primitives(*template, template.root as nat)));
         }
         Ok(CompiledPair::new(store, root))
     }
@@ -674,6 +727,104 @@ pub mod verify {
             reveal(flat::test_wf);
         }
     }
+    /// Primitives in the sub-DAG rooted at a flat test; forward references contribute nothing.
+    pub open spec fn reachable_test_primitives(template: FlatPair<u64>, id: nat) -> Set<model::Primitive>
+        decreases id, 1nat, 0nat,
+    {
+        if id >= template.tests@.len() { Set::empty() } else {
+            match template.tests@[id as int] {
+                FlatTest::Atom { field, term, .. } => Set::empty().insert(model::Primitive::Eq(field, term_view(term))),
+                FlatTest::And(children) | FlatTest::Or(children) =>
+                    reachable_test_prefix(template, id, children@.len()),
+                _ => Set::empty(),
+            }
+        }
+    }
+
+    pub open spec fn reachable_test_prefix(template: FlatPair<u64>, id: nat, n: nat) -> Set<model::Primitive>
+        decreases id, 0nat, n,
+    {
+        if id >= template.tests@.len() { Set::empty() } else {
+            match template.tests@[id as int] {
+                FlatTest::And(children) | FlatTest::Or(children) => if 0 < n <= children@.len() {
+                    let child = children@[n - 1] as nat;
+                    reachable_test_prefix(template, id, (n - 1) as nat).union(
+                        if child < id { reachable_test_primitives(template, child) } else { Set::empty() })
+                } else { Set::empty() },
+                _ => Set::empty(),
+            }
+        }
+    }
+
+    /// Primitives in the sub-DAG rooted at a flat regex, excluding unreachable table nodes.
+    pub open spec fn reachable_regex_primitives(template: FlatPair<u64>, id: nat) -> Set<model::Primitive>
+        decreases id, 1nat, 0nat,
+    {
+        if id >= template.regexes@.len() { Set::empty() } else {
+            match template.regexes@[id as int] {
+                FlatRegex::Test(test) => reachable_test_primitives(template, test as nat),
+                FlatRegex::Union(children) | FlatRegex::Concat(children) | FlatRegex::Intersect(children) =>
+                    reachable_regex_prefix(template, id, children@.len()),
+                FlatRegex::Star(child) | FlatRegex::Complement(child) =>
+                    if child < id { reachable_regex_primitives(template, child as nat) } else { Set::empty() },
+                _ => Set::empty(),
+            }
+        }
+    }
+
+    pub open spec fn reachable_regex_prefix(template: FlatPair<u64>, id: nat, n: nat) -> Set<model::Primitive>
+        decreases id, 0nat, n,
+    {
+        if id >= template.regexes@.len() { Set::empty() } else {
+            match template.regexes@[id as int] {
+                FlatRegex::Union(children) | FlatRegex::Concat(children) | FlatRegex::Intersect(children) =>
+                    if 0 < n <= children@.len() {
+                        let child = children@[n - 1] as nat;
+                        reachable_regex_prefix(template, id, (n - 1) as nat).union(
+                            if child < id { reachable_regex_primitives(template, child) } else { Set::empty() })
+                    } else { Set::empty() },
+                _ => Set::empty(),
+            }
+        }
+    }
+
+    pub proof fn lemma_reachable_test_child(template: FlatPair<u64>, id: nat, n: nat, i: int)
+        requires id < template.tests@.len(), 0 <= i < n,
+            match template.tests@[id as int] {
+                FlatTest::And(children) | FlatTest::Or(children) =>
+                    n <= children@.len() && children@[i] < id,
+                _ => false,
+            },
+        ensures match template.tests@[id as int] {
+            FlatTest::And(children) | FlatTest::Or(children) =>
+                reachable_test_primitives(template, children@[i] as nat).subset_of(
+                    reachable_test_prefix(template, id, n)),
+            _ => false,
+        },
+        decreases n,
+    {
+        if i < n - 1 { lemma_reachable_test_child(template, id, (n - 1) as nat, i); }
+    }
+
+    pub proof fn lemma_reachable_regex_child(template: FlatPair<u64>, id: nat, n: nat, i: int)
+        requires id < template.regexes@.len(), 0 <= i < n,
+            match template.regexes@[id as int] {
+                FlatRegex::Union(children) | FlatRegex::Concat(children) | FlatRegex::Intersect(children) =>
+                    n <= children@.len() && children@[i] < id,
+                _ => false,
+            },
+        ensures match template.regexes@[id as int] {
+            FlatRegex::Union(children) | FlatRegex::Concat(children) | FlatRegex::Intersect(children) =>
+                reachable_regex_primitives(template, children@[i] as nat).subset_of(
+                    reachable_regex_prefix(template, id, n)),
+            _ => false,
+        },
+        decreases n,
+    {
+        if i < n - 1 { lemma_reachable_regex_child(template, id, (n - 1) as nat, i); }
+    }
+
+
 
     #[verifier::opaque]
     pub open spec fn source_primitive_prefix(template: FlatPair<u64>, n: nat) -> Set<model::Primitive>
@@ -775,6 +926,62 @@ pub mod verify {
     pub(crate) open spec fn regexes_vocabulary(g: model::Graph, template: FlatPair<u64>, ids: Seq<RegexId>) -> bool {
         forall|i: int| 0 <= i < ids.len() ==> ids[i]@ < g.regexes.len()
             && (#[trigger] vocab::regex_primitives(model::lift_regex(g, ids[i]@))).subset_of(source_primitives(template))
+    }
+
+    pub(crate) open spec fn tests_reachable_vocabulary(g: model::Graph, template: FlatPair<u64>, ids: Seq<TestId>) -> bool {
+        ids.len() <= template.tests@.len() && forall|i: int| 0 <= i < ids.len() ==>
+            ids[i]@ < g.tests.len() && (#[trigger] vocab::test_primitives(model::lift_test(g, ids[i]@)))
+                .subset_of(reachable_test_primitives(template, i as nat))
+    }
+
+    pub(crate) open spec fn regexes_reachable_vocabulary(g: model::Graph, template: FlatPair<u64>, ids: Seq<RegexId>) -> bool {
+        ids.len() <= template.regexes@.len() && forall|i: int| 0 <= i < ids.len() ==>
+            ids[i]@ < g.regexes.len() && (#[trigger] vocab::regex_primitives(model::lift_regex(g, ids[i]@)))
+                .subset_of(reachable_regex_primitives(template, i as nat))
+    }
+
+    pub(crate) proof fn lemma_tests_reachable_stable(a: model::Graph, b: model::Graph,
+        template: FlatPair<u64>, tests: Seq<TestId>)
+        requires model::graph_wf(a), model::graph_extends(a, b),
+            tests_reachable_vocabulary(a, template, tests),
+        ensures tests_reachable_vocabulary(b, template, tests),
+    {
+        hide(reachable_test_primitives);
+        model::lemma_graph_wf_elim(a);
+        assert forall|i: int| 0 <= i < tests.len() implies tests[i]@ < b.tests.len()
+            && vocab::test_primitives(model::lift_test(b, tests[i]@)).subset_of(
+                reachable_test_primitives(template, i as nat)) by {
+            assert(vocab::test_primitives(model::lift_test(a, tests[i]@)).subset_of(
+                reachable_test_primitives(template, i as nat)));
+            model::lemma_lift_test_stable(a, b, tests[i]@);
+        }
+    }
+
+    pub(crate) proof fn lemma_regexes_reachable_stable(a: model::Graph, b: model::Graph,
+        template: FlatPair<u64>, regexes: Seq<RegexId>)
+        requires model::graph_wf(a), model::graph_extends(a, b),
+            regexes_reachable_vocabulary(a, template, regexes),
+        ensures regexes_reachable_vocabulary(b, template, regexes),
+    {
+        hide(reachable_regex_primitives);
+        model::lemma_graph_wf_elim(a);
+        assert forall|i: int| 0 <= i < regexes.len() implies regexes[i]@ < b.regexes.len()
+            && vocab::regex_primitives(model::lift_regex(b, regexes[i]@)).subset_of(
+                reachable_regex_primitives(template, i as nat)) by {
+            assert(vocab::regex_primitives(model::lift_regex(a, regexes[i]@)).subset_of(
+                reachable_regex_primitives(template, i as nat)));
+            model::lemma_lift_regex_stable(a, b, regexes[i]@);
+        }
+    }
+
+    pub(crate) proof fn lemma_reachable_vocabulary_stable(a: model::Graph, b: model::Graph,
+        template: FlatPair<u64>, tests: Seq<TestId>, regexes: Seq<RegexId>)
+        requires model::graph_wf(a), model::graph_extends(a, b),
+            tests_reachable_vocabulary(a, template, tests), regexes_reachable_vocabulary(a, template, regexes),
+        ensures tests_reachable_vocabulary(b, template, tests), regexes_reachable_vocabulary(b, template, regexes),
+    {
+        lemma_tests_reachable_stable(a, b, template, tests);
+        lemma_regexes_reachable_stable(a, b, template, regexes);
     }
 
     pub(crate) proof fn lemma_vocabulary_stable(a: model::Graph, b: model::Graph, template: FlatPair<u64>, tests: Seq<TestId>, regexes: Seq<RegexId>)
@@ -898,6 +1105,91 @@ pub mod verify {
             FlatRegex::Intersect(children) => lemma_set_vocabulary(a, b, template, tests, ids, children@, selected, true, out),
         }
     }
+
+    pub(crate) proof fn lemma_regex_reachable_vocabulary(a: model::Graph, b: model::Graph,
+        template: FlatPair<u64>, tests: Seq<TestId>, ids: Seq<RegexId>,
+        node: FlatRegex, selected: Seq<RegexId>, out: nat)
+        requires model::graph_wf(a), model::graph_wf(b), model::graph_extends(a, b), out < b.regexes.len(),
+            ids.len() < template.regexes@.len(), node == template.regexes@[ids.len() as int],
+            crate::verify::finite_compile::compiled_nf(a, tests, ids),
+            tests_reachable_vocabulary(b, template, tests),
+            regexes_reachable_vocabulary(a, template, ids), regexes_reachable_vocabulary(b, template, ids),
+            match node {
+                FlatRegex::Concat(children) | FlatRegex::Union(children) | FlatRegex::Intersect(children) =>
+                    selected_regex_refs(ids, children@, selected),
+                _ => true,
+            },
+            match node {
+                FlatRegex::Empty => out == b.constants.empty,
+                FlatRegex::All => out == b.constants.all,
+                FlatRegex::Epsilon => out == b.constants.epsilon,
+                FlatRegex::Test(t) => t < tests.len() && if tests[t as int]@ == b.constants.test_false {
+                    out == b.constants.empty
+                } else { b.regexes[out as int].kind == model::RegexKindNode::Test(tests[t as int]@) },
+                FlatRegex::Concat(_) => norm::regex_concat_result(a, b, selected, out),
+                FlatRegex::Union(_) => norm::regex_set_flat_inputs(a, selected, false) ==> norm::regex_set_shape(a, b, selected, false, out),
+                FlatRegex::Intersect(_) => norm::regex_set_flat_inputs(a, selected, true) ==> norm::regex_set_shape(a, b, selected, true, out),
+                FlatRegex::Complement(child) => child < ids.len() && norm::regex_not_result(b, ids[child as int]@, out),
+                FlatRegex::Star(child) => child < ids.len() && vocab::regex_primitives(model::lift_regex(b, out)).subset_of(
+                    vocab::regex_primitives(model::lift_regex(b, ids[child as int]@))),
+            },
+        ensures vocab::regex_primitives(model::lift_regex(b, out)).subset_of(
+            reachable_regex_primitives(template, ids.len())),
+    {
+        let allowed = reachable_regex_primitives(template, ids.len());
+        norm::regex_constants(b);
+        reveal_with_fuel(vocab::regex_primitives, 1);
+        match node {
+            FlatRegex::Empty | FlatRegex::All | FlatRegex::Epsilon => {
+                norm::regex_unfold(b, out);
+            },
+            FlatRegex::Test(t) => {
+                norm::regex_unfold(b, out);
+                assert(vocab::test_primitives(model::lift_test(b, tests[t as int]@)).subset_of(allowed));
+            },
+            FlatRegex::Star(child) => {
+                assert(vocab::regex_primitives(model::lift_regex(b, ids[child as int]@)).subset_of(allowed));
+            },
+            FlatRegex::Complement(child) => {
+                crate::verify::finite_compile::lemma_compiled_regex(a, tests, ids, child as int);
+                model::lemma_graph_wf_elim(a);
+                model::lemma_lift_regex_stable(a, b, ids[child as int]@);
+                crate::verify::finite_link::lemma_not_link(b, ids[child as int]@, out);
+                vocab::lemma_not_vocab(model::lift_regex(b, ids[child as int]@));
+                assert(vocab::regex_primitives(model::lift_regex(b, ids[child as int]@)).subset_of(allowed));
+            },
+            FlatRegex::Concat(children) | FlatRegex::Union(children) | FlatRegex::Intersect(children) => {
+                assert forall|i: int| 0 <= i < selected.len() implies
+                    vocab::regex_primitives(model::lift_regex(a, selected[i]@)).subset_of(allowed) by {
+                    lemma_reachable_regex_child(template, ids.len(), children@.len(), i);
+                    assert(selected[i] == ids[children@[i] as int]);
+                }
+                assert forall|i: int| 0 <= i < selected.len() implies selected[i]@ < a.regexes.len() by {
+                    assert(selected[i] == ids[children@[i] as int]);
+                }
+                assert(norm::regex_ids_valid(a, selected));
+                let rs = crate::verify::finite_link::lifts(a, selected);
+                rs.to_set_ensures();
+                assert forall|r: language::Regex<model::Test>| rs.to_set().contains(r) implies
+                    vocab::regex_primitives(r).subset_of(allowed) by {
+                    let i = rs.lemma_contains_to_index(r);
+                    assert(rs[i] == model::lift_regex(a, selected[i]@));
+                }
+                if node is Concat {
+                    crate::verify::finite_link::lemma_concat_link(a, b, selected, out);
+                    vocab::lemma_cat_vocab(rs, allowed);
+                } else {
+                    let inter = node is Intersect;
+                    crate::verify::finite_compile::lemma_selected_nf(a, tests, ids, children@, selected);
+                    crate::verify::finite_link::lemma_flat_inputs(a, selected, inter);
+                    crate::verify::finite_link::lemma_set_link(a, b, selected, inter, out);
+                    vocab::lemma_nset_vocab(inter, crate::verify::finite_link::lift_set(a, selected),
+                        model::lift_regex(b, out), allowed);
+                }
+            },
+        }
+    }
+
 
     pub open spec fn term_view(term: FlatTerm<u64>) -> model::GTerm {
         match term {
