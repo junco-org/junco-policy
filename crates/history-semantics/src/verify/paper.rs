@@ -20,6 +20,7 @@
 
 use super::history_algebra as algebra;
 use super::refinement::{finiteness, inclusion, pruning, search, semantics};
+use history_syntax::Event;
 use junco_core::verify::history_specs as language;
 use junco_core::verify::history_specs::{EventView, Head, Regex, SrcTest, Subst};
 use vstd::prelude::*;
@@ -146,14 +147,14 @@ pub proof fn theorem_finite_residuals()
 /// reduces rule-by-rule to coverage, then numerically to one constrained inclusion per
 /// split case. Proved by [`theorem_policy_reduction`] using
 /// `semantics::theorem_refines_iff_covers` and `inclusion::theorem_policy_reduction`.
-pub open spec fn stmt_policy_reduction<C: PartialEq>() -> bool {
-    semantics::stmt_refines_iff_covers::<C>() && inclusion::stmt_policy_reduction()
+pub open spec fn stmt_policy_reduction<E: Event>() -> bool {
+    semantics::stmt_refines_iff_covers::<E>() && inclusion::stmt_policy_reduction()
 }
 
-pub proof fn theorem_policy_reduction<C: PartialEq>()
-    ensures stmt_policy_reduction::<C>(),
+pub proof fn theorem_policy_reduction<E: Event>()
+    ensures stmt_policy_reduction::<E>(),
 {
-    semantics::theorem_refines_iff_covers::<C>();
+    semantics::theorem_refines_iff_covers::<E>();
     inclusion::theorem_policy_reduction();
 }
 
@@ -162,14 +163,14 @@ pub proof fn theorem_policy_reduction<C: PartialEq>()
 /// [`theorem_redundancy_vacuity`] using `semantics::theorem_redundant_iff_covered`
 /// and `inclusion::theorem_vacuity_reductions`. Executable redundancy filters every
 /// occurrence of an id; shortest policy counterexamples are only split-case-local.
-pub open spec fn stmt_redundancy_vacuity<C: PartialEq>() -> bool {
-    semantics::stmt_redundant_iff_covered::<C>() && inclusion::stmt_vacuity_reductions()
+pub open spec fn stmt_redundancy_vacuity<E: Event>() -> bool {
+    semantics::stmt_redundant_iff_covered::<E>() && inclusion::stmt_vacuity_reductions()
 }
 
-pub proof fn theorem_redundancy_vacuity<C: PartialEq>()
-    ensures stmt_redundancy_vacuity::<C>(),
+pub proof fn theorem_redundancy_vacuity<E: Event>()
+    ensures stmt_redundancy_vacuity::<E>(),
 {
-    semantics::theorem_redundant_iff_covered::<C>();
+    semantics::theorem_redundant_iff_covered::<E>();
     inclusion::theorem_vacuity_reductions();
 }
 

@@ -4,7 +4,7 @@
 use alloc::boxed::Box;
 use alloc::vec;
 #[cfg(verus_keep_ghost)]
-use history_syntax::verify::dsl::RegexView;
+use history_syntax::spec::events::RegexView;
 use history_syntax::{Event, RegexExpr, TestExpr};
 use vstd::prelude::*;
 
