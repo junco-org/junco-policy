@@ -63,6 +63,8 @@ KIND_NAMES = [k for k, _ in KINDS]
 
 # Uninterpreted specs whose meaning the trusted contracts rely on, with that meaning.
 MEANING = {
+    "hash_coherent": "the single hashing hypothesis (R4): a key type's `Hash`/`Eq` are faithful to "
+                     "`eq_spec`, so the external_body hash containers behave as maps on `eq_spec` classes",
     "arc_identity": "native allocation identity of an `Arc`; faithful because every compared type "
                     "has a unique-per-allocation value (comment at the declaration)",
     "reference_identity": "native identity of a `&T`; same fidelity argument as `arc_identity`",
@@ -371,7 +373,7 @@ print("  correctness does not depend on hits, only on the cached values being th
 print("- The hash containers `NativeMap`/`NativeSet`/`NativeGroups` (`crates/history-store/src/typed/map.rs`,")
 print("  `crates/history-analysis/src/native.rs`): external_body wrappers over hashbrown whose")
 print("  contracts hold under `key_laws` (R4, `crates/junco-core/src/spec/hypotheses.rs`): the key's")
-print("  `Hash`/`Eq` are faithful to `eq_spec` (vstd's `obeys_key_model`, the single trust token),")
+print("  `Hash`/`Eq` are faithful to `eq_spec` (`hash_coherent`, the single hashing hypothesis),")
 print("  instantiated for the library's own key types by the `axiom` items above.")
 print("- Identity of stores: `arc_identity`/`reference_identity` are functions of the pointee's spec")
 print("  value (Verus erases `Arc<T>` and `&T` to `T`). The wrappers that equate them with pointer")
