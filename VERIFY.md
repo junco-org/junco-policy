@@ -91,7 +91,7 @@ refinement. Read them against the paper in this order:
 | R5 | `crates/history-semantics/src/spec/monitor.rs` | 6 | `ValidatorView`, `check_frame`, `check_step`, `permits_result`, `rollback_step`, `trace_safe` | `thm:matcher` at the level of `Validator` |
 | R6 | `crates/history-analysis/src/spec/analyzer.rs` | 22 | `AnalyzerView`, `analyzer_wf`, `known_with`, the capacities, `rules_of`, `without_rule`, `counterexample_spec`, `covered_spec`, `removal_preserves_decisions`, `redundant_spec`, `at_least_as_strict_spec`, `tail_included_spec`; A5 in prose in the header | A1–A6 |
 | P | `crates/history-semantics/src/verify/paper.rs` | one `stmt_*`/`theorem_*` per paper result | the paper index: table of paper label → mechanized statement → proof → file; `theorem_paper_index` proves every row | all |
-| T | `crates/history-semantics/tests/reviewer.rs`, `crates/history-analysis/tests/reviewer.rs` | 7 and 15 verified items | the end-to-end statements over public items only (below) | `thm:matcher`, A1–A6, S9 |
+| T | `crates/history-semantics/tests/reviewer.rs`, `crates/history-analysis/tests/reviewer.rs` | 7 and 14 verified items | the end-to-end statements over public items only (below) | `thm:matcher`, A1–A6, S9 |
 
 The theorems a reviewer reads:
 
