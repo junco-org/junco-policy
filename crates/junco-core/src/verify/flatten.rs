@@ -167,6 +167,158 @@ pub open spec fn flattened<E: Event>(rule: Rule<E>, flat_rule: FlatRule<E::Compo
         && regex_represents::<E>(flat_rule.source.tests@, flat_rule.source.regexes@,
             flat_rule.source.root as nat, rule.tail@, rule.head@)
 }
+
+/// Constants of a reachable flat test are contained in the per-coordinate known sets.
+pub open spec fn test_constants_bounded<C>(tests: Seq<FlatTest<C>>, id: nat, known: Seq<Set<C>>) -> bool
+    decreases id,
+{
+    id < tests.len() && match tests[id as int] {
+        FlatTest::Atom { field, term: FlatTerm::Constant(value), .. } =>
+            (field.0 as nat) < known.len() && known[field.0 as int].contains(value),
+        FlatTest::And(children) | FlatTest::Or(children) => flat::references_before(children@, id)
+            && forall|i: int| 0 <= i < children@.len() ==>
+                test_constants_bounded(tests, children@[i] as nat, known),
+        _ => true,
+    }
+}
+
+/// Only nodes reachable from the regex root contribute constants to the source rule.
+pub open spec fn regex_constants_bounded<C>(tests: Seq<FlatTest<C>>, regexes: Seq<FlatRegex>,
+    id: nat, known: Seq<Set<C>>) -> bool
+    decreases id,
+{
+    id < regexes.len() && match regexes[id as int] {
+        FlatRegex::Test(test) => test_constants_bounded(tests, test as nat, known),
+        FlatRegex::Union(children) | FlatRegex::Concat(children) | FlatRegex::Intersect(children) =>
+            flat::references_before(children@, id)
+            && forall|i: int| 0 <= i < children@.len() ==>
+                regex_constants_bounded(tests, regexes, children@[i] as nat, known),
+        FlatRegex::Star(child) | FlatRegex::Complement(child) => child < id
+            && regex_constants_bounded(tests, regexes, child as nat, known),
+        _ => true,
+    }
+}
+
+/// Source test constants bound the reachable nodes of their actual flattened representation.
+pub proof fn lemma_test_constants_bounded<E: Event>(
+    tests: Seq<FlatTest<E::Component>>, id: nat, source: SourceTest<E>,
+    head: SourceHead<E>, known: Seq<Set<E::Component>>,
+)
+    requires test_represents::<E>(tests, id, source, head), known.len() == head.len(),
+        forall|j: int| 0 <= j < known.len() ==>
+            crate::spec::questions::test_constants(source, head.len())[j].subset_of(known[j]),
+    ensures test_constants_bounded(tests, id, known),
+    decreases source,
+{
+    reveal_with_fuel(test_represents, 2);
+    reveal_with_fuel(test_constants_bounded, 2);
+    lemma_test_operands(tests[id as int]);
+    match source {
+        TestView::Atom { pattern, .. } => {
+            if let FlatTest::Atom { field, term: FlatTerm::Constant(value), .. } = tests[id as int] {
+                crate::spec::questions::lemma_test_constants_index(source, head.len(), field.0 as int);
+                assert(known[field.0 as int].contains(value));
+            }
+        },
+        TestView::And(children) | TestView::Or(children) => {
+            let ids = test_operands(tests[id as int]);
+            assert forall|i: int| 0 <= i < children.len() implies
+                test_constants_bounded(tests, ids[i] as nat, known) by {
+                assert forall|j: int| 0 <= j < known.len() implies
+                    crate::spec::questions::test_constants(children[i], head.len())[j].subset_of(known[j]) by {
+                    crate::spec::questions::lemma_test_constants_index(source, head.len(), j);
+                    let sets = Seq::new(children.len(), |k: int| if 0 <= k < children.len() {
+                        crate::spec::questions::test_constants(children[k], head.len())[j]
+                    } else { Set::empty() });
+                    crate::spec::questions::lemma_constants_union(sets, i);
+                }
+                lemma_test_constants_bounded::<E>(tests, ids[i] as nat, children[i], head, known);
+            }
+        },
+        _ => {},
+    }
+}
+
+/// Source regex constants bound every test reachable through its flat DAG root.
+pub proof fn lemma_regex_constants_bounded<E: Event>(
+    tests: Seq<FlatTest<E::Component>>, regexes: Seq<FlatRegex>, id: nat,
+    source: SourceRegex<E>, head: SourceHead<E>, known: Seq<Set<E::Component>>,
+)
+    requires regex_represents::<E>(tests, regexes, id, source, head), known.len() == head.len(),
+        forall|j: int| 0 <= j < known.len() ==>
+            crate::spec::questions::regex_constants(source, head.len())[j].subset_of(known[j]),
+    ensures regex_constants_bounded(tests, regexes, id, known),
+    decreases source,
+{
+    reveal_with_fuel(regex_represents, 2);
+    reveal_with_fuel(regex_constants_bounded, 2);
+    lemma_regex_operands(regexes[id as int]);
+    match source {
+        RegexView::Test(test) => {
+            if let FlatRegex::Test(test_id) = regexes[id as int] {
+                assert forall|j: int| 0 <= j < known.len() implies
+                    crate::spec::questions::test_constants(test, head.len())[j].subset_of(known[j]) by {
+                    crate::spec::questions::lemma_regex_constants_index(source, head.len(), j);
+                }
+                lemma_test_constants_bounded::<E>(tests, test_id as nat, test, head, known);
+            }
+        },
+        RegexView::Union(children) | RegexView::Concat(children) | RegexView::Intersect(children) => {
+            let ids = regex_operands(regexes[id as int]);
+            assert forall|i: int| 0 <= i < children.len() implies
+                regex_constants_bounded(tests, regexes, ids[i] as nat, known) by {
+                assert forall|j: int| 0 <= j < known.len() implies
+                    crate::spec::questions::regex_constants(children[i], head.len())[j].subset_of(known[j]) by {
+                    crate::spec::questions::lemma_regex_constants_index(source, head.len(), j);
+                    let sets = Seq::new(children.len(), |k: int| if 0 <= k < children.len() {
+                        crate::spec::questions::regex_constants(children[k], head.len())[j]
+                    } else { Set::empty() });
+                    crate::spec::questions::lemma_constants_union(sets, i);
+                }
+                lemma_regex_constants_bounded::<E>(tests, regexes, ids[i] as nat, children[i], head, known);
+            }
+        },
+        RegexView::Star(child) | RegexView::Not(child) => {
+            assert forall|j: int| 0 <= j < known.len() implies
+                crate::spec::questions::regex_constants(*child, head.len())[j].subset_of(known[j]) by {
+                crate::spec::questions::lemma_regex_constants_index(source, head.len(), j);
+            }
+            match regexes[id as int] {
+                FlatRegex::Star(child_id) | FlatRegex::Complement(child_id) =>
+                    lemma_regex_constants_bounded::<E>(tests, regexes, child_id as nat, *child, head, known),
+                _ => {},
+            }
+        },
+        _ => {},
+    }
+}
+
+/// Executable lowering cannot introduce a reachable constant absent from the source rule.
+pub proof fn lemma_flattened_constants<E: Event>(rule: Rule<E>, lowered: FlatRule<E::Component>)
+    requires flattened::<E>(rule, lowered),
+    ensures
+        (forall|i: int| 0 <= i < lowered.source.head@.len() ==>
+            match #[trigger] lowered.source.head@[i] {
+                FlatHead::Constant(value) => crate::spec::questions::rule_constants(rule@)[i].contains(value),
+                _ => true,
+            }),
+        regex_constants_bounded(lowered.source.tests@, lowered.source.regexes@,
+            lowered.source.root as nat, crate::spec::questions::rule_constants(rule@)),
+{
+    let known = crate::spec::questions::rule_constants(rule@);
+    assert forall|i: int| 0 <= i < lowered.source.head@.len() implies
+        match #[trigger] lowered.source.head@[i] {
+            FlatHead::Constant(value) => known[i].contains(value),
+            _ => true,
+        } by {
+        assert(head_slot_represents(lowered.source.head@[i], rule.head@[i]));
+    }
+    assert forall|j: int| 0 <= j < known.len() implies
+        crate::spec::questions::regex_constants(rule.tail@, rule.head@.len())[j].subset_of(known[j]) by {}
+    lemma_regex_constants_bounded::<E>(lowered.source.tests@, lowered.source.regexes@,
+        lowered.source.root as nat, rule.tail@, rule.head@, known);
+}
+
 /// The executable test table's coordinate validation transfers to its source tree.
 pub proof fn lemma_represented_test_wf<E: Event>(
     tests: Seq<FlatTest<E::Component>>, id: nat, source: SourceTest<E>, head: SourceHead<E>,

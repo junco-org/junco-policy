@@ -1335,6 +1335,81 @@ pub mod verify {
             _ => {},
         }
     }
+
+    /// Numeric bindings exist exactly when the real-event rule head matches, including rejection.
+    pub proof fn lemma_rule_numeric_head<E: history_syntax::Event>(
+        rule: history_syntax::Rule<E>, flattened: junco_core::flat::FlatRule<E::Component>,
+        template: FlatPair<u64>, compiled_maps: junco_core::verify::encoding::Codebook<E::Component>,
+        maps: junco_core::verify::encoding::Codebook<E::Component>,
+        domain: junco_core::verify::encoding::Domain<E::Component>,
+        candidate: E, candidate_codes: Seq<u64>, request: EventView,
+    )
+        requires junco_core::verify::flatten::flattened::<E>(rule, flattened),
+            junco_core::verify::encoding::lowering(flattened.source, template, compiled_maps,
+                junco_core::verify::flatten::component_equality::<E>()),
+            junco_core::verify::encoding::extends(compiled_maps, maps,
+                junco_core::verify::flatten::component_equality::<E>()),
+            junco_core::verify::encoding::maps_wf(maps,
+                junco_core::verify::flatten::component_equality::<E>(), domain),
+            junco_core::verify::encoding::constants_in_domain(flattened.source, domain),
+            junco_core::verify::encoding::event_encoded(maps,
+                junco_core::verify::flatten::component_equality::<E>(), domain,
+                history_syntax::spec::events::event_view(candidate), candidate_codes),
+            event_representation(candidate_codes, request),
+        ensures junco_core::spec::semantics::head_matches::<E>(rule.head@, candidate)
+            == (exists|binding: Subst| language::head_match(head_view(template), request, binding)),
+    {
+        use junco_core::verify::encoding as enc;
+        let history: Seq<E> = Seq::empty();
+        let codes: Seq<Seq<u64>> = Seq::empty();
+        assert(enc::word_encoded(maps, junco_core::verify::flatten::component_equality::<E>(), domain,
+            history.map(|i: int, event: E| history_syntax::spec::events::event_view(event)), codes));
+        enc::lemma_dsl_later_maps_preservation::<E>(rule, flattened, template, compiled_maps,
+            maps, domain, candidate, history, candidate_codes, codes);
+        enc::lemma_topology_wf(flattened.source, template);
+        lemma_flat_head(template, candidate_codes, request);
+    }
+
+    /// Connect a validated executable source rule directly to the compiled numeric language.
+    pub proof fn lemma_rule_numeric_semantics<E: history_syntax::Event>(
+        rule: history_syntax::Rule<E>, flattened: junco_core::flat::FlatRule<E::Component>,
+        template: FlatPair<u64>, compiled_maps: junco_core::verify::encoding::Codebook<E::Component>,
+        maps: junco_core::verify::encoding::Codebook<E::Component>,
+        domain: junco_core::verify::encoding::Domain<E::Component>,
+        candidate: E, history: Seq<E>, candidate_codes: Seq<u64>, history_codes: Seq<Seq<u64>>,
+        request: EventView, numeric: Seq<EventView>, theta: Subst,
+    )
+        requires junco_core::verify::flatten::flattened::<E>(rule, flattened),
+            junco_core::verify::encoding::lowering(flattened.source, template, compiled_maps,
+                junco_core::verify::flatten::component_equality::<E>()),
+            junco_core::verify::encoding::extends(compiled_maps, maps,
+                junco_core::verify::flatten::component_equality::<E>()),
+            junco_core::verify::encoding::maps_wf(maps,
+                junco_core::verify::flatten::component_equality::<E>(), domain),
+            junco_core::verify::encoding::constants_in_domain(flattened.source, domain),
+            junco_core::verify::encoding::event_encoded(maps,
+                junco_core::verify::flatten::component_equality::<E>(), domain,
+                history_syntax::spec::events::event_view(candidate), candidate_codes),
+            junco_core::verify::encoding::word_encoded(maps,
+                junco_core::verify::flatten::component_equality::<E>(), domain,
+                history.map(|i: int, event: E| history_syntax::spec::events::event_view(event)), history_codes),
+            event_representation(candidate_codes, request), word_representation(history_codes, numeric),
+            language::head_match(head_view(template), request, theta),
+        ensures junco_core::spec::semantics::lang::<E>(rule.tail@, rule.head@, candidate, history)
+                == source_regex(template, template.root as nat, theta, numeric),
+    {
+        use junco_core::verify::encoding as enc;
+        let projected = history.map(|i: int, event: E| history_syntax::spec::events::event_view(event));
+        enc::lemma_dsl_later_maps_preservation::<E>(rule, flattened, template, compiled_maps,
+            maps, domain, candidate, history, candidate_codes, history_codes);
+        enc::lemma_topology_wf(flattened.source, template);
+        assert forall|i: int| 0 <= i < history_codes.len() implies
+            history_codes[i].len() == candidate_codes.len() by {
+            assert(enc::event_encoded(maps, junco_core::verify::flatten::component_equality::<E>(),
+                domain, projected[i], history_codes[i]));
+        }
+        lemma_flat_regex(template, template.root as nat, candidate_codes, request, history_codes, numeric, theta);
+    }
     }
 }
 
