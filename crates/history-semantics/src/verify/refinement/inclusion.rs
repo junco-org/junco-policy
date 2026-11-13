@@ -521,6 +521,51 @@ pub proof fn lemma_firing_lang(d: NDomains, p: Seq<NRule>, g1: Constraint, theta
     }
 }
 
+/// Counterexample transfer (`app:mech-diff`): within a case deciding every head constant of `p`,
+/// `p` denies exactly the histories of the firing denials.
+pub proof fn lemma_case_denies(d: NDomains, p: Seq<NRule>, g1: Constraint, theta: Subst, w: Seq<EventView>)
+    requires
+        n_theta_ok(d, theta),
+        sat_by(theta, g1),
+        forall|pair: (Component, nat)| #[trigger] head_pairs(p).contains(pair) ==> decides(d, g1, pair.0, pair.1),
+    ensures n_policy_denies(p, theta, w) == n_lang(theta, firing_denials(d, p, g1), w),
+{
+    let pi = head_pairs(p);
+    lemma_head_pairs(p);
+    lemma_firing_lang(d, p, g1, theta, w);
+    if n_policy_denies(p, theta, w) {
+        let j = choose|j: int| 0 <= j < p.len() && #[trigger] n_rule_denies(p[j], theta, w);
+        let gj = head_constraint(p[j].head);
+        lemma_rule_denies_iff(p[j], theta, w);
+        lemma_head_constraint(p[j].head);
+        assert forall|l: Literal| #[trigger] gj.contains(l) implies l.equal && decides(d, g1, l.component, l.value) by {
+            assert(n_head_field(p[j].head, l.component) == Some(l.value));
+            assert(pi.contains((l.component, l.value)));
+        }
+        lemma_decided_entails(d, g1, gj, theta);
+    }
+    if n_lang(theta, firing_denials(d, p, g1), w) {
+        let j = choose|j: int| 0 <= j < p.len()
+            && entails(d, g1, head_constraint(p[j].head)) && #[trigger] n_lang(theta, denial(p[j]), w);
+        assert(sat_by(theta, head_constraint(p[j].head)));
+        lemma_rule_denies_iff(p[j], theta, w);
+        assert(n_rule_denies(p[j], theta, w));
+    }
+}
+
+/// `split_ok` is monotone in the decided pairs.
+pub proof fn lemma_split_ok_mono(d: NDomains, g: Constraint, small: Pairs, big: Pairs, cases: Set<Constraint>)
+    requires split_ok(d, g, big, cases), small.subset_of(big),
+    ensures split_ok(d, g, small, cases),
+{
+    assert forall|g1: Constraint| #[trigger] cases.contains(g1) implies satisfiable(d, g1) && entails(d, g1, g)
+        && forall|p: (Component, nat)| small.contains(p) ==> #[trigger] decides(d, g1, p.0, p.1) by {
+        assert forall|p: (Component, nat)| small.contains(p) implies #[trigger] decides(d, g1, p.0, p.1) by {
+            assert(big.contains(p));
+        }
+    }
+}
+
 pub proof fn lemma_policy_reduction(d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>)
     requires split_ok(d, head_constraint(rule.head), head_pairs(p), cases),
     ensures
@@ -528,8 +573,6 @@ pub proof fn lemma_policy_reduction(d: NDomains, p: Seq<NRule>, rule: NRule, cas
             ==> included_under(d, g1, denial(rule), firing_denials(d, p, g1)),
 {
     let gr = head_constraint(rule.head);
-    let pi = head_pairs(p);
-    lemma_head_pairs(p);
     if n_covers(d, p, rule) {
         assert forall|g1: Constraint| #[trigger] cases.contains(g1)
             implies included_under(d, g1, denial(rule), firing_denials(d, p, g1)) by {
@@ -539,16 +582,7 @@ pub proof fn lemma_policy_reduction(d: NDomains, p: Seq<NRule>, rule: NRule, cas
                 assert(sat_by(theta, gr));
                 lemma_rule_denies_iff(rule, theta, w);
                 assert(n_rule_denies(rule, theta, w));
-                let j = choose|j: int| 0 <= j < p.len() && #[trigger] n_rule_denies(p[j], theta, w);
-                let gj = head_constraint(p[j].head);
-                lemma_rule_denies_iff(p[j], theta, w);
-                lemma_head_constraint(p[j].head);
-                assert forall|l: Literal| #[trigger] gj.contains(l) implies l.equal && decides(d, g1, l.component, l.value) by {
-                    assert(n_head_field(p[j].head, l.component) == Some(l.value));
-                    assert(pi.contains((l.component, l.value)));
-                }
-                lemma_decided_entails(d, g1, gj, theta);
-                lemma_firing_lang(d, p, g1, theta, w);
+                lemma_case_denies(d, p, g1, theta, w);
             }
         }
     }
@@ -560,12 +594,7 @@ pub proof fn lemma_policy_reduction(d: NDomains, p: Seq<NRule>, rule: NRule, cas
             let g1 = choose|g1: Constraint| #[trigger] cases.contains(g1) && sat_by(theta, g1);
             assert(included_under(d, g1, denial(rule), firing_denials(d, p, g1)));
             assert(n_lang(theta, firing_denials(d, p, g1), w));
-            lemma_firing_lang(d, p, g1, theta, w);
-            let j = choose|j: int| 0 <= j < p.len()
-                && entails(d, g1, head_constraint(p[j].head)) && #[trigger] n_lang(theta, denial(p[j]), w);
-            assert(sat_by(theta, head_constraint(p[j].head)));
-            lemma_rule_denies_iff(p[j], theta, w);
-            assert(n_rule_denies(p[j], theta, w));
+            lemma_case_denies(d, p, g1, theta, w);
         }
     }
 }
