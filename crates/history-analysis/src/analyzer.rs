@@ -15,13 +15,17 @@ use history_semantics::verify::refinement::{
     analyzer as verdict, implementation, inclusion, search as paper,
 };
 #[cfg(verus_keep_ghost)]
-use history_semantics::{compile_verify as numeric, symbolic_language_verify as facade};
+use history_semantics::{
+    compile_verify as numeric, symbolic_language_verify as facade, symbolic_verify as symbolic,
+};
 use history_syntax::{Component, Event, Head, RegexExpr, Rule, RuleMode};
 use junco_core::compile::validate_component;
 use junco_core::flat::{FlatHead, FlatPair, FlatRule};
 use junco_core::flatten::flatten_rule_parts;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
+#[cfg(verus_keep_ghost)]
+use junco_core::verify::history_specs::Regex;
 use junco_core::limits::Unmetered;
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
@@ -511,33 +515,52 @@ impl<E: Event> PolicyAnalyzer<E> {
                 proof {
                     views::table::lemma_structural_dag(left_numeric);
                     views::table::lemma_structural_dag(right_numeric);
+                    views::table::lemma_structural_local(left_numeric);
+                    views::table::lemma_structural_local(right_numeric);
                     assert(views::table::dag(tables@));
+                    assert(views::table::local_vars(tables@));
                     assert(source_codes_wf(self.constants, tables@));
                 }
                 let left_root = tables.append(&left_numeric)?;
-                proof { lemma_append_payload(self.constants, empty, left_numeric, tables@); }
+                proof {
+                    lemma_append_payload(self.constants, empty, left_numeric, tables@);
+                    views::table::lemma_append_local(empty, left_numeric, tables@);
+                }
                 let ghost first_tables = tables@;
                 let right_root = tables.append(&right_numeric)?;
                 proof {
                     lemma_append_payload(self.constants, first_tables, right_numeric, tables@);
+                    views::table::lemma_append_local(first_tables, right_numeric, tables@);
                     assert forall|theta: junco_core::verify::history_specs::Subst, word: Seq<junco_core::verify::history_specs::EventView>|
                         numeric::source_regex(tables@, left_root as nat, theta, word)
                             == numeric::source_regex(left_numeric, left_numeric.root as nat, theta, word) by {}
                 }
                 let ghost assembled = tables@;
                 let difference = tables.difference(left_root, right_root)?;
+                let ghost left = tail_regex(left_numeric);
+                let ghost right = tail_regex(right_numeric);
                 proof {
                     assert(source_codes_wf(self.constants, difference));
-                    assert(difference_source(input, difference));
+                    assert(views::table::local_vars(difference)) by { assert(difference.tests@ == assembled.tests@); }
+                    views::table::lemma_bind_structural(difference);
+                    assert forall|theta: junco_core::verify::history_specs::Subst, word: Seq<junco_core::verify::history_specs::EventView>|
+                        junco_core::verify::history_specs::event_wf(theta) implies
+                        #[trigger] numeric::source_regex(difference, difference.root as nat, theta, word)
+                            == (history_semantics::verify::refinement::encoding::n_lang(theta, left, word)
+                                && !history_semantics::verify::refinement::encoding::n_lang(theta, right, word)) by {
+                        views::firing::lemma_template_regex(left_numeric, left_numeric.root as nat, theta, word);
+                        views::firing::lemma_template_regex(right_numeric, right_numeric.root as nat, theta, word);
+                    }
                     assert forall|v: [Set<nat>; 3]| v[0].len() <= self.constants.values@.len()
                         && v[1].len() <= self.constants.values@.len() && v[2].len() <= self.constants.values@.len()
                         implies exec::resource_capacity(v) by {}
-                    assert(decision_ready(*self, input, constraint, difference));
+                    assert(crate::verify::policy::query_ready(*self, constraint, difference, left, right));
                 }
                 #[cfg(verus_keep_ghost)]
-                let decided = self.decide(constraint, difference, Ghost(input))?;
+                let decided = self.decide(constraint, difference, Ghost(left), Ghost(right))?;
                 #[cfg(not(verus_keep_ghost))]
                 let decided = self.decide(constraint, difference)?;
+                proof { lemma_tail_verdict(*self, input, constraint@, decided); }
                 decided
             }
             None => {
@@ -618,16 +641,19 @@ impl<E: Event> PolicyAnalyzer<E> {
 
 verus! {
 impl<E: Event> PolicyAnalyzer<E> {
-    /// Decides whether `difference` is empty under `constraint`.
+    /// Decides the constrained inclusion `left ⊑_constraint right` (Definition `def:constrained`)
+    /// from `difference`, a template with the language of `left & ¬right`.
     fn decide(
         &self,
         constraint: Constraint,
         difference: FlatPair<u64>,
-        #[cfg(verus_keep_ghost)] Ghost(input): Ghost<TailInput<E>>,
+        #[cfg(verus_keep_ghost)] Ghost(left): Ghost<Regex<model::Test>>,
+        #[cfg(verus_keep_ghost)] Ghost(right): Ghost<Regex<model::Test>>,
     ) -> (result: Result<Inclusion<E>, HistoryError>)
-        requires decision_ready(*self, input, constraint, difference),
-        ensures result matches Ok(v) ==> tail_verdict(*self, input, v),
+        requires crate::verify::policy::query_ready(*self, constraint, difference, left, right),
+        ensures result matches Ok(v) ==> crate::verify::policy::decided(*self, constraint@, left, right, v),
     {
+        proof { assert(GRAPH_BYTES as int % 16 == 0); }
         let mut language = match SymbolicLanguage::compile(&difference, GRAPH_BYTES) {
             Ok(language) => language,
             Err(HistoryError::GraphLimit { .. }) => return Ok(Inclusion::Exhausted),
@@ -639,19 +665,21 @@ impl<E: Event> PolicyAnalyzer<E> {
         let ghost vocabulary = exec::root_vocabulary(language, self.universes, constraint@);
         proof {
             lemma_root_payload(*self, language, difference, constraint@);
+            views::table::lemma_structural_local(difference);
+            lemma_source_primitives_safe(self.constants, difference);
+            assert(exec::primitives_safe(symbolic::regex_primitives(start.state)));
             lemma_root_fits(*self, language, constraint@, self.constants.values@.len());
             assert(views::constraint_unique::universes_distinct(self.universes));
             assert forall|theta: junco_core::verify::history_specs::Subst, word: Seq<junco_core::verify::history_specs::EventView>|
                 junco_core::verify::history_specs::event_wf(theta) implies
-                    history_semantics::verify::refinement::encoding::n_lang(theta, start.state, word)
-                        == (numeric::source_regex(input.left_numeric, input.left_numeric.root as nat, theta, word)
-                            && !numeric::source_regex(input.right_numeric, input.right_numeric.root as nat, theta, word)) by {
+                    #[trigger] history_semantics::verify::refinement::encoding::n_lang(theta, start.state, word)
+                        == (history_semantics::verify::refinement::encoding::n_lang(theta, left, word)
+                            && !history_semantics::verify::refinement::encoding::n_lang(theta, right, word)) by {
                 assert(model::regex_lang(facade::graph(language), theta, facade::root(language), word)
                     == numeric::source_regex(difference, difference.root as nat, theta, word));
                 reveal(model::regex_lang);
             }
-            assert(difference_language(input, start.state));
-            assert(tail_ready(*self, input, start.state));
+            assert(paper::initial_ok(start.state, left, right));
         }
         let outcome = match search(&mut language, &self.universes, constraint) {
             Ok(outcome) => outcome,
@@ -659,14 +687,11 @@ impl<E: Event> PolicyAnalyzer<E> {
             Err(error) => return Err(error),
         };
         proof {
-            lemma_result_outcome(views::ndomains(self.universes), start, exec::outcome_view(outcome));
+            lemma_query_outcome(views::ndomains(self.universes), start, left, right, exec::outcome_view(outcome));
             lemma_refutation_input(*self, start, outcome, vocabulary);
         }
         match outcome {
-            SearchOutcome::Holds => {
-                proof { lemma_holds(*self, input, start.state); }
-                Ok(Inclusion::Holds)
-            }
+            SearchOutcome::Holds => Ok(Inclusion::Holds),
             SearchOutcome::Refuted(refutation) => {
                 #[cfg(verus_keep_ghost)]
                 let counterexample = self.counterexample(&refutation.constraint, &refutation.letters, refutation.alphabets)?;
@@ -674,8 +699,8 @@ impl<E: Event> PolicyAnalyzer<E> {
                 let counterexample = self.counterexample(&refutation.constraint, &refutation.letters)?;
                 proof {
                     reveal(exec::refutation_ready);
-                    lemma_counterexample(*self, input, start.state, refutation.constraint,
-                        refutation.letters@, refutation.alphabets@, counterexample);
+                    assert(crate::verify::reconstruction::reconstructed(self.constants, self.universes,
+                        refutation.constraint, refutation.letters@, refutation.alphabets@, counterexample));
                 }
                 Ok(Inclusion::Counterexample(counterexample))
             }
