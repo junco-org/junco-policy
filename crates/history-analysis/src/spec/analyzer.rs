@@ -6,9 +6,10 @@
 //!
 //! `known` is determined by the contracts, never chosen by the implementation: `new` establishes
 //! `known == declared_sets(domains)`; `add_rule` ensures `after.known == known_with(before.known,
-//! rule_constants(rule))`; `tail_included` ensures `after.known == known_with(before.known,
-//! tail_constants(head, left, right))`; `covered`, `redundant` and `at_least_as_strict` leave the
-//! view unchanged. So capacity (`capacity_for`) is relative to exactly the constants of the inputs.
+//! rule_constants(rule))` and `tail_included` ensures `after.known == known_with(before.known,
+//! tail_constants(head, left, right))`, both on every return (`Ok` or `Err`: interning may have
+//! happened before a failure); `covered`, `redundant` and `at_least_as_strict` leave the view
+//! unchanged. So capacity (`capacity_for`) is relative to exactly the constants of the inputs.
 //!
 //! A5 (escapes), in prose: `Exhausted` is returned only when a search's `charge` returned
 //! `HistoryError::GraphBudget` (whose contract is `charged + bytes > budget`, with the budget
@@ -45,12 +46,11 @@ pub struct AnalyzerView<C> {
     pub known: Seq<Set<C>>,
 }
 
-/// Open consequences of the opaque `PolicyAnalyzer::wf`.
+/// Open consequences of the opaque `PolicyAnalyzer::wf`. (`known` is not required to be tagged:
+/// a failed `add_rule` may have interned ill-tagged constants; freshness tags the fresh values.)
 pub open spec fn analyzer_wf<E: Event>(a: AnalyzerView<E::Component>) -> bool {
     &&& domains_wf::<E>(a.domains)
     &&& a.known.len() == arity::<E>()
-    &&& forall|i: int, v: E::Component| 0 <= i < a.known.len() && #[trigger] a.known[i].contains(v)
-        ==> E::coordinate_spec(v) == i
     &&& forall|i: int| 0 <= i < a.rules.len() ==> rule_wf(#[trigger] a.rules[i])
         && a.rules[i].head.len() == arity::<E>()
         && forall|j: int| 0 <= j < a.known.len() ==> rule_constants(a.rules[i])[j].subset_of(a.known[j])
