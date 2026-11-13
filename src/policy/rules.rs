@@ -48,6 +48,15 @@ impl<E: Judged> RuleSet<E> {
 }
 
 /// Rules over one event type, and how their verdicts are applied to an owned history.
+///
+/// Unverified glue (D1): this type is outside the Verus proofs. On top of the verified
+/// `TracePolicy`/`History` it adds, exactly: (1) a `could_fire` head filter selecting the rules
+/// compiled for each event; (2) one `TracePolicy` per distinct event of the batch, built from the
+/// selected rules; (3) decide-then-append: a granted event is pushed to the history after its
+/// decision; (4) audit mode, which also appends denied events and reports them without enforcing;
+/// (5) error-to-deny: a compile or history error becomes a `Deny` decision (and a reported
+/// denial, even in audit mode when the append itself failed). The verified `check_step` contract
+/// covers each `TracePolicy::decide` call, not this composition.
 pub struct RulePolicy<E: Judged> {
     rules: Vec<TraceRule<E>>,
     audit: bool,

@@ -46,6 +46,16 @@ use vstd::prelude::*;
 use vstd::std_specs::cmp::{OrdSpec, PartialEqSpec};
 
 verus! {
+// Identity fidelity. Verus erases `Arc<T>` and `&T` to `T` in spec (vstd's `Arc::new` ensures
+// `*v == t`; `*a == *b` proves `a == b`), so both functions below depend only on the pointee's
+// value: two distinct allocations with equal contents would have equal identities while
+// `Arc::ptr_eq`/`core::ptr::eq` say they differ. The external_body wrappers that equate the two
+// (`share_store`, `borrow_store`, `share_numeric_owner`, `borrow_numeric_owner`,
+// `same_numeric_reference`, `CompiledRule::same_owner`) are faithful because every compared type
+// has a unique-per-allocation value: `HistoryStore` is constructed only by `HistoryStore::new`,
+// one static singleton per arity, and stores of different arity differ in `domains@.len()`;
+// `Store<E>` is constructed only by `Store::new`, whose `id` comes from the verified never-recycled
+// store-id allocator, and neither type is `Clone`. Keep both facts when adding constructors.
 pub uninterp spec fn arc_identity<T>(arc: Arc<T>) -> vstd::resource::Loc;
 pub uninterp spec fn reference_identity<T>(value: &T) -> vstd::resource::Loc;
 

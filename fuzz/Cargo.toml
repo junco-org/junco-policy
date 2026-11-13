@@ -38,7 +38,14 @@ criterion = { version = "0.8", default-features = false, features = [
     "plotters",
 ] }
 dogwood-language = "1.1.0"
-history-semantics = { path = "../crates/history-semantics", default-features = false, features = ["test-util"] }
+
+[features]
+# Engine work counters for `examples/replay_curve.rs`; off for the fuzz target and benchmarks.
+test-util = ["history-semantics/test-util"]
+
+[[example]]
+name = "replay_curve"
+required-features = ["test-util"]
 
 [[bin]]
 name = "lock_policy"
