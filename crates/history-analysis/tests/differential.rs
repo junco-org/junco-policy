@@ -518,10 +518,10 @@ fn policy_instances(setup: &Setup, witness: &Counterexample<Access>) -> Vec<(Acc
     }
     let mut fresh = Vec::new();
     for event in std::iter::once(&witness.candidate).chain(&witness.history) {
-        if let Value::Fresh(number) = event.values[0] {
-            if !fresh.contains(&number) {
-                fresh.push(number);
-            }
+        if let Value::Fresh(number) = event.values[0]
+            && !fresh.contains(&number)
+        {
+            fresh.push(number);
         }
     }
     fn assignments(

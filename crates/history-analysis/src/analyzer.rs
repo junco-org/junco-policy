@@ -802,37 +802,34 @@ impl<E: Event> PolicyAnalyzer<E> {
                     assert(stored_rule_wf(self.constants, self.universes, *theirs));
                     assert(queries::stored_numeric(*theirs).head =~= pins(theirs.numeric.head@));
                 }
-                match &theirs.constraint {
-                    Some(head) => {
+                if let Some(head) = &theirs.constraint {
+                    proof {
+                        firing::lemma_head_firing_exact(views::ndomains(self.universes), case@, head@);
+                    }
+                    if case.entails(head) {
+                        let ghost previous = tables@;
                         proof {
-                            firing::lemma_head_firing_exact(views::ndomains(self.universes), case@, head@);
+                            views::table::lemma_structural_dag(theirs.numeric);
+                            views::policy_source::lemma_numeric_rule(theirs.numeric, theirs.mode);
                         }
-                        if case.entails(head) {
-                            let ghost previous = tables@;
-                            proof {
-                                views::table::lemma_structural_dag(theirs.numeric);
-                                views::policy_source::lemma_numeric_rule(theirs.numeric, theirs.mode);
+                        let root = tables.denial(&theirs.numeric, theirs.mode)?;
+                        proof { lemma_append_payload(self.constants, previous, theirs.numeric, tables@); }
+                        proof {
+                            added = Some(root);
+                            assert(queries::stored_numeric(*theirs).head =~= pins(theirs.numeric.head@));
+                            assert forall|theta: junco_core::verify::history_specs::Subst,
+                                word: Seq<junco_core::verify::history_specs::EventView>|
+                                junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
+                                numeric::source_regex(tables@, root as nat, theta, word)
+                                    == encoding::n_lang(theta, inclusion::denial(queries::stored_numeric(*theirs)), word) by {
+                                inclusion::lemma_denial_lang(queries::stored_numeric(*theirs), theta, word);
                             }
-                            let root = tables.denial(&theirs.numeric, theirs.mode)?;
-                            proof { lemma_append_payload(self.constants, previous, theirs.numeric, tables@); }
-                            proof {
-                                added = Some(root);
-                                assert(queries::stored_numeric(*theirs).head =~= pins(theirs.numeric.head@));
-                                assert forall|theta: junco_core::verify::history_specs::Subst,
-                                    word: Seq<junco_core::verify::history_specs::EventView>|
-                                    junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
-                                    numeric::source_regex(tables@, root as nat, theta, word)
-                                        == encoding::n_lang(theta, inclusion::denial(queries::stored_numeric(*theirs)), word) by {
-                                    inclusion::lemma_denial_lang(queries::stored_numeric(*theirs), theta, word);
-                                }
-                            }
-                            matching.push(root);
                         }
-                    },
-                    None => {
-                        proof { firing::lemma_unsatisfiable_head_does_not_fire(views::ndomains(self.universes),
-                            implementation::constraint_of(case@), inclusion::head_constraint(queries::stored_numeric(*theirs).head)); }
-                    },
+                        matching.push(root);
+                    }
+                } else {
+                    proof { firing::lemma_unsatisfiable_head_does_not_fire(views::ndomains(self.universes),
+                        implementation::constraint_of(case@), inclusion::head_constraint(queries::stored_numeric(*theirs).head)); }
                 }
             }
             proof {
