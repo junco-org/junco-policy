@@ -9,6 +9,8 @@ extern crate alloc;
 extern crate std;
 
 pub mod event;
+#[cfg(verus_keep_ghost)]
+pub mod spec;
 pub mod syntax;
 #[cfg(verus_keep_ghost)]
 pub mod verify;

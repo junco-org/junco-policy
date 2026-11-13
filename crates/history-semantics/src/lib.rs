@@ -25,6 +25,8 @@ pub(crate) mod progress;
 #[cfg(feature = "runtime")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime")))]
 pub mod runtime;
+#[cfg(all(verus_keep_ghost, feature = "runtime"))]
+pub mod spec;
 #[cfg(feature = "runtime")]
 pub(crate) mod symbolic;
 #[cfg(feature = "runtime")]

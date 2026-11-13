@@ -25,6 +25,9 @@ pub mod kernel;
 #[cfg(verus_keep_ghost)]
 pub mod verify;
 
+#[cfg(verus_keep_ghost)]
+pub mod spec;
+
 pub use compile::{FlatEncoder, lower_flat};
 pub use error::{CompileError, HistoryError};
 pub use event::{Grant, Request};
