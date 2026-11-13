@@ -43,25 +43,24 @@ contracts against real implementations; it is not a proof of those assumptions.
 
 ## Verification evidence baseline
 
-This is a **source-reported pre-reviewer baseline**, not a verification run performed while
-editing this guide. Full-feature figures were reported by the integration owner at
-`92f4e9d`/`e525e20`; syntax was cached from the same source. The no-default figures are
-from an earlier foundation snapshot before final Track F additions. They are deliberately
-not represented as a completed current thirteen-configuration gate. The integration owner
+This is a **Main-reported pre-reviewer baseline at `e525e20`**, not a verification run
+performed while editing this guide. Main reports that the full original eleven-configuration
+gate passed with zero errors, including the no-default configurations below. This is not
+the final thirteen-configuration gate with the new reviewer targets. The integration owner
 replaces this table with final observed results after integration.
 
 | Configuration (`cargo verus verify --locked ...`) | Reported baseline |
 |---|---|
-| `-p history-syntax --no-default-features` | 63 verified, 0 errors; earlier foundation |
-| `-p history-syntax --features serde,std` | 63 verified, 0 errors; same-source cached |
-| `-p junco-core --no-default-features` | 239 verified, 0 errors; earlier foundation |
+| `-p history-syntax --no-default-features` | 63 verified, 0 errors |
+| `-p history-syntax --features serde,std` | 63 verified, 0 errors |
+| `-p junco-core --no-default-features` | 239 verified, 0 errors |
 | `-p junco-core --features runtime,std,serde` | 323 verified, 0 errors |
-| `-p history-store --no-default-features --features runtime` | 303 verified, 0 errors; earlier foundation |
+| `-p history-store --no-default-features --features runtime` | 306 verified, 0 errors |
 | `-p history-store --features runtime,std` | 306 verified, 0 errors |
-| `-p history-semantics --no-default-features --features runtime` | 1641 verified, 0 errors; earlier foundation |
+| `-p history-semantics --no-default-features --features runtime` | 1641 verified, 0 errors |
 | `-p history-semantics --features runtime,std,cache` | 1646 verified, 0 errors |
 | `-p history-semantics --features runtime,std,cache --test public_specs` | 21 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime` | No current figure supplied |
+| `-p history-analysis --no-default-features --features runtime` | 626 verified, 0 errors |
 | `-p history-analysis --no-default-features --features runtime,std` | 626 verified, 0 errors |
 | `-p history-semantics --features runtime,std,cache --test reviewer` | Final integration result not yet recorded |
 | `-p history-analysis --no-default-features --features runtime,std --test reviewer` | Final integration result not yet recorded |
