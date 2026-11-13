@@ -256,14 +256,14 @@ pub open spec fn initial_ok(q0: Regex<model::Test>, r: Regex<model::Test>, s: Re
         ==> (#[trigger] n_lang(theta, q0, w) == (n_lang(theta, r, w) && !n_lang(theta, s, w)))
 }
 
-/// Theorem Inclusion search correctness (`thm:search`), soundness, completeness and minimality:
-/// every trace that returns satisfies `outcome_ok`, with or without pruning, for undeclared and
-/// declared finite domains alike.
+/// Inclusion search correctness: every returned trace satisfies `outcome_ok`, with or without
+/// pruning, for undeclared and declared finite domains alike. Complete successor cases are
+/// required only for expanded trace nodes, exactly the premise established by the executable.
 pub open spec fn stmt_search_correct() -> bool {
     forall|d: NDomains, g0: Constraint, r: Regex<model::Test>, s: Regex<model::Test>, q0: Regex<model::Test>,
         cases_of: spec_fn(Item) -> Set<Case>, t: Trace, outcome: Outcome|
         satisfiable(d, g0) && #[trigger] initial_ok(q0, r, s)
-            && (forall|i: Item| #[trigger] steps_ok(d, i, cases_of(i)))
+            && trace_steps_ok(d, cases_of, t)
             && #[trigger] trace_wf(d, g0, q0, cases_of, t) && #[trigger] trace_outcome(t, outcome)
             ==> outcome_ok(d, g0, r, s, outcome)
 }
@@ -1091,10 +1091,9 @@ pub proof fn theorem_search_correct()
     assert forall|d: NDomains, g0: Constraint, r: Regex<model::Test>, s: Regex<model::Test>,
         q0: Regex<model::Test>, cases_of: spec_fn(Item) -> Set<Case>, t: Trace, outcome: Outcome|
         satisfiable(d, g0) && #[trigger] initial_ok(q0, r, s)
-        && (forall|i: Item| #[trigger] steps_ok(d, i, cases_of(i)))
+        && trace_steps_ok(d, cases_of, t)
         && #[trigger] trace_wf(d, g0, q0, cases_of, t) && #[trigger] trace_outcome(t, outcome)
         implies outcome_ok(d, g0, r, s, outcome) by {
-        assert(trace_steps_ok(d, cases_of, t));
         lemma_search_correct(d, g0, r, s, q0, cases_of, t, outcome);
     }
 }
