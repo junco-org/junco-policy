@@ -33,19 +33,19 @@ verus! {
 /// related to this algebra by `refinement::encoding::stmt_front_end_denies`.
 pub open spec fn stmt_regex_language<L>(sem: spec_fn(L, EventView) -> bool,
     r: Regex<L>, w: Seq<EventView>) -> bool {
-    language::lang(sem, r, w) == match r {
+    language::numeric_lang(sem, r, w) == match r {
         Regex::Empty => false,
         Regex::All => true,
         Regex::Epsilon => w.len() == 0,
         Regex::Test(l) => w.len() == 1 && sem(l, w[0]),
-        Regex::Union(cs) => exists|i: int| 0 <= i < cs.len() && language::lang(sem, cs[i], w),
-        Regex::Intersect(cs) => forall|i: int| 0 <= i < cs.len() ==> language::lang(sem, cs[i], w),
-        Regex::Not(c) => !language::lang(sem, *c, w),
+        Regex::Union(cs) => exists|i: int| 0 <= i < cs.len() && language::numeric_lang(sem, cs[i], w),
+        Regex::Intersect(cs) => forall|i: int| 0 <= i < cs.len() ==> language::numeric_lang(sem, cs[i], w),
+        Regex::Not(c) => !language::numeric_lang(sem, *c, w),
         Regex::Concat(cs) => exists|parts: Seq<Seq<EventView>>| parts.len() == cs.len()
             && w == parts.flatten()
-            && forall|i: int| 0 <= i < cs.len() ==> language::lang(sem, cs[i], parts[i]),
+            && forall|i: int| 0 <= i < cs.len() ==> language::numeric_lang(sem, cs[i], parts[i]),
         Regex::Star(c) => exists|parts: Seq<Seq<EventView>>| w == parts.flatten()
-            && forall|i: int| 0 <= i < parts.len() ==> language::lang(sem, *c, parts[i]),
+            && forall|i: int| 0 <= i < parts.len() ==> language::numeric_lang(sem, *c, parts[i]),
     }
 }
 
@@ -53,7 +53,7 @@ pub proof fn theorem_regex_language<L>(sem: spec_fn(L, EventView) -> bool,
     r: Regex<L>, w: Seq<EventView>)
     ensures stmt_regex_language(sem, r, w),
 {
-    reveal(language::lang);
+    reveal(language::numeric_lang);
 }
 
 /// Lemma One-step correctness (`lem:sderiv`), up to language before normalization.
@@ -102,7 +102,7 @@ pub proof fn theorem_matcher_correct(head: Head, tail: Regex<SrcTest>, request: 
 {
     if language::pair_lang(head, tail, request, history) {
         let theta = choose|theta: Subst| language::head_match(head, request, theta)
-            && language::lang(algebra::src_sem(theta), tail, history);
+            && language::numeric_lang(algebra::src_sem(theta), tail, history);
         algebra::theorem_rule_decision(head, tail, request, history, theta);
     }
     if exists|theta: Subst| language::head_match(head, request, theta)

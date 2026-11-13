@@ -27,7 +27,7 @@ broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemm
 
 /// Kernel test semantics under the whole-candidate valuation `θ`.
 pub open spec fn n_lang(theta: Subst, r: Regex<model::Test>, w: Seq<EventView>) -> bool {
-    language::lang(model::gsem(theta), r, w)
+    language::numeric_lang(model::gsem(theta), r, w)
 }
 
 /// A numeric head: a code per constant component, `None` for a variable.
@@ -529,11 +529,11 @@ pub proof fn lemma_lang_rename(r: Regex<model::Test>, theta: Subst, f: spec_fn(n
     requires n_renaming_ok(f, fixed, values), n_in_values(values, theta),
         enc::pointwise(u, v, n_renamed(f, values)),
         forall|c: Component, k: nat| #[trigger] regex_mentions(r, c, k) ==> fixed.contains(k),
-    ensures language::lang(model::gsem(theta), r, u)
-        == language::lang(model::gsem(n_rename_event(f, theta)), r, v),
+    ensures language::numeric_lang(model::gsem(theta), r, u)
+        == language::numeric_lang(model::gsem(n_rename_event(f, theta)), r, v),
     decreases r,
 {
-    reveal_with_fuel(language::lang, 1);
+    reveal_with_fuel(language::numeric_lang, 1);
     reveal_with_fuel(regex_mentions, 1);
     let ftheta = n_rename_event(f, theta);
     let rel = n_renamed(f, values);
@@ -550,7 +550,7 @@ pub proof fn lemma_lang_rename(r: Regex<model::Test>, theta: Subst, f: spec_fn(n
         },
         Regex::Union(cs) | Regex::Intersect(cs) => {
             assert forall|i: int| 0 <= i < cs.len() implies
-                language::lang(model::gsem(theta), cs[i], u) == language::lang(model::gsem(ftheta), cs[i], v) by {
+                language::numeric_lang(model::gsem(theta), cs[i], u) == language::numeric_lang(model::gsem(ftheta), cs[i], v) by {
                 assert forall|c: Component, k: nat| #[trigger] regex_mentions(cs[i], c, k) implies fixed.contains(k) by {
                     reveal(regex_mention_child);
                     assert(regex_mention_child(r, i) == Some(cs[i]));
@@ -574,60 +574,60 @@ pub proof fn lemma_lang_rename(r: Regex<model::Test>, theta: Subst, f: spec_fn(n
                     assert(regex_mentions(r, c, k));
                 }
             }
-            if language::lang(model::gsem(theta), r, u) {
+            if language::numeric_lang(model::gsem(theta), r, u) {
                 let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == cs.len() && u == parts.flatten()
-                    && forall|i: int| 0 <= i < cs.len() ==> language::lang(model::gsem(theta), cs[i], parts[i]);
+                    && forall|i: int| 0 <= i < cs.len() ==> language::numeric_lang(model::gsem(theta), cs[i], parts[i]);
                 assert(enc::pointwise(v, u, rev));
                 enc::lemma_partition_lift(v, u, parts, rev);
                 let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && v == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rev);
-                assert forall|i: int| 0 <= i < cs.len() implies language::lang(model::gsem(ftheta), cs[i], lifted[i]) by {
+                assert forall|i: int| 0 <= i < cs.len() implies language::numeric_lang(model::gsem(ftheta), cs[i], lifted[i]) by {
                     assert(enc::pointwise(lifted[i], parts[i], rev));
                     assert(enc::pointwise(parts[i], lifted[i], rel));
                     lemma_lang_rename(cs[i], theta, f, fixed, values, parts[i], lifted[i]);
                 }
-                assert(language::lang(model::gsem(ftheta), r, v));
+                assert(language::numeric_lang(model::gsem(ftheta), r, v));
             }
-            if language::lang(model::gsem(ftheta), r, v) {
+            if language::numeric_lang(model::gsem(ftheta), r, v) {
                 let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == cs.len() && v == parts.flatten()
-                    && forall|i: int| 0 <= i < cs.len() ==> language::lang(model::gsem(ftheta), cs[i], parts[i]);
+                    && forall|i: int| 0 <= i < cs.len() ==> language::numeric_lang(model::gsem(ftheta), cs[i], parts[i]);
                 enc::lemma_partition_lift(u, v, parts, rel);
                 let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && u == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rel);
-                assert forall|i: int| 0 <= i < cs.len() implies language::lang(model::gsem(theta), cs[i], lifted[i]) by {
+                assert forall|i: int| 0 <= i < cs.len() implies language::numeric_lang(model::gsem(theta), cs[i], lifted[i]) by {
                     lemma_lang_rename(cs[i], theta, f, fixed, values, lifted[i], parts[i]);
                 }
-                assert(language::lang(model::gsem(theta), r, u));
+                assert(language::numeric_lang(model::gsem(theta), r, u));
             }
         },
         Regex::Star(b) => {
             assert forall|c: Component, k: nat| #[trigger] regex_mentions(*b, c, k) implies fixed.contains(k) by {
                 assert(regex_mentions(r, c, k));
             }
-            if language::lang(model::gsem(theta), r, u) {
+            if language::numeric_lang(model::gsem(theta), r, u) {
                 let parts = choose|parts: Seq<Seq<EventView>>| u == parts.flatten()
-                    && forall|i: int| 0 <= i < parts.len() ==> language::lang(model::gsem(theta), *b, parts[i]);
+                    && forall|i: int| 0 <= i < parts.len() ==> language::numeric_lang(model::gsem(theta), *b, parts[i]);
                 assert(enc::pointwise(v, u, rev));
                 enc::lemma_partition_lift(v, u, parts, rev);
                 let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && v == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rev);
-                assert forall|i: int| 0 <= i < lifted.len() implies language::lang(model::gsem(ftheta), *b, lifted[i]) by {
+                assert forall|i: int| 0 <= i < lifted.len() implies language::numeric_lang(model::gsem(ftheta), *b, lifted[i]) by {
                     assert(enc::pointwise(lifted[i], parts[i], rev));
                     assert(enc::pointwise(parts[i], lifted[i], rel));
                     lemma_lang_rename(*b, theta, f, fixed, values, parts[i], lifted[i]);
                 }
-                assert(language::lang(model::gsem(ftheta), r, v));
+                assert(language::numeric_lang(model::gsem(ftheta), r, v));
             }
-            if language::lang(model::gsem(ftheta), r, v) {
+            if language::numeric_lang(model::gsem(ftheta), r, v) {
                 let parts = choose|parts: Seq<Seq<EventView>>| v == parts.flatten()
-                    && forall|i: int| 0 <= i < parts.len() ==> language::lang(model::gsem(ftheta), *b, parts[i]);
+                    && forall|i: int| 0 <= i < parts.len() ==> language::numeric_lang(model::gsem(ftheta), *b, parts[i]);
                 enc::lemma_partition_lift(u, v, parts, rel);
                 let lifted = choose|lifted: Seq<Seq<EventView>>| lifted.len() == parts.len() && u == lifted.flatten()
                     && forall|i: int| 0 <= i < parts.len() ==> enc::pointwise(lifted[i], parts[i], rel);
-                assert forall|i: int| 0 <= i < lifted.len() implies language::lang(model::gsem(theta), *b, lifted[i]) by {
+                assert forall|i: int| 0 <= i < lifted.len() implies language::numeric_lang(model::gsem(theta), *b, lifted[i]) by {
                     lemma_lang_rename(*b, theta, f, fixed, values, lifted[i], parts[i]);
                 }
-                assert(language::lang(model::gsem(theta), r, u));
+                assert(language::numeric_lang(model::gsem(theta), r, u));
             }
         },
         _ => {},

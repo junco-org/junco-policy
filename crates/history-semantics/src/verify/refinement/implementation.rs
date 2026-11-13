@@ -28,12 +28,95 @@ pub open spec fn register_of(g: ConstraintView, c: Component) -> RegisterView
     g[c.0 as int]
 }
 
-/// The literals a constraint view stands for.
+/// The literals a constraint view stands for; `lemma_constraint_of` proves this comprehension finite.
 pub open spec fn constraint_of(g: ConstraintView) -> Constraint {
     Set::new(|l: Literal| l.component.0 < g.len() && match register_of(g, l.component) {
         RegisterView::Equals(v) => l.equal && l.value == v,
         RegisterView::Differs(ds) => !l.equal && ds.contains(l.value),
-    }).unwrap_or(Set::empty())
+    }).unwrap()
+}
+
+/// A finite superset of a constraint view's literals, assembled one register at a time.
+pub open spec fn constraint_of_bound(g: ConstraintView) -> ISet<Literal>
+    decreases g.len(),
+{
+    if g.len() == 0 {
+        ISet::empty()
+    } else {
+        let c = Component((g.len() - 1) as u8);
+        let last = match g.last() {
+            RegisterView::Equals(v) => set![eq_literal(c, v)].to_iset(),
+            RegisterView::Differs(ds) => ds.to_iset().map(|v: nat| ne_literal(c, v)),
+        };
+        constraint_of_bound(g.drop_last()).union(last)
+    }
+}
+
+pub proof fn lemma_constraint_of_bound(g: ConstraintView)
+    ensures
+        constraint_of_bound(g).finite(),
+        forall|l: Literal| (l.component.0 < g.len() && match register_of(g, l.component) {
+            RegisterView::Equals(v) => l.equal && l.value == v,
+            RegisterView::Differs(ds) => !l.equal && ds.contains(l.value),
+        }) ==> #[trigger] constraint_of_bound(g).contains(l),
+    decreases g.len(),
+{
+    broadcast use vstd::iset::lemma_iset_union_finite, vstd::set::lemma_to_iset_finite;
+    if g.len() > 0 {
+        let q = g.drop_last();
+        let c = Component((g.len() - 1) as u8);
+        lemma_constraint_of_bound(q);
+        match g.last() {
+            RegisterView::Equals(v) => {},
+            RegisterView::Differs(ds) => {
+                ds.to_iset().lemma_map_finite(|v: nat| ne_literal(c, v));
+            },
+        }
+        assert forall|l: Literal| (l.component.0 < g.len() && match register_of(g, l.component) {
+            RegisterView::Equals(v) => l.equal && l.value == v,
+            RegisterView::Differs(ds) => !l.equal && ds.contains(l.value),
+        }) implies #[trigger] constraint_of_bound(g).contains(l) by {
+            if l.component.0 < q.len() {
+                assert(q[l.component.0 as int] == g[l.component.0 as int]);
+                assert(constraint_of_bound(q).contains(l));
+            } else {
+                assert(l.component.0 == g.len() - 1);
+                assert(l.component == c);
+                assert(register_of(g, l.component) == g.last());
+                match g.last() {
+                    RegisterView::Equals(v) => {
+                        assert(l == eq_literal(c, v));
+                        assert(set![eq_literal(c, v)].to_iset().contains(l));
+                    },
+                    RegisterView::Differs(ds) => {
+                        assert(l == ne_literal(c, l.value));
+                        assert(ds.to_iset().map(|v: nat| ne_literal(c, v)).contains(l));
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// The bounded comprehension exists and represents exactly the view's literals.
+pub proof fn lemma_constraint_of(g: ConstraintView)
+    ensures
+        Set::new(|l: Literal| l.component.0 < g.len() && match register_of(g, l.component) {
+            RegisterView::Equals(v) => l.equal && l.value == v,
+            RegisterView::Differs(ds) => !l.equal && ds.contains(l.value),
+        }) is Some,
+        forall|l: Literal| #[trigger] constraint_of(g).contains(l)
+            <==> (l.component.0 < g.len() && match register_of(g, l.component) {
+                RegisterView::Equals(v) => l.equal && l.value == v,
+                RegisterView::Differs(ds) => !l.equal && ds.contains(l.value),
+            }),
+{
+    lemma_constraint_of_bound(g);
+    let f = |l: Literal| l.component.0 < g.len() && match register_of(g, l.component) {
+        RegisterView::Equals(v) => l.equal && l.value == v,
+        RegisterView::Differs(ds) => !l.equal && ds.contains(l.value),
+    };
+    lemma_set_new_bounded(f, constraint_of_bound(g));
 }
 
 /// `Class`: a constant, or the candidate's own value (the register).
