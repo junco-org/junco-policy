@@ -802,7 +802,10 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
             junco_core::spec::hypotheses::event_obligations::<E>() && domain::<E>()(field, *value)
                 ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
     {
-        proof { self.calls = Ghost(self.calls@ + 1); }
+        proof {
+            self.calls = Ghost(self.calls@ + 1);
+            junco_core::verify::encoding::lemma_grows_by_refl(component_maps(*self.books), junco_core::verify::encoding::only_value(field, *value));
+        }
         validate_component::<E>(field, value)?;
         let index = field.index();
         if index >= self.books.books.len() {
@@ -830,6 +833,8 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
             junco_core::spec::hypotheses::event_obligations::<E>() && components_wf(*old(self).books) ==>
                 maps_wf::<E>(component_maps(*final(self).books))
                 && maps_extend::<E>(component_maps(*old(self).books), component_maps(*final(self).books))
+                && junco_core::verify::encoding::grows_by(component_maps(*old(self).books), component_maps(*final(self).books),
+                    junco_core::verify::encoding::only_value(Component(index as u8), *value))
                 && (result matches Ok(id) ==> junco_core::verify::encoding::encoded(
                     component_maps(*final(self).books), Self::equality(), Component(index as u8), *value, id)),
     {
@@ -866,6 +871,13 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
                 }
                 lemma_component_maps_wf(*self.books);
                 lemma_component_maps_extend(initial, *self.books);
+                assert forall|i: int| 0 <= i < arity::<E>() && i != index
+                    implies self.books.books@[i] == initial.books@[i] by {}
+                if let Ok(id) = result {
+                    assert(book_entries(self.books.books@[index as int]) == book_entries(initial.books@[index as int])
+                        || book_entries(self.books.books@[index as int]) == book_entries(initial.books@[index as int]).push((*value, id)));
+                }
+                lemma_component_maps_grow(initial, *self.books, index as int, *value);
                 if let Ok(id) = result {
                     lemma_component_book_encoded(*self.books, Component(index as u8), *value, id);
                 }
@@ -1360,6 +1372,30 @@ pub mod verify {
                 && component_equality::<E>()(field, value, component_maps(before)[f][i].0);
             assert(book_entries(before.books@[f]).is_prefix_of(book_entries(after.books@[f])));
             assert(component_maps(after)[f][i] == component_maps(before)[f][i]);
+        }
+    }
+
+    /// One `intern` at `index` adds at most the interned value to the books.
+    pub(super) proof fn lemma_component_maps_grow<E: Event>(before: ComponentBooks<E>, after: ComponentBooks<E>,
+        index: int, value: E::Component)
+        requires before.books@.len() == after.books@.len(), 0 <= index < before.books@.len(),
+            forall|f: int| 0 <= f < before.books@.len() && f != index ==> after.books@[f] == before.books@[f],
+            book_entries(after.books@[index]) == book_entries(before.books@[index])
+                || exists|id: u64| book_entries(after.books@[index]) == book_entries(before.books@[index]).push((value, id)),
+        ensures encoding::grows_by(component_maps(before), component_maps(after), encoding::only_value(Component(index as u8), value)),
+    {
+        let b = component_maps(before);
+        let a = component_maps(after);
+        assert forall|f: int, i: int| #![trigger a[f][i]] 0 <= f < a.len() && 0 <= i < a[f].len()
+            implies (exists|j: int| 0 <= j < b[f].len() && (#[trigger] b[f][j]).0 == a[f][i].0)
+                || encoding::only_value(Component(index as u8), value)(encoding::field_at(f), a[f][i].0) by {
+            assert(a[f] == book_entries(after.books@[f]));
+            assert(b[f] == book_entries(before.books@[f]));
+            if f == index && i >= b[f].len() {
+                assert(a[f][i].0 == value);
+            } else {
+                assert(a[f][i] == b[f][i]);
+            }
         }
     }
 

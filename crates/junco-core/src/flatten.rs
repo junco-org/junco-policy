@@ -266,6 +266,9 @@ fn flatten_atom<E: Event>(
         && (forall|i: int| 0 <= i < children@.len()
             ==> crate::spec::semantics::regex_scoped(children@[i]@, head))
         ==> work_scoped::<E>(final(work)@, head),
+    result is Ok ==> forall|tail| work_within::<E>(old(work)@, tail)
+        && (forall|i: int| 0 <= i < children@.len() ==> regex_constants_within(children@[i]@, tail))
+        ==> work_within::<E>(final(work)@, tail),
 )]
 fn schedule_regexes<'a, E: Event, L: Limits>(
     work: &mut Vec<Work<'a, E>>,
@@ -285,6 +288,9 @@ fn schedule_regexes<'a, E: Event, L: Limits>(
                 && (forall|i: int| 0 <= i < children@.len()
                     ==> crate::spec::semantics::regex_scoped(children@[i]@, head))
                 ==> work_scoped::<E>(work@, head),
+            forall|tail| work_within::<E>(before, tail)
+                && (forall|i: int| 0 <= i < children@.len() ==> regex_constants_within(children@[i]@, tail))
+                ==> work_within::<E>(work@, tail),
         decreases index,
     ))]
     while index > 0 {
@@ -299,6 +305,11 @@ fn schedule_regexes<'a, E: Event, L: Limits>(
                     ==> crate::spec::semantics::regex_scoped(children@[i]@, head))
                 implies work_scoped::<E>(work@, head) by {
                 lemma_work_scoped_push::<E>(previous, Work::Regex(&children[index as int]), head);
+            }
+            assert forall|tail| work_within::<E>(before, tail)
+                && (forall|i: int| 0 <= i < children@.len() ==> regex_constants_within(children@[i]@, tail))
+                implies work_within::<E>(work@, tail) by {
+                lemma_work_within_push::<E>(previous, Work::Regex(&children[index as int]), tail);
             }
             assert(match work@.last() { Work::Regex(source) => source@ == children@[index as int]@, _ => false });
             reveal_with_fuel(regex_forest_cost, 2);
@@ -334,6 +345,9 @@ fn schedule_regexes<'a, E: Event, L: Limits>(
         && (forall|i: int| 0 <= i < children@.len()
             ==> crate::spec::semantics::test_scoped(children@[i]@, head))
         ==> work_scoped::<E>(final(work)@, head),
+    result is Ok ==> forall|tail| work_within::<E>(old(work)@, tail)
+        && (forall|i: int| 0 <= i < children@.len() ==> test_constants_within(children@[i]@, tail))
+        ==> work_within::<E>(final(work)@, tail),
 )]
 fn schedule_tests<'a, E: Event, L: Limits>(
     work: &mut Vec<Work<'a, E>>,
@@ -353,6 +367,9 @@ fn schedule_tests<'a, E: Event, L: Limits>(
                 && (forall|i: int| 0 <= i < children@.len()
                     ==> crate::spec::semantics::test_scoped(children@[i]@, head))
                 ==> work_scoped::<E>(work@, head),
+            forall|tail| work_within::<E>(before, tail)
+                && (forall|i: int| 0 <= i < children@.len() ==> test_constants_within(children@[i]@, tail))
+                ==> work_within::<E>(work@, tail),
         decreases index,
     ))]
     while index > 0 {
@@ -367,6 +384,11 @@ fn schedule_tests<'a, E: Event, L: Limits>(
                     ==> crate::spec::semantics::test_scoped(children@[i]@, head))
                 implies work_scoped::<E>(work@, head) by {
                 lemma_work_scoped_push::<E>(previous, Work::Test(&children[index as int]), head);
+            }
+            assert forall|tail| work_within::<E>(before, tail)
+                && (forall|i: int| 0 <= i < children@.len() ==> test_constants_within(children@[i]@, tail))
+                implies work_within::<E>(work@, tail) by {
+                lemma_work_within_push::<E>(previous, Work::Test(&children[index as int]), tail);
             }
             assert(match work@.last() { Work::Test(source) => source@ == children@[index as int]@, _ => false });
             reveal_with_fuel(test_forest_cost, 2);
@@ -418,7 +440,7 @@ pub fn flatten_rule<E: Event, L: Limits>(
 /// The continuation invariant excludes internal stack and operand-guard failures.
 #[verus_verify]
 #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
-#[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
+#[cfg_attr(verus_keep_ghost, verifier::rlimit(45))]
 #[verus_spec(result => ensures
     no_invariant_compile_failure(result),
     crate::spec::semantics::regex_scoped(source_tail@, source_head@) ==>
@@ -461,6 +483,7 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
         if crate::spec::semantics::regex_scoped(rule.tail@, rule.head@) {
             assert(work_scoped::<E>(work@, rule.head@)) by { reveal(work_scoped); }
         }
+        assert(work_within::<E>(work@, rule.tail@)) by { reveal(work_within); }
     }
     #[cfg_attr(verus_keep_ghost, verus_spec(
         invariant builder.wf(),
@@ -475,6 +498,9 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                     builder.head_view()[i], crate::verify::encoding::field_at(i), component_domain::<E>()),
             E::obeys_projection_spec() ==> forall|i: int| 0 <= i < builder.tests_view().len()
                 ==> crate::verify::encoding::test_in_domain(builder.tests_view()[i], component_domain::<E>()),
+            work_within::<E>(work@, rule.tail@),
+            forall|i: int| 0 <= i < builder.tests_view().len()
+                ==> flat_test_within(#[trigger] builder.tests_view()[i], rule.tail@),
             result_stacks::<E>(builder.tests_view(), builder.regexes_view(), tests@, regexes@,
                 test_sources, regex_sources, rule.head@),
             run_work::<E>(work@, test_sources, regex_sources) == Some((Seq::empty(), seq![rule.tail@])),
@@ -505,6 +531,7 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                 lemma_work_scoped_pop::<E>(old_work, rule.head@);
                 assert(work_scoped::<E>(work@, rule.head@));
             }
+            lemma_work_within_pop::<E>(old_work, rule.tail@);
             reveal_with_fuel(work_cost, 2);
             reveal_with_fuel(history_syntax::spec::events::regex_view, 2);
             reveal_with_fuel(history_syntax::spec::events::test_view, 2);
@@ -532,7 +559,7 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                 }
                 RegexExpr::Test(test) => {
                     proof! {
-                        lemma_visit_test_regex::<E>(work@, regex, test, tests.len(), test_sources, regex_sources, rule.head@);
+                        lemma_visit_test_regex::<E>(work@, regex, test, tests.len(), test_sources, regex_sources, rule.head@, rule.tail@);
                         lemma_work_cost_push::<E>(work@, Work::FinishRegex(regex, tests.len()));
                         lemma_work_cost_push::<E>(work@.push(Work::FinishRegex(regex, tests.len())), Work::Test(test));
                     }
@@ -550,7 +577,7 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                 }
                 RegexExpr::Star(child) | RegexExpr::Not(child) => {
                     proof! {
-                        lemma_visit_unary_regex::<E>(work@, regex, child, regexes.len(), test_sources, regex_sources, rule.head@);
+                        lemma_visit_unary_regex::<E>(work@, regex, child, regexes.len(), test_sources, regex_sources, rule.head@, rule.tail@);
                         lemma_work_cost_push::<E>(work@, Work::FinishRegex(regex, regexes.len()));
                         lemma_work_cost_push::<E>(work@.push(Work::FinishRegex(regex, regexes.len())), Work::Regex(child));
                     }
@@ -575,12 +602,16 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                         _ => {},
                     } }
                     proof! {
-                        lemma_finish_many_regex::<E>(work@, regex, regexes.len(), test_sources, regex_sources, regex_views::<E>(children@), rule.head@);
+                        lemma_finish_many_regex::<E>(work@, regex, regexes.len(), test_sources, regex_sources, regex_views::<E>(children@), rule.head@, rule.tail@);
                         if crate::spec::semantics::regex_scoped(rule.tail@, rule.head@) {
                             assert forall|i: int| 0 <= i < children@.len() implies
                                 crate::spec::semantics::regex_scoped(children@[i]@, rule.head@) by {
                                 assert(regex_views::<E>(children@)[i] == children@[i]@);
                             }
+                        }
+                        assert forall|i: int| 0 <= i < children@.len() implies
+                            regex_constants_within(children@[i]@, rule.tail@) by {
+                            assert(regex_views::<E>(children@)[i] == children@[i]@);
                         }
                         lemma_work_cost_push::<E>(work@, Work::FinishRegex(regex, regexes.len()));
                         assert(regex_cost::<E>(regex@) == 2 + regex_forest_cost::<E>(regex_views::<E>(children@)));
@@ -626,6 +657,13 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                     proof! {
                         assert(crate::flat::verify::test_wf(builder.head_view(), node, builder.tests_view().len()));
                         assert(E::obeys_projection_spec() ==> crate::verify::encoding::test_in_domain(node, component_domain::<E>()));
+                        if let TestExpr::Atom { pattern, .. } = test {
+                            if let FlatTest::Atom { field, term: FlatTerm::Constant(value), .. } = &node {
+                                assert(atom_term_represents::<E>(*field, FlatTerm::Constant(*value), pattern@, rule.head@));
+                                assert(crate::spec::questions::test_constant_at(test@, field.0 as int).contains(*value));
+                            }
+                        }
+                        assert(flat_test_within(node, rule.tail@));
                     }
                     let id = builder.test(node, limits, world)?;
                     proof! {
@@ -647,12 +685,16 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                     proof! {
                         assert(test@ == history_syntax::spec::events::TestView::And(test_views::<E>(children@))
                             || test@ == history_syntax::spec::events::TestView::Or(test_views::<E>(children@)));
-                        lemma_finish_test::<E>(work@, test, tests.len(), test_sources, regex_sources, test_views::<E>(children@), rule.head@);
+                        lemma_finish_test::<E>(work@, test, tests.len(), test_sources, regex_sources, test_views::<E>(children@), rule.head@, rule.tail@);
                         if crate::spec::semantics::regex_scoped(rule.tail@, rule.head@) {
                             assert forall|i: int| 0 <= i < children@.len() implies
                                 crate::spec::semantics::test_scoped(children@[i]@, rule.head@) by {
                                 assert(test_views::<E>(children@)[i] == children@[i]@);
                             }
+                        }
+                        assert forall|i: int| 0 <= i < children@.len() implies
+                            test_constants_within(children@[i]@, rule.tail@) by {
+                            assert(test_views::<E>(children@)[i] == children@[i]@);
                         }
                         assert(test_cost::<E>(test@) == 2 + test_forest_cost::<E>(test_views::<E>(children@)));
                     }
@@ -870,6 +912,10 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                     if i < old_tests.len() { assert(builder.tests_view()[i] == old_tests[i]); }
                 }
             }
+            assert forall|i: int| 0 <= i < builder.tests_view().len() implies
+                flat_test_within(#[trigger] builder.tests_view()[i], rule.tail@) by {
+                if i < old_tests.len() { assert(builder.tests_view()[i] == old_tests[i]); }
+            }
         }
     }
     proof! {
@@ -899,6 +945,7 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
         assert(head_represents::<E>(source.head@, rule.head@));
         assert(regex_represents::<E>(source.tests@, source.regexes@, source.root as nat, rule.tail@, rule.head@));
         assert(E::obeys_projection_spec() ==> crate::verify::encoding::constants_in_domain(source, component_domain::<E>()));
+        assert(forall|i: int| 0 <= i < source.tests@.len() ==> flat_test_within(#[trigger] source.tests@[i], rule.tail@));
     }
     Ok(FlatRule { mode, source })
 }
