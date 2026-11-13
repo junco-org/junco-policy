@@ -50,7 +50,7 @@ the SMT query asks for a string in the left language but not the right language.
 
 The dataset's 29 distinct ranges partition all 256 bytes into 47 classes that no range splits.
 `ALPHABET` contains one representative byte per class and is declared as the entire action
-universe with `Domains::infinite().with_domain(Component(1), ALPHABET.map(Component3::C1))`. No fresh action characters exist.
+universe with `Domains::infinite().with_domain(Component(1), &ALPHABET.map(Component3::C1))`. No fresh action characters exist.
 Every character test is a union of whole classes, so inclusion over the representatives is
 identical to inclusion over the full 8-bit alphabet. The dataset has no complement,
 intersection, `re.allchar`, or `re.all`; loop upper bounds are at most 67.

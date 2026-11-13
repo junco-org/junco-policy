@@ -6,10 +6,16 @@ use super::encoding::*;
 use super::search::{Outcome, follows, outcome_ok};
 use crate::verify::finite_states::lemma_powerset_finite;
 use alloc::boxed::Box;
-use history_syntax::MAX_ARITY;
+use history_syntax::spec::events::{RegexView, RuleView, event_view};
 use history_syntax::syntax::{Component, RuleMode};
+use history_syntax::{Event, MAX_ARITY};
 use junco_core::kernel::verify as model;
-use junco_core::spec::semantics::violated_by;
+use junco_core::spec::questions::{
+    DomainsView, always_denies, forbid_all, in_domains, never_denies, refines,
+};
+use junco_core::spec::semantics::{
+    head_matches, history_view, lang, policy_denies, policy_permits, rule_violated, violated_by,
+};
 use junco_core::verify::history_specs as language;
 use junco_core::verify::history_specs::{EventView, Regex, Subst};
 use vstd::iset_lib::lemma_iset_subset_finite;
@@ -198,7 +204,7 @@ pub open spec fn stmt_policy_search_composition() -> bool {
 /// `R` never denies iff `ρ_R ⊑_{Γ_R} ∅`; `R` denies every matching candidate and history iff
 /// `Univ ⊑_{Γ_R} ρ_R`. These are constrained forms of the vacuity reductions of appendix
 /// `app:policy-reduction`, which use denial expressions. No executable vacuity query exists; the
-/// typed `never_denies`/`always_denies` (`semantics.rs`) are not linked to this statement.
+/// typed vacuity questions go through `at_least_as_strict` by `stmt_vacuity_via_refinement`.
 pub open spec fn stmt_vacuity_reductions() -> bool {
     forall|d: NDomains, rule: NRule| rule.head.len() == d.len() ==> {
         &&& (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) ==> !#[trigger] n_rule_denies(rule, theta, w))
@@ -206,6 +212,16 @@ pub open spec fn stmt_vacuity_reductions() -> bool {
         &&& (forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) && n_head_matches(rule.head, theta)
                 ==> #[trigger] n_rule_denies(rule, theta, w))
             <==> #[trigger] included_under(d, head_constraint(rule.head), Regex::All, denial(rule))
+    }
+}
+
+/// Vacuity through refinement (decision 6, `app:policy-reduction`): a rule never denies iff the
+/// empty policy refines `[R]`, and denies every matching candidate iff `[R]` refines
+/// `[forbid head(R) Univ]`; both are `at_least_as_strict` queries.
+pub open spec fn stmt_vacuity_via_refinement<E: Event>() -> bool {
+    forall|d: DomainsView<E::Component>, r: RuleView<E::Component>| {
+        &&& #[trigger] never_denies::<E>(d, r) <==> refines::<E>(d, Seq::empty(), seq![r])
+        &&& #[trigger] always_denies::<E>(d, r) <==> refines::<E>(d, seq![r], seq![forbid_all(r.head)])
     }
 }
 
@@ -859,6 +875,56 @@ pub proof fn theorem_vacuity_reductions()
                     ==> #[trigger] n_rule_denies(rule, theta, w))
                 <==> included_under(d, head_constraint(rule.head), Regex::All, denial(rule))) by {
         lemma_vacuity(d, rule);
+    }
+}
+
+pub proof fn theorem_vacuity_via_refinement<E: Event>()
+    ensures stmt_vacuity_via_refinement::<E>(),
+{
+    assert forall|d: DomainsView<E::Component>, r: RuleView<E::Component>|
+        #[trigger] never_denies::<E>(d, r) <==> refines::<E>(d, Seq::empty(), seq![r]) by {
+        let single = seq![r];
+        assert forall|c: E, h: Seq<E>| policy_denies(single, c, h) <==> rule_violated(r, c, h) by {
+            assert(single[0] == r);
+        }
+        assert(forall|c: E, h: Seq<E>| !policy_denies(Seq::<RuleView<E::Component>>::empty(), c, h));
+        if never_denies::<E>(d, r) {
+            assert forall|c: E, h: Seq<E>| in_domains::<E>(d, c, h) && policy_permits(Seq::empty(), c, h)
+                implies #[trigger] policy_permits(single, c, h) by {
+                assert(!rule_violated(r, c, h));
+            }
+        }
+        if refines::<E>(d, Seq::empty(), single) {
+            assert forall|c: E, h: Seq<E>| in_domains::<E>(d, c, h) implies !#[trigger] rule_violated(r, c, h) by {
+                assert(policy_permits(single, c, h));
+            }
+        }
+    }
+    assert forall|d: DomainsView<E::Component>, r: RuleView<E::Component>|
+        #[trigger] always_denies::<E>(d, r) <==> refines::<E>(d, seq![r], seq![forbid_all(r.head)]) by {
+        let single = seq![r];
+        let all = seq![forbid_all(r.head)];
+        assert forall|c: E, h: Seq<E>| policy_denies(single, c, h) <==> rule_violated(r, c, h) by {
+            assert(single[0] == r);
+        }
+        assert forall|c: E, h: Seq<E>| policy_denies(all, c, h) <==> head_matches(r.head, event_view(c)) by {
+            assert(all[0] == forbid_all(r.head));
+            assert(lang(RegexView::<E::Component>::All, r.head, event_view(c), history_view(h)));
+            assert(rule_violated(forbid_all(r.head), c, h) == head_matches(r.head, event_view(c)));
+        }
+        if always_denies::<E>(d, r) {
+            assert forall|c: E, h: Seq<E>| in_domains::<E>(d, c, h) && policy_permits(single, c, h)
+                implies #[trigger] policy_permits(all, c, h) by {
+                assert(!rule_violated(r, c, h));
+            }
+        }
+        if refines::<E>(d, single, all) {
+            assert forall|c: E, h: Seq<E>| in_domains::<E>(d, c, h) && head_matches(r.head, event_view(c))
+                implies #[trigger] rule_violated(r, c, h) by {
+                assert(policy_denies(all, c, h));
+                assert(!policy_permits(all, c, h));
+            }
+        }
     }
 }
 

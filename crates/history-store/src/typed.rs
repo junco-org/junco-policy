@@ -515,6 +515,18 @@ fn allocate_store_id(Ghost(registry): Ghost<vstd::resource::Loc>)
         { issue_store_id(state, registry) })
 }
 
+/// A fresh process-wide owner id from the store-id allocator, for clients that tag handles with
+/// their issuer (the analyzer's `RuleId`). Ids are issued in increasing order, so no two calls in
+/// one process return the same id; the allocator's ghost receipt is not needed by these clients.
+pub fn issue_owner_id() -> (result: Result<u64, HistoryError>)
+    ensures result matches Ok(id) ==> id > 0,
+        junco_core::verify::history_specs::no_invariant_failure(result),
+        result matches Err(error) ==> error == (HistoryError::IdExhausted { domain: "store" }),
+{
+    let (id, _receipt) = allocate_store_id(Ghost(arbitrary()))?;
+    Ok(id)
+}
+
 impl<E: Event> Store<E> {
     /// Create an empty typed view. Store-ID exhaustion is reported before wrapping.
     pub fn new() -> (result: Result<Self, HistoryError>)

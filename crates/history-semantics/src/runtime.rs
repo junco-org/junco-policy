@@ -662,7 +662,7 @@ impl RuleRuntime {
         requires resume_requires(*old(self), *bindings, *stored, target_len),
         ensures resume_ensures(*old(self), *final(self), result, *bindings, *stored, target_len),
     )]
-    pub fn resume_cursor(
+    pub(crate) fn resume_cursor(
         &mut self,
         bindings: &Bindings,
         stored: &StoredHistory,
@@ -732,7 +732,7 @@ impl RuleRuntime {
             *bindings, *stored, target_len, batch_size, result),
             result != Err(HistoryError::WrongHistoryOwner),
     )]
-    pub fn advance_cursor<L: Limits>(
+    pub(crate) fn advance_cursor<L: Limits>(
         &mut self,
         cursor: &mut BatchCursor,
         bindings: &Bindings,

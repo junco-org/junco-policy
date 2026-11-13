@@ -10,6 +10,7 @@ use crate::runtime::RuleRuntime;
 use crate::runtime::verify::{self as cache, HistorySnapshots};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use history_store::cache::HistoryCursor;
 use history_store::history::StoredHistory;
 use history_store::store::{Event, HistoryStore};
@@ -350,6 +351,57 @@ pub(crate) fn flat_template_cached_decision<L: Limits>(
             word, stored@.events.take(target_len as int), bindings@);
     }
     Ok(Some(accepted))
+}
+
+/// The crate-internal cursor API, driven once from a fresh store: resume, advance to the stored
+/// length, and read the answer against `runtime_accepts`.
+fn numeric_runtime_readiness<L: Limits>(bindings: &Bindings,
+    limits: &mut L, world: &mut ObservationWorld) -> Result<(), junco_core::HistoryError>
+    requires language::event_wf(bindings@, bindings@.len()),
+        1 <= bindings@.len() <= history_syntax::MAX_ARITY,
+{
+    let arity = bindings.arity();
+    let owner = HistoryStore::new(arity);
+    let store = history_store::store::borrow_numeric_owner(&owner);
+    let handle = owner.new_history(limits, world)?;
+    let record = store.history_record(&handle)?;
+    let guard = record.read();
+    let stored: &StoredHistory = &guard;
+    let target = stored.len();
+    let mut regexes = Vec::new();
+    regexes.push(junco_core::flat::FlatRegex::All);
+    let mut head = Vec::new();
+    while head.len() < arity
+        invariant head@.len() <= arity,
+            forall|i: int| 0 <= i < head@.len() ==> head@[i] == junco_core::flat::FlatHead::<u64>::Bind,
+        decreases arity - head@.len(),
+    {
+        head.push(junco_core::flat::FlatHead::<u64>::Bind);
+    }
+    let template = FlatPair {
+        head,
+        tests: Vec::new(), regexes, root: 0,
+    };
+    let mut state = RuleRuntime::new(&owner, &template, false, limits, world)?;
+    let ghost constructed = state;
+    proof {
+        cache::lemma_constructor_runtime_wf(state, owner, template);
+        cache::lemma_constructor_snapshot_compatible(state, owner, template, *stored);
+        cache::lemma_resume_requires(state, *bindings, *stored, target);
+    }
+    let mut cursor = state.resume_cursor(bindings, stored, target);
+    proof { cache::lemma_resume_can_advance(constructed, state, cursor, *bindings, *stored, target); }
+    let ghost before = state;
+    let ghost start = cursor;
+    let answer = state.advance_cursor(&mut cursor, bindings, stored, target, target, limits, world);
+    proof {
+        cache::lemma_advance_result_facts(before, state, start, cursor, *bindings, *stored, target, target, answer);
+        cache::lemma_runtime_frame_accepts(constructed, before, bindings@, stored@.events.take(target as int));
+        assert(answer matches Ok(Some(accepted)) ==>
+            accepted == cache::runtime_accepts(constructed, bindings@, stored@.events.take(target as int)));
+        assert(answer != Err(junco_core::HistoryError::WrongHistoryOwner));
+    }
+    Ok(())
 }
 
 }
