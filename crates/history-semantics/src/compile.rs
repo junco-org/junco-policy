@@ -824,6 +824,63 @@ pub mod verify {
         if i < n - 1 { lemma_reachable_regex_child(template, id, (n - 1) as nat, i); }
     }
 
+    /// A primitive in a test prefix comes from one of its referenced children.
+    pub proof fn lemma_reachable_test_prefix_member(template: FlatPair<u64>, id: nat, n: nat,
+        children: Seq<u32>, p: model::Primitive)
+        requires id < template.tests@.len(), reachable_test_prefix(template, id, n).contains(p),
+            match template.tests@[id as int] {
+                FlatTest::And(cs) | FlatTest::Or(cs) => n <= cs@.len() && cs@ == children,
+                _ => false,
+            },
+        ensures exists|i: int| 0 <= i < n && #[trigger] children[i] < id
+            && reachable_test_primitives(template, children[i] as nat).contains(p),
+        decreases n,
+    {
+        reveal_with_fuel(reachable_test_prefix, 1);
+        assert(n > 0);
+        if reachable_test_prefix(template, id, (n - 1) as nat).contains(p) {
+            lemma_reachable_test_prefix_member(template, id, (n - 1) as nat, children, p);
+            let i = choose|i: int| 0 <= i < n - 1 && #[trigger] children[i] < id
+                && reachable_test_primitives(template, children[i] as nat).contains(p);
+            assert(exists|j: int| 0 <= j < n && #[trigger] children[j] < id
+                && reachable_test_primitives(template, children[j] as nat).contains(p));
+        } else {
+            assert(children[n - 1] < id);
+            assert(reachable_test_primitives(template, children[n - 1] as nat).contains(p));
+            assert(exists|j: int| 0 <= j < n && #[trigger] children[j] < id
+                && reachable_test_primitives(template, children[j] as nat).contains(p));
+        }
+    }
+
+    /// A primitive in a regex prefix comes from one of its referenced children.
+    pub proof fn lemma_reachable_regex_prefix_member(template: FlatPair<u64>, id: nat, n: nat,
+        children: Seq<u32>, p: model::Primitive)
+        requires id < template.regexes@.len(), reachable_regex_prefix(template, id, n).contains(p),
+            match template.regexes@[id as int] {
+                FlatRegex::Union(cs) | FlatRegex::Concat(cs) | FlatRegex::Intersect(cs) =>
+                    n <= cs@.len() && cs@ == children,
+                _ => false,
+            },
+        ensures exists|i: int| 0 <= i < n && #[trigger] children[i] < id
+            && reachable_regex_primitives(template, children[i] as nat).contains(p),
+        decreases n,
+    {
+        reveal_with_fuel(reachable_regex_prefix, 1);
+        assert(n > 0);
+        if reachable_regex_prefix(template, id, (n - 1) as nat).contains(p) {
+            lemma_reachable_regex_prefix_member(template, id, (n - 1) as nat, children, p);
+            let i = choose|i: int| 0 <= i < n - 1 && #[trigger] children[i] < id
+                && reachable_regex_primitives(template, children[i] as nat).contains(p);
+            assert(exists|j: int| 0 <= j < n && #[trigger] children[j] < id
+                && reachable_regex_primitives(template, children[j] as nat).contains(p));
+        } else {
+            assert(children[n - 1] < id);
+            assert(reachable_regex_primitives(template, children[n - 1] as nat).contains(p));
+            assert(exists|j: int| 0 <= j < n && #[trigger] children[j] < id
+                && reachable_regex_primitives(template, children[j] as nat).contains(p));
+        }
+    }
+
 
 
     #[verifier::opaque]
