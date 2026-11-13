@@ -101,7 +101,8 @@ pub(crate) fn pack_policy_rule<E: Event, C>(
 
 /// Builds a `Forbid` rule using the three-ary `(principal, action, resource)` convention.
 #[verus_verify]
-#[verus_spec(result => ensures
+#[verus_spec(result => requires history_syntax::spec::events::arity::<E>() == 3,
+    ensures
     policy_rule_source(result).mode == RuleMode::Forbid,
     policy_rule_source(result).head@ == seq![
         PatternView::Variable(seq!['p']), PatternView::Constant(action), PatternView::Variable(seq!['r']),
