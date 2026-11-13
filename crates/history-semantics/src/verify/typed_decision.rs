@@ -51,9 +51,9 @@ pub(crate) proof fn lemma_runtime_frame(template: FlatPair<u64>, before: RuleRun
     let last = after.pair.store.graph();
     graph::lemma_graph_wf_elim(first);
     graph::lemma_lift_regex_stable(first, last, before.pair.root@);
-    assert forall|theta: junco_core::verify::history_specs::Subst,
-        word: Seq<junco_core::verify::history_specs::EventView>|
-        junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
+    assert forall|theta: junco_core::verify::numeric_regex::Subst,
+        word: Seq<junco_core::verify::numeric_regex::EventView>|
+        junco_core::verify::numeric_regex::event_wf(theta, theta.len()) implies
             graph::regex_lang(last, theta, after.pair.root@, word)
                 == numeric::source_regex(template, template.root as nat, theta, word) by {
         assert(graph::regex_lang(first, theta, before.pair.root@, word)

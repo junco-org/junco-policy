@@ -1,7 +1,7 @@
 //! Exact head firing for the concrete split's structurally decided cases.
 use super::*;
 use history_semantics::verify::refinement::{encoding, implementation, inclusion};
-use junco_core::verify::history_specs::Subst;
+use junco_core::verify::numeric_regex::Subst;
 use vstd::prelude::*;
 
 verus! {

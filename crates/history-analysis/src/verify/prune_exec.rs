@@ -10,7 +10,7 @@ use history_semantics::verify::refinement::{
 use history_store::native::groups;
 use junco_core::kernel::{RegexId, verify as model};
 use junco_core::observation::{PartsKey, SmallVecSpecFns};
-use junco_core::verify::history_specs::Regex;
+use junco_core::verify::numeric_regex::Regex;
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 

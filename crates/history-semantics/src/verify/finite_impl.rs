@@ -15,7 +15,7 @@
 use crate::verify::finite_states::*;
 use alloc::boxed::Box;
 use junco_core::kernel::verify as model;
-use junco_core::verify::history_specs::Regex;
+use junco_core::verify::numeric_regex::Regex;
 use vstd::iset_lib::lemma_iset_subset_finite;
 use vstd::prelude::*;
 

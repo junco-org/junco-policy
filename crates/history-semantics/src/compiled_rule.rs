@@ -25,8 +25,9 @@ use history_store::typed::verify as books;
 use junco_core::spec::{hypotheses::monitor_hypotheses, semantics};
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::{
-    dsl, encoding, flatten as source,
-    history_specs::{no_internal_compile_error, no_invariant_failure},
+    dsl, encoding,
+    errors::{no_internal_compile_error, no_invariant_failure},
+    flatten as source,
 };
 #[cfg(verus_keep_ghost)]
 use verify::*;
@@ -68,7 +69,7 @@ pub(crate) open spec fn compiled_source<E: Event>(
     pub closed spec fn constructed<E: Event>(compiled: CompiledRule<E>, rule: Rule<E>, store: Arc<Store<E>>) -> bool {
         compiled_wf(compiled) && compiled.source@ == rule && compiled.store == store
             && compiled.runtime.cursors@ == Seq::<history_store::cache::HistoryCursor>::empty()
-            && compiled.runtime.snapshots@ == Map::<(usize, u64), Seq<junco_core::verify::history_specs::EventView>>::empty()
+            && compiled.runtime.snapshots@ == Map::<(usize, u64), Seq<junco_core::verify::numeric_regex::EventView>>::empty()
     }
     pub closed spec fn decision_requires<E: Event>(compiled: CompiledRule<E>, history: History<E>) -> bool {
         compiled_wf(compiled) && raw::history_wf(history)
@@ -114,7 +115,7 @@ pub mod verify {
     }
 
     pub(crate) open spec fn observation_matches(registry: vstd::resource::Loc, key: (usize, u64),
-        events: Seq<junco_core::verify::history_specs::EventView>, observation: ObservedHistory) -> bool {
+        events: Seq<junco_core::verify::numeric_regex::EventView>, observation: ObservedHistory) -> bool {
         observation.registration.id() == registry && observation.registration.key() == key.0
             && observation.registration.value() == observation.snapshot.id()
             && observation.snapshot.value().revision == key.1 as nat
@@ -132,7 +133,7 @@ pub mod verify {
     /// Publishing an exact lifecycle observation also introduces closed snapshot compatibility.
     pub(crate) proof fn lemma_observations_insert(registry: vstd::resource::Loc,
         snapshots: crate::runtime::verify::HistorySnapshots, observations: Map<(usize, u64), ObservedHistory>,
-        key: (usize, u64), events: Seq<junco_core::verify::history_specs::EventView>, observation: ObservedHistory)
+        key: (usize, u64), events: Seq<junco_core::verify::numeric_regex::EventView>, observation: ObservedHistory)
         requires observations_wf(registry, snapshots, observations),
             observation_matches(registry, key, events, observation),
         ensures observations_wf(registry, snapshots.insert(key, events), observations.insert(key, observation)),
@@ -340,7 +341,7 @@ pub mod verify {
             None => crate::compile::verify::head_rejects(template, request),
             Some(accepted) => exists|bindings: junco_core::kernel::Bindings|
                 crate::compile::verify::bindings_match(template, request, bindings)
-                    && junco_core::verify::history_specs::event_wf(bindings@, bindings@.len())
+                    && junco_core::verify::numeric_regex::event_wf(bindings@, bindings@.len())
                     && accepted == crate::compile::verify::source_regex(template, template.root as nat,
                         bindings@, history_store::store::verify::events_view(raw::stored_events(&stored))),
         }
@@ -388,7 +389,7 @@ pub mod verify {
                 Some(accepted) => {
                     let bindings = choose|bindings: junco_core::kernel::Bindings|
                         crate::compile::verify::bindings_match(compiled.template, request, bindings)
-                            && junco_core::verify::history_specs::event_wf(bindings@, bindings@.len())
+                            && junco_core::verify::numeric_regex::event_wf(bindings@, bindings@.len())
                             && accepted == crate::compile::verify::source_regex(compiled.template,
                                 compiled.template.root as nat, bindings@,
                                 history_store::store::verify::events_view(raw::stored_events(history.numeric())));

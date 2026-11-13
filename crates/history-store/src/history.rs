@@ -31,9 +31,9 @@ use vstd::std_specs::iter::IteratorSpec;
 #[cfg(verus_keep_ghost)]
 verus! {
 impl View for StoredHistory {
-    type V = junco_core::verify::history_specs::HistoryStateView;
-    closed spec fn view(&self) -> junco_core::verify::history_specs::HistoryStateView {
-        junco_core::verify::history_specs::HistoryStateView {
+    type V = junco_core::verify::numeric_regex::HistoryStateView;
+    closed spec fn view(&self) -> junco_core::verify::numeric_regex::HistoryStateView {
+        junco_core::verify::numeric_regex::HistoryStateView {
             events: crate::store::verify::events_view(self.events@),
             revision: self.revision as nat,
         }
@@ -41,7 +41,7 @@ impl View for StoredHistory {
 }
 
 pub proof fn lemma_stored_history_view(stored: StoredHistory)
-    ensures stored@ == (junco_core::verify::history_specs::HistoryStateView {
+    ensures stored@ == (junco_core::verify::numeric_regex::HistoryStateView {
         events: crate::store::verify::events_view(verify::stored_events(&stored)),
         revision: stored.spec_revision() as nat,
     }),
@@ -124,7 +124,7 @@ impl StoredHistory {
     #[verus_spec(result =>
         ensures verify::stored_append_result(*old(self), *final(self), events@, result),
             result != Err(HistoryError::WrongHistoryOwner),
-            junco_core::verify::history_specs::no_invariant_failure(result),
+            junco_core::verify::errors::no_invariant_failure(result),
     )]
     pub(crate) fn append_events<L: Limits>(
         &mut self,
@@ -149,7 +149,7 @@ impl StoredHistory {
             proof! {
                 assert(self.events@ =~= entry_events);
                 assert(self.id == entry.id && self.revision == entry.revision);
-                assert(junco_core::verify::history_specs::history_mutation(entry@, self@));
+                assert(junco_core::verify::numeric_regex::history_mutation(entry@, self@));
                 assert(verify::stored_events(&*self) == entry_events);
             }
             return Err(error.into());
@@ -160,7 +160,7 @@ impl StoredHistory {
                     + crate::store::verify::events_view(events@));
             assert(self.id == entry.id && self.revision == entry.revision);
             assert(self.events@ == entry_events + events@);
-            assert(junco_core::verify::history_specs::history_mutation(entry@, self@));
+            assert(junco_core::verify::numeric_regex::history_mutation(entry@, self@));
             assert(verify::stored_events(&*self) == entry_events + events@);
         }
         Ok(())
@@ -246,13 +246,13 @@ impl<E: TypedEvent> History<E> {
     #[verus_spec(result =>
         requires books::store_wf(*store),
         ensures result matches Ok(history) ==> history_wf(history) && empty_history(history, store),
-            junco_core::verify::history_specs::no_invariant_failure(result),
+            junco_core::verify::errors::no_invariant_failure(result),
     )]
     pub fn new(store: Arc<Store<E>>) -> Result<Self, HistoryError> {
         proof! { broadcast use verify::group_history_representation; }
         proof! { books::lemma_empty_snapshot(&*store); }
         proof_decl! {
-            let ghost empty = junco_core::verify::history_specs::HistoryStateView {
+            let ghost empty = junco_core::verify::numeric_regex::HistoryStateView {
                 events: Seq::empty(), revision: 0,
             };
             let tracked lifecycle = Lifecycle::new(empty);
@@ -291,7 +291,7 @@ impl<E: TypedEvent> History<E> {
     #[verus_spec(result =>
         requires books::store_wf(*store),
         ensures result matches Ok(history) ==> history_wf(history) && initialized_history(history, store)
-            && forall|items: Seq<E>| junco_core::verify::history_specs::into_iter_yields(events, items)
+            && forall|items: Seq<E>| junco_core::verify::numeric_regex::into_iter_yields(events, items)
                 ==> raw_events(history) == items,
     )]
     pub fn from_events<I: IntoIterator<Item = E>>(
@@ -308,7 +308,7 @@ impl<E: TypedEvent> History<E> {
         proof! {
             if let Ok(ref history) = result {
                 assert forall|items: Seq<E>|
-                    junco_core::verify::history_specs::into_iter_yields(input, items)
+                    junco_core::verify::numeric_regex::into_iter_yields(input, items)
                     implies raw_events(*history) == items by {
                     assert(converted.obeys_prophetic_iter_laws());
                     assert(converted.remaining() == items);
@@ -462,7 +462,7 @@ impl<E: TypedEvent> History<E> {
             self.lifecycle.borrow_mut().advance(self.numeric@);
             assert(owner_frame(before, *self));
             assert(self.maps@ == before.maps@);
-            assert(junco_core::verify::history_specs::history_mutation(before.numeric@, self.numeric@));
+            assert(junco_core::verify::numeric_regex::history_mutation(before.numeric@, self.numeric@));
             if len < before.events@.len() {
                 assert(self.numeric.events@ == before.numeric.events@.take(len as int));
                 assert(self.numeric.revision == before.numeric.revision + 1);
@@ -534,7 +534,7 @@ impl<E: TypedEvent> History<E> {
         }
         limits.enforce_memory()?;
         proof_decl! {
-            let ghost copied = junco_core::verify::history_specs::HistoryStateView {
+            let ghost copied = junco_core::verify::numeric_regex::HistoryStateView {
                 events: crate::store::verify::events_view(numeric_events@), revision: 0,
             };
             let tracked lifecycle = Lifecycle::new(copied);
@@ -650,7 +650,7 @@ impl<E: TypedEvent> Eq for History<E> {}
 pub mod verify {
     use super::*;
     use history_syntax::{Arity, spec::events::event_view};
-    use junco_core::verify::history_specs::{
+    use junco_core::verify::numeric_regex::{
         HistoryStateView, history_mutation, lemma_revision_chain_preserves_prefix,
     };
     use vstd::prelude::*;
@@ -953,9 +953,9 @@ pub mod verify {
         before: History<E>, after: History<E>, event: E, result: Result<(), HistoryError>,
     ) -> bool {
         history_wf(after) && owner_frame(before, after)
-        && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(result))
+        && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> junco_core::verify::errors::no_invariant_failure(result))
         && after.numeric.revision == before.numeric.revision
-        && junco_core::verify::history_specs::history_mutation(before.numeric@, after.numeric@)
+        && junco_core::verify::numeric_regex::history_mutation(before.numeric@, after.numeric@)
         && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> books::maps_extend::<E>(before.maps@, after.maps@))
         && match result {
             Err(_) => state_frame(before, after),
@@ -1023,7 +1023,7 @@ pub mod verify {
         requires push_result(before, after, event, result),
         ensures history_wf(after), owner_frame(before, after), store_of(after) == store_of(before),
             after.spec_numeric().spec_revision() == before.spec_numeric().spec_revision(),
-            junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(result),
+            junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> junco_core::verify::errors::no_invariant_failure(result),
             result is Err ==> state_frame(before, after),
             result is Ok ==> raw_events(after) == raw_events(before).push(event),
     {}
@@ -1241,9 +1241,9 @@ pub mod verify {
     )
         ensures #[trigger] push_result(before, after, event, result) <==> {
             history_wf(after) && owner_frame(before, after)
-            && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(result))
+            && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> junco_core::verify::errors::no_invariant_failure(result))
             && after.numeric.revision == before.numeric.revision
-            && junco_core::verify::history_specs::history_mutation(before.numeric@, after.numeric@)
+            && junco_core::verify::numeric_regex::history_mutation(before.numeric@, after.numeric@)
             && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> books::maps_extend::<E>(before.maps@, after.maps@))
             && match result {
             Err(_) => state_frame(before, after),

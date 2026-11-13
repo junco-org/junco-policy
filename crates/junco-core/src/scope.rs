@@ -2,7 +2,7 @@
 
 use crate::error::CompileError;
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_specs::no_internal_compile_error;
+use crate::verify::errors::no_internal_compile_error;
 use alloc::borrow::ToOwned;
 use history_syntax::{Component, MAX_ARITY};
 use vstd::prelude::*;

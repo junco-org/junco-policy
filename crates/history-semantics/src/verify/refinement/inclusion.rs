@@ -10,8 +10,8 @@ use alloc::boxed::Box;
 use history_syntax::MAX_ARITY;
 use history_syntax::syntax::{Component, RuleMode};
 use junco_core::kernel::verify as model;
-use junco_core::verify::history_specs as language;
-use junco_core::verify::history_specs::{EventView, Regex, Subst};
+use junco_core::verify::numeric_regex as language;
+use junco_core::verify::numeric_regex::{EventView, Regex, Subst};
 use vstd::iset_lib::lemma_iset_subset_finite;
 use vstd::prelude::*;
 
@@ -75,10 +75,10 @@ pub open spec fn split_delta(d: NDomains, g: Constraint, pi: Pairs, delta: Const
         ==> delta.contains(eq_literal(p.0, p.1)) != delta.contains(ne_literal(p.0, p.1))
 }
 
-/// The paper's `Split(Γ; Π)`: the satisfiable `Γ ∪ Δ`.
+/// The paper's `Split(Γ; Π)`: the satisfiable `Γ ∪ Δ`, finite by `lemma_paper_split_members`.
 pub open spec fn paper_split(d: NDomains, g: Constraint, pi: Pairs) -> Set<Constraint> {
     Set::new(|g1: Constraint| exists|delta: Constraint| #[trigger] split_delta(d, g, pi, delta) && g1 == g.union(delta)
-        && satisfiable(d, g1)).unwrap_or(Set::empty())
+        && satisfiable(d, g1)).unwrap()
 }
 
 pub open spec fn stmt_paper_split_ok() -> bool {
@@ -107,9 +107,9 @@ pub open spec fn no_cex_shorter(d: NDomains, g: Constraint, r: Regex<model::Test
 // ----- policy reduction, rule by rule over split cases. This replaces Proposition Refinement as
 // inclusion (`prop:policy`), which is not mechanized as stated; see appendix `app:mech-diff`. -----
 
-/// Head constraint `Γ_R`.
+/// Head constraint `Γ_R`, finite by `lemma_head_constraint`.
 pub open spec fn head_constraint(h: NHead) -> Constraint {
-    Set::new(|l: Literal| l.equal && n_head_field(h, l.component) == Some(l.value)).unwrap_or(Set::empty())
+    Set::new(|l: Literal| l.equal && n_head_field(h, l.component) == Some(l.value)).unwrap()
 }
 
 /// Denial expression `ρ_R`: the tail for `forbid`, its complement for `require`.
@@ -117,10 +117,10 @@ pub open spec fn denial(rule: NRule) -> Regex<model::Test> {
     match rule.mode { RuleMode::Forbid => rule.tail, RuleMode::Require => Regex::Not(Box::new(rule.tail)) }
 }
 
-/// `Π` of the policy reduction (`app:mech-diff`): `(x_c, v)` for each head constant `v` at component `c` in `P`.
+/// `Π` of the policy reduction (`app:mech-diff`): `(x_c, v)` for each head constant `v` at component `c` in `P`, finite by `lemma_head_pairs`.
 pub open spec fn head_pairs(p: Seq<NRule>) -> Pairs {
     Set::new(|pair: (Component, nat)| exists|i: int| 0 <= i < p.len() && #[trigger] n_head_field(p[i].head, pair.0) == Some(pair.1))
-        .unwrap_or(Set::empty())
+        .unwrap()
 }
 
 /// `Σ_{R' ∈ P, Γ' ⊨ Γ_R'} ρ_R'` (the empty sum is `∅`).
@@ -253,6 +253,7 @@ pub proof fn lemma_head_coordinate_pairs(h: NHead, c: Component, v: nat)
 /// `Γ_R` has exactly the equalities of the head's constant coordinates.
 pub proof fn lemma_head_constraint(h: NHead)
     ensures
+        Set::new(|l: Literal| l.equal && n_head_field(h, l.component) == Some(l.value)) is Some,
         forall|l: Literal| #[trigger] head_constraint(h).contains(l)
             <==> (l.equal && n_head_field(h, l.component) == Some(l.value)),
 {
@@ -310,6 +311,8 @@ pub proof fn lemma_head_pairs_bound(p: Seq<NRule>)
 /// `Π` has exactly the head constants of `P` (finitely many).
 pub proof fn lemma_head_pairs(p: Seq<NRule>)
     ensures
+        Set::new(|pair: (Component, nat)| exists|i: int| 0 <= i < p.len()
+            && #[trigger] n_head_field(p[i].head, pair.0) == Some(pair.1)) is Some,
         forall|pair: (Component, nat)| #[trigger] head_pairs(p).contains(pair)
             <==> exists|i: int| 0 <= i < p.len() && #[trigger] n_head_field(p[i].head, pair.0) == Some(pair.1),
 {
@@ -327,6 +330,8 @@ pub open spec fn pair_literals(pi: Pairs) -> Set<Literal> {
 /// Membership in the paper's `Split` (the defining set is finite).
 pub proof fn lemma_paper_split_members(d: NDomains, g: Constraint, pi: Pairs)
     ensures
+        Set::new(|g1: Constraint| exists|delta: Constraint| #[trigger] split_delta(d, g, pi, delta)
+            && g1 == g.union(delta) && satisfiable(d, g1)) is Some,
         forall|g1: Constraint| #[trigger] paper_split(d, g, pi).contains(g1)
             <==> exists|delta: Constraint| #[trigger] split_delta(d, g, pi, delta) && g1 == g.union(delta)
                 && satisfiable(d, g1),
@@ -580,7 +585,7 @@ pub proof fn lemma_firing_lang(d: NDomains, p: Seq<NRule>, g1: Constraint, theta
     let ms = firing.map(|i: int, r: NRule| denial(r));
     assert(firing_denials(d, p, g1) == Regex::Union(ms));
     if n_lang(theta, firing_denials(d, p, g1), w) {
-        let i = choose|i: int| 0 <= i < ms.len() && language::lang(model::gsem(theta), ms[i], w);
+        let i = choose|i: int| 0 <= i < ms.len() && language::numeric_lang(model::gsem(theta), ms[i], w);
         let r = firing[i];
         assert(entails(d, g1, head_constraint(r.head)));
         assert(firing.contains(r));
@@ -593,7 +598,7 @@ pub proof fn lemma_firing_lang(d: NDomains, p: Seq<NRule>, g1: Constraint, theta
         assert(firing.contains(p[j]));
         let i = choose|i: int| 0 <= i < firing.len() && firing[i] == p[j];
         assert(ms[i] == denial(p[j]));
-        assert(language::lang(model::gsem(theta), ms[i], w));
+        assert(language::numeric_lang(model::gsem(theta), ms[i], w));
         language::lemma_lang_union(model::gsem(theta), ms, w);
     }
 }

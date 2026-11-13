@@ -33,7 +33,7 @@ use history_syntax::syntax::Component;
 use junco_core::kernel::verify as model;
 use junco_core::observation::SmallVecSpecFns;
 use junco_core::spec::hypotheses::analyzer_hypotheses;
-use junco_core::verify::history_specs::{self as language, EventView, Subst};
+use junco_core::verify::numeric_regex::{self as language, EventView, Subst};
 use vstd::prelude::*;
 
 verus! {
@@ -1869,7 +1869,7 @@ pub(crate) proof fn implemented_steps_ok(g: Constraint, atoms: Seq<Atom>, univer
     hide(search::atoms_complete);
     hide(search::paper_steps);
     hide(encoding::n_lang);
-    hide(language::lang);
+    hide(language::numeric_lang);
     hide(class_options);
     hide(register_options);
     let operands = choose|operands: Operands| operands_of(operands, atoms) && operands.register@.len() == universes@.len()

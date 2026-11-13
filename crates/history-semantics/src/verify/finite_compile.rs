@@ -12,7 +12,7 @@ use crate::verify::finite_trans::lemma_cat_nf;
 use alloc::boxed::Box;
 use junco_core::kernel::verify as model;
 use junco_core::kernel::{RegexId, TestId};
-use junco_core::verify::history_specs::Regex;
+use junco_core::verify::numeric_regex::Regex;
 use vstd::prelude::*;
 
 verus! {

@@ -338,8 +338,8 @@ impl Domain {
                 assert(old_id < id);
             }
             assert(!entry.ids.contains(id));
-            assert(junco_core::verify::history_specs::interner_wf(entry.paths, id as nat));
-            junco_core::verify::history_specs::lemma_interner_fresh_nonreuse(entry.paths, id as nat,
+            assert(junco_core::verify::numeric_regex::interner_wf(entry.paths, id as nat));
+            junco_core::verify::numeric_regex::lemma_interner_fresh_nonreuse(entry.paths, id as nat,
                 path@, id as nat);
         }
         Self::path_insert(&mut self.paths, owned, id);
@@ -356,7 +356,7 @@ impl Domain {
         }
         proof_decl! { let tracked binding; }
         proof! {
-            junco_core::verify::history_specs::lemma_interner_raise_frontier(self@.paths,
+            junco_core::verify::numeric_regex::lemma_interner_raise_frontier(self@.paths,
                 id as nat + 1, u64::MAX as nat);
             assert forall|known_id: u64| self.ids@.contains(known_id)
                 <==> self@.paths.values().contains(known_id as nat) by {
@@ -1502,7 +1502,7 @@ pub mod verify {
         history_keys_id(numeric_authorities().history_keys)
     }
 
-    use junco_core::verify::history_specs as language;
+    use junco_core::verify::numeric_regex as language;
     impl View for Event {
         type V = language::EventView;
         open(crate) spec fn view(&self) -> language::EventView {

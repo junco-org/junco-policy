@@ -9,7 +9,7 @@ use history_store::native::representatives;
 use junco_core::kernel::verify as model;
 use junco_core::kernel::{RegexId, TestId};
 use junco_core::observation::SmallVecSpecFns;
-use junco_core::verify::history_specs::{self as language, Regex};
+use junco_core::verify::numeric_regex::{self as language, Regex};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
