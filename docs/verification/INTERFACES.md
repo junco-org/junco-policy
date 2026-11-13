@@ -73,8 +73,12 @@ by adding an unnecessary premise.
 
 `hash_coherent` remains the single uninterpreted hashing hypothesis. The maintainer withdrew the
 earlier primitive-key and `Component2/3/4` compositional-axiom approval; those introductions are
-not allowed. Decision 4's library-internal key axioms remain, each listed and justified in
-TRUST.md. Public `lemma_u8_event_hypotheses` for `(u8, u8, u8)` and
+not allowed. Decision 4's five internal-key introductions may assume **only hash_coherent**;
+native equality, equivalence and view reflection must be proved. The ordered-parts key uses
+a locally owned PartsKey wrapper because the external SmallVec model supplies no equality
+specification; its one hashing introduction replaces the former SmallVec introduction.
+Each remaining assumption is listed and justified in TRUST.md.
+Public `lemma_u8_event_hypotheses` for `(u8, u8, u8)` and
 `lemma_u32_event_hypotheses` for `(u32, u8, u8)` prove arity, projection, surjectivity and equality
 laws and take only `hash_coherent::<E::Component>()` as their premise. No arbitrary user Hash/Eq
 implementation is assumed correct, and neither analysis nor semantics gains an external body.

@@ -126,8 +126,12 @@ B/F migrate that content exactly to the new vocabulary and remove superseded pre
 five introductions were too broad. Parent is narrowing their frozen interface to exactly
 hash_coherent, removing the SmallVec view-equality assumption, and proving every equality
 and equivalence conjunct separately. No additional equality/view axiom will be introduced.
-No unprovable conjunct has yet been established; any genuine proof obstruction will be
-reported explicitly instead of assumed. Concrete user-type hashing axioms remain forbidden.
+Three tuple-key equality/equivalence proofs now close. SmallVec's existing model has an
+uninterpreted view and no equality specification, so its obeys_eq_spec, equivalence and
+eq_spec-to-view postconditions cannot follow from the existing specifications; focused attempts
+failed each obligation independently. Parent chose a locally owned PartsKey newtype with
+verified sequence equality, retargeting the single parts hashing axiom to that internal key.
+No additional trusted fact or primitive/user-type hashing axiom is introduced.
 
 **2026-11-13: Exhausted is not a blocker** (`baff915`): acknowledged. The unit/no-claim
 fallback is already implemented and pushed in `a3a0313`; no wave or merge waits for a token.
