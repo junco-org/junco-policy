@@ -51,6 +51,14 @@ fn action(value: u8) -> RegexExpr<DocumentEvent> {
 }
 
 #[test]
+fn coordinate_cardinality_defaults_to_unknown_without_restricting_events() {
+    for index in [0, 1, 2, 3, usize::MAX] {
+        assert_eq!(DocumentEvent::coordinate_cardinality(index), None);
+        assert_eq!(<(u8, u8, u8)>::coordinate_cardinality(index), None);
+    }
+}
+
+#[test]
 fn typed_constructors_keep_values_names_and_field_order() {
     assert_eq!(
         ComponentPattern::<u32>::constant(7_u8),

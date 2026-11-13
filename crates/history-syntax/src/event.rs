@@ -6,14 +6,14 @@ use frunk_core::coproduct::{CNil, Coproduct};
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
-use self::specs::{AritySpec, EventSpec};
+use crate::spec::events::{AritySpec, EventSpec, EventSpecImpl};
 
 verus! {
 /// Largest arity any event type may declare; sizes inline numeric tuples.
 pub const MAX_ARITY: usize = 8;
 }
 
-mod sealed {
+pub(crate) mod sealed {
     #[vstd::prelude::verus_verify]
     pub trait Sealed {}
 }
@@ -40,7 +40,7 @@ macro_rules! arities {
 
         #[cfg(verus_keep_ghost)]
         verus! {
-            impl specs::AritySpecImpl for $name {
+            impl crate::spec::events::AritySpecImpl for $name {
                 open spec fn value_spec() -> nat { $value }
             }
         }
@@ -74,6 +74,15 @@ pub trait Event: Copy + Debug + Eq + Hash {
     ///
     /// For every valid `i`, `Self::coordinate(event.component(i)) == i`.
     fn coordinate(component: Self::Component) -> usize;
+
+    /// Optional exact number of equality classes at a coordinate.
+    ///
+    /// `None` leaves the coordinate's cardinality unknown. This metadata does not
+    /// declare or restrict a policy domain; finite implementations prove its R1 contract.
+    #[verus_verify]
+    fn coordinate_cardinality(_index: usize) -> Option<usize> {
+        None
+    }
 }
 
 /// Tagged coordinates of a two-component tuple event.
@@ -244,62 +253,8 @@ where
     }
 }
 
-/// Conditional native projection boundary; implementations need not opt in.
 #[cfg(verus_keep_ghost)]
-pub mod specs {
-    use super::*;
-    verus! {
-
-    #[verifier::external_trait_specification]
-    #[verifier::external_trait_extension(AritySpec via AritySpecImpl)]
-    pub trait ExArity: sealed::Sealed {
-        type ExternalTraitSpecificationFor: Arity;
-        spec fn value_spec() -> nat;
-        fn value() -> (result: usize)
-            ensures 1 <= result <= MAX_ARITY, result == Self::value_spec();
-    }
-
-    // Transparent specifications expose exactly the Frunk enum variants to body proofs.
-    #[verifier::external_type_specification]
-    #[verifier::accept_recursive_types(H)]
-    #[verifier::reject_recursive_types_in_ground_variants(T)]
-    pub struct ExCoproduct<H, T>(Coproduct<H, T>);
-
-    #[verifier::external_type_specification]
-    // Like vstd's Infallible: the pinned verifier cannot represent a zero-variant datatype.
-    #[verifier::external_body]
-    pub struct ExCNil(CNil);
-
-    #[verifier::external_trait_specification]
-    #[verifier::external_trait_extension(EventSpec via EventSpecImpl)]
-    pub trait ExEvent: Copy + Debug + Eq + Hash {
-        type ExternalTraitSpecificationFor: Event;
-        type Component: Copy + Debug + Eq + Hash;
-        type Arity: Arity;
-
-        spec fn obeys_projection_spec() -> bool;
-        spec fn component_spec(self, index: int) -> Self::Component;
-        spec fn coordinate_spec(component: Self::Component) -> nat;
-
-        fn component(self, index: usize) -> (result: Self::Component)
-            ensures Self::obeys_projection_spec() ==> result == self.component_spec(index as int);
-        fn coordinate(component: Self::Component) -> (result: usize)
-            ensures Self::obeys_projection_spec() ==>
-                result as nat == Self::coordinate_spec(component)
-                && result < Self::Arity::value_spec();
-    }
-
-    pub open spec fn arity<E: Event>() -> nat { E::Arity::value_spec() }
-
-    pub open spec fn projection_laws<E: Event>() -> bool {
-        forall|e: E, i: int| 0 <= i < arity::<E>() ==>
-            E::coordinate_spec(e.component_spec(i)) == i
-    }
-
-    pub open spec fn event_view<E: Event>(e: E) -> Seq<E::Component> {
-        Seq::new(arity::<E>(), |i: int| e.component_spec(i))
-    }
-
+verus! {
     impl<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash> EventSpecImpl for (A, B)
     where (A, B): Copy,
     {
@@ -376,6 +331,5 @@ pub mod specs {
         open spec fn coordinate_spec(component: Self::Component) -> nat {
             H::coordinate_spec(component)
         }
-    }
     }
 }

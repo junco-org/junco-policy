@@ -1,6 +1,7 @@
 //! Structural views and constructor/disposal proofs for the owned DSL.
 
 use crate::Event;
+use crate::spec::events::{AtomView, HeadView, PatternView, RegexView, RuleView, TestView};
 use crate::syntax::{
     AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
@@ -11,42 +12,6 @@ verus! {
 
 broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
 
-pub enum PatternView<T> {
-    Constant(T),
-    Variable(Seq<char>),
-}
-
-pub type HeadView<C> = Seq<PatternView<C>>;
-
-pub struct AtomView<C> {
-    pub component: nat,
-    pub pattern: PatternView<C>,
-}
-
-pub enum TestView<C> {
-    True,
-    False,
-    Atom { comparison: Comparison, pattern: AtomView<C> },
-    And(Seq<TestView<C>>),
-    Or(Seq<TestView<C>>),
-}
-
-/// The same algebra as the numeric history model, over concrete component values.
-pub enum RegexView<C> {
-    Empty, All, Epsilon,
-    Test(TestView<C>),
-    Union(Seq<RegexView<C>>),
-    Concat(Seq<RegexView<C>>),
-    Star(Box<RegexView<C>>),
-    Intersect(Seq<RegexView<C>>),
-    Not(Box<RegexView<C>>),
-}
-
-pub struct RuleView<C> {
-    pub mode: RuleMode,
-    pub head: HeadView<C>,
-    pub tail: RegexView<C>,
-}
 /// Remaining source nodes, used to prove that iterative disposal terminates.
 pub open spec fn test_nodes<E: Event>(test: TestExpr<E>) -> nat
     decreases test,
