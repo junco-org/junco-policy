@@ -270,6 +270,7 @@ impl Search<'_> {
     /// derivative tests.
     // `?` on `intern` exceeds the verifier's resource limit on the letter loop that follows.
     #[allow(clippy::question_mark)]
+    #[verifier::rlimit(20)]
     fn expand(&mut self, index: usize) -> (result: Result<(), HistoryError>)
         requires running(*old(self),index as nat,old(self).start@,old(self).vocabulary@),
             search_obligations(),index < old(self).items@.len(),

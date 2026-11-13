@@ -9,6 +9,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod event;
+pub mod key_hash;
 #[cfg(verus_keep_ghost)]
 pub mod spec;
 pub mod syntax;
@@ -20,6 +21,7 @@ pub use event::{
 };
 pub use frunk_core::Coprod;
 pub use frunk_core::coproduct::{CNil, Coproduct};
+pub use key_hash::KeyHash;
 pub use syntax::{
     AtomPattern, Comparison, Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };

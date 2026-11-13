@@ -238,12 +238,12 @@ source checkpoint and proves `WrongCheckpointOwner` without changing the target.
 Stale-frontier failures consume an ID; exhaustion does not. Later consumer failures
 do not remove issued IDs.
 
-The theorem is conditional on stable `Event` projections and component equality and
-hashing that agree with their models. Modeled equality must be reflexive, symmetric
-and transitive; equal native keys must hash coherently. These obligations are explicit
-in [`event_obligations` and `key_laws`](crates/junco-core/src/spec/hypotheses.rs) (R4), not
-universal proofs about arbitrary user types; `hash_coherent` is the single hashing hypothesis
-(see `VERIFY.md`, Hypotheses). Native field projections, callback invocation, const/static
+The theorem is conditional on stable `Event` projections and component equality that
+agrees with its model. Modeled equality must be reflexive, symmetric and transitive, and
+the verified key hash (`KeyHash`) must be constant on equal keys. These obligations are
+explicit in [`event_obligations` and `key_laws`](crates/junco-core/src/spec/hypotheses.rs)
+(R4), proved for every built-in event type, and hypotheses only for hand-written root
+event types (see `VERIFY.md`, Hypotheses). Native field projections, callback invocation, const/static
 installation and reference identity, mutex/Arc/record adapters, container operations
 and reservations remain proof boundaries. Callbacks may panic or diverge; no purity
 or determinism is assumed. Caching remains trusted. Checked byte-record callbacks

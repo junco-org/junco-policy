@@ -14,6 +14,13 @@ pub enum Symbol {
     Candidate,
 }
 
+// Unverified glue: `hash_respects_eq` is a hypothesis for this type (as `event_laws` already is).
+impl history_syntax::KeyHash for Symbol {
+    fn key_hash(&self) -> u64 {
+        history_syntax::key_hash::hash_via_std(self)
+    }
+}
+
 impl Event for Symbol {
     type Component = Component3<(), (), Symbol>;
     type Arity = N3;

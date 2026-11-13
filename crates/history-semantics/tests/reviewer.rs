@@ -1,9 +1,8 @@
 //! Reviewer theorems for the monitor (R5, Theorem `thm:matcher` at the level of `Validator`).
 //!
 //! Every statement here uses only public items: R1–R5, `Validator` and `Store`. The generic
-//! theorems take R4's `event_obligations::<E>()`; the concrete `(u32, u64)` instances take only
-//! `hash_coherent::<Component2<u32, u64>>()` (TRUST.md: the single uninterpreted hashing
-//! hypothesis; `junco_core::verify::hypotheses` proves every other conjunct).
+//! theorems take R4's `event_obligations::<E>()`; the concrete `(u32, u64)` instances are
+//! premise-free (`junco_core::verify::hypotheses` proves every conjunct).
 #![cfg(all(verus_keep_ghost, feature = "runtime"))]
 
 extern crate alloc;
@@ -21,7 +20,7 @@ use history_syntax::event::Component2;
 use history_syntax::spec::events::event_view;
 use history_syntax::{Event, Head, RegexExpr, Rule, RuleMode};
 use junco_core::event::Request;
-use junco_core::spec::hypotheses::{event_obligations, hash_coherent};
+use junco_core::spec::hypotheses::event_obligations;
 use junco_core::spec::questions::{DomainsView, in_domains, refines};
 use junco_core::spec::semantics::{
     head_matches, least_violation, policy_denies, policy_permits, rule_violated,
@@ -176,10 +175,8 @@ pub proof fn theorem_analyzer_to_monitor<E: Event, M>(
 
 // ----- the concrete event type (u32, u64) -----
 
-/// `(u32, u64)` events satisfy every hypothesis once `hash_coherent` of their component type is
-/// assumed (the only premise; TRUST.md).
+/// `(u32, u64)` events satisfy every hypothesis; no premise.
 pub proof fn theorem_event_obligations_u32_u64()
-    requires hash_coherent::<Component2<u32, u64>>(),
     ensures event_obligations::<(u32, u64)>(),
 {
     lemma_u32_u64_event_hypotheses();
@@ -220,10 +217,9 @@ fn monitor_client<E: Event, M>(head: Head<E>, request: Request<E, M>)
     Ok((state, answer))
 }
 
-/// The same client for `(u32, u64)` events under the single premise `hash_coherent`.
+/// The same client for `(u32, u64)` events, premise-free.
 fn monitor_client_u32_u64<M>(head: Head<(u32, u64)>, request: Request<(u32, u64), M>)
     -> (result: Result<(Validator<(u32, u64)>, Result<Decision<(u32, u64), M>, HistoryError>), CompileError>)
-    requires hash_coherent::<Component2<u32, u64>>(),
     ensures result matches Ok((state, answer)) ==> state.wf()
         && stmt_monitor_check(ValidatorView { rules: state@.rules, history: Seq::<(u32, u64)>::empty() }, request, answer)
         && trace_safe(state@),

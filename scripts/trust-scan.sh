@@ -63,14 +63,9 @@ KIND_NAMES = [k for k, _ in KINDS]
 
 # Uninterpreted specs whose meaning the trusted contracts rely on, with that meaning.
 MEANING = {
-    "hash_coherent": "the single hashing hypothesis (R4): a key type's `Hash`/`Eq` are faithful to "
-                     "`eq_spec`, so the external_body hash containers behave as maps on `eq_spec` classes",
     "arc_identity": "native allocation identity of an `Arc`; faithful because every compared type "
                     "has a unique-per-allocation value (comment at the declaration)",
     "reference_identity": "native identity of a `&T`; same fidelity argument as `arc_identity`",
-    "representatives": "the entries of an external_body hash map, as `eq_spec` classes under `key_laws`",
-    "members": "the entries of an external_body hash set, as `eq_spec` classes under `key_laws`",
-    "groups": "the entries of an external_body hash multimap, as `eq_spec` classes under `key_laws`",
     "successor_cache_view": "the entries of the LRU successor cache; contracts allow eviction, never a fabricated entry",
     "snapshot_published": "persistent provenance of a codebook snapshot under the registry resource",
     "singleton_store": "the process-wide numeric store of an arity (static installation)",
@@ -370,11 +365,11 @@ print()
 print("- `crates/history-store/src/cache.rs`: the LRU successor cache behind `successor_cache_view`.")
 print("  Its contracts allow any entry to be evicted and never a fabricated one; the search's")
 print("  correctness does not depend on hits, only on the cached values being the ones once inserted.")
-print("- The hash containers `NativeMap`/`NativeSet`/`NativeGroups` (`crates/history-store/src/typed/map.rs`,")
-print("  `crates/history-analysis/src/native.rs`): external_body wrappers over hashbrown whose")
-print("  contracts hold under `key_laws` (R4, `crates/junco-core/src/spec/hypotheses.rs`): the key's")
-print("  `Hash`/`Eq` are faithful to `eq_spec` (`hash_coherent`, the single hashing hypothesis),")
-print("  instantiated for the library's own key types by the `axiom` items above.")
+print("- `crates/history-store/src/keyed.rs`: `KeyedMap`, the verified hash container behind the store's")
+print("  codebooks and the analyzer's `NativeSet`/`NativeGroups` (`crates/history-analysis/src/native.rs`),")
+print("  over hashconsius's `index::Buckets`. Its lookup contract on `eq_spec` classes is proved from")
+print("  `key_laws` (R4, `crates/junco-core/src/spec/hypotheses.rs`: `KeyHash::hash_spec` respects")
+print("  `eq_spec`); only `reserve_one` (capacity reservation, test-util fault injection) is external_body.")
 print("- Identity of stores: `arc_identity`/`reference_identity` are functions of the pointee's spec")
 print("  value (Verus erases `Arc<T>` and `&T` to `T`). The wrappers that equate them with pointer")
 print("  comparison are faithful because `HistoryStore` is one static singleton per arity and")
@@ -389,7 +384,8 @@ print("  granted events; audit mode, which also appends denied events; and error
 print("  history errors become `Deny`). The verified `check_step` covers each `TracePolicy::decide`,")
 print("  not this composition.")
 print("- The root event types `LockEvent`, `FlowEvent`, `AgentEvent` implement `Event` by hand in the")
-print("  unverified crate; `event_laws` (R1) is a hypothesis for them, stated at each impl.")
-print("- User `Hash`/`Eq` code runs under the store lock; a panic there unwinds through the lock and")
+print("  unverified crate; `event_laws` (R1) and `hash_respects_eq` (R4, their `KeyHash` being")
+print("  `hash_via_std`, FNV-1a over `std::hash::Hash`) are hypotheses for them, stated at each impl.")
+print("- User `Eq`/`KeyHash` code runs under the store lock; a panic there unwinds through the lock and")
 print("  is outside the trusted base (the store assumes its lock invariant on re-entry).")
 PY

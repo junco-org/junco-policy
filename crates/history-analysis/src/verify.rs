@@ -1,7 +1,6 @@
 //! Ghost views and contracts linking the executable analyzer to the frozen refinement layers.
 
 pub(crate) mod constraint_unique;
-pub mod key_axioms;
 pub(crate) mod policy_bridge;
 pub(crate) mod policy_case_profile;
 pub(crate) mod policy_firing;

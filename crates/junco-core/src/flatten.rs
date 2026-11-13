@@ -440,7 +440,7 @@ pub fn flatten_rule<E: Event, L: Limits>(
 /// The continuation invariant excludes internal stack and operand-guard failures.
 #[verus_verify]
 #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
-#[cfg_attr(verus_keep_ghost, verifier::rlimit(45))]
+#[cfg_attr(verus_keep_ghost, verifier::rlimit(60))]
 #[verus_spec(result => ensures
     no_invariant_compile_failure(result),
     crate::spec::semantics::regex_scoped(source_tail@, source_head@) ==>

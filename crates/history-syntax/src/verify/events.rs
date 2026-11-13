@@ -2,6 +2,7 @@
 
 use crate::event::specs::EventSpec;
 use crate::event::{Component2, Component3, Component4, Event};
+use crate::key_hash::KeyHash;
 use crate::spec::events::{arity, event_laws, event_view, well_tagged};
 use core::fmt::Debug;
 use core::hash::Hash;
@@ -11,7 +12,7 @@ use vstd::prelude::*;
 verus! {
 
 /// A pair projects each coordinate with its own tag and every well-tagged pair is a view.
-pub proof fn lemma_event_laws_pair<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash>()
+pub proof fn lemma_event_laws_pair<A: Copy + Debug + Eq + Hash + KeyHash, B: Copy + Debug + Eq + Hash + KeyHash>()
     ensures event_laws::<(A, B)>(),
 {
     assert forall|xs: Seq<Component2<A, B>>| #[trigger] well_tagged::<(A, B)>(xs)
@@ -24,8 +25,8 @@ pub proof fn lemma_event_laws_pair<A: Copy + Debug + Eq + Hash, B: Copy + Debug 
 }
 
 /// A triple projects each coordinate with its own tag and every well-tagged triple is a view.
-pub proof fn lemma_event_laws_triple<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash,
-    C: Copy + Debug + Eq + Hash>()
+pub proof fn lemma_event_laws_triple<A: Copy + Debug + Eq + Hash + KeyHash, B: Copy + Debug + Eq + Hash + KeyHash,
+    C: Copy + Debug + Eq + Hash + KeyHash>()
     ensures event_laws::<(A, B, C)>(),
 {
     assert forall|xs: Seq<Component3<A, B, C>>| #[trigger] well_tagged::<(A, B, C)>(xs)
@@ -39,8 +40,8 @@ pub proof fn lemma_event_laws_triple<A: Copy + Debug + Eq + Hash, B: Copy + Debu
 }
 
 /// A quadruple projects each coordinate with its own tag and every well-tagged quadruple is a view.
-pub proof fn lemma_event_laws_quad<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash,
-    C: Copy + Debug + Eq + Hash, D: Copy + Debug + Eq + Hash>()
+pub proof fn lemma_event_laws_quad<A: Copy + Debug + Eq + Hash + KeyHash, B: Copy + Debug + Eq + Hash + KeyHash,
+    C: Copy + Debug + Eq + Hash + KeyHash, D: Copy + Debug + Eq + Hash + KeyHash>()
     ensures event_laws::<(A, B, C, D)>(),
 {
     assert forall|xs: Seq<Component4<A, B, C, D>>| #[trigger] well_tagged::<(A, B, C, D)>(xs)

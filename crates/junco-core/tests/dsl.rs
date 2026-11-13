@@ -313,6 +313,11 @@ fn component_equality_uses_native_identity_not_representation() {
             0_u8.hash(state);
         }
     }
+    impl history_syntax::KeyHash for Identity {
+        fn key_hash(&self) -> u64 {
+            history_syntax::key_hash::hash_via_std(self)
+        }
+    }
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     struct IdentityEvent(Identity);
     impl Event for IdentityEvent {

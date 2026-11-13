@@ -11,7 +11,7 @@ use std::str::FromStr;
 use history_semantics::TraceRule;
 use history_semantics::policy::{PRINCIPAL_VAR, component_equals, component_is, last_state_change};
 use history_syntax::{
-    Comparison, Component, ComponentPattern, Event, Head, N4, Rule, RuleMode, TestExpr,
+    Comparison, Component, ComponentPattern, Event, Head, KeyHash, N4, Rule, RuleMode, TestExpr,
 };
 
 use super::agent::Label;
@@ -82,6 +82,13 @@ pub enum FlowComponent<P, V, L> {
     Action(FlowAction),
     /// The classification at coordinate 3.
     Label(L),
+}
+
+// Unverified glue: `hash_respects_eq` is a hypothesis for this type (as `event_laws` already is).
+impl<P: Hash, V: Hash, L: Hash> KeyHash for FlowComponent<P, V, L> {
+    fn key_hash(&self) -> u64 {
+        history_syntax::key_hash::hash_via_std(self)
+    }
 }
 
 // Hypothesis (D4): this crate is not verified, so `event_laws::<FlowEvent<P, V, L>>` (R1) is
