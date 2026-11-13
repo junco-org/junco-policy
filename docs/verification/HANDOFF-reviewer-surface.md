@@ -66,14 +66,17 @@ arbitrary order and duplicate ids handled). It does **not** touch `tail_included
 
 - Start from `main` after PR #10 merges if it has merged by then; otherwise rebase onto it as soon
   as it merges.
-- Do not edit the minimality or removal predicates and proofs (`*_minimal`, `*_ok`,
+- Do not change what PR #10's minimality and removal results guarantee (`*_minimal`, `*_ok`,
   `shortest_in_case`, `same_profile`, `policy_minimality.rs`, `policy_case_profile.rs`,
-  `policy_removal.rs`).
+  `policy_removal.rs`). When R6 replaces them, restate their content over the new definitions,
+  move their proofs, and delete the old predicates (decision 10); do not keep them alive through
+  compatibility lemmas.
 - Expected textual conflicts: the module header of `refinement/analyzer.rs` (both this branch and
   PR #10 rewrite it), `VERIFY.md`, `README.md`. Resolve by taking PR #10's contracts and keeping
   this branch's corrections: no `never_fires`/`always_fires` contract block, the `Exhausted`
   description, the `tail_included` vacuity caveat, current paper labels.
-- R6 restates PR #10's `*_ok` and `redundant_decisions_ok` clauses without weakening them.
+- R6 restates PR #10's `*_ok` and `redundant_decisions_ok` clauses, over the new definitions,
+  without weakening them.
 - Track B's bridge lemmas and track F's work build on PR #10's `analyzer.rs`.
 
 ## What already exists (do not re-prove)
@@ -374,8 +377,8 @@ rebase all tracks immediately after.
 Priority 1:
 1. `scripts/verify-all.sh` reports 0 errors in every configuration, including the two new
    `reviewer` targets; all CI jobs pass.
-2. R1–R6 exist; no public contract mentions an `open(crate)`/`open(super)` definition; old
-   duplicate definitions are gone.
+2. R1–R6 exist; no public contract mentions an `open(crate)`/`open(super)` definition; every
+   definition that `INTERFACES.md` lists as replaced is gone, and no lemma mentions one.
 3. The monitor theorem with trace safety and A1–A5 are proved as Verus clients from public items
    only, and the hypothesis bundles are proved for the two concrete event types.
 4. Differential tests pass, including the four new cases.
@@ -390,6 +393,9 @@ Priority 3:
 ## Final report
 
 - The R1–R6 definitions a reviewer must read (count, by file) and the theorem names in T.
+- Every remaining lemma that relates two definitions of the same concept, each classified as an
+  implementation-to-model link (allowed) or a compatibility lemma (must be none), with a one-line
+  justification for each link.
 - Each decision above: kept or changed, and why.
 - `TRUST.md` diff: every new trusted item with its justification.
 - Verified-function counts per configuration.
