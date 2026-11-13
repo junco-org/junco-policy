@@ -8,12 +8,14 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use history_analysis::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, Value};
+use history_analysis::{
+    Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, RuleId, Value,
+};
 use history_semantics::{PolicyDecision, TracePolicy, TraceRule};
 use history_store::{History, Store};
 use history_syntax::{
-    AtomPattern, Comparison, Component, ComponentPattern, Event, Head, N3, RegexExpr, Rule,
-    RuleMode, TestExpr,
+    AtomPattern, Comparison, Component, Component2, ComponentPattern, Event, Head, N3, RegexExpr,
+    Rule, RuleMode, TestExpr,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1303,5 +1305,375 @@ impl<'a> Interpreter<'a> {
             self.descend(stack, roots, letters, bound, shortest);
             stack.pop();
         }
+    }
+}
+
+// ===== Random small policies over `(u8, u8)` with declared domains, every pair enumerated =====
+
+/// Declared values per coordinate; every candidate and history event is enumerated from these.
+const PAIR_D0: [u8; 3] = [0, 1, 2];
+const PAIR_D1: [u8; 2] = [0, 1];
+/// Longest history the brute force enumerates.
+const PAIR_BOUND: usize = 3;
+/// Random policies per query kind.
+const PAIR_CASES: usize = 30;
+
+type Pair = (u8, u8);
+type PairComponent = Component2<u8, u8>;
+
+fn pair_domains() -> Domains<Pair> {
+    Domains::infinite()
+        .with_domain(Component(0), &PAIR_D0.map(Component2::C0))
+        .expect("domain")
+        .with_domain(Component(1), &PAIR_D1.map(Component2::C1))
+        .expect("domain")
+}
+
+fn pair_events() -> Vec<Pair> {
+    PAIR_D0
+        .iter()
+        .flat_map(|&a| PAIR_D1.iter().map(move |&b| (a, b)))
+        .collect()
+}
+
+/// Every history of length at most `PAIR_BOUND`, shortest first.
+fn pair_histories() -> Vec<Vec<Pair>> {
+    let events = pair_events();
+    let mut all = vec![Vec::new()];
+    let mut layer = vec![Vec::new()];
+    for _ in 0..PAIR_BOUND {
+        layer = layer
+            .iter()
+            .flat_map(|history: &Vec<Pair>| {
+                events.iter().map(move |&event| {
+                    let mut longer = history.clone();
+                    longer.push(event);
+                    longer
+                })
+            })
+            .collect();
+        all.extend(layer.iter().cloned());
+    }
+    all
+}
+
+fn pair_constant(rng: &mut Rng, coordinate: usize) -> PairComponent {
+    if coordinate == 0 {
+        Component2::C0(PAIR_D0[rng.below(PAIR_D0.len())])
+    } else {
+        Component2::C1(PAIR_D1[rng.below(PAIR_D1.len())])
+    }
+}
+
+fn pair_head(rng: &mut Rng) -> Head<Pair> {
+    Head::new((0..2).map(|coordinate| {
+        if rng.below(2) == 0 {
+            ComponentPattern::variable(["x", "y"][coordinate])
+        } else {
+            ComponentPattern::constant(pair_constant(rng, coordinate))
+        }
+    }))
+}
+
+/// A test on one coordinate; a variable is used only where the head binds one.
+fn pair_test(rng: &mut Rng, head: &Head<Pair>) -> TestExpr<Pair> {
+    let coordinate = rng.below(2);
+    let bound = matches!(head.0[coordinate], ComponentPattern::Variable(_));
+    let pattern = if bound && rng.below(2) == 0 {
+        ComponentPattern::variable(["x", "y"][coordinate])
+    } else {
+        ComponentPattern::constant(pair_constant(rng, coordinate))
+    };
+    let comparison = if rng.below(2) == 0 {
+        Comparison::Eq
+    } else {
+        Comparison::Neq
+    };
+    TestExpr::atom(
+        comparison,
+        AtomPattern::new(Component(coordinate as u8), pattern),
+    )
+}
+
+fn pair_regex(rng: &mut Rng, head: &Head<Pair>, depth: usize) -> RegexExpr<Pair> {
+    if depth == 0 {
+        return match rng.below(4) {
+            0 => RegexExpr::Epsilon,
+            1 => RegexExpr::All,
+            _ => RegexExpr::Test(pair_test(rng, head)),
+        };
+    }
+    let kind = rng.below(6);
+    let mut child = || pair_regex(rng, head, depth - 1);
+    match kind {
+        0 => RegexExpr::Union(vec![child()]),
+        1 => RegexExpr::Concat(vec![child(), child()]),
+        2 => RegexExpr::Union(vec![child(), child()]),
+        3 => RegexExpr::Intersect(vec![child(), child()]),
+        4 => RegexExpr::Star(Box::new(child())),
+        5 => RegexExpr::Not(Box::new(child())),
+        _ => RegexExpr::Concat(vec![RegexExpr::All, child()]),
+    }
+}
+
+fn pair_rule(rng: &mut Rng) -> Rule<Pair> {
+    let head = pair_head(rng);
+    let tail = pair_regex(rng, &head, 2);
+    let mode = if rng.below(2) == 0 {
+        RuleMode::Forbid
+    } else {
+        RuleMode::Require
+    };
+    Rule::new(mode, head, tail)
+}
+
+fn pair_component(event: Pair, coordinate: usize) -> PairComponent {
+    event.component(coordinate)
+}
+
+fn pair_head_matches(head: &Head<Pair>, candidate: Pair) -> bool {
+    head.0.iter().enumerate().all(|(i, pattern)| match pattern {
+        ComponentPattern::Constant(c) => *c == pair_component(candidate, i),
+        ComponentPattern::Variable(_) => true,
+    })
+}
+
+/// R2 `test_sem`: a variable resolves only to the candidate's binding at the same coordinate.
+fn pair_test_holds(test: &TestExpr<Pair>, head: &Head<Pair>, candidate: Pair, event: Pair) -> bool {
+    match test {
+        TestExpr::True => true,
+        TestExpr::False => false,
+        TestExpr::Atom {
+            comparison,
+            pattern,
+        } => {
+            let i = pattern.component.index();
+            let expected = match &pattern.pattern {
+                ComponentPattern::Constant(c) => Some(*c),
+                ComponentPattern::Variable(name) => match &head.0[i] {
+                    ComponentPattern::Variable(bound) if bound == name => {
+                        Some(pair_component(candidate, i))
+                    }
+                    _ => None,
+                },
+            };
+            let actual = pair_component(event, i);
+            match (comparison, expected) {
+                (_, None) => false,
+                (Comparison::Eq, Some(value)) => actual == value,
+                (Comparison::Neq, Some(value)) => actual != value,
+            }
+        }
+        TestExpr::And(children) => children
+            .iter()
+            .all(|child| pair_test_holds(child, head, candidate, event)),
+        TestExpr::Or(children) => children
+            .iter()
+            .any(|child| pair_test_holds(child, head, candidate, event)),
+    }
+}
+
+/// R2 `lang` by enumeration of the splits of `history`.
+fn pair_lang(
+    regex: &RegexExpr<Pair>,
+    head: &Head<Pair>,
+    candidate: Pair,
+    history: &[Pair],
+) -> bool {
+    fn concat(
+        children: &[RegexExpr<Pair>],
+        head: &Head<Pair>,
+        candidate: Pair,
+        history: &[Pair],
+    ) -> bool {
+        match children.split_first() {
+            None => history.is_empty(),
+            Some((first, rest)) => (0..=history.len()).any(|k| {
+                pair_lang(first, head, candidate, &history[..k])
+                    && concat(rest, head, candidate, &history[k..])
+            }),
+        }
+    }
+    fn star(child: &RegexExpr<Pair>, head: &Head<Pair>, candidate: Pair, history: &[Pair]) -> bool {
+        history.is_empty()
+            || (1..=history.len()).any(|k| {
+                pair_lang(child, head, candidate, &history[..k])
+                    && star(child, head, candidate, &history[k..])
+            })
+    }
+    match regex {
+        RegexExpr::Empty => false,
+        RegexExpr::All => true,
+        RegexExpr::Epsilon => history.is_empty(),
+        RegexExpr::Test(test) => {
+            history.len() == 1 && pair_test_holds(test, head, candidate, history[0])
+        }
+        RegexExpr::Union(children) => children
+            .iter()
+            .any(|child| pair_lang(child, head, candidate, history)),
+        RegexExpr::Intersect(children) => children
+            .iter()
+            .all(|child| pair_lang(child, head, candidate, history)),
+        RegexExpr::Concat(children) => concat(children, head, candidate, history),
+        RegexExpr::Star(child) => star(child, head, candidate, history),
+        RegexExpr::Not(child) => !pair_lang(child, head, candidate, history),
+    }
+}
+
+/// R2 `rule_violated`.
+fn pair_violated(rule: &Rule<Pair>, candidate: Pair, history: &[Pair]) -> bool {
+    pair_head_matches(&rule.head, candidate)
+        && match rule.mode {
+            RuleMode::Forbid => pair_lang(&rule.tail, &rule.head, candidate, history),
+            RuleMode::Require => !pair_lang(&rule.tail, &rule.head, candidate, history),
+        }
+}
+
+/// R2 `policy_denies` for the rules selected by index.
+fn pair_denies(rules: &[Rule<Pair>], policy: &[usize], candidate: Pair, history: &[Pair]) -> bool {
+    policy
+        .iter()
+        .any(|&index| pair_violated(&rules[index], candidate, history))
+}
+
+/// All domains are declared, so a witness has exactly one real instance.
+fn pair_instance(witness: &Counterexample<Pair>) -> (Pair, Vec<Pair>) {
+    fn event(components: &Components<Pair>) -> Pair {
+        let value = |index: usize| match components.values[index] {
+            Value::Constant(c) => c,
+            Value::Fresh(_) => panic!("declared components have no fresh values: {components:?}"),
+        };
+        match (value(0), value(1)) {
+            (Component2::C0(a), Component2::C1(b)) => (a, b),
+            other => panic!("components out of order: {other:?}"),
+        }
+    }
+    (
+        event(&witness.candidate),
+        witness.history.iter().map(event).collect(),
+    )
+}
+
+/// `verdict` against brute force over every pair with a history of length at most `PAIR_BOUND`:
+/// `Holds` iff no enumerated pair `fails`; a counterexample instantiates to a pair that `fails`,
+/// and is no longer than the bound only if the brute force found a failing pair too.
+fn pair_check(
+    verdict: Inclusion<Pair>,
+    fails: impl Fn(Pair, &[Pair]) -> bool,
+    context: &dyn Fn() -> String,
+) {
+    let brute = pair_events()
+        .into_iter()
+        .flat_map(|candidate| {
+            pair_histories()
+                .into_iter()
+                .map(move |history| (candidate, history))
+        })
+        .find(|(candidate, history)| fails(*candidate, history));
+    match verdict {
+        Inclusion::Holds => assert!(
+            brute.is_none(),
+            "holds despite the failing pair {brute:?}: {}",
+            context()
+        ),
+        Inclusion::Counterexample(witness) => {
+            let (candidate, history) = pair_instance(&witness);
+            assert!(
+                fails(candidate, &history),
+                "{witness:?} decodes to {candidate:?}/{history:?}, which does not fail: {}",
+                context()
+            );
+            assert!(
+                brute.is_some() || history.len() > PAIR_BOUND,
+                "brute force found no failing pair but {witness:?} is short: {}",
+                context()
+            );
+        }
+        Inclusion::Exhausted => panic!("search exhausted: {}", context()),
+    }
+}
+
+fn pair_setup(rng: &mut Rng, count: usize) -> (PolicyAnalyzer<Pair>, Vec<Rule<Pair>>, Vec<RuleId>) {
+    let rules = (0..count).map(|_| pair_rule(rng)).collect::<Vec<_>>();
+    let mut analyzer = PolicyAnalyzer::new(pair_domains());
+    let ids = rules
+        .iter()
+        .map(|rule| analyzer.add_rule(rule).unwrap())
+        .collect::<Vec<_>>();
+    (analyzer, rules, ids)
+}
+
+#[test]
+fn pair_covered_agrees_with_brute_force() {
+    let mut rng = Rng(0x6a75_6e63_6f00_0011);
+    for _ in 0..PAIR_CASES {
+        let (analyzer, rules, ids) = pair_setup(&mut rng, 3);
+        let verdict = analyzer.covered(ids[0], &ids[1..]).unwrap();
+        pair_check(
+            verdict,
+            |c, h| pair_violated(&rules[0], c, h) && !pair_denies(&rules, &[1, 2], c, h),
+            &|| format!("covered: {rules:?}"),
+        );
+    }
+}
+
+#[test]
+fn pair_redundant_agrees_with_brute_force() {
+    let mut rng = Rng(0x6a75_6e63_6f00_0012);
+    for _ in 0..PAIR_CASES {
+        let (analyzer, rules, ids) = pair_setup(&mut rng, 3);
+        let verdict = analyzer.redundant(ids[0], &ids).unwrap();
+        pair_check(
+            verdict,
+            |c, h| pair_denies(&rules, &[0, 1, 2], c, h) != pair_denies(&rules, &[1, 2], c, h),
+            &|| format!("redundant: {rules:?}"),
+        );
+    }
+}
+
+#[test]
+fn pair_at_least_as_strict_agrees_with_brute_force() {
+    let mut rng = Rng(0x6a75_6e63_6f00_0013);
+    for _ in 0..PAIR_CASES {
+        let (analyzer, rules, ids) = pair_setup(&mut rng, 4);
+        let verdict = analyzer.at_least_as_strict(&ids[..2], &ids[2..]).unwrap();
+        pair_check(
+            verdict,
+            |c, h| pair_denies(&rules, &[2, 3], c, h) && !pair_denies(&rules, &[0, 1], c, h),
+            &|| format!("at_least_as_strict: {rules:?}"),
+        );
+    }
+}
+
+#[test]
+fn pair_tail_included_agrees_with_brute_force() {
+    let mut rng = Rng(0x6a75_6e63_6f00_0014);
+    for _ in 0..PAIR_CASES {
+        let head = pair_head(&mut rng);
+        let left = pair_regex(&mut rng, &head, 2);
+        let right = pair_regex(&mut rng, &head, 2);
+        let mut analyzer = PolicyAnalyzer::new(pair_domains());
+        let verdict = analyzer.tail_included(&head, &left, &right).unwrap();
+        let fails = |c: Pair, h: &[Pair]| {
+            pair_head_matches(&head, c)
+                && pair_lang(&left, &head, c, h)
+                && !pair_lang(&right, &head, c, h)
+        };
+        if let Inclusion::Counterexample(witness) = &verdict {
+            // Tail counterexamples have globally minimum length (R6 `shortest`).
+            let (_, history) = pair_instance(witness);
+            let shortest = pair_histories()
+                .into_iter()
+                .find(|h| pair_events().into_iter().any(|c| fails(c, h)))
+                .map(|h| h.len());
+            assert_eq!(
+                shortest.unwrap_or(PAIR_BOUND + 1).min(history.len()),
+                history.len(),
+                "{witness:?} is not shortest: {head:?} {left:?} {right:?}"
+            );
+        }
+        pair_check(verdict, fails, &|| {
+            format!("tail_included: {head:?} {left:?} {right:?}")
+        });
     }
 }
