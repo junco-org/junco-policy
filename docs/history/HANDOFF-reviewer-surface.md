@@ -13,7 +13,7 @@ able to see, without reading anything else:
 4. which mechanized statement corresponds to which paper result.
 
 The evidence for every problem, with file:line references, is in
-`docs/verification/REVIEWER-SURFACE-PLAN.md` (the **plan**). This handoff says what to build, in
+[REVIEWER-SURFACE-PLAN.md](REVIEWER-SURFACE-PLAN.md) (the **plan**). This handoff says what to build, in
 which order, and what can run in parallel. Item names below (R1–R6, P, T, S1–S13, D1–D4) refer to
 the plan.
 

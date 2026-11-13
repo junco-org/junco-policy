@@ -152,6 +152,8 @@ jobs:
           cargo verus verify --locked -p history-semantics --features runtime,std,cache --test public_specs
           cargo verus verify --locked -p history-analysis --no-default-features --features runtime
           cargo verus verify --locked -p history-analysis --no-default-features --features runtime,std
+          cargo verus verify --locked -p history-semantics --features runtime,std,cache --test reviewer
+          cargo verus verify --locked -p history-analysis --no-default-features --features runtime,std --test reviewer
 
   msrv:
     name: MSRV (Rust 1.98.1)
