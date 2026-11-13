@@ -518,6 +518,66 @@ fn allocate_store_id(Ghost(registry): Ghost<vstd::resource::Loc>)
         { issue_store_id(state, registry) })
 }
 
+/// A non-recycled process identity backed by the existing checked identity registry.
+/// Its linear birth certificate makes independently owned tokens provably distinct.
+pub struct OwnerId {
+    id: u64,
+    registry: Ghost<vstd::resource::Loc>,
+    receipt: Tracked<StoreIdReceipt>,
+    birth: Tracked<RegistryBirth>,
+}
+
+impl OwnerId {
+    /// The token owns its birth certificate and a receipt from the process authority.
+    pub closed spec fn wf(&self) -> bool {
+        self.id > 0 && self.birth@.key() == 0
+            && self.birth@.id() == self.registry@ && self.birth@.value() == self.registry@
+            && self.receipt@.id() == store_id_authority()
+            && self.receipt@.key() == self.id && self.receipt@.value() == self.registry@
+    }
+
+    /// Numeric identity checked by native consumers; zero is never issued.
+    pub closed spec fn value(&self) -> u64 { self.id }
+
+    /// Allocates one checked identity without allocating runtime codebooks or numeric stores.
+    pub fn new() -> (result: Result<Self, HistoryError>)
+        ensures result matches Ok(owner) ==> owner.wf(),
+            result matches Err(error) ==> error == (HistoryError::IdExhausted { domain: "owner" }),
+    {
+        let tracked (mut authority, empty) = vstd::resource::map::GhostMapAuth::new(
+            Map::<usize, vstd::resource::Loc>::empty());
+        let ghost registry = authority.id();
+        let tracked birth = authority.insert(0, registry);
+        let (id, receipt) = match allocate_store_id(Ghost(registry)) {
+            Ok(value) => value,
+            Err(_) => return Err(HistoryError::IdExhausted { domain: "owner" }),
+        };
+        Ok(Self { id, registry: Ghost(registry), receipt, birth: Tracked(birth) })
+    }
+
+    /// Returns the native identity, with the same value used by verified owner checks.
+    pub fn id(&self) -> (result: u64)
+        ensures result == self.value(),
+    {
+        self.id
+    }
+
+    /// Establishes separation of two simultaneously owned tokens; erased proofs do no runtime work.
+    pub fn establish_distinct(&mut self, other: &Self)
+        requires old(self).wf(), other.wf(),
+        ensures final(self).wf(), final(self).value() == old(self).value(),
+            final(self).value() != other.value(),
+    {
+        proof {
+            reveal(OwnerId::wf);
+            reveal(OwnerId::value);
+            lemma_registry_births_distinct(self.birth.borrow_mut(), other.birth.borrow());
+            lemma_store_receipts_distinct(self.registry@, other.registry@,
+                self.receipt.borrow(), other.receipt.borrow());
+        }
+    }
+}
+
 impl<E: Event> Store<E> {
     /// Create an empty typed view. Store-ID exhaustion is reported before wrapping.
     pub fn new() -> (result: Result<Self, HistoryError>)
