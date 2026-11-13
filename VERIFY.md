@@ -56,19 +56,19 @@ implementations with the `verus-spec-check` tool (network access on first use).
 
 | Configuration (`cargo verus verify --locked ...`) | Result |
 |---|---|
-| `-p history-syntax --no-default-features` | TBD verified, 0 errors |
-| `-p history-syntax --features serde,std` | TBD verified, 0 errors |
-| `-p junco-core --no-default-features` | TBD verified, 0 errors |
-| `-p junco-core --features runtime,std,serde` | TBD verified, 0 errors |
-| `-p history-store --no-default-features --features runtime` | TBD verified, 0 errors |
-| `-p history-store --features runtime,std` | TBD verified, 0 errors |
-| `-p history-semantics --no-default-features --features runtime` | TBD verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache` | TBD verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache --test public_specs` | TBD verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache --test reviewer` | TBD verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime` | TBD verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime,std` | TBD verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime,std --test reviewer` | TBD verified, 0 errors |
+| `-p history-syntax --no-default-features` | 60 verified, 0 errors |
+| `-p history-syntax --features serde,std` | 60 verified, 0 errors |
+| `-p junco-core --no-default-features` | 203 verified, 0 errors |
+| `-p junco-core --features runtime,std,serde` | 287 verified, 0 errors |
+| `-p history-store --no-default-features --features runtime` | 289 verified, 0 errors |
+| `-p history-store --features runtime,std` | 289 verified, 0 errors |
+| `-p history-semantics --no-default-features --features runtime` | 1619 verified, 0 errors |
+| `-p history-semantics --features runtime,std,cache` | 1624 verified, 0 errors |
+| `-p history-semantics --features runtime,std,cache --test public_specs` | 19 verified, 0 errors |
+| `-p history-semantics --features runtime,std,cache --test reviewer` | 7 verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime` | 603 verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime,std` | 603 verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime,std --test reviewer` | 14 verified, 0 errors |
 
 The counts are from the pinned toolchain (`-- --num-threads N` only changes wall time). The
 `--test` rows count the theorems and clients of the test target itself; the library they build
