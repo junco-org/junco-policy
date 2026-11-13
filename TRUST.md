@@ -214,11 +214,11 @@ is not verified at all (see Unverified glue below).
 - `crates/history-store/src/store.rs:1498`: `fn numeric_authorities` — **meaning**: the process-wide coordinate and history-key allocators (static installation)
 - `crates/history-store/src/store.rs:1832`: `fn cell_view`
 - `crates/history-store/src/store.rs:1833`: `fn record_view`
-- `crates/history-store/src/typed.rs:987`: `fn store_ids_authority_id`
-- `crates/history-store/src/typed.rs:988`: `fn process_store_ids` — **meaning**: the process-wide store-id allocator (static installation)
-- `crates/history-store/src/typed.rs:992`: `fn store_ids_mutex_valid`
-- `crates/history-store/src/typed.rs:1176`: `fn snapshot_published` — **meaning**: persistent provenance of a codebook snapshot under the registry resource
-- `crates/history-store/src/typed.rs:1306`: `fn mutex_valid`
+- `crates/history-store/src/typed.rs:999`: `fn store_ids_authority_id`
+- `crates/history-store/src/typed.rs:1000`: `fn process_store_ids` — **meaning**: the process-wide store-id allocator (static installation)
+- `crates/history-store/src/typed.rs:1004`: `fn store_ids_mutex_valid`
+- `crates/history-store/src/typed.rs:1188`: `fn snapshot_published` — **meaning**: persistent provenance of a codebook snapshot under the registry resource
+- `crates/history-store/src/typed.rs:1318`: `fn mutex_valid`
 - `crates/history-store/src/typed/map.rs:24`: `fn representatives` — **meaning**: the entries of an external_body hash map, as `eq_spec` classes under `key_laws`
 
 ### `derived_eq_claim` (1)
