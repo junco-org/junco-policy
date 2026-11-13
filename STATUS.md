@@ -7,10 +7,10 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 | Item | State | Evidence / public statements |
 |---|---|---|
 | H1 | merged | [PR #13](https://github.com/junco-org/junco-policy/pull/13), merge commit `bce1df8511fc56919724e18bdbf5e610c8252bdb`; every CI check passed. Public statements detailed below. |
-| H3 | in progress | Local gates passed; [PR #15](https://github.com/junco-org/junco-policy/pull/15), rebased head `68743aa`, awaits CI. `Denial::index` and exact-index `check_step` added; paper/reviewer/public clients and root observations updated. |
+| H3 | in progress | Local gates passed; [PR #15](https://github.com/junco-org/junco-policy/pull/15), rebased head `2a6f942` atop merged H6, awaits fresh CI. Prior head passed every check. `Denial::index` and exact-index `check_step` added; paper/reviewer/public clients and root observations updated. |
 | H4 | in progress | Local gates passed; [PR #17](https://github.com/junco-org/junco-policy/pull/17), head `06f0db5`, awaits CI. `stmt_search_correct` and its theorem require trace_steps_ok only for expanded nodes; public index uses the same statement. |
-| H6 | in progress | Local gates passed; [PR #14](https://github.com/junco-org/junco-policy/pull/14), rebased head `c6b5503`, awaits CI. Changed `PolicyAnalyzer::add_rule` (`crates/history-analysis/src/analyzer.rs`) and `ValidatorBuilder::add_rule` (`crates/history-semantics/src/validator.rs`): Ok implies rule_wf, exact event arity and correctly tagged head constants. Reviewer clients consume the clauses. Unused analyzer_wf/rule_constants_tagged removed. |
-| H5 | in progress | Monitor half first: explicit resource_error predicate and propagation through core/store/evaluator/public monitor contracts staged. Native cargo check passed. Initial verifier parse issue in an ID macro repaired; integrated proof gates running. Analyzer half not started. |
+| H6 | merged | [PR #14](https://github.com/junco-org/junco-policy/pull/14), merge commit `4151cb0a66058e9ecbc7e787b23438b40f319192`; all CI passed. Public statements detailed below. |
+| H5 | in progress | Monitor half first: explicit resource_error and propagation through core/store/evaluator/public monitor contracts staged. Core **288**, store **289** verified, **0 errors**. Native check passed. Monitor gate running after correcting public opaque-field access. Analyzer half not started. |
 | H2 | not started | |
 | H7 | not started | |
 | H8 | not started | |
@@ -22,7 +22,7 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 | H14 | not started | |
 | H15 | not started | Deferred unless all other items complete. |
 
-Merged items: H1, PR #13, `bce1df8511fc56919724e18bdbf5e610c8252bdb`.
+Merged items: H1, PR #13, `bce1df8511fc56919724e18bdbf5e610c8252bdb`; H6, PR #14, `4151cb0a66058e9ecbc7e787b23438b40f319192`.
 
 H1 public statements:
 - `counterexample_spec<E>` (`crates/history-analysis/src/spec/analyzer.rs`) now includes `forall i. 0 <= i < arity::<E>() && a.domains[i] is Some ==> fresh_used(cex,i) =~= ISet::empty()` and `undeclared_capacity::<E>(a,cex) ==> cex_has_instance::<E>(a.domains,a.known,cex)`; existing arity and every-instance validity clauses retained.
@@ -30,6 +30,12 @@ H1 public statements:
 - New `theorem_counterexample_has_instance<E>` (`crates/history-analysis/tests/reviewer.rs`): counterexample_spec plus capacity at every undeclared coordinate implies cex_has_instance.
 - New `theorem_declared_fresh_rejected<E>` (same file): fresh_used contains a name at an in-range declared coordinate implies not counterexample_spec.
 - New `lemma_declared_coordinate_zero<E>` (same file): counterexample_spec and an in-range declared coordinate imply fresh_used.len() == 0 and fresh_capacity for that length.
+
+H6 changed public statements:
+- `PolicyAnalyzer::add_rule` (`crates/history-analysis/src/analyzer.rs`): `result matches Ok(id) ==> rule_wf(rule@) && rule@.head.len() == arity::<E>() && head_coordinates_wf::<E>(rule@.head)`, in addition to the exact rule/known/domain/owner frame and stable index. Existing requires include event hypotheses.
+- `ValidatorBuilder::add_rule` (`crates/history-semantics/src/validator.rs`): under `event_obligations::<E>()`, successful registration implies `rule_wf(source@) && source@.head.len() == arity::<E>() && head_coordinates_wf::<E>(source@.head)`, in addition to the existing source-order frame.
+- `head_coordinates_wf` is the existing public predicate: exact arity, and every Constant(value) in head[i] has `E::coordinate_spec(value) == i`.
+- Deleted unused `analyzer_wf` and `rule_constants_tagged` from `crates/history-analysis/src/spec/analyzer.rs`; no replacement unproved view invariant.
 
 Verification: H1 library merge gate `history-analysis --no-default-features --features runtime,std`: **603 verified, 0 errors**; reviewer: **17 verified, 0 errors**. Ghost-erased clippy passed (`--all-targets -- -D warnings`); package tests **27 passed**. Final package fmt passed after removing the throwaway smoke example. Runtime smoke observed counterexample candidate `[Constant(C0(3)), Constant(C1(7))]`, empty history, both coordinates declared; concrete `(3,7), []` refutes All ⊆ Empty. No ensures weakened; no trusted items added; no paper or benchmark edits.
 
