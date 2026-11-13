@@ -793,7 +793,8 @@ fn derive_atoms(
 }
 
 #[verus_verify]
-#[verus_spec(result => ensures result.is_ok() == atom_valid(primitive))]
+#[verus_spec(result => ensures result.is_ok() == atom_valid(primitive),
+    atom_valid(primitive) ==> junco_core::verify::history_specs::no_internal_error(result))]
 fn validate_atom(primitive: Primitive) -> Result<(), HistoryError> {
     let Primitive::Eq { field, term } = primitive;
     match term {
@@ -835,7 +836,8 @@ fn atom(primitive: Primitive) -> Atom {
 /// Truth words of `atoms` under `letter`: bit `i % 64` of word `i / 64` is atom `i`.
 #[verus_verify]
 #[verus_spec(result => requires atoms_wf(atoms@),
-    ensures truth_bits(atoms@, *letter, result.view()))]
+    ensures truth_bits(atoms@, *letter, result.view()),
+        atoms@.len() + 63 <= usize::MAX ==> symbolic::assignment_valid(atoms@.len(), result.view()))]
 // vstd specifies `%` but not `is_multiple_of`.
 #[allow(clippy::manual_is_multiple_of)]
 fn truth(atoms: &[Atom], letter: &Letter) -> SmallVec<[u64; 2]> {
@@ -849,11 +851,13 @@ fn truth(atoms: &[Atom], letter: &Letter) -> SmallVec<[u64; 2]> {
                 assert(((0u64 >> bit) & 1u64) == 0) by(bit_vector);
             }
         }
+        if atoms@.len() + 63 <= usize::MAX { lemma_assignment_zero(atoms@.len(), words.view()); }
     }
     let mut index = 0;
     #[cfg_attr(verus_keep_ghost, verus_spec(invariant
         atoms_wf(atoms@), index <= atoms@.len(),
         words.view().len() == (atoms@.len() + 63) / 64,
+        atoms@.len() + 63 <= usize::MAX ==> symbolic::assignment_valid(atoms@.len(), words.view()),
         forall|i: int| 0 <= i < index ==> symbolic::truth_word_bit(words.view(), i as nat)
             == implementation::letter_holds(letter@, atoms@[i]@),
         forall|j: nat| index <= j ==> !symbolic::truth_word_bit(words.view(), j),
@@ -864,7 +868,12 @@ fn truth(atoms: &[Atom], letter: &Letter) -> SmallVec<[u64; 2]> {
             let slice = words.as_mut_slice();
             proof! { assert(index / 64 < before.len()); }
             slice[index / 64] |= 1u64 << (index % 64);
-            proof! { lemma_truth_set(before, words.view(), index as nat); }
+            proof! {
+                lemma_truth_set(before, words.view(), index as nat);
+                if atoms@.len() + 63 <= usize::MAX {
+                    lemma_assignment_set(atoms@.len(), before, words.view(), index as nat);
+                }
+            }
         }
         index += 1;
     }
