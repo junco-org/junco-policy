@@ -520,9 +520,9 @@ pub proof fn lemma_dsl_later_maps_preservation<E: history_syntax::Event>(
             request, numeric_request),
         word_encoded(later_maps, crate::verify::flatten::component_equality::<E>(), domain,
             history, numeric_history),
-    ensures crate::verify::dsl::head_matches(rule.head@, request)
+    ensures crate::spec::semantics::head_matches(rule.head@, request)
             == crate::flat::verify::head_matches(numeric.head@, numeric_request, numeric_equality()),
-        crate::verify::dsl::lang(rule.tail@, rule.head@, request, history)
+        crate::spec::semantics::lang(rule.tail@, rule.head@, request, history)
             == crate::flat::verify::lang(numeric.tests@, numeric.regexes@, numeric.root as nat,
                 numeric_request, numeric_history, numeric_equality()),
 {

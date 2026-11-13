@@ -4,12 +4,12 @@
 //! reduction proved here is the equivalent rule-by-rule form that the analyzer uses.
 use super::encoding::*;
 use super::search::{Outcome, follows, outcome_ok};
-use super::semantics::violated_by;
 use crate::verify::finite_states::lemma_powerset_finite;
 use alloc::boxed::Box;
 use history_syntax::MAX_ARITY;
 use history_syntax::syntax::{Component, RuleMode};
 use junco_core::kernel::verify as model;
+use junco_core::spec::semantics::violated_by;
 use junco_core::verify::history_specs as language;
 use junco_core::verify::history_specs::{EventView, Regex, Subst};
 use vstd::iset_lib::lemma_iset_subset_finite;

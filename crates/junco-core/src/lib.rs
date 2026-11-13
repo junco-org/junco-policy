@@ -23,6 +23,8 @@ pub mod scope;
 pub mod kernel;
 
 #[cfg(verus_keep_ghost)]
+pub mod spec;
+#[cfg(verus_keep_ghost)]
 pub mod verify;
 
 pub use compile::{FlatEncoder, lower_flat};

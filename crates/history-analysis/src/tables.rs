@@ -188,7 +188,7 @@ impl Tables {
                             == numeric::source_regex(final(self)@, index, theta, word))
                 && forall|theta: Subst, word: Seq<EventView>|
                     numeric::source_regex(final(self)@, root as nat, theta, word)
-                        == history_semantics::verify::refinement::semantics::violated_by(
+                        == junco_core::spec::semantics::violated_by(
                             mode, numeric::source_regex(*source, source.root as nat, theta, word)))]
     pub(crate) fn denial(
         &mut self,
@@ -205,11 +205,11 @@ impl Tables {
                     lemma_frame_languages(appended, self@);
                     assert forall|theta: Subst, word: Seq<EventView>|
                         numeric::source_regex(self@, root as nat, theta, word)
-                            == history_semantics::verify::refinement::semantics::violated_by(
+                            == junco_core::spec::semantics::violated_by(
                                 mode, numeric::source_regex(*source, source.root as nat, theta, word))
                         by {
                         reveal_with_fuel(numeric::source_regex, 1);
-                        reveal(history_semantics::verify::refinement::semantics::violated_by);
+                        reveal(junco_core::spec::semantics::violated_by);
                         assert(self.regexes@[root as int] == FlatRegex::Complement(source_root));
                         assert(numeric::source_regex(self@, root as nat, theta, word)
                             == !numeric::source_regex(self@, source_root as nat, theta, word));

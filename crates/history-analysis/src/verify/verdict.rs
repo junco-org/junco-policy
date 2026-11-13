@@ -15,7 +15,7 @@ use history_syntax::Rule;
 use history_syntax::spec::events::arity;
 use junco_core::flat::FlatRule;
 use junco_core::flat::{FlatHead, FlatPair, FlatTerm, FlatTest};
-use junco_core::verify::dsl as tdsl;
+use junco_core::spec::semantics as tdsl;
 use junco_core::verify::{encoding as enc, flatten as fl};
 use vstd::prelude::*;
 

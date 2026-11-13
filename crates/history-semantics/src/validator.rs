@@ -15,6 +15,8 @@ use junco_core::event::{Grant, Request};
 use junco_core::limits::{Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics as sem;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::{no_invariant_compile_failure, no_invariant_failure};
 use vstd::prelude::*;
 
@@ -204,7 +206,7 @@ impl<E: Event> Validator<E> {
             history_store::history::verify::state_frame(verify::validator_history(*old(self)), verify::validator_history(*final(self))),
             result matches Ok(permitted) ==> (history_store::typed::verify::native_obligations::<E>() ==>
                 permitted == (forall|i: int| 0 <= i < verify::validator_sources(*old(self)).len() ==>
-                    !junco_core::verify::dsl::rule_violated(verify::validator_sources(*old(self))[i], *candidate,
+                    !sem::rule_violated(verify::validator_sources(*old(self))[i]@, *candidate,
                         history_store::history::verify::raw_events(verify::validator_history(*old(self)))))))]
     pub fn permits(&mut self, candidate: &E) -> Result<bool, HistoryError> {
         proof! { history_store::history::verify::lemma_history_frame_facts(self.history, self.history); }
@@ -238,8 +240,8 @@ impl<E: Event> Validator<E> {
             index <= self.rules@.len(), verify::validator_wf(*self), verify::validator_frame(entry, *self),
             entry == *old(self), self.history == entry.history,
             history_store::typed::verify::native_obligations::<E>() ==>
-                forall|j: int| 0 <= j < index ==> !junco_core::verify::dsl::rule_violated(
-                    verify::validator_sources(entry)[j], *candidate, history_store::history::verify::raw_events(entry.history)),
+                forall|j: int| 0 <= j < index ==> !sem::rule_violated(
+                    verify::validator_sources(entry)[j]@, *candidate, history_store::history::verify::raw_events(entry.history)),
             decreases self.rules@.len() - index))]
         while index < self.rules.len() {
             proof_decl! { let ghost before = *self; }
@@ -362,7 +364,7 @@ pub mod verify {
         0 <= index < before.rules@.len() && denial.mode == before.rules@[index].mode_spec()
             && denial.event == request.event
             && (books::native_obligations::<E>() ==> denial.mode == validator_sources(before)[index].mode
-                && compiled::least_violation(validator_sources(before), before.history, request.event, index))
+                && sem::least_violation(sem::rule_views(validator_sources(before)), request.event, raw::raw_events(before.history), index))
             && denial.message@ == match denial.mode {
                 RuleMode::Require => "committed history does not satisfy required past-regex rule"@,
                 RuleMode::Forbid => "committed history satisfies forbidden past-regex rule"@,
@@ -381,7 +383,7 @@ pub mod verify {
                 && raw::push_result(before.history, after.history, request.event, Ok(()))
                 && (books::native_obligations::<E>() ==> forall|index: int|
                     0 <= index < validator_sources(before).len() ==>
-                        !junco_core::verify::dsl::rule_violated(validator_sources(before)[index], request.event, raw::raw_events(before.history))),
+                        !sem::rule_violated(validator_sources(before)[index]@, request.event, raw::raw_events(before.history))),
         }
     }
 
@@ -405,14 +407,14 @@ pub mod verify {
                     && exists|index: int| denial_at(before, request, denial, index)
                         && (books::native_obligations::<E>() ==>
                             denial.mode == validator_sources(before)[index].mode
-                                && compiled::least_violation(validator_sources(before),
-                                    validator_history(before), request.event, index)),
+                                && sem::least_violation(sem::rule_views(validator_sources(before)),
+                                    request.event, raw::raw_events(validator_history(before)), index)),
                 Ok(Decision::Grant(grant)) => grant.event == request.event && grant.metadata == request.metadata
                     && raw::push_result(validator_history(before), validator_history(after), request.event, Ok(()))
                     && raw::raw_events(validator_history(after)) == raw::raw_events(validator_history(before)).push(request.event)
                     && (books::native_obligations::<E>() ==> forall|index: int|
                         0 <= index < validator_sources(before).len() ==>
-                            !junco_core::verify::dsl::rule_violated(validator_sources(before)[index],
+                            !sem::rule_violated(validator_sources(before)[index]@,
                                 request.event, raw::raw_events(validator_history(before)))),
             },
     {

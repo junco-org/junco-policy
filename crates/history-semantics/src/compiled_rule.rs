@@ -22,8 +22,10 @@ use history_store::history::verify as raw;
 #[cfg(verus_keep_ghost)]
 use history_store::typed::verify as books;
 #[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics as dsl;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::{
-    dsl, encoding, flatten as source,
+    encoding, flatten as source,
     history_specs::{no_invariant_compile_failure, no_invariant_failure},
 };
 #[cfg(verus_keep_ghost)]
@@ -179,21 +181,15 @@ pub mod verify {
 
     pub open spec fn dsl_result<E: Event>(rule: Rule<E>, history: History<E>, candidate: E,
         result: Result<Option<bool>, HistoryError>) -> bool {
-        result matches Ok(answer) ==> answer == junco_core::verify::dsl::rule_evaluation(
-            rule, candidate, raw::raw_events(history))
-    }
-
-
-    pub open spec fn least_violation<E: Event>(sources: Seq<Rule<E>>, history: History<E>, candidate: E, index: int) -> bool {
-        0 <= index < sources.len() && junco_core::verify::dsl::rule_violated(sources[index], candidate, raw::raw_events(history))
-            && forall|j: int| 0 <= j < index ==> !junco_core::verify::dsl::rule_violated(sources[j], candidate, raw::raw_events(history))
+        result matches Ok(answer) ==> answer == dsl::rule_evaluation(
+            rule@, candidate, raw::raw_events(history))
     }
 
     pub open spec fn ordered_result<E: Event>(sources: Seq<Rule<E>>, history: History<E>, candidate: E,
         result: Result<Option<usize>, HistoryError>) -> bool {
         books::native_obligations::<E>() ==> match result {
-            Ok(Some(index)) => least_violation(sources, history, candidate, index as int),
-            Ok(None) => forall|j: int| 0 <= j < sources.len() ==> !junco_core::verify::dsl::rule_violated(sources[j], candidate, raw::raw_events(history)),
+            Ok(Some(index)) => dsl::least_violation(dsl::rule_views(sources), candidate, raw::raw_events(history), index as int),
+            Ok(None) => forall|j: int| 0 <= j < sources.len() ==> !dsl::rule_violated(sources[j]@, candidate, raw::raw_events(history)),
             Err(_) => true,
         }
     }
@@ -239,7 +235,7 @@ pub mod verify {
         result: Result<Option<bool>, HistoryError>, mode: RuleMode)
         requires compiled_wf(compiled), books::native_obligations::<E>(),
             dsl_result(source_rule(compiled), history, candidate, result), mode == compiled.mode_spec(),
-        ensures result matches Ok(answer) ==> junco_core::verify::dsl::rule_violated(source_rule(compiled), candidate, raw::raw_events(history))
+        ensures result matches Ok(answer) ==> dsl::rule_violated(source_rule(compiled)@, candidate, raw::raw_events(history))
             == match answer { None => false, Some(accepted) => match mode {
                 RuleMode::Require => !accepted, RuleMode::Forbid => accepted,
             } },
@@ -272,8 +268,8 @@ pub mod verify {
                 == !books::same_store_owner(compiled_store(before), raw::store_of(history)),
             books::native_obligations::<E>() ==> dsl_result(source_rule(before), history, candidate, result),
             books::native_obligations::<E>() ==> match result {
-                Ok(answer) => answer == junco_core::verify::dsl::rule_evaluation(
-                    source_rule(before), candidate, raw::raw_events(history)),
+                Ok(answer) => answer == dsl::rule_evaluation(
+                    source_rule(before)@, candidate, raw::raw_events(history)),
                 Err(_) => true,
             },
     {}

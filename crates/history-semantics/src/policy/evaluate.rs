@@ -19,6 +19,8 @@ use history_syntax::{Event, Rule, RuleMode};
 use junco_core::limits::{Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics as sem;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::{no_invariant_compile_failure, no_invariant_failure};
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
@@ -110,7 +112,8 @@ pub open(crate) spec fn policy_decision_result<E: Event, C>(before: CompiledPoli
                 after.callback_trace@.calls.len() == before.callback_trace@.calls.len() + 1
                     && 0 <= index < verify::policy_sources(before).len()
                     && (history_store::typed::verify::native_obligations::<E>() ==>
-                        crate::compiled_rule::verify::least_violation(verify::policy_sources(before), history, candidate, index))
+                        sem::least_violation(sem::rule_views(verify::policy_sources(before)), candidate,
+                            history_store::history::verify::raw_events(history), index))
                     && after.callback_trace@.calls == before.callback_trace@.calls.push(DiagnosticCall {
                         index: call.index, source: verify::policy_sources(before)[index],
                         diagnostic_id: verify::policy_diagnostic_ids(before)[index],
@@ -267,13 +270,13 @@ pub mod verify {
                     && policy_diagnostic_calls(after) == policy_diagnostic_calls(before)
                     && compiled::ordered_result(policy_sources(before), history, candidate, Ok(None))
                     && (books::native_obligations::<E>() ==> forall|i: int| 0 <= i < policy_sources(before).len() ==>
-                        !junco_core::verify::dsl::rule_violated(policy_sources(before)[i], candidate,
+                        !sem::rule_violated(policy_sources(before)[i]@, candidate,
                             history_store::history::verify::raw_events(history))),
                 Ok(PolicyDecision::Deny { .. }) => policy_selected_index(after) < policy_sources(before).len()
                     && policy_selected_source(after) == policy_sources(before)[policy_selected_index(after) as int]
                     && policy_selected_diagnostic_id(after) == policy_diagnostic_ids(before)[policy_selected_index(after) as int]
-                    && (books::native_obligations::<E>() ==> compiled::least_violation(policy_sources(before), history,
-                        candidate, policy_selected_index(after) as int))
+                    && (books::native_obligations::<E>() ==> sem::least_violation(sem::rule_views(policy_sources(before)),
+                        candidate, history_store::history::verify::raw_events(history), policy_selected_index(after) as int))
                     && (policy_wf(before) ==> policy_context_calls(after) == policy_context_calls(before) + 1
                         && policy_diagnostic_calls(after) == policy_diagnostic_calls(before) + 1),
             },
@@ -552,8 +555,9 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                     assert(verify::policy_wf(*self));
                     assert(verify::policy_frame(entry, *self));
                     assert(index < verify::policy_sources(entry).len());
-                    assert(books::native_obligations::<E>() ==> compiled::least_violation(
-                        verify::policy_sources(entry), *history, *probe, index as int));
+                    assert(books::native_obligations::<E>() ==> sem::least_violation(
+                        sem::rule_views(verify::policy_sources(entry)), *probe,
+                        history_store::history::verify::raw_events(*history), index as int));
                     let ghost observed_decision = decision;
                     if let PolicyDecision::Deny { failed_precondition, allowed_fixes } = observed_decision {
                         assert(self.callback_trace@.calls == entry.callback_trace@.calls.push(DiagnosticCall {
@@ -605,8 +609,8 @@ impl<E: Event, C> CompiledPolicy<E, C> {
             history_store::history::verify::history_wf(*history),
             books::same_store_owner(entry.store, history_store::history::verify::store_of(*history)),
             history_store::typed::verify::native_obligations::<E>() ==>
-                forall|j: int| 0 <= j < index ==> !junco_core::verify::dsl::rule_violated(
-                    verify::policy_sources(entry)[j], *probe, history_store::history::verify::raw_events(*history)),
+                forall|j: int| 0 <= j < index ==> !sem::rule_violated(
+                    verify::policy_sources(entry)[j]@, *probe, history_store::history::verify::raw_events(*history)),
             decreases self.rules@.len() - index))]
         while index < self.rules.len() {
             proof_decl! { let ghost before = *self; }

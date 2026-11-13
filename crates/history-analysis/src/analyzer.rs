@@ -450,7 +450,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             final(self)@.domains == old(self)@.domains,
             result matches Ok(id) ==> final(self)@.rules == old(self)@.rules.push(encoding::rule_view(*rule))
                 && id@ == old(self)@.rules.len()
-                && history_semantics::verify::refinement::semantics::rule_wf(encoding::rule_view(*rule)),
+                && junco_core::spec::semantics::rule_wf(encoding::rule_view(*rule)),
             result is Err ==> final(self)@.rules == old(self)@.rules,
             junco_core::verify::history_specs::no_invariant_compile_failure(result),
     {

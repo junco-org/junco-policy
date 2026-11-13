@@ -1,193 +1,20 @@
-//! Structural views and independent, concrete-component semantics for the owned DSL.
-//!
-//! Component equality is `PartialEqSpec::eq_spec`, not representation equality. Connecting
-//! native projections/equality to this model remains conditional on their respective contracts.
+//! Lemmas about the typed semantics of `crate::spec::semantics`, and a real scope client.
 
+use crate::spec::semantics::{lang, rule_views, test_sem};
 use alloc::boxed::Box;
-use history_syntax::Event;
-use history_syntax::spec::events::{
-    AtomView, HeadView, PatternView, RegexView, TestView, event_view,
-};
-use history_syntax::{Comparison, Component, Rule, RuleMode};
+use history_syntax::spec::events::{HeadView, RegexView, TestView};
+use history_syntax::{Component, Event, Rule};
 use vstd::prelude::*;
-use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
 
 broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
 
-
-
-pub open spec fn pattern_name<T>(pattern: PatternView<T>) -> Option<Seq<char>> {
-    match pattern { PatternView::Constant(_) => None, PatternView::Variable(name) => Some(name) }
-}
-
-pub open spec fn distinct_names<T, U>(left: PatternView<T>, right: PatternView<U>) -> bool {
-    match (pattern_name(left), pattern_name(right)) {
-        (Some(a), Some(b)) => a != b,
-        _ => true,
-    }
-}
-
-pub open spec fn head_scoped<C>(head: HeadView<C>) -> bool {
-    forall|i: int, j: int| 0 <= i < j < head.len() ==>
-        distinct_names(#[trigger] head[i], #[trigger] head[j])
-}
-
-pub open spec fn head_pattern_matches<T: PartialEq>(pattern: PatternView<T>, actual: T) -> bool {
-    match pattern {
-        PatternView::Constant(expected) => actual.eq_spec(&expected),
-        PatternView::Variable(_) => true,
-    }
-}
-
-pub open spec fn head_matches<C: PartialEq>(head: HeadView<C>, candidate: Seq<C>) -> bool {
-    head.len() == candidate.len()
-        && forall|i: int| 0 <= i < head.len() ==>
-            head_pattern_matches(#[trigger] head[i], candidate[i])
-}
-
-/// Substitution is coordinate-local: an identically spelled name in another coordinate is absent.
-pub open spec fn resolve_pattern<T>(
-    pattern: PatternView<T>, head: PatternView<T>, candidate: T,
-) -> Option<T> {
-    match pattern {
-        PatternView::Constant(value) => Some(value),
-        PatternView::Variable(name) => match head {
-            PatternView::Variable(bound) => if name == bound { Some(candidate) } else { None },
-            PatternView::Constant(_) => None,
-        },
-    }
-}
-
-pub open spec fn pattern_scoped<T>(pattern: PatternView<T>, head: PatternView<T>) -> bool {
-    match pattern {
-        PatternView::Constant(_) => true,
-        PatternView::Variable(name) => pattern_name(head) == Some(name),
-    }
-}
-
-pub open spec fn atom_scoped<C>(atom: AtomView<C>, head: HeadView<C>) -> bool {
-    atom.component < head.len() && pattern_scoped(atom.pattern, head[atom.component as int])
-}
-
-pub open spec fn test_scoped<C>(test: TestView<C>, head: HeadView<C>) -> bool
-    decreases test,
-{
-    match test {
-        TestView::True | TestView::False => true,
-        TestView::Atom { pattern, .. } => atom_scoped(pattern, head),
-        // Separate bindings keep conditional expressions out of the quantified index triggers.
-        TestView::And(children) =>
-            forall|i: int| 0 <= i < children.len() ==> test_scoped(#[trigger] children[i], head),
-        TestView::Or(children) =>
-            forall|i: int| 0 <= i < children.len() ==> test_scoped(#[trigger] children[i], head),
-    }
-}
-
-pub open spec fn regex_scoped<C>(regex: RegexView<C>, head: HeadView<C>) -> bool
-    decreases regex,
-{
-    match regex {
-        RegexView::Empty | RegexView::All | RegexView::Epsilon => true,
-        RegexView::Test(test) => test_scoped(test, head),
-        RegexView::Union(children) =>
-            forall|i: int| 0 <= i < children.len() ==> regex_scoped(#[trigger] children[i], head),
-        RegexView::Concat(children) =>
-            forall|i: int| 0 <= i < children.len() ==> regex_scoped(#[trigger] children[i], head),
-        RegexView::Intersect(children) =>
-            forall|i: int| 0 <= i < children.len() ==> regex_scoped(#[trigger] children[i], head),
-        RegexView::Star(child) | RegexView::Not(child) => regex_scoped(*child, head),
-    }
-}
-
-pub open spec fn comparison_sem<T: PartialEq>(comparison: Comparison, actual: T, expected: Option<T>) -> bool {
-    match expected {
-        None => false,
-        Some(value) => match comparison {
-            Comparison::Eq => actual.eq_spec(&value),
-            Comparison::Neq => !actual.eq_spec(&value),
-        },
-    }
-}
-
-pub open spec fn atom_sem<C: PartialEq>(
-    comparison: Comparison, atom: AtomView<C>, head: HeadView<C>,
-    candidate: Seq<C>, event: Seq<C>,
-) -> bool {
-    atom.component < head.len() && atom.component < candidate.len() && atom.component < event.len()
-        && comparison_sem(comparison, event[atom.component as int],
-            resolve_pattern(atom.pattern, head[atom.component as int], candidate[atom.component as int]))
-}
-
-pub open spec fn test_sem<C: PartialEq>(
-    test: TestView<C>, head: HeadView<C>,
-    candidate: Seq<C>, event: Seq<C>,
-) -> bool
-    decreases test,
-{
-    match test {
-        TestView::True => true,
-        TestView::False => false,
-        TestView::Atom { comparison, pattern } => atom_sem(comparison, pattern, head, candidate, event),
-        TestView::And(children) => forall|i: int| 0 <= i < children.len() ==>
-            test_sem(children[i], head, candidate, event),
-        TestView::Or(children) => exists|i: int| 0 <= i < children.len()
-            && test_sem(children[i], head, candidate, event),
-    }
-}
-
-/// Whole-word language semantics, in oldest-to-newest event order.
-pub open spec fn lang<C: PartialEq>(
-    regex: RegexView<C>, head: HeadView<C>, candidate: Seq<C>,
-    word: Seq<Seq<C>>,
-) -> bool
-    decreases regex,
-{
-    match regex {
-        RegexView::Empty => false,
-        RegexView::All => true,
-        RegexView::Epsilon => word.len() == 0,
-        RegexView::Test(test) => word.len() == 1 && test_sem(test, head, candidate, word[0]),
-        RegexView::Union(children) => exists|i: int| 0 <= i < children.len()
-            && lang(children[i], head, candidate, word),
-        RegexView::Intersect(children) => forall|i: int| 0 <= i < children.len() ==>
-            lang(children[i], head, candidate, word),
-        RegexView::Not(child) => !lang(*child, head, candidate, word),
-        RegexView::Concat(children) => exists|parts: Seq<Seq<Seq<C>>>|
-            parts.len() == children.len() && word == parts.flatten()
-            && forall|i: int| 0 <= i < children.len() ==> lang(children[i], head, candidate, parts[i]),
-        RegexView::Star(child) => exists|parts: Seq<Seq<Seq<C>>>|
-            word == parts.flatten()
-            && forall|i: int| 0 <= i < parts.len() ==> lang(*child, head, candidate, parts[i]),
-    }
-}
-
-/// Evaluates the tail over committed history, excluding the candidate; a head mismatch is `None`.
-pub open spec fn rule_evaluation<E: Event>(rule: Rule<E>, candidate: E, history: Seq<E>) -> Option<bool> {
-    if !head_matches(rule.head@, event_view(candidate)) {
-        None
-    } else {
-        Some(lang(rule.tail@, rule.head@, event_view(candidate),
-            history.map(|i: int, e: E| event_view(e))))
-    }
-}
-
-/// A mismatching rule never violates; Require negates the tail answer and Forbid retains it.
-pub open spec fn rule_violated<E: Event>(rule: Rule<E>, candidate: E, history: Seq<E>) -> bool {
-    match rule_evaluation(rule, candidate, history) {
-        None => false,
-        Some(accepted) => match rule.mode {
-            RuleMode::Require => !accepted,
-            RuleMode::Forbid => accepted,
-        },
-    }
-}
-
-/// Pair-language membership, independent of whether the rule requires or forbids its tail.
-pub open spec fn rule_accepts<E: Event>(rule: Rule<E>, candidate: E, history: Seq<E>) -> bool {
-    rule_evaluation(rule, candidate, history) == Some(true)
-}
+/// Indexing the views of a rule sequence is the view of the indexed rule.
+pub broadcast proof fn lemma_rule_views_index<E: Event>(rules: Seq<Rule<E>>, i: int)
+    requires 0 <= i < rules.len(),
+    ensures #![trigger rule_views(rules)[i]] #![trigger rules[i]@] rule_views(rules)[i] == rules[i]@,
+{}
 
 /// Empty operators retain their different Boolean and language identities.
 pub proof fn lemma_empty_operators<C: PartialEq>(

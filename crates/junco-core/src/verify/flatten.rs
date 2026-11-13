@@ -7,7 +7,7 @@ use crate::flatten::Work;
 use crate::limits::Limits;
 use crate::observation::ObservationWorld;
 use crate::scope::VariableScope;
-use crate::verify::dsl;
+use crate::spec::semantics as dsl;
 use history_syntax::Event;
 use history_syntax::event::specs::EventSpec;
 use history_syntax::spec::events::{AtomView, HeadView, PatternView, RegexView, TestView, arity};

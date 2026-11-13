@@ -10,8 +10,8 @@
 use alloc::boxed::Box;
 use history_syntax::Comparison;
 use history_syntax::spec::events::{HeadView, PatternView, RegexView, RuleView, TestView};
-use history_syntax::syntax::RuleMode;
-use junco_core::verify::dsl as tdsl;
+use junco_core::spec::semantics as tdsl;
+use junco_core::spec::semantics::{rule_wf, violated_by};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -22,11 +22,6 @@ broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemm
 /// The status of one rule for a candidate and a history. `Violated` is the paper's rule violation
 /// (Definition Rule violation, `def:violates`); `NotFired` is a head that does not unify.
 pub enum Status { NotFired, Satisfied, Violated }
-
-/// `mode = require` and the history is outside the tail, or `mode = forbid` and it is inside.
-pub open spec fn violated_by(mode: RuleMode, inside: bool) -> bool {
-    match mode { RuleMode::Require => !inside, RuleMode::Forbid => inside }
-}
 
 pub open spec fn rule_status<C: PartialEq>(
     rule: RuleView<C>, candidate: Seq<C>, history: Seq<Seq<C>>,
@@ -110,18 +105,6 @@ pub open spec fn infinite_domains<C: PartialEq>(
     domains: DomainsView<C>,
 ) -> bool {
     all_unrestricted(domains) && infinite_type::<C>()
-}
-
-// ----- well-formed rules -----
-
-/// Head variables have distinct names and every tail variable is the head variable of its own
-/// component (`sec:rules`, "a tail whose variables occur in h"; component-locality, `sec:events`).
-pub open spec fn rule_wf<C>(rule: RuleView<C>) -> bool {
-    1 <= rule.head.len() <= history_syntax::MAX_ARITY && tdsl::head_scoped(rule.head) && tdsl::regex_scoped(rule.tail, rule.head)
-}
-
-pub open spec fn head_tails_wf<C>(head: HeadView<C>, left: RegexView<C>, right: RegexView<C>) -> bool {
-    1 <= head.len() <= history_syntax::MAX_ARITY && tdsl::head_scoped(head) && tdsl::regex_scoped(left, head) && tdsl::regex_scoped(right, head)
 }
 
 // ----- policy questions (`sec:policy`, Definition Policy refinement `def:policy-refinement`, appendix `app:policy-reduction`) -----

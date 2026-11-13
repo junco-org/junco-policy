@@ -22,13 +22,15 @@ use junco_core::event::Request;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex};
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
-use junco_core::verify::{dsl, history_specs};
+use junco_core::spec::semantics as dsl;
+use junco_core::verify::history_specs;
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 use vstd::view::DeepView;
 
 verus! {
-broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
+broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas,
+    junco_core::verify::dsl::lemma_rule_views_index};
 
 fn indexed_projection<E: Event>(event: E, index: usize) -> (result: (E::Component, usize))
     requires E::obeys_projection_spec(), projection_laws::<E>(), index < arity::<E>(),
@@ -84,7 +86,7 @@ fn compiled_truth_table<E: Event>(
             option == (if dsl::head_matches(head@, event_view(*candidate)) {
                 Some(universal)
             } else { None }))
-        && (answer is Ok ==> dsl::rule_violated(compiled::source_rule(rule), *candidate, events@)
+        && (answer is Ok ==> dsl::rule_violated(compiled::source_rule(rule)@, *candidate, events@)
             == (dsl::head_matches(head@, event_view(*candidate))
                 && match mode { RuleMode::Require => !universal, RuleMode::Forbid => universal })),
 {
@@ -106,7 +108,7 @@ fn compiled_truth_table<E: Event>(
     proof {
         compiled::lemma_decision_result_facts(before, rule, value, *candidate, answer);
         if answer is Ok {
-            assert(answer == Ok(dsl::rule_evaluation(original, *candidate, events@)));
+            assert(answer == Ok(dsl::rule_evaluation(original@, *candidate, events@)));
         }
     }
     Ok((value, rule, answer))
@@ -123,19 +125,19 @@ fn five_decision_cases<E: Event>(mismatch: Head<E>, require_all: Head<E>, forbid
 {
     let (value, rule, answer) = compiled_truth_table(mismatch, RuleMode::Require, false, Vec::new(), candidate)?;
     assert(answer is Ok ==> answer == Ok(None));
-    assert(answer is Ok ==> !dsl::rule_violated(compiled::source_rule(rule), *candidate, history::raw_events(value)));
+    assert(answer is Ok ==> !dsl::rule_violated(compiled::source_rule(rule)@, *candidate, history::raw_events(value)));
     let (value, rule, answer) = compiled_truth_table(require_all, RuleMode::Require, true, Vec::new(), candidate)?;
     assert(answer is Ok ==> answer == Ok(Some(true)));
-    assert(answer is Ok ==> !dsl::rule_violated(compiled::source_rule(rule), *candidate, history::raw_events(value)));
+    assert(answer is Ok ==> !dsl::rule_violated(compiled::source_rule(rule)@, *candidate, history::raw_events(value)));
     let (value, rule, answer) = compiled_truth_table(forbid_all, RuleMode::Forbid, true, Vec::new(), candidate)?;
     assert(answer is Ok ==> answer == Ok(Some(true)));
-    assert(answer is Ok ==> dsl::rule_violated(compiled::source_rule(rule), *candidate, history::raw_events(value)));
+    assert(answer is Ok ==> dsl::rule_violated(compiled::source_rule(rule)@, *candidate, history::raw_events(value)));
     let (value, rule, answer) = compiled_truth_table(require_empty, RuleMode::Require, false, Vec::new(), candidate)?;
     assert(answer is Ok ==> answer == Ok(Some(false)));
-    assert(answer is Ok ==> dsl::rule_violated(compiled::source_rule(rule), *candidate, history::raw_events(value)));
+    assert(answer is Ok ==> dsl::rule_violated(compiled::source_rule(rule)@, *candidate, history::raw_events(value)));
     let (value, rule, answer) = compiled_truth_table(forbid_empty, RuleMode::Forbid, false, Vec::new(), candidate)?;
     assert(answer is Ok ==> answer == Ok(Some(false)));
-    assert(answer is Ok ==> !dsl::rule_violated(compiled::source_rule(rule), *candidate, history::raw_events(value)));
+    assert(answer is Ok ==> !dsl::rule_violated(compiled::source_rule(rule)@, *candidate, history::raw_events(value)));
     Ok(())
 }
 
@@ -212,10 +214,10 @@ fn trace_first_diagnostic<E: Event + 'static,
             events@.map(|i: int, event: E| event_view(event))));
         assert(!dsl::lang(second_source.tail@, second_head@, event_view(*candidate),
             events@.map(|i: int, event: E| event_view(event))));
-        assert(dsl::rule_evaluation(first_source, *candidate, events@) == Some(true));
-        assert(dsl::rule_evaluation(second_source, *candidate, events@) == Some(false));
-        assert(dsl::rule_violated(first_source, *candidate, events@));
-        assert(dsl::rule_violated(second_source, *candidate, events@));
+        assert(dsl::rule_evaluation(first_source@, *candidate, events@) == Some(true));
+        assert(dsl::rule_evaluation(second_source@, *candidate, events@) == Some(false));
+        assert(dsl::rule_violated(first_source@, *candidate, events@));
+        assert(dsl::rule_violated(second_source@, *candidate, events@));
     }
     let first = TraceRule::new(first, first_diagnostic);
     let second = TraceRule::new(second, second_diagnostic);
@@ -251,16 +253,16 @@ fn trace_first_diagnostic<E: Event + 'static,
         trace::lemma_trace_decision_result_facts(before, state, value, *candidate, answer);
         assert(history::raw_events(value) == raw_before);
         if let Ok(PolicyDecision::Grant) = answer {
-            assert(!dsl::rule_violated(trace::trace_sources(before)[0], *candidate, events@));
+            assert(!dsl::rule_violated(trace::trace_sources(before)[0]@, *candidate, events@));
             assert(false);
         }
         if let Ok(PolicyDecision::Deny { ref failed_precondition, ref allowed_fixes }) = answer {
             let index = trace::trace_selected_index(state) as int;
-            assert(compiled::least_violation(trace::trace_sources(before), value, *candidate, index));
+            assert(dsl::least_violation(dsl::rule_views(trace::trace_sources(before)), *candidate, history::raw_events(value), index));
             assert(0 <= index < 2);
             if index != 0 {
                 assert(0 <= 0 < index);
-                assert(!dsl::rule_violated(trace::trace_sources(before)[0], *candidate, events@));
+                assert(!dsl::rule_violated(trace::trace_sources(before)[0]@, *candidate, events@));
                 assert(false);
             }
             assert(trace::trace_selected_index(state) == 0);
@@ -306,15 +308,15 @@ fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: R
         assert(source.tail@ == if universal { RegexView::All } else { RegexView::Empty });
         assert(dsl::lang(source.tail@, head@, event_view(request.event),
             Seq::<E>::empty().map(|i: int, event: E| event_view(event))) == universal);
-        assert(dsl::rule_evaluation(source, request.event, Seq::<E>::empty()) == Some(universal));
-        assert(dsl::rule_violated(source, request.event, Seq::<E>::empty()) == !universal);
+        assert(dsl::rule_evaluation(source@, request.event, Seq::<E>::empty()) == Some(universal));
+        assert(dsl::rule_violated(source@, request.event, Seq::<E>::empty()) == !universal);
     }
     let answer = state.check(request);
     proof {
         validator::lemma_check_result_facts(before, state, request, answer);
         match answer {
             Ok(Decision::Grant(_)) => {
-                assert(!dsl::rule_violated(validator::validator_sources(before)[0], request.event,
+                assert(!dsl::rule_violated(validator::validator_sources(before)[0]@, request.event,
                     history::raw_events(validator::validator_history(before))));
                 assert(universal);
             },
@@ -322,10 +324,10 @@ fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: R
                 let index = choose|index: int| validator::denial_at(before, request, *denial, index)
                     && (books::native_obligations::<E>() ==>
                         denial.mode == validator::validator_sources(before)[index].mode
-                            && compiled::least_violation(validator::validator_sources(before),
-                                validator::validator_history(before), request.event, index));
-                assert(compiled::least_violation(validator::validator_sources(before),
-                    validator::validator_history(before), request.event, index));
+                            && dsl::least_violation(dsl::rule_views(validator::validator_sources(before)),
+                                request.event, history::raw_events(validator::validator_history(before)), index));
+                assert(dsl::least_violation(dsl::rule_views(validator::validator_sources(before)),
+                    request.event, history::raw_events(validator::validator_history(before)), index));
                 assert(index == 0);
                 assert(denial.mode == RuleMode::Require);
                 assert(!universal);
@@ -347,7 +349,7 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
             Ok(PolicyDecision::Grant) => trace::trace_context_calls(state) == 0
                 && trace::trace_diagnostic_calls(state) == 0
                 && (books::native_obligations::<E>() ==> forall|i: int| 0 <= i < rules@.len() ==>
-                    !dsl::rule_violated(trace::trace_rule_source(rules@[i]), *candidate, events@)),
+                    !dsl::rule_violated(trace::trace_rule_source(rules@[i])@, *candidate, events@)),
             Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) =>
                 trace::trace_context_calls(state) == 1 && trace::trace_diagnostic_calls(state) == 1
                 && trace::trace_selected_index(state) < rules@.len()
@@ -356,10 +358,10 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
                 && diagnostic_output(trace::trace_selected_diagnostic_id(state), *candidate,
                     failed_precondition@, allowed_fixes.deep_view())
                 && (books::native_obligations::<E>() ==>
-                    dsl::rule_violated(trace::trace_rule_source(rules@[trace::trace_selected_index(state) as int]),
+                    dsl::rule_violated(trace::trace_rule_source(rules@[trace::trace_selected_index(state) as int])@,
                         *candidate, events@)
                     && forall|i: int| 0 <= i < trace::trace_selected_index(state) ==>
-                        !dsl::rule_violated(trace::trace_rule_source(rules@[i]), *candidate, events@)),
+                        !dsl::rule_violated(trace::trace_rule_source(rules@[i])@, *candidate, events@)),
         },
 {
     let store = Arc::new(Store::<E>::new()?);
@@ -391,9 +393,9 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
             Ok(PolicyDecision::Grant) => {
                 if books::native_obligations::<E>() {
                     assert forall|i: int| 0 <= i < items.len() implies
-                        !dsl::rule_violated(trace::trace_rule_source(items[i]), *candidate, events@) by {
+                        !dsl::rule_violated(trace::trace_rule_source(items[i])@, *candidate, events@) by {
                         assert(trace::trace_sources(before)[i] == trace::trace_rule_source(items[i]));
-                        assert(!dsl::rule_violated(trace::trace_sources(before)[i], *candidate,
+                        assert(!dsl::rule_violated(trace::trace_sources(before)[i]@, *candidate,
                             history::raw_events(value)));
                     }
                 }
@@ -403,13 +405,13 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
                 assert(0 <= index < items.len());
                 assert(trace::trace_diagnostic_ids(before)[index] == trace::trace_rule_diagnostic_id(items[index]));
                 if books::native_obligations::<E>() {
-                    assert(compiled::least_violation(trace::trace_sources(before), value, *candidate, index));
+                    assert(dsl::least_violation(dsl::rule_views(trace::trace_sources(before)), *candidate, history::raw_events(value), index));
                     assert(trace::trace_sources(before)[index] == trace::trace_rule_source(items[index]));
-                    assert(dsl::rule_violated(trace::trace_rule_source(items[index]), *candidate, events@));
+                    assert(dsl::rule_violated(trace::trace_rule_source(items[index])@, *candidate, events@));
                     assert forall|i: int| 0 <= i < index implies
-                        !dsl::rule_violated(trace::trace_rule_source(items[i]), *candidate, events@) by {
+                        !dsl::rule_violated(trace::trace_rule_source(items[i])@, *candidate, events@) by {
                         assert(trace::trace_sources(before)[i] == trace::trace_rule_source(items[i]));
-                        assert(!dsl::rule_violated(trace::trace_sources(before)[i], *candidate,
+                        assert(!dsl::rule_violated(trace::trace_sources(before)[i]@, *candidate,
                             history::raw_events(value)));
                     }
                 }
@@ -435,7 +437,7 @@ fn last_state_change_helper<E: Event>(
     let ghost setter_view = setter@;
     let ghost stable_view = stable@;
     let tail = history_semantics::policy::last_state_change(setter, stable);
-    proof { dsl::lemma_last_state_change_lang(setter_view, stable_view, head@, candidate@, word@); }
+    proof { junco_core::verify::dsl::lemma_last_state_change_lang(setter_view, stable_view, head@, candidate@, word@); }
     tail
 }
 
@@ -458,19 +460,19 @@ proof fn last_state_change_cases<C: PartialEq>(
         dsl::lang(RegexView::Concat(seq![RegexView::All, RegexView::Test(TestView::True),
             RegexView::Star(Box::new(RegexView::Test(TestView::True)))]), head, candidate, seq![set, kept]),
 {
-    dsl::lemma_last_state_change_lang(setter, stable, head, candidate, seq![]);
-    dsl::lemma_last_state_change_lang(setter, stable, head, candidate, seq![set, kept]);
+    junco_core::verify::dsl::lemma_last_state_change_lang(setter, stable, head, candidate, seq![]);
+    junco_core::verify::dsl::lemma_last_state_change_lang(setter, stable, head, candidate, seq![set, kept]);
     assert(exists|i: int| 0 <= i < 2 && dsl::test_sem(setter, head, candidate, seq![set, kept][i])
         && forall|j: int| i < j < 2 ==> dsl::test_sem(stable, head, candidate, seq![set, kept][j])) by {
         assert(dsl::test_sem(setter, head, candidate, seq![set, kept][0]));
     }
-    dsl::lemma_last_state_change_lang(setter, stable, head, candidate, seq![set, broken]);
+    junco_core::verify::dsl::lemma_last_state_change_lang(setter, stable, head, candidate, seq![set, broken]);
     assert forall|i: int| 0 <= i < 2 implies
         !(dsl::test_sem(setter, head, candidate, seq![set, broken][i])
             && forall|j: int| i < j < 2 ==> dsl::test_sem(stable, head, candidate, seq![set, broken][j])) by {
         if i == 0 { assert(!dsl::test_sem(stable, head, candidate, seq![set, broken][1])); }
     }
-    dsl::lemma_last_state_change_lang(TestView::True, TestView::True, head, candidate, seq![set, kept]);
+    junco_core::verify::dsl::lemma_last_state_change_lang(TestView::True, TestView::True, head, candidate, seq![set, kept]);
     assert(exists|i: int| 0 <= i < 2 && dsl::test_sem(TestView::True, head, candidate, seq![set, kept][i])
         && forall|j: int| i < j < 2 ==> dsl::test_sem(TestView::True, head, candidate, seq![set, kept][j])) by {
         assert(dsl::test_sem(TestView::True, head, candidate, seq![set, kept][0]));

@@ -47,7 +47,8 @@
 use super::semantics::*;
 use history_store::typed::verify::eq_equivalence;
 use history_syntax::spec::events::{HeadView, RegexView, RuleView};
-use junco_core::verify::dsl as tdsl;
+use junco_core::spec::semantics as tdsl;
+use junco_core::spec::semantics::rule_wf;
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 

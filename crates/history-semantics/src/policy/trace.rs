@@ -15,6 +15,8 @@ use super::rule::{Diagnostic, PolicyRule, pack_policy_rule};
 use history_store::{History, Store};
 use history_syntax::{Event, Rule};
 #[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics as sem;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::{no_invariant_compile_failure, no_invariant_failure};
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
@@ -117,7 +119,7 @@ pub mod verify {
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before)
                     && (history_store::typed::verify::native_obligations::<E>() ==>
                         forall|i: int| 0 <= i < trace_sources(before).len() ==>
-                            !junco_core::verify::dsl::rule_violated(trace_sources(before)[i], candidate,
+                            !sem::rule_violated(trace_sources(before)[i]@, candidate,
                                 history_store::history::verify::raw_events(history))),
                 Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) =>
                     trace_context_calls(after) == trace_context_calls(before) + 1
@@ -125,11 +127,8 @@ pub mod verify {
                         && trace_selected_index(after) < trace_sources(before).len()
                         && trace_selected_diagnostic_id(after) == trace_diagnostic_ids(before)[trace_selected_index(after) as int]
                         && (history_store::typed::verify::native_obligations::<E>() ==>
-                            junco_core::verify::dsl::rule_violated(trace_sources(before)[trace_selected_index(after) as int], candidate,
-                                history_store::history::verify::raw_events(history))
-                                && forall|i: int| 0 <= i < trace_selected_index(after) ==>
-                                    !junco_core::verify::dsl::rule_violated(trace_sources(before)[i], candidate,
-                                        history_store::history::verify::raw_events(history)))
+                            sem::least_violation(sem::rule_views(trace_sources(before)), candidate,
+                                history_store::history::verify::raw_events(history), trace_selected_index(after) as int))
                         && diagnostic_output(super::super::evaluate::verify::policy_trace(after.compiled).calls.last().diagnostic_id,
                             candidate, failed_precondition@, allowed_fixes.deep_view()),
             }
@@ -172,7 +171,7 @@ pub mod verify {
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before)
                     && (history_store::typed::verify::native_obligations::<E>() ==> forall|i: int|
                         0 <= i < trace_sources(before).len() ==>
-                            !junco_core::verify::dsl::rule_violated(trace_sources(before)[i], candidate,
+                            !sem::rule_violated(trace_sources(before)[i]@, candidate,
                                 history_store::history::verify::raw_events(history))),
                 Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) =>
                     trace_context_calls(after) == trace_context_calls(before) + 1
@@ -181,8 +180,8 @@ pub mod verify {
                         && trace_selected_source(after) == trace_sources(before)[trace_selected_index(after) as int]
                         && trace_selected_diagnostic_id(after) == trace_diagnostic_ids(before)[trace_selected_index(after) as int]
                         && (history_store::typed::verify::native_obligations::<E>() ==>
-                            crate::compiled_rule::verify::least_violation(trace_sources(before), history,
-                                candidate, trace_selected_index(after) as int))
+                            sem::least_violation(sem::rule_views(trace_sources(before)), candidate,
+                                history_store::history::verify::raw_events(history), trace_selected_index(after) as int))
                         && diagnostic_output(trace_selected_diagnostic_id(after), candidate,
                             failed_precondition@, allowed_fixes.deep_view()),
             },
