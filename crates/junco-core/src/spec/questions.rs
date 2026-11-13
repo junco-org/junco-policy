@@ -2,12 +2,14 @@
 //! Declared domains restrict both the candidate and every event in the history.
 
 use super::semantics::{head_matches, lang, policy_denies, rule_violated};
+use super::hypotheses::eq_equivalence;
 use history_syntax::Event;
 use history_syntax::Rule;
-use history_syntax::event::specs::EventSpec;
+use history_syntax::spec::events::EventSpec;
 use history_syntax::spec::events::{
     HeadView, PatternView, RegexView, RuleView, TestView, arity, event_view,
 };
+use history_syntax::spec::events::{surjectivity, well_tagged};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -302,6 +304,481 @@ pub open spec fn has_instance<E: Event>(domains: Domains<E::Component>, cex: Cou
 pub open spec fn every_instance<E: Event>(domains: Domains<E::Component>, cex: Counterexample<E::Component>,
     failure: spec_fn(E, Seq<E>) -> bool) -> bool {
     forall|candidate: E, history: Seq<E>| #[trigger] instance(domains, cex, candidate, history) ==> failure(candidate, history)
+}
+
+/// Candidates have the same split-case profile when they agree on every known constant.
+pub open spec fn same_profile<E: Event>(known: Seq<Set<E::Component>>, candidate: E, other: E) -> bool {
+    known.len() == arity::<E>()
+        && forall|i: int, constant: E::Component| 0 <= i < known.len() && #[trigger] known[i].contains(constant)
+            ==> (event_view(candidate)[i].eq_spec(&constant) == event_view(other)[i].eq_spec(&constant))
+}
+
+/// No domain-valid real-event failure has a history shorter than `n`, among all candidates.
+pub open spec fn shortest<E: Event>(
+    domains: Domains<E::Component>, n: nat, fails: spec_fn(E, Seq<E>) -> bool,
+) -> bool {
+    forall|candidate: E, history: Seq<E>| in_domains::<E>(domains, candidate, history) && history.len() < n
+        ==> !#[trigger] fails(candidate, history)
+}
+
+/// No shorter real-event failure has the returned candidate's constant profile (PR #10).
+pub open spec fn shortest_in_case<E: Event>(
+    domains: Domains<E::Component>, known: Seq<Set<E::Component>>, candidate: E, n: nat,
+    fails: spec_fn(E, Seq<E>) -> bool,
+) -> bool {
+    forall|other: E, history: Seq<E>| in_domains::<E>(domains, other, history) && history.len() < n
+        && same_profile::<E>(known, candidate, other) ==> !#[trigger] fails(other, history)
+}
+
+/// Instantiate the canonical equivalence law at one native-equality value.
+pub proof fn lemma_native_eq_reflexive<C: PartialEq>(value: C)
+    requires eq_equivalence::<C>(|a: C, b: C| a.eq_spec(&b), |_: C| true),
+    ensures value.eq_spec(&value),
+{
+    let eq = |a: C, b: C| a.eq_spec(&b);
+    let domain = |_: C| true;
+    assert(eq_equivalence(eq, domain));
+    assert(domain(value));
+    assert(eq(value, value));
+}
+
+/// Instantiate symmetry without requiring callers to match a higher-order equality trigger.
+pub proof fn lemma_native_eq_symmetric<C: PartialEq>(left: C, right: C)
+    requires eq_equivalence::<C>(|a: C, b: C| a.eq_spec(&b), |_: C| true),
+    ensures left.eq_spec(&right) == right.eq_spec(&left),
+{
+    let eq = |a: C, b: C| a.eq_spec(&b);
+    let domain = |_: C| true;
+    assert(eq_equivalence(eq, domain));
+    assert(domain(left) && domain(right));
+    assert(eq(left, right) == eq(right, left));
+}
+
+/// Instantiate transitivity on the full native-equality carrier.
+pub proof fn lemma_native_eq_transitive<C: PartialEq>(left: C, middle: C, right: C)
+    requires
+        eq_equivalence::<C>(|a: C, b: C| a.eq_spec(&b), |_: C| true),
+        left.eq_spec(&middle), middle.eq_spec(&right),
+    ensures left.eq_spec(&right),
+{
+    let eq = |a: C, b: C| a.eq_spec(&b);
+    let domain = |_: C| true;
+    assert(eq_equivalence(eq, domain));
+    assert(domain(left) && domain(middle) && domain(right));
+    assert(eq(left, middle) && eq(middle, right));
+    assert(eq(left, right));
+}
+
+/// Membership in the fresh-name set is exactly an occurrence in the finite word.
+pub proof fn lemma_fresh_names_member<C>(word: Seq<Seq<SymbolicValue<C>>>, coordinate: int, name: nat)
+    ensures
+        fresh_names(word, coordinate).contains(name) <==> exists|j: int|
+            0 <= j < word.len() && 0 <= coordinate < word[j].len()
+                && #[trigger] word[j][coordinate] == SymbolicValue::Fresh(name),
+    decreases word.len(),
+{
+    if word.len() > 0 {
+        lemma_fresh_names_member(word.drop_last(), coordinate, name);
+        assert forall|j: int| 0 <= j < word.len() - 1 implies
+            word.drop_last()[j] == word[j] by {}
+        if 0 <= coordinate < word.last().len()
+            && word.last()[coordinate] == SymbolicValue::Fresh(name) {
+            assert(word[(word.len() - 1) as int][coordinate] == SymbolicValue::Fresh(name));
+        }
+        if exists|j: int| 0 <= j < word.len() && 0 <= coordinate < word[j].len()
+            && #[trigger] word[j][coordinate] == SymbolicValue::Fresh(name) {
+            let j = choose|j: int| 0 <= j < word.len() && 0 <= coordinate < word[j].len()
+                && #[trigger] word[j][coordinate] == SymbolicValue::Fresh(name);
+            if j < word.len() - 1 {
+                assert(word.drop_last()[j][coordinate] == SymbolicValue::Fresh(name));
+            }
+        }
+    }
+}
+
+/// Distinct names, rather than their largest numeric label, bound the requested capacity.
+pub proof fn lemma_fresh_names_count<C>(word: Seq<Seq<SymbolicValue<C>>>, coordinate: int)
+    ensures fresh_names(word, coordinate).len() <= word.len(),
+    decreases word.len(),
+{
+    if word.len() > 0 {
+        lemma_fresh_names_count(word.drop_last(), coordinate);
+    }
+}
+
+/// Every candidate/history fresh occurrence is counted, with at most one per event.
+pub proof fn lemma_fresh_count<C>(cex: Counterexample<C>, coordinate: int)
+    ensures
+        fresh_count(cex, coordinate) <= 1 + cex.history.len(),
+        forall|name: nat| 0 <= coordinate < cex.candidate.len()
+            && cex.candidate[coordinate] == SymbolicValue::Fresh(name)
+            ==> #[trigger] fresh_names(seq![cex.candidate] + cex.history, coordinate).contains(name),
+        forall|j: int, name: nat| #![trigger cex.history[j][coordinate], fresh_names(seq![cex.candidate] + cex.history, coordinate).contains(name)]
+            0 <= j < cex.history.len() && 0 <= coordinate < cex.history[j].len()
+            && cex.history[j][coordinate] == SymbolicValue::Fresh(name)
+            ==> fresh_names(seq![cex.candidate] + cex.history, coordinate).contains(name),
+{
+    let word = seq![cex.candidate] + cex.history;
+    lemma_fresh_names_count(word, coordinate);
+    assert forall|name: nat| 0 <= coordinate < cex.candidate.len()
+        && cex.candidate[coordinate] == SymbolicValue::Fresh(name)
+        implies fresh_names(word, coordinate).contains(name) by {
+        lemma_fresh_names_member(word, coordinate, name);
+        assert(word[0][coordinate] == SymbolicValue::Fresh(name));
+    }
+    assert forall|j: int, name: nat| 0 <= j < cex.history.len() && 0 <= coordinate < cex.history[j].len()
+        && cex.history[j][coordinate] == SymbolicValue::Fresh(name)
+        implies fresh_names(word, coordinate).contains(name) by {
+        lemma_fresh_names_member(word, coordinate, name);
+        assert(word[j + 1][coordinate] == SymbolicValue::Fresh(name));
+    }
+}
+
+/// Enumerating the used names assigns each one a distinct capacity witness.
+pub proof fn lemma_choice_from_capacity<E: Event>(
+    domains: Domains<E::Component>, cex: Counterexample<E::Component>, coordinate: int,
+) -> (choice: spec_fn(nat) -> E::Component)
+    requires
+        fresh_capacity::<E>(domains, cex.known, coordinate, fresh_count(cex, coordinate)),
+        eq_equivalence::<E::Component>(|a: E::Component, b: E::Component| a.eq_spec(&b), |_: E::Component| true),
+    ensures choice_ok::<E>(cex, coordinate, choice),
+{
+    let used = fresh_names(seq![cex.candidate] + cex.history, coordinate);
+    let names = used.to_seq();
+    used.lemma_to_seq_len();
+    used.lemma_to_seq_to_set_id();
+    names.to_set_ensures();
+    let values = choose|values: Seq<E::Component>| values.len() == used.len()
+        && (forall|j: int| 0 <= j < values.len() ==> E::coordinate_spec(#[trigger] values[j]) == coordinate
+            && (forall|constant: E::Component| cex.known[coordinate].contains(constant) ==> !values[j].eq_spec(&constant))
+            && match domains[coordinate] {
+                None => true,
+                Some(domain) => exists|value: E::Component| domain.contains(value) && values[j].eq_spec(&value),
+            })
+        && (forall|j: int, l: int| 0 <= j < l < values.len() ==> !#[trigger] values[j].eq_spec(&values[l]));
+    let choice = |name: nat| values[names.index_of(name)];
+    assert forall|name: nat| used.contains(name) implies
+        E::coordinate_spec(choice(name)) == coordinate
+            && forall|constant: E::Component| cex.known[coordinate].contains(constant)
+                ==> !choice(name).eq_spec(&constant) by {
+        assert(names.contains(name));
+        assert(0 <= names.index_of(name) < names.len());
+    }
+    assert forall|m: nat, n: nat| used.contains(m) && used.contains(n) && m != n
+        implies !choice(m).eq_spec(&choice(n)) by {
+        assert(names.contains(m) && names.contains(n));
+        let j = names.index_of(m);
+        let l = names.index_of(n);
+        assert(0 <= j < names.len() && names[j] == m);
+        assert(0 <= l < names.len() && names[l] == n);
+        assert(j != l);
+        if l < j {
+            assert(!values[l].eq_spec(&values[j]));
+            lemma_native_eq_symmetric(values[j], values[l]);
+            assert(values[j].eq_spec(&values[l]) == values[l].eq_spec(&values[j]));
+        }
+    }
+    choice
+}
+
+/// Capacity supplies one shared, tagged, injective choice per coordinate.
+pub proof fn lemma_counterexample_choices<E: Event>(
+    domains: Domains<E::Component>, cex: Counterexample<E::Component>,
+) -> (choices: Seq<spec_fn(nat) -> E::Component>)
+    requires
+        counterexample_wf::<E>(domains, cex),
+        counterexample_capacity::<E>(domains, cex),
+        eq_equivalence::<E::Component>(|a: E::Component, b: E::Component| a.eq_spec(&b), |_: E::Component| true),
+    ensures
+        choices.len() == arity::<E>(),
+        forall|i: int| 0 <= i < arity::<E>() ==> choice_ok::<E>(cex, i, #[trigger] choices[i]),
+{
+    let choices = Seq::new(arity::<E>(), |i: int|
+        choose|choice: spec_fn(nat) -> E::Component| choice_ok::<E>(cex, i, choice));
+    assert forall|i: int| 0 <= i < arity::<E>() implies choice_ok::<E>(cex, i, #[trigger] choices[i]) by {
+        let witness = lemma_choice_from_capacity::<E>(domains, cex, i);
+        assert(exists|choice: spec_fn(nat) -> E::Component| choice_ok::<E>(cex, i, choice));
+    }
+    choices
+}
+
+/// A symbolic event in the returned word becomes a real event under the shared choices.
+pub proof fn lemma_symbolic_event_instance<E: Event>(
+    domains: Domains<E::Component>, cex: Counterexample<E::Component>,
+    values: Seq<SymbolicValue<E::Component>>, choices: Seq<spec_fn(nat) -> E::Component>,
+) -> (event: E)
+    requires
+        symbolic_event_wf::<E>(domains, values),
+        values == cex.candidate || cex.history.contains(values),
+        choices.len() == arity::<E>(),
+        forall|i: int| 0 <= i < arity::<E>() ==> choice_ok::<E>(cex, i, #[trigger] choices[i]),
+        surjectivity::<E>(),
+        eq_equivalence::<E::Component>(|a: E::Component, b: E::Component| a.eq_spec(&b), |_: E::Component| true),
+    ensures
+        event_in_domains::<E>(domains, event),
+        forall|i: int| 0 <= i < arity::<E>()
+            ==> #[trigger] event_view(event)[i] == value_of(values[i], choices[i]),
+{
+    let tuple = Seq::new(arity::<E>(), |i: int| value_of(values[i], choices[i]));
+    assert forall|i: int| 0 <= i < arity::<E>() implies
+        E::coordinate_spec(#[trigger] tuple[i]) == i by {
+        match values[i] {
+            SymbolicValue::Constant(_) => {},
+            SymbolicValue::Fresh(name) => {
+                lemma_fresh_count(cex, i);
+                if values != cex.candidate {
+                    let j = choose|j: int| 0 <= j < cex.history.len() && cex.history[j] == values;
+                    assert(cex.history[j][i] == SymbolicValue::Fresh(name));
+                }
+                assert(fresh_names(seq![cex.candidate] + cex.history, i).contains(name));
+            },
+        }
+    }
+    assert(well_tagged::<E>(tuple));
+    let event = choose|event: E| event_view(event) == tuple;
+    assert forall|i: int| 0 <= i < domains.len() implies match #[trigger] domains[i] {
+        None => true,
+        Some(domain) => exists|member: E::Component| domain.contains(member) && event_view(event)[i].eq_spec(&member),
+    } by {
+        if domains[i] is Some {
+            assert(values[i] is Constant);
+        }
+    }
+    event
+}
+
+/// R3 capacity and well-formedness produce a domain-valid pair of actual R1 events.
+pub proof fn lemma_counterexample_has_instance<E: Event>(
+    domains: Domains<E::Component>, cex: Counterexample<E::Component>,
+)
+    requires
+        counterexample_wf::<E>(domains, cex),
+        counterexample_capacity::<E>(domains, cex),
+        surjectivity::<E>(),
+        eq_equivalence::<E::Component>(|a: E::Component, b: E::Component| a.eq_spec(&b), |_: E::Component| true),
+    ensures has_instance::<E>(domains, cex),
+{
+    let choices = lemma_counterexample_choices::<E>(domains, cex);
+    let candidate = lemma_symbolic_event_instance::<E>(domains, cex, cex.candidate, choices);
+    assert forall|j: int| #![trigger cex.history[j]] 0 <= j < cex.history.len() implies
+        exists|event: E| event_in_domains::<E>(domains, event)
+            && forall|i: int| 0 <= i < arity::<E>()
+                ==> #[trigger] event_view(event)[i] == value_of(cex.history[j][i], choices[i]) by {
+        assert(cex.history.contains(cex.history[j]));
+        let event = lemma_symbolic_event_instance::<E>(domains, cex, cex.history[j], choices);
+    }
+    let history = Seq::new(cex.history.len(), |j: int| choose|event: E|
+        event_in_domains::<E>(domains, event)
+            && forall|i: int| 0 <= i < arity::<E>()
+                ==> #[trigger] event_view(event)[i] == value_of(cex.history[j][i], choices[i]));
+    assert forall|i: int| 0 <= i < arity::<E>() implies choice_ok::<E>(cex, i, choices[i])
+        && event_view(candidate)[i].eq_spec(&value_of(cex.candidate[i], choices[i])) by {
+        let value = value_of(cex.candidate[i], choices[i]);
+        lemma_native_eq_reflexive(value);
+        assert(value.eq_spec(&value));
+    }
+    assert forall|j: int| 0 <= j < history.len() implies cex.history[j].len() == arity::<E>()
+        && forall|i: int| 0 <= i < arity::<E>()
+            ==> event_view(history[j])[i].eq_spec(&value_of(cex.history[j][i], choices[i])) by {
+        assert forall|i: int| 0 <= i < arity::<E>() implies
+            event_view(history[j])[i].eq_spec(&value_of(cex.history[j][i], choices[i])) by {
+            let value = value_of(cex.history[j][i], choices[i]);
+            lemma_native_eq_reflexive(value);
+            assert(value.eq_spec(&value));
+        }
+    }
+    assert(instance::<E>(domains, cex, candidate, history));
+}
+
+/// A finite initial segment embeds into a coordinate with native equality reflecting indices.
+/// The embedding may wrap a primitive value in any event's coordinate tag.
+pub open spec fn coordinate_embedding<E: Event>(
+    coordinate: int, size: nat, embed: spec_fn(nat) -> E::Component,
+) -> bool {
+    0 <= coordinate < arity::<E>()
+        && (forall|n: nat| n < size ==> E::coordinate_spec(#[trigger] embed(n)) == coordinate)
+        && (forall|m: nat, n: nat| m < size && n < size && #[trigger] embed(m).eq_spec(&embed(n)) ==> m == n)
+}
+
+/// At most one embedded index can collide with each known constant's equality class.
+pub proof fn lemma_embedding_collision_bound<C: PartialEq>(
+    known: Set<C>, size: nat, embed: spec_fn(nat) -> C,
+)
+    requires
+        eq_equivalence::<C>(|a: C, b: C| a.eq_spec(&b), |_: C| true),
+        forall|m: nat, n: nat| m < size && n < size && #[trigger] embed(m).eq_spec(&embed(n)) ==> m == n,
+    ensures
+        Set::<nat>::range(0, size).filter(|n: nat|
+            exists|constant: C| known.contains(constant) && embed(n).eq_spec(&constant)).len() <= known.len(),
+{
+    broadcast use vstd::set_lib::range_set_properties, vstd::set::lemma_set_filter;
+    let bad = Set::<nat>::range(0, size).filter(|n: nat|
+        exists|constant: C| known.contains(constant) && embed(n).eq_spec(&constant));
+    let representative = |n: nat| choose|constant: C| known.contains(constant) && embed(n).eq_spec(&constant);
+    assert forall|m: nat, n: nat| bad.contains(m) && bad.contains(n)
+        && representative(m) == representative(n) implies m == n by {
+        let constant = representative(m);
+        assert(embed(m).eq_spec(&constant));
+        assert(embed(n).eq_spec(&constant));
+        lemma_native_eq_symmetric(embed(n), constant);
+        lemma_native_eq_transitive(embed(m), constant, embed(n));
+        assert(constant.eq_spec(&embed(n)));
+        assert(embed(m).eq_spec(&embed(n)));
+    }
+    assert(bad.injective_on(representative));
+    let image = bad.map(representative);
+    assert forall|constant: C| image.contains(constant) implies known.contains(constant) by {
+        bad.lemma_map_contains(representative, constant);
+        let n = choose|n: nat| bad.contains(n) && representative(n) == constant;
+        assert(known.contains(representative(n)));
+    }
+    assert(image.subset_of(known));
+    vstd::set_lib::lemma_map_size(bad, image, representative);
+    vstd::set_lib::lemma_len_subset(image, known);
+}
+
+/// A tagged embedding of `size` equality classes leaves at least `size - known.len()` fresh values.
+/// This is a cardinality argument, not an assumption of the capacity witness being constructed.
+pub proof fn lemma_fresh_capacity_from_embedding<E: Event>(
+    domains: Domains<E::Component>, known: Seq<Set<E::Component>>,
+    coordinate: int, k: nat, size: nat, embed: spec_fn(nat) -> E::Component,
+)
+    requires
+        domains.len() == arity::<E>(),
+        known.len() == arity::<E>(),
+        coordinate_embedding::<E>(coordinate, size, embed),
+        domains[coordinate] is None,
+        k + known[coordinate].len() <= size,
+        eq_equivalence::<E::Component>(|a: E::Component, b: E::Component| a.eq_spec(&b), |_: E::Component| true),
+    ensures fresh_capacity::<E>(domains, known, coordinate, k),
+{
+    broadcast use vstd::set_lib::range_set_properties, vstd::set::lemma_set_filter;
+    let universe = Set::<nat>::range(0, size);
+    let bad = universe.filter(|n: nat| exists|constant: E::Component|
+        known[coordinate].contains(constant) && embed(n).eq_spec(&constant));
+    lemma_embedding_collision_bound(known[coordinate], size, embed);
+    let good = universe.difference(bad);
+    vstd::set_lib::lemma_set_difference_len(universe, bad);
+    assert(universe.intersect(bad) =~= bad);
+    assert(good.len() >= k);
+    good.lemma_to_seq_len();
+    good.lemma_to_seq_no_duplicates();
+    good.lemma_to_seq_to_set_id();
+    let indices = good.to_seq();
+    indices.to_set_ensures();
+    let values = Seq::new(k, |j: int| embed(indices[j]));
+    assert forall|j: int| 0 <= j < values.len() implies
+        E::coordinate_spec(#[trigger] values[j]) == coordinate
+            && (forall|constant: E::Component| known[coordinate].contains(constant)
+                ==> !values[j].eq_spec(&constant))
+            && match domains[coordinate] {
+                None => true,
+                Some(domain) => exists|value: E::Component| domain.contains(value) && values[j].eq_spec(&value),
+            } by {
+        assert(good.contains(indices[j]));
+        assert(indices[j] < size);
+        assert(!bad.contains(indices[j]));
+    }
+    assert forall|j: int, l: int| 0 <= j < l < values.len()
+        implies !#[trigger] values[j].eq_spec(&values[l]) by {
+        assert(good.contains(indices[j]) && good.contains(indices[l]));
+        assert(indices[j] != indices[l]);
+    }
+    assert(fresh_capacity::<E>(domains, known, coordinate, k));
+}
+
+/// An empty fresh-name request is satisfiable even at a declared coordinate.
+pub proof fn lemma_fresh_capacity_zero<E: Event>(
+    domains: Domains<E::Component>, known: Seq<Set<E::Component>>, coordinate: int,
+)
+    requires domains.len() == arity::<E>(), known.len() == arity::<E>(), 0 <= coordinate < arity::<E>(),
+    ensures fresh_capacity::<E>(domains, known, coordinate, 0),
+{
+    let values = Seq::<E::Component>::empty();
+    assert(values.len() == 0);
+    assert(fresh_capacity::<E>(domains, known, coordinate, 0));
+}
+
+/// A tagged u8-sized coordinate has capacity whenever `k + known.len() <= 256`.
+pub proof fn lemma_fresh_capacity_u8<E: Event>(
+    domains: Domains<E::Component>, known: Seq<Set<E::Component>>,
+    coordinate: int, k: nat, embed: spec_fn(nat) -> E::Component,
+)
+    requires
+        domains.len() == arity::<E>(), known.len() == arity::<E>(),
+        coordinate_embedding::<E>(coordinate, u8::MAX as nat + 1, embed),
+        domains[coordinate] is None,
+        k + known[coordinate].len() <= u8::MAX as nat + 1,
+        eq_equivalence::<E::Component>(|a: E::Component, b: E::Component| a.eq_spec(&b), |_: E::Component| true),
+    ensures fresh_capacity::<E>(domains, known, coordinate, k),
+{
+    lemma_fresh_capacity_from_embedding::<E>(domains, known, coordinate, k, u8::MAX as nat + 1, embed);
+}
+
+/// A tagged u16-sized coordinate has capacity below its size minus the known constants.
+pub proof fn lemma_fresh_capacity_u16<E: Event>(
+    domains: Domains<E::Component>, known: Seq<Set<E::Component>>,
+    coordinate: int, k: nat, embed: spec_fn(nat) -> E::Component,
+)
+    requires
+        domains.len() == arity::<E>(), known.len() == arity::<E>(),
+        coordinate_embedding::<E>(coordinate, u16::MAX as nat + 1, embed),
+        domains[coordinate] is None,
+        k + known[coordinate].len() <= u16::MAX as nat + 1,
+        eq_equivalence::<E::Component>(|a: E::Component, b: E::Component| a.eq_spec(&b), |_: E::Component| true),
+    ensures fresh_capacity::<E>(domains, known, coordinate, k),
+{
+    lemma_fresh_capacity_from_embedding::<E>(domains, known, coordinate, k, u16::MAX as nat + 1, embed);
+}
+
+/// A tagged u32-sized coordinate has capacity below its size minus the known constants.
+pub proof fn lemma_fresh_capacity_u32<E: Event>(
+    domains: Domains<E::Component>, known: Seq<Set<E::Component>>,
+    coordinate: int, k: nat, embed: spec_fn(nat) -> E::Component,
+)
+    requires
+        domains.len() == arity::<E>(), known.len() == arity::<E>(),
+        coordinate_embedding::<E>(coordinate, u32::MAX as nat + 1, embed),
+        domains[coordinate] is None,
+        k + known[coordinate].len() <= u32::MAX as nat + 1,
+        eq_equivalence::<E::Component>(|a: E::Component, b: E::Component| a.eq_spec(&b), |_: E::Component| true),
+    ensures fresh_capacity::<E>(domains, known, coordinate, k),
+{
+    lemma_fresh_capacity_from_embedding::<E>(domains, known, coordinate, k, u32::MAX as nat + 1, embed);
+}
+
+/// A tagged u64-sized coordinate has capacity below its size minus the known constants.
+pub proof fn lemma_fresh_capacity_u64<E: Event>(
+    domains: Domains<E::Component>, known: Seq<Set<E::Component>>,
+    coordinate: int, k: nat, embed: spec_fn(nat) -> E::Component,
+)
+    requires
+        domains.len() == arity::<E>(), known.len() == arity::<E>(),
+        coordinate_embedding::<E>(coordinate, u64::MAX as nat + 1, embed),
+        domains[coordinate] is None,
+        k + known[coordinate].len() <= u64::MAX as nat + 1,
+        eq_equivalence::<E::Component>(|a: E::Component, b: E::Component| a.eq_spec(&b), |_: E::Component| true),
+    ensures fresh_capacity::<E>(domains, known, coordinate, k),
+{
+    lemma_fresh_capacity_from_embedding::<E>(domains, known, coordinate, k, u64::MAX as nat + 1, embed);
+}
+
+/// A tagged natural-number embedding supplies every finite requested capacity.
+pub proof fn lemma_fresh_capacity_nat<E: Event>(
+    domains: Domains<E::Component>, known: Seq<Set<E::Component>>,
+    coordinate: int, k: nat, embed: spec_fn(nat) -> E::Component,
+)
+    requires
+        domains.len() == arity::<E>(), known.len() == arity::<E>(),
+        0 <= coordinate < arity::<E>(), domains[coordinate] is None,
+        forall|n: nat| E::coordinate_spec(#[trigger] embed(n)) == coordinate,
+        forall|m: nat, n: nat| #[trigger] embed(m).eq_spec(&embed(n)) ==> m == n,
+        eq_equivalence::<E::Component>(|a: E::Component, b: E::Component| a.eq_spec(&b), |_: E::Component| true),
+    ensures fresh_capacity::<E>(domains, known, coordinate, k),
+{
+    let size = k + known[coordinate].len();
+    assert(coordinate_embedding::<E>(coordinate, size, embed));
+    lemma_fresh_capacity_from_embedding::<E>(domains, known, coordinate, k, size, embed);
 }
 
 }
