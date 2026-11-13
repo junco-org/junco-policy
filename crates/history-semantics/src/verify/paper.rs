@@ -12,7 +12,8 @@
 //! | `lem:similarity-language` | `stmt_lem_similarity_language` | `stmt_similarity_preserves_language` | `theorem_similarity_preserves_language` | `history_algebra.rs` |
 //! | `lem:sderiv` | `stmt_lem_sderiv` | `stmt_symbolic_derivative_correct` | `theorem_symbolic_derivative_correct` | `history_algebra.rs` |
 //! | `thm:sderiv` | `stmt_thm_sderiv` | `stmt_symbolic_run_correct` | `theorem_symbolic_run_correct` | `history_algebra.rs` |
-//! | `thm:matcher` | `stmt_thm_matcher` | `stmt_not_fired` (step 1), `stmt_rule_decision` (steps 2–3), `stmt_similar_tails_same_decision` (normalization); at the monitor level `check_step` (R5) | `theorem_not_fired`, `theorem_rule_decision`, `theorem_similar_tails_same_decision`; `tests/reviewer.rs` | `history_algebra.rs`; `crates/history-semantics/src/spec/monitor.rs` |
+//! | `thm:matcher` | `stmt_thm_matcher` | `stmt_not_fired` (step 1), `stmt_rule_decision` (steps 2–3), `stmt_similar_tails_same_decision` (normalization) | `theorem_not_fired`, `theorem_rule_decision`, `theorem_similar_tails_same_decision` | `history_algebra.rs` |
+//! | `thm:matcher` (monitor level, R5) | `stmt_matcher` | `check_step` and `trace_safe` for `Validator::check`/`rollback`: a grant means no rule is violated, a denial names the first violated rule, every reachable history is trace safe | `theorem_matcher`; `theorem_monitor_check`, `theorem_trace_safe`, `theorem_analyzer_to_monitor` and the exec client `monitor_client` in `crates/history-semantics/tests/reviewer.rs` | `crates/history-semantics/src/spec/monitor.rs` |
 //! | `def:violates`, `def:policy-violates` | — (definition) | `rule_violated`, `policy_denies`, `least_violation` (R2) | — | `crates/junco-core/src/spec/semantics.rs` |
 //! | `def:policy-refinement` | — (definition) | `refines`, `covers` (R3) | — | `crates/junco-core/src/spec/questions.rs` |
 //! | `app:policy-reduction` | `stmt_app_policy_reduction` | `stmt_refines_iff_covers`, `stmt_redundant_iff_covered` (over events, R3); `stmt_vacuity_reductions` (numeric, constrained form); `stmt_vacuity_via_refinement` (typed vacuity through `at_least_as_strict`, decision 6) | `theorem_refines_iff_covers`, `theorem_redundant_iff_covered`, `theorem_vacuity_reductions`, `theorem_vacuity_via_refinement` | `refinement/semantics.rs`, `refinement/inclusion.rs` |
@@ -25,7 +26,7 @@
 //! | `lem:prune`, `def:pruning` | `stmt_lem_prune` | `stmt_prune_sound`, `stmt_checks_discard` | `theorem_prune_sound`, `theorem_checks_discard` | `refinement/pruning.rs` |
 //! | `lem:simulation`, `fig:simulation` | `stmt_lem_simulation` | `stmt_sim_rules_sound`, `stmt_test_rules_sound` (the code's relation is smaller than the figure's) | `theorem_sim_rules_sound`, `theorem_test_rules_sound` | `refinement/pruning.rs` |
 //! | `lem:finite-states`, `app:finiteness` | `stmt_lem_finite_states` | `stmt_reachable_states_finite`, `stmt_lift_injective`; for the implementation `m_impl().contract()` and the parametric `theorem_impl_finitely_many_items` | `theorem_reachable_states_finite`, `theorem_lift_injective`, `theorem_impl_contract` | `refinement/finiteness.rs`, `finite_impl.rs` |
-//! | Executable analyzer (Section 6) | — | `covered_spec`, `redundant_spec`, `at_least_as_strict_spec`, `tail_included_spec` (R6), ensured by `PolicyAnalyzer`'s queries | `tests/reviewer.rs` | `crates/history-analysis/src/spec/analyzer.rs` |
+//! | Executable analyzer, A1–A6 (Section 6, R6) | `stmt_analyzer_a1` … `stmt_analyzer_a6` (in `crates/history-analysis/tests/reviewer.rs`; R6 is downstream of this crate) | A1 `covered_spec` decides coverage; A2 counterexamples are real pairs in the domains; A3 `at_least_as_strict_spec`/`redundant_spec`; A4 `tail_included_spec`; A5 escapes (`no_invariant_failure`, `Exhausted` claims nothing); A6 `minimal_in_case` | `theorem_a1_covered_decision`, `theorem_a2_real_counterexamples`, `theorem_a3_refinement`, `theorem_a3_redundancy`, `theorem_a4_tail_inclusion`, `theorem_a5_escapes`, `theorem_a6_minimality`, `theorem_vacuity_corollaries`, `analyzer_client` | `crates/history-analysis/src/spec/analyzer.rs`, `crates/history-analysis/tests/reviewer.rs` |
 //!
 //! Auxiliary statements, not paper results but cited by `app:mech-diff`: `stmt_genericity`
 //! (`refinement/semantics.rs`), `stmt_numeric_genericity`, `stmt_source_regex_local`,
@@ -37,11 +38,16 @@
 //! `alg:search`, `app:cases`, `app:search-proof` (`refinement/search.rs`); `app:pruning`,
 //! `app:simulation` (`refinement/pruning.rs`); `app:mech-diff` (the differences, listed in
 //! `VERIFY.md`).
+use crate::spec::monitor::{ValidatorView, check_frame, check_step, rollback_step, trace_safe};
+use crate::validator::{Decision, verify as validator};
 use crate::verify::finite_impl;
 use crate::verify::history_algebra as algebra;
 use crate::verify::refinement::{encoding, finiteness, inclusion, pruning, search, semantics};
 use history_syntax::Event;
+use junco_core::HistoryError;
+use junco_core::event::Request;
 use junco_core::kernel::verify as model;
+use junco_core::spec::semantics as sem;
 use junco_core::verify::history_specs::SrcTest;
 use vstd::prelude::*;
 
@@ -95,6 +101,69 @@ pub proof fn theorem_thm_matcher()
     algebra::theorem_not_fired();
     algebra::theorem_rule_decision();
     algebra::theorem_similar_tails_same_decision();
+}
+
+/// Theorem Matcher correctness at the level of `Validator` (`thm:matcher`, R5): a `check` whose
+/// result satisfies `check_step` grants only when no rule is violated, denies naming the first
+/// violated rule in source order, and never fails with an invariant error; a `check` or
+/// `rollback` preserves `trace_safe`.
+pub open spec fn stmt_matcher<E: Event, M>() -> bool {
+    &&& forall|before: ValidatorView<E>, request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>|
+        #[trigger] check_step(before, request, result) ==> match result {
+            Ok(Decision::Grant(_)) => forall|i: int| 0 <= i < before.rules.len()
+                ==> !sem::rule_violated(#[trigger] before.rules[i], request.event, before.history),
+            Ok(Decision::Denied(denial)) => exists|i: int| 0 <= i < before.rules.len()
+                && sem::rule_violated(#[trigger] before.rules[i], request.event, before.history)
+                && denial.mode == before.rules[i].mode
+                && forall|j: int| 0 <= j < i ==> !sem::rule_violated(#[trigger] before.rules[j], request.event, before.history),
+            Err(error) => !(error is Invariant),
+        }
+    &&& forall|before: ValidatorView<E>, after: ValidatorView<E>, request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>|
+        trace_safe(before) && #[trigger] check_frame(before, after, request, result) && check_step(before, request, result)
+        ==> trace_safe(after)
+    &&& forall|before: ValidatorView<E>, after: ValidatorView<E>, result: Result<(), HistoryError>|
+        trace_safe(before) && #[trigger] rollback_step(before, after, result) ==> trace_safe(after)
+}
+
+pub proof fn theorem_matcher<E: Event, M>()
+    ensures stmt_matcher::<E, M>(),
+{
+    assert forall|before: ValidatorView<E>, request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>|
+        #[trigger] check_step(before, request, result) implies match result {
+            Ok(Decision::Grant(_)) => forall|i: int| 0 <= i < before.rules.len()
+                ==> !sem::rule_violated(#[trigger] before.rules[i], request.event, before.history),
+            Ok(Decision::Denied(denial)) => exists|i: int| 0 <= i < before.rules.len()
+                && sem::rule_violated(#[trigger] before.rules[i], request.event, before.history)
+                && denial.mode == before.rules[i].mode
+                && forall|j: int| 0 <= j < i ==> !sem::rule_violated(#[trigger] before.rules[j], request.event, before.history),
+            Err(error) => !(error is Invariant),
+        } by {
+        match result {
+            Ok(Decision::Grant(_)) => {
+                assert forall|i: int| 0 <= i < before.rules.len()
+                    implies !sem::rule_violated(#[trigger] before.rules[i], request.event, before.history) by {
+                    if sem::rule_violated(before.rules[i], request.event, before.history) {
+                        assert(sem::policy_denies(before.rules, request.event, before.history));
+                    }
+                }
+            },
+            Ok(Decision::Denied(denial)) => {
+                let i = choose|i: int| #[trigger] sem::least_violation(before.rules, request.event, before.history, i)
+                    && denial.mode == before.rules[i].mode;
+                assert(sem::rule_violated(before.rules[i], request.event, before.history));
+            },
+            Err(_) => {},
+        }
+    }
+    assert forall|before: ValidatorView<E>, after: ValidatorView<E>, request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>|
+        trace_safe(before) && #[trigger] check_frame(before, after, request, result) && check_step(before, request, result)
+        implies trace_safe(after) by {
+        validator::lemma_check_preserves_trace_safe(before, after, request, result);
+    }
+    assert forall|before: ValidatorView<E>, after: ValidatorView<E>, result: Result<(), HistoryError>|
+        trace_safe(before) && #[trigger] rollback_step(before, after, result) implies trace_safe(after) by {
+        validator::lemma_rollback_preserves_trace_safe(before, after, result);
+    }
 }
 
 /// Reductions of refinement, redundancy and vacuity (appendix `app:policy-reduction`): refinement
@@ -239,6 +308,7 @@ pub proof fn theorem_paper_index<E: Event>()
         stmt_thm_sderiv::<SrcTest>(),
         stmt_thm_sderiv::<model::Test>(),
         stmt_thm_matcher(),
+        stmt_matcher::<E, ()>(),
         stmt_app_policy_reduction::<E>(),
         stmt_prop_policy(),
         inclusion::stmt_paper_split_ok(),
@@ -260,6 +330,7 @@ pub proof fn theorem_paper_index<E: Event>()
     theorem_thm_sderiv::<SrcTest>();
     theorem_thm_sderiv::<model::Test>();
     theorem_thm_matcher();
+    theorem_matcher::<E, ()>();
     theorem_app_policy_reduction::<E>();
     theorem_prop_policy();
     inclusion::theorem_paper_split_ok();

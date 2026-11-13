@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Reproduces the `verify-core` CI job (.github/workflows/ci.yml) locally: checks the pinned
-# toolchain, runs the eleven `cargo verus verify` configurations, and prints a summary table.
+# toolchain, runs the thirteen `cargo verus verify` configurations, and prints a summary table.
 #
 # Usage: scripts/verify-all.sh [--list] [--download DIR] [-- VERUS_ARGS...]
 #   --list          check the toolchain and print the commands; verify nothing
@@ -20,7 +20,7 @@ verus_sha256=624018662868563a7bec0dd07be5e4dd0c3d61124b4b55105765884bf2d4d1a0
 z3_url=https://github.com/Z3Prover/z3/releases/download/z3-4.16.0/z3-4.16.0-x64-glibc-2.39.zip
 z3_sha256=7288c49a5bd6dbafd7b0b0d1f65956b91672da24b08f09242919af159be3418e
 
-# The eleven configurations of the CI job, in its order.
+# The thirteen configurations of the CI job, in its order.
 configs=(
     "-p history-syntax --no-default-features"
     "-p history-syntax --features serde,std"
@@ -31,8 +31,10 @@ configs=(
     "-p history-semantics --no-default-features --features runtime"
     "-p history-semantics --features runtime,std,cache"
     "-p history-semantics --features runtime,std,cache --test public_specs"
+    "-p history-semantics --features runtime,std,cache --test reviewer"
     "-p history-analysis --no-default-features --features runtime"
     "-p history-analysis --no-default-features --features runtime,std"
+    "-p history-analysis --no-default-features --features runtime,std --test reviewer"
 )
 
 usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
