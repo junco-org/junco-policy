@@ -1,7 +1,7 @@
 //! R4: the hypothesis bundles every monitor and analyzer guarantee assumes about its event type
-//! (plan S4, decision 4). Their discharge for concrete event types is in
-//! `junco_core::verify::hypotheses` and `history_syntax::verify::events`; the one trusted token is
-//! `hash_coherent`, listed in TRUST.md.
+//! (plan S4, decision 4). The concrete witnesses (`junco_core::verify::hypotheses`,
+//! `history_syntax::verify::events`) prove every conjunct except `hash_coherent`, which they take
+//! as their only premise.
 
 use crate::spec::semantics::*;
 use core::hash::Hash;
@@ -12,13 +12,14 @@ use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
 
-/// The single trust token: `K`'s `Hash`/`Eq` are faithful to `eq_spec`, so the `external_body`
-/// hash containers behave as maps on `eq_spec` classes. This is vstd's key model; vstd axiomatizes
-/// it for primitive integers and `bool`; `Component2/3/4` get it from their payloads by the axioms
-/// in `junco_core::verify::hypotheses` (TRUST.md).
-pub open spec fn hash_coherent<K: ?Sized>() -> bool {
-    vstd::std_specs::hash::obeys_key_model::<K>()
-}
+/// The single uninterpreted hashing hypothesis: `K`'s `Hash`/`Eq` are faithful to `eq_spec`, so
+/// the `external_body` hash containers behave as maps on `eq_spec` classes. Semantically this is
+/// vstd's key model (`vstd::std_specs::hash::obeys_key_model`), which exists only with vstd's
+/// `std` feature; it stays uninterpreted here so every configuration compiles. Nothing discharges
+/// it for a user component type: the reviewer theorems carry `hash_coherent::<C>()` as a premise.
+/// The library's internal key types take it by the axioms in
+/// `history_analysis::verify::key_axioms` (TRUST.md).
+pub uninterp spec fn hash_coherent<K: ?Sized>() -> bool;
 
 /// `eq_spec` is an equivalence relation on `T`.
 pub open spec fn eq_equivalence<T: PartialEq>() -> bool {
