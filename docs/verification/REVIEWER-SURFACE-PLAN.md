@@ -1,6 +1,6 @@
 # Plan: a reviewer-readable verification surface, and fixes from the spec audit
 
-Baseline: PR #9 head `d7d9d53` (`proof/policy-analyzer-e2e`). Paper: `junco-org/paper`, `pldi2027/`.
+Baseline: `main` at `1efa267` (merge of PR #9; same tree as PR head `d7d9d53`). Paper: `junco-org/paper`, `pldi2027/`.
 Line numbers refer to that baseline and drift; symbol names are authoritative.
 
 Method: eight read-only audits of the specifications, the executable contracts, the trusted base,
@@ -206,16 +206,18 @@ second copy of the same rule under another id makes each copy redundant (multise
 policy_denies(P \ {rule}, c, h))`, requiring `policy.contains(rule)`, with the composition lemma.
 Document the id/multiset reading.
 
-### S8 (MED). Minimality is not ensured by the policy queries
+### S8 (MED). Minimality is not ensured by the policy queries (handled by a separate PR)
 
-No entry point ensures `*_minimal`; `covered_minimal`, `redundant_minimal`,
-`at_least_as_strict_minimal` and the `*_ok` conjunctions are dead. The intended guarantee is per
-split case (`shortest_in_case`), because `covered_with` returns the first refuted case; it is not
-"shortest for the rule". `tail_included` claims global `shortest`, which is right for a single
-search but meaningless while S3 stands.
+At `1efa267` no entry point ensures `*_minimal`; `covered_minimal`, `redundant_minimal`,
+`at_least_as_strict_minimal` and the `*_ok` conjunctions are unused. Those predicates specify
+minimality per split case (`shortest_in_case`), because `covered_with` returns the first refuted
+case. `tail_included` claims global `shortest`, which is right for a single search but
+meaningless while S3 stands.
 
-**Fix.** Land the minimality branch and ensure `*_minimal`, or delete the dead predicates and say
-"no minimality" in R6 and in the paper.
+**Status.** A separate PR adding **per-rule** minimality to the policy queries is about to be
+opened. It is out of scope for this plan: do not edit the minimality predicates or their proofs.
+The R6 surface must restate whatever minimality clause that PR ensures, without weakening it, and
+the paper must describe the minimality it actually proves (per rule, not per split case).
 
 ### S9 (MED). Declared finite domains are an unchecked assumption about runtime inputs
 
@@ -321,8 +323,8 @@ coordinate); `E_D`, `H_D` events and histories in `D`; `viol` from R2.
   `h ∈ L(ℓ) ⇒ h ∈ L(ρ)`; a counterexample is real and of minimum `|h|`.
 - **A5 (escapes).** `Exhausted ⇒` a search exceeded `GRAPH_BYTES` (S5). `Err` is never an
   invariant failure. Every call terminates.
-- **A6 (minimality, if S8 lands).** A policy-query counterexample is shortest among candidates in
-  its split case.
+- **A6 (minimality, from the separate minimality PR).** A policy-query counterexample is shortest
+  for its rule; restate exactly what that PR ensures.
 - **Non-vacuity (T).** For one concrete event type: the hypotheses hold; `new`, two `add_rule`s and
   each query are callable; one query is shown to return each of `Holds` and `Counterexample`
   *(as a test, not a proof)*.
@@ -396,7 +398,7 @@ coproduct impls, or list projection laws as a hypothesis.
 | "The analyzer executes the inclusion query, not the reductions" (`implementation.tex`, `appendix.tex`), `\todo{If proof of policy inclusion works, fix}`, Table `tab:mechanization-impl` listing only `tail_included`, "the executed search starts from a head constraint with only equalities" | False at PR #9. | Describe `covered`, `redundant`, `at_least_as_strict`, their contracts and hypotheses; drop the sentence and the todo. |
 | Vacuity formulas (`r·lift(φ_h ∧ π = x) ⊑ Emp`, …) | `stmt_vacuity_reductions`: constrained form, both modes, no appended event. | Mark † and describe the constrained form; see S10. |
 | Redundancy `P∖{R} ⊑ {R}` | Same at policy level; executable meaning weaker (S7). | Note multiset/id reading. |
-| "Each counterexample shortest for its own inclusion" (`inclusion.tex`) | Per split case only, and not ensured by the executable (S8). | Say "within its split case" or "no minimality". |
+| "Each counterexample shortest for its own inclusion" (`inclusion.tex`) | Not ensured at `1efa267`; per-rule minimality arrives in a separate PR (S8). | Match the paper to that PR's statement. |
 | `fig:simulation`, `lem:simulation` ("memoized recursion decides ≤") | Code's relation is **smaller**: lifted-test `SumL`/`AndR` apply only when both sides are tests (`history-analysis/src/simulation.rs` `derive`). Example: `⟨φ₁∨φ₂⟩ ≤ ⟨φ₁⟩·Univ + ⟨φ₂⟩·Univ` is derivable in the Figure, rejected by the code *[inference]*. Soundness proved; "decides" is not. | Restrict the Figure's lifted-test rules or add the case to `derive`/`sim_step`; say "sound and terminating". Fix `app:mech-diff` ("relaxed side conditions") and `VERIFY.md` difference 4 ("more rules"), both wrong. |
 | `alg:succ`, `lem:succ`, `lem:uniform` | `stmt_successor_cases` over a semantic case family (adds a partition property); the executable is proved against it by `lemma_emitted_steps`; `alg:succ` itself is not mechanized. | Keep †. `VERIFY.md` should cite `lemma_emitted_steps`, not the unused `expansion_ok` (delete it). |
 | `def:pruning` domination | Executable lookup is a sound subset (subsets enumerated only for `|P| ≤ 4`). | One sentence in `app:pruning`. |
@@ -424,8 +426,8 @@ coproduct impls, or list projection laws as a hypothesis.
 - Remove hard-coded line references from doc comments (dozens have drifted, e.g. `encoding.rs:4`,
   `implementation.rs:84-136`, `search.rs:59`) and regenerate README anchors (`pair_lang`, `lang`,
   `public_compiled_decision`, `retained_history_lifecycle` all point at wrong lines).
-- Dead specs: `never_fires_ok`, `always_fires_ok`, `denies_fn`, `grants_matching`, unused
-  `*_minimal`/`*_ok` (unless S8 lands), `expansion_ok`, `head_tails_wf` (unless S3 uses it).
+- Dead specs: `never_fires_ok`, `always_fires_ok`, `denies_fn`, `grants_matching`, `expansion_ok`,
+  `head_tails_wf` (unless S3 uses it). Leave `*_minimal`/`*_ok` to the minimality PR.
 - Near-duplicate `*_finite_domains` statements: factor the shared body.
 - Names: one `lang` on the surface (others `flat_lang`, `numeric_lang`, `kernel_lang`);
   `check_result` → `check_step`; `raw_events` → `events`; `history_specs.rs` → split into the
