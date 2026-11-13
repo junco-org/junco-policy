@@ -461,6 +461,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     #[verus_spec(result => requires views::analyzer_obligations::<E>(),
         analyzer_state_wf(*old(self)), query_capacity(*old(self), *left, *right),
         ensures analyzer_state_wf(*final(self)), final(self)@.rules == old(self)@.rules,
+            junco_core::verify::history_specs::no_internal_compile_error(result),
             result matches Ok(v) ==> verdict::tail_included_ok(final(self)@, head@, left@, right@, v@))]
     pub fn tail_included(
         &mut self,
@@ -652,6 +653,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     ) -> (result: Result<Inclusion<E>, HistoryError>)
         requires crate::verify::policy::query_ready(*self, constraint, difference, left, right),
         ensures result matches Ok(v) ==> crate::verify::policy::decided(*self, constraint@, left, right, v),
+            junco_core::verify::history_specs::no_internal_error(result),
     {
         proof { assert(GRAPH_BYTES as int % 16 == 0); }
         let mut language = match SymbolicLanguage::compile(&difference, GRAPH_BYTES) {
