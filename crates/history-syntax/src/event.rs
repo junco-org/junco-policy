@@ -294,10 +294,11 @@ verus! {
 
     impl<H: Event> EventSpecImpl for Coproduct<H, CNil> {
         open spec fn obeys_projection_spec() -> bool { H::obeys_projection_spec() }
-        // CNil has no native values; its opaque logical extension is deliberately unconstrained.
+        // CNil has no native values; its logical extension uses one coherent head projection.
         open spec fn component_spec(self, index: int) -> Self::Component {
             match self {
-                Coproduct::Inl(head) => head.component_spec(index), Coproduct::Inr(_) => arbitrary(),
+                Coproduct::Inl(head) => head.component_spec(index),
+                Coproduct::Inr(_) => arbitrary::<H>().component_spec(index),
             }
         }
         open spec fn coordinate_spec(component: Self::Component) -> nat {

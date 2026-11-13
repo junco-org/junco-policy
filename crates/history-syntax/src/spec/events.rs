@@ -208,6 +208,23 @@ pub proof fn lemma_coproduct_last_surjectivity<H: Event>()
     }
 }
 
+/// A terminal coproduct inherits lawful projections and product realization from its event arm.
+pub proof fn lemma_coproduct_last_event_laws<H: Event>()
+    requires event_laws::<H>(),
+    ensures event_laws::<Coproduct<H, CNil>>(),
+{
+    lemma_coproduct_last_surjectivity::<H>();
+    assert forall|event: Coproduct<H, CNil>|
+        #[trigger] well_tagged::<Coproduct<H, CNil>>(event_view(event)) by {
+        let head = match event {
+            Coproduct::Inl(head) => head,
+            Coproduct::Inr(_) => arbitrary::<H>(),
+        };
+        assert(well_tagged::<H>(event_view(head)));
+        assert(event_view(event) =~= event_view(head));
+    }
+}
+
 /// A coproduct with shared coordinate types inherits tuple realization from its head event arm.
 pub proof fn lemma_coproduct_surjectivity<H: Event, T, Rest>()
     where Coproduct<T, Rest>: Event<Component = H::Component, Arity = H::Arity>
@@ -220,6 +237,31 @@ pub proof fn lemma_coproduct_surjectivity<H: Event, T, Rest>()
         assert(well_tagged::<H>(values));
         let head = choose|head: H| #[trigger] event_view(head) == values;
         assert(event_view(Coproduct::<H, Coproduct<T, Rest>>::Inl(head)) =~= values);
+    }
+}
+
+/// Shared-coordinate coproducts preserve event laws when both arms agree on component tags.
+pub proof fn lemma_coproduct_event_laws<H: Event, T, Rest>()
+    where Coproduct<T, Rest>: Event<Component = H::Component, Arity = H::Arity>
+    requires
+        event_laws::<H>(), event_laws::<Coproduct<T, Rest>>(),
+        forall|value: H::Component| #[trigger] H::coordinate_spec(value)
+            == <Coproduct<T, Rest> as EventSpec>::coordinate_spec(value),
+    ensures event_laws::<Coproduct<H, Coproduct<T, Rest>>>(),
+{
+    lemma_coproduct_surjectivity::<H, T, Rest>();
+    assert forall|event: Coproduct<H, Coproduct<T, Rest>>|
+        #[trigger] well_tagged::<Coproduct<H, Coproduct<T, Rest>>>(event_view(event)) by {
+        match event {
+            Coproduct::Inl(head) => {
+                assert(well_tagged::<H>(event_view(head)));
+                assert(event_view(event) =~= event_view(head));
+            },
+            Coproduct::Inr(tail) => {
+                assert(well_tagged::<Coproduct<T, Rest>>(event_view(tail)));
+                assert(event_view(event) =~= event_view(tail));
+            },
+        }
     }
 }
 
