@@ -221,12 +221,29 @@ pub open spec fn others(policy: Seq<nat>, rule: nat) -> Seq<nat> {
     policy.filter(|id: nat| id != rule)
 }
 
+/// Removing every occurrence of `rule` from `policy` changes no decision in the domains: the
+/// rule is redundant (appendix `app:policy-reduction`).
+pub open spec fn removable<P: PartialEq, A: PartialEq, R: PartialEq>(
+    a: AnalyzerView<P, A, R>, rule: nat, policy: Seq<nat>,
+) -> bool {
+    forall|c: TEvent<P, A, R>, h: Seq<TEvent<P, A, R>>| event_in(a.domains, c) && history_in(a.domains, h)
+        ==> #[trigger] policy_denies(rules_of(a, policy), c, h) == policy_denies(rules_of(a, others(policy, rule)), c, h)
+}
+
 /// `redundant(rule, policy)`, soundness and completeness: `covered(rule, policy without every
-/// occurrence of rule)`, which `semantics::stmt_redundant_iff_covered` relates to decisions.
+/// occurrence of rule)`, read as decisions by `semantics::stmt_redundant_iff_covered`: `Holds`
+/// means removing the rule changes no decision; a counterexample is a pair whose decision it
+/// changes, so for a rule of the policy it is not redundant.
 pub open spec fn redundant_correct<P: PartialEq, A: PartialEq, R: PartialEq>(
     a: AnalyzerView<P, A, R>, rule: nat, policy: Seq<nat>, v: InclusionView<P, A, R>,
 ) -> bool {
-    covered_correct(a, rule, others(policy, rule), v)
+    &&& covered_correct(a, rule, others(policy, rule), v)
+    &&& match v {
+        InclusionView::Holds => removable(a, rule, policy),
+        InclusionView::Counterexample(_) => policy.contains(rule) && unrestricted_infinite(a.domains)
+            ==> !removable(a, rule, policy),
+        InclusionView::Exhausted => true,
+    }
 }
 
 /// `redundant(rule, policy)`, minimality.
