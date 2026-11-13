@@ -54,17 +54,27 @@ decisions below.
 (merge of PR #9) plus the plan and this file. Work on a new branch from it. Read first: the plan,
 `VERIFY.md`, `TRUST.md`, and `crates/history-semantics/src/verify/refinement/mod.rs`.
 
-## Coordination with the per-rule minimality PR
+## Coordination with PR #10 (minimality and removal semantics)
 
-A separate PR adding **per-rule** minimality of policy-query counterexamples is about to be opened
-(plan S8). It is out of scope here.
+PR #10 (`proof/policy-analyzer-minimality`, open at `52118c4`) is out of scope here. It makes
+`covered`, `redundant` and `at_least_as_strict` ensure `*_ok` (correctness plus minimality
+**within the returned split case**, not per rule or globally), and adds `policy_removal.rs`:
+`redundant` ensures `redundant_decisions_ok` (Holds ⇒ removing every occurrence of the target id
+preserves all decisions; a counterexample ⇒ removal changes a decision when the target occurs;
+arbitrary order and duplicate ids handled). It does **not** touch `tail_included` or vacuity
+(S3, S10 stay open; they are track F's).
 
-- Do not edit the minimality predicates (`*_minimal`, `*_ok`, `shortest_in_case`, `same_profile`)
-  or the modules that PR adds.
-- The owner of `history-analysis/src/analyzer.rs` (track F) rebases onto that PR when it merges,
-  and R6 restates its minimality `ensures` without weakening them. Whichever lands second adapts.
-- If the PR changes `covered_with` or the verdict predicates, track B's bridge lemmas must be
-  re-checked after the rebase.
+- Start from `main` after PR #10 merges if it has merged by then; otherwise rebase onto it as soon
+  as it merges.
+- Do not edit the minimality or removal predicates and proofs (`*_minimal`, `*_ok`,
+  `shortest_in_case`, `same_profile`, `policy_minimality.rs`, `policy_case_profile.rs`,
+  `policy_removal.rs`).
+- Expected textual conflicts: the module header of `refinement/analyzer.rs` (both this branch and
+  PR #10 rewrite it), `VERIFY.md`, `README.md`. Resolve by taking PR #10's contracts and keeping
+  this branch's corrections: no `never_fires`/`always_fires` contract block, the `Exhausted`
+  description, the `tail_included` vacuity caveat, current paper labels.
+- R6 restates PR #10's `*_ok` and `redundant_decisions_ok` clauses without weakening them.
+- Track B's bridge lemmas and track F's work build on PR #10's `analyzer.rs`.
 
 ## What already exists (do not re-prove)
 
@@ -104,8 +114,8 @@ new search or reduction proofs.
    `(ConstraintId, RegexId)`, `(RegexId, RegexId)`, `(TestId, TestId)`, `SmallVec<[RegexId; 4]>`)
    become trusted axioms, one per type, listed in `TRUST.md`, not preconditions. Add a
    `PartialEqSpecImpl` for `Component2/3/4` (and coproducts) so `eq_spec` is defined for them.
-5. **Redundancy (S7).** `redundant` requires `policy.contains(rule)` and ensures "removing every
-   occurrence of `rule` changes no decision" directly. Document the id/multiset reading.
+5. **Redundancy (S7).** Keep PR #10's removal semantics, including its choice that an absent
+   target keeps the coverage meaning; R6 restates it. Document the id/multiset reading.
 6. **Vacuity (S10).** No new entry points. Prove in R3 that `never_denies(d, r) ⇔ refines(d, [], [r])`
    and `always_denies(d, r) ⇔ refines(d, [r], [forbid head(r) Univ])`, so vacuity goes through
    `at_least_as_strict`. Delete `never_fires_ok`/`always_fires_ok` and the false module header.
@@ -221,7 +231,7 @@ Files: `history-analysis/src/analyzer.rs`, `history-analysis/src/verify.rs` (`fr
 - `tail_included` gets the same counterexample shape, ensures `domains`/`rules` unchanged, and
   requires or ensures `head_tails_wf` (S3).
 - Redundancy, vacuity, domains, ownership per decisions 5–8.
-- Depends on tracks A, B, C. Rebase onto the minimality PR when it merges.
+- Depends on tracks A, B, C and on PR #10 (see Coordination).
 
 ### Track G — Trusted base and builds (D2, D3, D4, D1)
 
@@ -246,7 +256,7 @@ dev-dependencies, `benches/`, `fuzz/benches/`, root crate `src/model.rs`, `src/p
 Files: `history-semantics/tests/reviewer.rs`, `history-analysis/tests/reviewer.rs`, `VERIFY.md`,
 `docs/`, `README.md` verification sections.
 
-- Prove the monitor theorem with trace safety, and A1–A5 (A6 from the minimality PR), as Verus
+- Prove the monitor theorem with trace safety, and A1–A6 (A6 restating PR #10), as Verus
   clients using only public items; prove the hypothesis bundles for the two concrete types;
   register both test targets in `scripts/verify-all.sh` and CI.
 - Rewrite `VERIFY.md` as the single reviewer document (commands, one count table, reviewer map,
@@ -297,7 +307,7 @@ No agent or resource limits. Critical path: **0 → B → F → T**.
 | M3 | Track C (errors; includes the `no_invariant_failure` rename, done first) | M0 | A, B, D, E, G |
 | M4 | Track D (monitor surface) | M0; A's bundle at merge | B, C, E, F, G |
 | M5 | Track E (paper index, hygiene) | M0 | A, B, C, D, F, G |
-| M6 | Track F (analyzer surface; rebase on minimality PR) | A, B, C | D, E, G |
+| M6 | Track F (analyzer surface; on top of PR #10) | A, B, C | D, E, G |
 | M7 | Track G (trust scan, builds, event impls) | — | everything |
 | M8 | Track T (reviewer theorems, docs) | A–F | G |
 
@@ -342,7 +352,7 @@ Priority 3:
 - Each decision above: kept or changed, and why.
 - `TRUST.md` diff: every new trusted item with its justification.
 - Verified-function counts per configuration.
-- Whether the minimality PR was integrated, and the exact minimality clause R6 restates.
+- The PR #10 commit integrated, and the exact minimality and removal clauses R6 restates.
 - **Paper changes needed**, as a checklist against plan §7 updated to the final code: statement
   names, the decision procedure in Section 5 (split cases, constrained inclusion), Prop
   `prop:policy` status, simulation figure vs. code, hypotheses, trusted base, counts, "decides" /
