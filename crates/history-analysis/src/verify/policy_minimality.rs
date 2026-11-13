@@ -4,12 +4,17 @@
 //! Numeric entailment, not equality of these constraints, carries the length bound.
 
 use super::frontend::*;
-use super::{self as views, policy_bridge as bridge, policy_case_profile as profile,
-    policy_queries as queries, reconstruction as slots, search_exec as exec, typed_numeric as typed, verdict};
+use super::{
+    self as views, policy_bridge as bridge, policy_case_profile as profile,
+    policy_queries as queries, reconstruction as slots, search_exec as exec,
+    typed_numeric as typed, verdict,
+};
 use crate::analyzer::{Counterexample, Inclusion, NumericDecision, PolicyAnalyzer, RuleId};
 use crate::constraint::{Constraint, Letter};
-use crate::spec::analyzer as analyzer;
-use history_semantics::verify::refinement::{encoding, implementation, inclusion, search, policy_removal};
+use crate::spec::analyzer;
+use history_semantics::verify::refinement::{
+    encoding, implementation, inclusion, policy_removal, search,
+};
 use history_syntax::spec::events::event_view;
 use history_syntax::{Component, Event, Rule};
 use junco_core::flat::{FlatPair, FlatRule};

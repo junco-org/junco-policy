@@ -16,8 +16,8 @@ use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
-broadcast use model::group_kernel_views;
-broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws;
+broadcast use model::group_kernel_views,
+    junco_core::spec::hypotheses::internal_keys::group_internal_key_laws;
 
 
 

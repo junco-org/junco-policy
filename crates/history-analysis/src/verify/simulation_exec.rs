@@ -14,8 +14,8 @@ use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
-broadcast use junco_core::kernel::verify::group_kernel_views;
-broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws;
+broadcast use junco_core::kernel::verify::group_kernel_views,
+    junco_core::spec::hypotheses::internal_keys::group_internal_key_laws;
 
 
 pub(crate) open spec fn semantic_le() -> spec_fn(Regex<model::Test>, Regex<model::Test>) -> bool {

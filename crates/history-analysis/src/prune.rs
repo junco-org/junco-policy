@@ -3,9 +3,6 @@
 //! Required parts are compared by identity; excluded pieces are compared by simulation.
 //! Inserted states are never removed, preserving breadth-first counterexample order.
 
-use history_store::native::NativeGroups;
-#[cfg(verus_keep_ghost)]
-verus! { broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws; }
 #[cfg(verus_keep_ghost)]
 use crate::verify::{prune_exec::*, simulation_exec::*, table_wf};
 use alloc::boxed::Box;
@@ -17,6 +14,7 @@ use history_semantics::verify::refinement::{
 };
 #[cfg(verus_keep_ghost)]
 use history_semantics::{normalize_verify as norm, symbolic_language_verify as facade};
+use history_store::native::NativeGroups;
 use junco_core::HistoryError;
 use junco_core::kernel::{RegexId, RegexKindView, RegexView};
 #[cfg(verus_keep_ghost)]
@@ -32,7 +30,8 @@ use crate::constraint::{Constraint, ConstraintId, ConstraintTable};
 use crate::simulation::Simulation;
 
 #[cfg(verus_keep_ghost)]
-verus! { broadcast use model::group_kernel_views; }
+verus! { broadcast use model::group_kernel_views,
+junco_core::spec::hypotheses::internal_keys::group_internal_key_laws; }
 #[verus_verify]
 const ENUMERATED_PARTS: usize = 4;
 

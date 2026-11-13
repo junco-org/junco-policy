@@ -10,12 +10,10 @@
 //! Cartesian-product overflow propagates as `HistoryError::IndexOverflow`; it never becomes a
 //! successful inclusion verdict or a capacity precondition on the query.
 
-use history_store::native::NativeSet;
-#[cfg(verus_keep_ghost)]
-verus! { broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws; }
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use history_semantics::SymbolicLanguage;
+use history_store::native::NativeSet;
 use junco_core::HistoryError;
 use junco_core::kernel::{Primitive, RegexId, Term, TransitionId};
 use smallvec::SmallVec;
@@ -48,7 +46,8 @@ use vstd::std_specs::cmp::PartialEqSpec;
 use vstd::std_specs::iter::IteratorSpec;
 
 #[cfg(verus_keep_ghost)]
-verus! { broadcast use model::group_kernel_views; }
+verus! { broadcast use model::group_kernel_views,
+junco_core::spec::hypotheses::internal_keys::group_internal_key_laws; }
 
 /// Result of one search.
 #[verus_verify]

@@ -7,6 +7,7 @@ use super::*;
 use super::{reconstruction as slots, typed_numeric as typed};
 use crate::analyzer::{Constants, PolicyAnalyzer};
 use crate::analyzer::{Counterexample, Inclusion, NumericDecision};
+use crate::spec::analyzer;
 use history_semantics::{
     SymbolicLanguage, compile_verify as numeric, symbolic_language_verify as facade,
     symbolic_verify as symbolic,
@@ -15,8 +16,7 @@ use history_syntax::Rule;
 use history_syntax::spec::events::{arity, event_view};
 use junco_core::flat::FlatRule;
 use junco_core::flat::{FlatHead, FlatPair, FlatTerm, FlatTest};
-use junco_core::spec::{questions as questions, semantics as tdsl};
-use crate::spec::analyzer as analyzer;
+use junco_core::spec::{questions, semantics as tdsl};
 use junco_core::verify::{encoding as enc, flatten as fl};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;

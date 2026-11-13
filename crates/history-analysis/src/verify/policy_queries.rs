@@ -6,12 +6,12 @@ use super::{
 };
 use crate::analyzer::{Inclusion, NumericDecision, PolicyAnalyzer, RuleId, StoredRule};
 use crate::constraint::{Constraint, Letter};
+use crate::spec::analyzer::{self as analyzer, rule_ids};
 use history_semantics::verify::refinement::{encoding, implementation, inclusion, search};
-use crate::spec::analyzer as analyzer;
-use junco_core::spec::{questions as q, semantics as s};
 use history_syntax::{Event, Rule};
 use junco_core::flat::{FlatPair, FlatRule};
 use junco_core::kernel::verify as model;
+use junco_core::spec::{questions as q, semantics as s};
 use junco_core::verify::history_specs::{EventView, Subst};
 use vstd::prelude::*;
 

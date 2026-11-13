@@ -7,7 +7,7 @@ use super::frontend::*;
 use super::{self as views, reconstruction as slots, search_exec as exec, typed_numeric as typed};
 use crate::analyzer::{Constants, Counterexample, PolicyAnalyzer};
 use crate::constraint::{Constraint, Letter};
-use crate::spec::analyzer as analyzer;
+use crate::spec::analyzer;
 use history_semantics::verify::refinement::{encoding, implementation, inclusion, search};
 use history_syntax::spec::events::{arity, event_view};
 use history_syntax::{Event, Rule};

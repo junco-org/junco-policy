@@ -19,9 +19,6 @@
 //! that of `y`. Every premise relates a pair of smaller nodes, so recursion on pairs, memoised,
 //! decides the relation. It need not be transitive.
 
-use history_store::native::NativeMap;
-#[cfg(verus_keep_ghost)]
-verus! { broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws; }
 #[cfg(verus_keep_ghost)]
 use crate::verify::simulation_exec::*;
 use history_semantics::SymbolicLanguage;
@@ -29,6 +26,7 @@ use history_semantics::SymbolicLanguage;
 use history_semantics::symbolic_language_verify as facade;
 #[cfg(verus_keep_ghost)]
 use history_semantics::verify::refinement::pruning as paper;
+use history_store::native::NativeMap;
 #[cfg(verus_keep_ghost)]
 use history_store::native::representatives;
 use junco_core::HistoryError;
@@ -43,7 +41,8 @@ use vstd::prelude::*;
 use vstd::std_specs::cmp::{OrdSpec, PartialEqSpec};
 
 verus! {
-broadcast use junco_core::kernel::verify::group_kernel_views;
+broadcast use junco_core::kernel::verify::group_kernel_views,
+    junco_core::spec::hypotheses::internal_keys::group_internal_key_laws;
 
 /// The simulation between the residuals of one language, memoised per pair.
 pub(crate) struct Simulation {

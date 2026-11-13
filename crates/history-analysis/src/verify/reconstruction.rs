@@ -7,16 +7,16 @@ use super::{
 };
 use crate::analyzer::{Components, Constants, Counterexample, Inclusion, Slot, Value};
 use crate::constraint::{Constraint, Letter, Universes};
+use crate::spec::analyzer::QueryResult;
 use history_semantics::verify::refinement::{encoding, implementation};
 use history_semantics::verify::refinement::{inclusion, search};
 use history_syntax::spec::events::{EventSpec, arity};
-use junco_core::spec::questions as q;
-use crate::spec::analyzer::QueryResult;
 use history_syntax::{Event, syntax::Component};
 use junco_core::kernel::verify as model;
+use junco_core::spec::questions as q;
 use junco_core::verify::history_specs::{self as language};
-use vstd::std_specs::cmp::PartialEqSpec;
 use vstd::prelude::*;
+use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
 broadcast use {vstd::seq::group_seq_lemmas, vstd::std_specs::vec::group_vec_axioms,
