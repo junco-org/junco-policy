@@ -1851,44 +1851,6 @@ pub(crate) proof fn lemma_steps_are_paper_steps(g: Constraint, atoms: Seq<Atom>,
     }
     assert(cases.to_iset() =~= paper);
 }
-
-pub(crate) proof fn implemented_steps_ok(g: Constraint, atoms: Seq<Atom>, universes: Universes,
-    groups: Seq<(Constraint, Vec<Letter>)>, state: language::Regex<model::Test>,
-    next: spec_fn(search::Assignment) -> language::Regex<model::Test>)
-    requires atoms_wf(atoms, universes@.len()), steps_result(g, atoms, universes, groups),
-        inclusion::satisfiable(ndomains(universes), implementation::constraint_of(g@)),
-        search::atoms_complete(state, atom_set(atoms)),
-        forall|alpha: search::Assignment| alpha.dom() == atom_set(atoms) ==> search::successor_ok(state, alpha, next(alpha)),
-    ensures search::steps_ok(ndomains(universes), search::Item { constraint: implementation::constraint_of(g@), state },
-        implemented_cases(groups, atom_set(atoms), next)),
-{
-    hide(search::steps_ok);
-    hide(search::successor_ok);
-    hide(search::atoms_complete);
-    hide(search::paper_steps);
-    hide(encoding::n_lang);
-    hide(language::numeric_lang);
-    hide(class_options);
-    hide(register_options);
-    let operands = choose|operands: Operands| operands_of(operands, atoms) && operands.register@.len() == universes@.len()
-        && constraint_views(group_constraints(groups)) == split_views(g, operands, universes)
-        && forall|i: int| 0 <= i < groups.len() ==> constraint_wf(groups[i].0)
-            && groups[i].0@.len() == universes@.len()
-            && letter_views(groups[i].1@) == letters_views(groups[i].0, operands, universes)
-            && forall|j: int| 0 <= j < groups[i].1@.len() ==> letter_wf(groups[i].1@[j])
-                && groups[i].1@[j]@.classes.len() == universes@.len();
-    lemma_operand_atoms(operands, atoms); lemma_split_views_ok(g, operands, universes, atoms);
-    lemma_steps_are_paper_steps(g, atoms, universes, groups, state, next);
-    search::theorem_successor_cases();
-    let splits = constraint_views(group_constraints(groups)).map(|v: implementation::ConstraintView| implementation::constraint_of(v));
-    let item = search::Item { constraint: implementation::constraint_of(g@), state };
-    let paper = search::paper_steps(ndomains(universes), item, atom_set(atoms), splits, next);
-    assert(paper.finite());
-    broadcast use vstd::set::lemma_set_new_from_iset;
-    assert(Set::new_from_iset(paper) is Some);
-    assert(Set::new_from_iset(paper).unwrap() =~= implemented_cases(groups, atom_set(atoms), next));
-    assert(search::steps_ok(ndomains(universes), item, implemented_cases(groups, atom_set(atoms), next)));
-}
 }
 
 verus! {
@@ -2531,8 +2493,8 @@ pub(crate) mod table {
 }
 
 verus! {
-/// What the analyzer assumes about its event type: exactly R4's `event_obligations` (open so
-/// external clients discharge it through R4's witnesses).
+/// What the analyzer assumes about its event type: exactly the hypotheses' `event_obligations`
+/// (`junco_core::spec::hypotheses`; open so clients discharge it through its witnesses).
 pub open spec fn analyzer_obligations<E: Event>() -> bool {
     junco_core::spec::hypotheses::event_obligations::<E>()
 }
@@ -3000,7 +2962,7 @@ pub(crate) mod frontend {
             }
         }
 
-        /// R6 `ids_of`, under the name the internal lemmas use.
+        /// `spec::analyzer::ids_of`, under the name the internal lemmas use.
         pub open(crate) spec fn rule_ids(ids: Seq<RuleId>) -> Seq<nat> {
             crate::spec::analyzer::ids_of(ids)
         }
@@ -3112,7 +3074,7 @@ pub(crate) mod frontend {
             }
         }
 
-        /// The reviewer's view of an analyzer (R6 `AnalyzerView`): the ghost declared domains and
+        /// The reviewer's view of an analyzer (`AnalyzerView`): the ghost declared domains and
         /// known constants (set by the contracts), and the rule views by index.
         pub open(crate) spec fn analyzer_view<E: Event>(a: PolicyAnalyzer<E>) -> AnalyzerView<E::Component> {
             AnalyzerView {
@@ -3135,7 +3097,7 @@ pub(crate) mod frontend {
                 ==> #[trigger] in_domain(a@.domains[k], x) == in_domain(selected_values(a.constants, a.universes[k]), x)
         }
 
-        /// Every interned constant is known at its coordinate up to `eq_spec` (R6 clause 3): the
+        /// Every interned constant is known at its coordinate up to `eq_spec` (the third clause of `AnalyzerView`'s invariant): the
         /// counterexample bridges (`every_instance`, `minimal_in_case`, the refutation clauses) rest
         /// on it. Part of `analyzer_state_wf`; `new` establishes it from the declared values and
         /// `add_rule`/`tail_included` keep it because a lowering interns only the input's constants.
@@ -3528,7 +3490,7 @@ pub(crate) mod frontend {
         }
 
         /// What `new` establishes about the view: no rules, the declared domains, and the declared
-        /// values as the known constants (R6).
+        /// values as the known constants (`AnalyzerView::known`).
         pub open spec fn constructed_from<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
             &&& a@.rules == Seq::<RuleView<E::Component>>::empty()
             &&& a@.domains == d@

@@ -1438,7 +1438,7 @@ fn pair_head_matches(head: &Head<Pair>, candidate: Pair) -> bool {
     })
 }
 
-/// R2 `test_sem`: a variable resolves only to the candidate's binding at the same coordinate.
+/// `test_sem`: a variable resolves only to the candidate's binding at the same coordinate.
 fn pair_test_holds(test: &TestExpr<Pair>, head: &Head<Pair>, candidate: Pair, event: Pair) -> bool {
     match test {
         TestExpr::True => true,
@@ -1473,7 +1473,7 @@ fn pair_test_holds(test: &TestExpr<Pair>, head: &Head<Pair>, candidate: Pair, ev
     }
 }
 
-/// R2 `lang` by enumeration of the splits of `history`.
+/// `lang` by enumeration of the splits of `history`.
 fn pair_lang(
     regex: &RegexExpr<Pair>,
     head: &Head<Pair>,
@@ -1520,7 +1520,7 @@ fn pair_lang(
     }
 }
 
-/// R2 `rule_violated`.
+/// `rule_violated`.
 fn pair_violated(rule: &Rule<Pair>, candidate: Pair, history: &[Pair]) -> bool {
     pair_head_matches(&rule.head, candidate)
         && match rule.mode {
@@ -1529,7 +1529,7 @@ fn pair_violated(rule: &Rule<Pair>, candidate: Pair, history: &[Pair]) -> bool {
         }
 }
 
-/// R2 `policy_denies` for the rules selected by index.
+/// `policy_denies` for the rules selected by index.
 fn pair_denies(rules: &[Rule<Pair>], policy: &[usize], candidate: Pair, history: &[Pair]) -> bool {
     policy
         .iter()
@@ -1660,7 +1660,7 @@ fn pair_tail_included_agrees_with_brute_force() {
                 && !pair_lang(&right, &head, c, h)
         };
         if let Inclusion::Counterexample(witness) = &verdict {
-            // Tail counterexamples have globally minimum length (R6 `shortest`).
+            // Tail counterexamples have globally minimum length (`shortest`).
             let (_, history) = pair_instance(witness);
             let shortest = pair_histories()
                 .into_iter()

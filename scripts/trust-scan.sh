@@ -63,7 +63,7 @@ KIND_NAMES = [k for k, _ in KINDS]
 
 # Uninterpreted specs whose meaning the trusted contracts rely on, with that meaning.
 MEANING = {
-    "hash_coherent": "the single hashing hypothesis (R4): a key type's `Hash`/`Eq` are faithful to "
+    "hash_coherent": "the single hashing hypothesis (`junco_core::spec::hypotheses`): a key type's `Hash`/`Eq` are faithful to "
                      "`eq_spec`, so the external_body hash containers behave as maps on `eq_spec` classes",
     "arc_identity": "native allocation identity of an `Arc`; faithful because every compared type "
                     "has a unique-per-allocation value (comment at the declaration)",
@@ -79,7 +79,7 @@ MEANING = {
     "diagnostic_output": "what a policy rule's diagnostic callback returns for a denial",
     "policy_rule_source": "the source rule a policy rule was built from",
     "policy_rule_diagnostic": "the diagnostic callback a policy rule retains",
-    "trace_rule_source": "the source rule a trace rule was built from (`TraceRule::clone` preserves it)",
+    "trace_rule_source": "the source rule a trace rule was built from",
     "trace_rule_diagnostic": "the diagnostic callback a trace rule retains",
     "trace_arc_call": "the result of invoking a trace diagnostic callback",
 }
@@ -370,9 +370,11 @@ print()
 print("- `crates/history-store/src/cache.rs`: the LRU successor cache behind `successor_cache_view`.")
 print("  Its contracts allow any entry to be evicted and never a fabricated one; the search's")
 print("  correctness does not depend on hits, only on the cached values being the ones once inserted.")
+print("  Exact lookup assumes that the derived `Hash`/`Eq` of its key `EventClass` agree with equality")
+print("  of `class_key`, a hashing fact outside `hash_coherent`.")
 print("- The hash containers `NativeMap`/`NativeSet`/`NativeGroups` (`crates/history-store/src/typed/map.rs`,")
 print("  `crates/history-analysis/src/native.rs`): external_body wrappers over hashbrown whose")
-print("  contracts hold under `key_laws` (R4, `crates/junco-core/src/spec/hypotheses.rs`): the key's")
+print("  contracts hold under `key_laws` (`crates/junco-core/src/spec/hypotheses.rs`): the key's")
 print("  `Hash`/`Eq` are faithful to `eq_spec` (`hash_coherent`, the single hashing hypothesis),")
 print("  instantiated for the library's own key types by the `axiom` items above.")
 print("- Identity of stores: `arc_identity`/`reference_identity` are functions of the pointee's spec")
@@ -389,7 +391,7 @@ print("  granted events; audit mode, which also appends denied events; and error
 print("  history errors become `Deny`). The verified `check_step` covers each `TracePolicy::decide`,")
 print("  not this composition.")
 print("- The root event types `LockEvent`, `FlowEvent`, `AgentEvent` implement `Event` by hand in the")
-print("  unverified crate; `event_laws` (R1) is a hypothesis for them, stated at each impl.")
+print("  unverified crate; `event_laws` (`history_syntax::spec::events`) is a hypothesis for them, stated at each impl.")
 print("- User `Hash`/`Eq` code runs under the store lock; a panic there unwinds through the lock and")
 print("  is outside the trusted base (the store assumes its lock invariant on re-entry).")
 PY

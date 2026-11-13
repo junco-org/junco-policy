@@ -1,4 +1,4 @@
-//! Concrete witnesses for R4's `event_obligations` (plan S4): the built-in tuple events satisfy
+//! Concrete witnesses for `event_obligations` (`junco_core::spec::hypotheses`): the built-in tuple events satisfy
 //! every conjunct once `hash_coherent` of their component type is assumed; nothing here is trusted.
 
 use crate::spec::hypotheses::{eq_equivalence, event_obligations, hash_coherent, key_laws};

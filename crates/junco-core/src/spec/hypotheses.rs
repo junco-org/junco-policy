@@ -1,5 +1,5 @@
-//! R4: the hypothesis bundles every monitor and analyzer guarantee assumes about its event type
-//! (plan S4, decision 4). The concrete witnesses (`junco_core::verify::hypotheses`,
+//! The hypothesis bundles every monitor and analyzer guarantee assumes about its event type.
+//! The concrete witnesses (`junco_core::verify::hypotheses`,
 //! `history_syntax::verify::events`) prove every conjunct except `hash_coherent`, which they take
 //! as their only premise.
 
@@ -35,7 +35,7 @@ pub open spec fn key_laws<K: Eq + Hash>() -> bool {
 }
 
 /// The one bundle every monitor and analyzer guarantee assumes about the event type `E`
-/// (R1 `event_laws` plus `key_laws` of its component type).
+/// (`event_laws` from `history_syntax::spec::events` plus `key_laws` of its component type).
 pub open spec fn event_obligations<E: Event>() -> bool {
     event_laws::<E>() && key_laws::<E::Component>()
 }

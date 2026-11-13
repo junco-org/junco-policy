@@ -81,7 +81,7 @@ impl<E: Event> ValidatorBuilder<E> {
 
 impl<E: Event> View for Validator<E> {
     type V = ValidatorView<E>;
-    /// R5 view: the rules passed to `add_rule`, in order, and the committed history.
+    /// Monitor-specification view: the rules passed to `add_rule`, in order, and the committed history.
     closed spec fn view(&self) -> ValidatorView<E> {
         ValidatorView {
             rules: sem::rule_views(verify::validator_sources(*self)),
@@ -174,7 +174,7 @@ impl<E: Event> Validator<E> {
     }
 
     /// Authorizes a request, appending its exact event only after successful evaluation
-    /// (R5 `check_frame`); under the event laws the decision means R5 `check_step`.
+    /// (`check_frame`); under the event laws the decision means `check_step`.
     #[verus_spec(result => requires old(self).wf(),
         ensures final(self).wf(),
             check_frame(old(self)@, final(self)@, request, result),
@@ -244,7 +244,7 @@ impl<E: Event> Validator<E> {
     }
 
     /// Evaluates without committing: the state is unchanged and, under the event laws, the
-    /// answer is R5 `permits_result`. Operational errors cannot be internal invariant failures.
+    /// answer is `permits_result`. Operational errors cannot be internal invariant failures.
     #[verus_spec(result => requires old(self).wf(),
         ensures final(self).wf(), final(self)@ == old(self)@, no_invariant_failure(result),
             event_obligations::<E>() ==> permits_result(old(self)@, *candidate, result),
@@ -345,7 +345,7 @@ impl<E: Event> Validator<E> {
         self.history.checkpoint()
     }
 
-    /// Rolls back a checkpoint of this validator's history: R5 `rollback_step`, plus the
+    /// Rolls back a checkpoint of this validator's history: `rollback_step`, plus the
     /// underlying history's checkpoint-ownership outcome.
     #[verus_spec(result => requires old(self).wf(),
         ensures final(self).wf(), rollback_step(old(self)@, final(self)@, result),
@@ -387,7 +387,7 @@ impl<E: Event> Validator<E> {
     }
 }
 
-/// Crate-internal frame predicates over the compiled entries, and the R5 trace-safety lemmas.
+/// Crate-internal frame predicates over the compiled entries, and the trace-safety lemmas of the monitor specification.
 #[cfg(verus_keep_ghost)]
 pub mod verify {
     use super::*;

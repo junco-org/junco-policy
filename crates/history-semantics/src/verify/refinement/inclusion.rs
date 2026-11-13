@@ -215,7 +215,7 @@ pub open spec fn stmt_vacuity_reductions() -> bool {
     }
 }
 
-/// Vacuity through refinement (decision 6, `app:policy-reduction`): a rule never denies iff the
+/// Vacuity through refinement (`app:policy-reduction`): a rule never denies iff the
 /// empty policy refines `[R]`, and denies every matching candidate iff `[R]` refines
 /// `[forbid head(R) Univ]`; both are `at_least_as_strict` queries.
 pub open spec fn stmt_vacuity_via_refinement<E: Event>() -> bool {
