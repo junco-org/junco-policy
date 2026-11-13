@@ -62,4 +62,67 @@ pub open spec fn stmt_policy_outcomes() -> bool {
         }
 }
 
+/// `stmt_policy_outcomes` for one split.
+pub proof fn lemma_policy_outcomes(d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>)
+    requires split_ok(d, head_constraint(rule.head), head_pairs(p), cases),
+    ensures
+        forall|g1: Constraint| #[trigger] cases.contains(g1) ==> case_cex_uncovered(d, p, rule, g1),
+        (forall|g1: Constraint| #[trigger] cases.contains(g1)
+            ==> outcome_ok(d, g1, denial(rule), firing_denials(d, p, g1), Outcome::Holds))
+            ==> n_covers(d, p, rule),
+        forall|g1: Constraint, g: Constraint, letters: Seq<Assignment>| cases.contains(g1)
+            && #[trigger] outcome_ok(d, g1, denial(rule), firing_denials(d, p, g1), Outcome::Refuted(g, letters))
+            ==> realizations_uncovered(d, p, rule, g, letters)
+                && no_uncovered_shorter(d, p, rule, g1, letters.len()),
+{
+    let gr = head_constraint(rule.head);
+    assert forall|g1: Constraint| #[trigger] cases.contains(g1) implies case_cex_uncovered(d, p, rule, g1) by {
+        assert forall|theta: Subst, w: Seq<EventView>|
+            #[trigger] inclusion_cex(d, g1, denial(rule), firing_denials(d, p, g1), theta, w)
+                <==> (n_theta_ok(d, theta) && n_history_in(d, w) && sat_by(theta, g1)
+                    && n_rule_denies(rule, theta, w) && !n_policy_denies(p, theta, w)) by {
+            if n_theta_ok(d, theta) && sat_by(theta, g1) {
+                assert(entails(d, g1, gr));
+                assert(sat_by(theta, gr));
+                lemma_rule_denies_iff(rule, theta, w);
+                lemma_case_denies(d, p, g1, theta, w);
+            }
+        }
+    }
+    lemma_policy_reduction(d, p, rule, cases);
+    assert forall|g1: Constraint, g: Constraint, letters: Seq<Assignment>| cases.contains(g1)
+        && #[trigger] outcome_ok(d, g1, denial(rule), firing_denials(d, p, g1), Outcome::Refuted(g, letters))
+        implies realizations_uncovered(d, p, rule, g, letters)
+            && no_uncovered_shorter(d, p, rule, g1, letters.len()) by {
+        assert(case_cex_uncovered(d, p, rule, g1));
+        assert forall|theta: Subst, u: Seq<EventView>| n_theta_ok(d, theta) && sat_by(theta, g)
+            && #[trigger] follows(d, letters, theta, u)
+            implies n_rule_denies(rule, theta, u) && !n_policy_denies(p, theta, u) by {
+            assert(inclusion_cex(d, g1, denial(rule), firing_denials(d, p, g1), theta, u));
+        }
+        assert forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w) && sat_by(theta, g1)
+            && w.len() < letters.len() implies !(#[trigger] n_rule_denies(rule, theta, w) && !n_policy_denies(p, theta, w)) by {
+            assert(!inclusion_cex(d, g1, denial(rule), firing_denials(d, p, g1), theta, w));
+        }
+    }
+}
+
+pub proof fn theorem_policy_outcomes()
+    ensures stmt_policy_outcomes(),
+{
+    assert forall|d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>|
+        #[trigger] split_ok(d, head_constraint(rule.head), head_pairs(p), cases) implies {
+            &&& forall|g1: Constraint| #[trigger] cases.contains(g1) ==> case_cex_uncovered(d, p, rule, g1)
+            &&& (forall|g1: Constraint| #[trigger] cases.contains(g1)
+                    ==> outcome_ok(d, g1, denial(rule), firing_denials(d, p, g1), Outcome::Holds))
+                ==> n_covers(d, p, rule)
+            &&& forall|g1: Constraint, g: Constraint, letters: Seq<Assignment>| cases.contains(g1)
+                && #[trigger] outcome_ok(d, g1, denial(rule), firing_denials(d, p, g1), Outcome::Refuted(g, letters))
+                ==> realizations_uncovered(d, p, rule, g, letters)
+                    && no_uncovered_shorter(d, p, rule, g1, letters.len())
+        } by {
+        lemma_policy_outcomes(d, p, rule, cases);
+    }
+}
+
 } // verus!

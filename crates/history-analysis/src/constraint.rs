@@ -261,7 +261,10 @@ impl Constraint {
     /// Whether every valuation satisfying `self` satisfies `other`, read syntactically.
     #[verus_spec(result => requires constraint_wf(*self), constraint_wf(*other),
         ensures result ==> forall|d: encoding::NDomains|
-            inclusion::entails(d, implementation::constraint_of(self@), implementation::constraint_of(other@)))]
+            inclusion::entails(d, implementation::constraint_of(self@), implementation::constraint_of(other@)),
+            result == (register_entails(self@.principal, other@.principal)
+                && register_entails(self@.action, other@.action)
+                && register_entails(self@.resource, other@.resource)))]
     pub(crate) fn entails(&self, other: &Self) -> bool {
         let result = self.0[0].entails(&other.0[0])
             && self.0[1].entails(&other.0[1])

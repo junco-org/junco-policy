@@ -30,6 +30,7 @@ use history_store::typed::verify::eq_equivalence;
 use history_syntax::verify::dsl::{HeadView, RegexView, RuleView};
 use junco_core::verify::dsl as tdsl;
 use junco_core::verify::dsl::EventView as TEvent;
+use vstd::iset_lib::lemma_iset_subset_finite;
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -220,12 +221,29 @@ pub open spec fn others(policy: Seq<nat>, rule: nat) -> Seq<nat> {
     policy.filter(|id: nat| id != rule)
 }
 
+/// Removing every occurrence of `rule` from `policy` changes no decision in the domains: the
+/// rule is redundant (appendix `app:policy-reduction`).
+pub open spec fn removable<P: PartialEq, A: PartialEq, R: PartialEq>(
+    a: AnalyzerView<P, A, R>, rule: nat, policy: Seq<nat>,
+) -> bool {
+    forall|c: TEvent<P, A, R>, h: Seq<TEvent<P, A, R>>| event_in(a.domains, c) && history_in(a.domains, h)
+        ==> #[trigger] policy_denies(rules_of(a, policy), c, h) == policy_denies(rules_of(a, others(policy, rule)), c, h)
+}
+
 /// `redundant(rule, policy)`, soundness and completeness: `covered(rule, policy without every
-/// occurrence of rule)`, which `semantics::stmt_redundant_iff_covered` relates to decisions.
+/// occurrence of rule)`, read as decisions by `semantics::stmt_redundant_iff_covered`: `Holds`
+/// means removing the rule changes no decision; a counterexample is a pair whose decision it
+/// changes, so for a rule of the policy it is not redundant.
 pub open spec fn redundant_correct<P: PartialEq, A: PartialEq, R: PartialEq>(
     a: AnalyzerView<P, A, R>, rule: nat, policy: Seq<nat>, v: InclusionView<P, A, R>,
 ) -> bool {
-    covered_correct(a, rule, others(policy, rule), v)
+    &&& covered_correct(a, rule, others(policy, rule), v)
+    &&& match v {
+        InclusionView::Holds => removable(a, rule, policy),
+        InclusionView::Counterexample(_) => policy.contains(rule) && unrestricted_infinite(a.domains)
+            ==> !removable(a, rule, policy),
+        InclusionView::Exhausted => true,
+    }
 }
 
 /// `redundant(rule, policy)`, minimality.
@@ -450,6 +468,80 @@ pub proof fn theorem_choice_exists<P: PartialEq, A: PartialEq, R: PartialEq>()
         let fa = lemma_choice_for_used(fresh_used(cex, |c: ComponentsView<P, A, R>| c.action), a.known_actions);
         let fr = lemma_choice_for_used(fresh_used(cex, |c: ComponentsView<P, A, R>| c.resource), a.known_resources);
         let f = FreshChoice { principal: fp, action: fa, resource: fr };
+        assert(admissible(a, cex, f));
+    }
+}
+
+/// The fresh numbers of a counterexample are finite (finitely many positions).
+pub proof fn lemma_fresh_finite<P, A, R>(cex: CexView<P, A, R>)
+    ensures fresh_finite(cex),
+{
+    lemma_fresh_used_finite(cex, |c: ComponentsView<P, A, R>| c.principal);
+    lemma_fresh_used_finite(cex, |c: ComponentsView<P, A, R>| c.action);
+    lemma_fresh_used_finite(cex, |c: ComponentsView<P, A, R>| c.resource);
+}
+
+proof fn lemma_fresh_used_finite<P, A, R, T>(cex: CexView<P, A, R>, get: spec_fn(ComponentsView<P, A, R>) -> ValueView<T>)
+    ensures fresh_used(cex, get).finite(),
+{
+    let num = |v: ValueView<T>| match v { ValueView::Fresh(n) => n, ValueView::Constant(_) => 0nat };
+    let vals = cex.history.push(cex.candidate).map_values(|c: ComponentsView<P, A, R>| num(get(c)));
+    let bound = vals.to_set().to_iset();
+    assert forall|n: nat| #[trigger] fresh_used(cex, get).contains(n) implies bound.contains(n) by {
+        if get(cex.candidate) == ValueView::<T>::Fresh(n) {
+            assert(vals[cex.history.len() as int] == n);
+        } else {
+            let i = choose|i: int| 0 <= i < cex.history.len() && #[trigger] get(cex.history[i]) == ValueView::<T>::Fresh(n);
+            assert(vals[i] == n);
+        }
+        assert(vals.to_set().contains(n));
+    }
+    vstd::set::lemma_to_iset_finite(vals.to_set());
+    lemma_iset_subset_finite(bound, fresh_used(cex, get));
+}
+
+/// An admissible choice for one component: none needed when no fresh number is used.
+proof fn lemma_choice_component<T: PartialEq>(used: ISet<nat>, known: Set<T>, domain: Option<Set<T>>) -> (f: spec_fn(nat) -> T)
+    requires
+        used.finite(),
+        eq_equivalence::<T>(),
+        domain is None ==> infinite_type::<T>(),
+        domain is Some ==> used == ISet::<nat>::empty(),
+    ensures choice_ok(f, used, known, domain),
+{
+    if domain is None {
+        lemma_choice_for_used(used, known)
+    } else {
+        |n: nat| arbitrary()
+    }
+}
+
+/// An admissible choice exists (`stmt_choice_exists_declared`), constructed.
+pub proof fn lemma_choice_exists_declared<P: PartialEq, A: PartialEq, R: PartialEq>(
+    a: AnalyzerView<P, A, R>, cex: CexView<P, A, R>,
+) -> (f: FreshChoice<P, A, R>)
+    requires
+        eq_equivalence::<P>(), eq_equivalence::<A>(), eq_equivalence::<R>(),
+        unrestricted_infinite(a.domains),
+        fresh_unrestricted(a.domains, cex),
+    ensures admissible(a, cex, f),
+{
+    lemma_fresh_finite(cex);
+    let fp = lemma_choice_component(fresh_used(cex, |c: ComponentsView<P, A, R>| c.principal), a.known_principals, a.domains.principal);
+    let fa = lemma_choice_component(fresh_used(cex, |c: ComponentsView<P, A, R>| c.action), a.known_actions, a.domains.action);
+    let fr = lemma_choice_component(fresh_used(cex, |c: ComponentsView<P, A, R>| c.resource), a.known_resources, a.domains.resource);
+    FreshChoice { principal: fp, action: fa, resource: fr }
+}
+
+pub proof fn theorem_choice_exists_declared<P: PartialEq, A: PartialEq, R: PartialEq>()
+    ensures stmt_choice_exists_declared::<P, A, R>(),
+{
+    assert forall|a: AnalyzerView<P, A, R>, cex: CexView<P, A, R>|
+        #![trigger unrestricted_infinite(a.domains), fresh_unrestricted(a.domains, cex)]
+        eq_equivalence::<P>() && eq_equivalence::<A>() && eq_equivalence::<R>()
+            && unrestricted_infinite(a.domains) && fresh_unrestricted(a.domains, cex)
+        implies exists|f: FreshChoice<P, A, R>| #[trigger] admissible(a, cex, f) by {
+        let f = lemma_choice_exists_declared(a, cex);
         assert(admissible(a, cex, f));
     }
 }
