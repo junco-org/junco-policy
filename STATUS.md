@@ -6,10 +6,10 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 
 | Item | State | Evidence / public statements |
 |---|---|---|
-| H1 | in progress | Strengthened `counterexample_spec` and added `undeclared_capacity` in `crates/history-analysis/src/spec/analyzer.rs`; reconstructed instance bridge verifies. Reviewer target running; added attempt A's declared-coordinate-zero lemma after inbox message. Branch fix/audit-h1. |
+| H1 | in progress | Local gates passed; [PR #13](https://github.com/junco-org/junco-policy/pull/13), head `73020d775580eafa6f91e959ef08d51ee0eb2f24`, awaits CI before merge. Changed `counterexample_spec`, new `undeclared_capacity` (`crates/history-analysis/src/spec/analyzer.rs`); new `theorem_counterexample_has_instance`, `theorem_declared_fresh_rejected`, `lemma_declared_coordinate_zero` (`crates/history-analysis/tests/reviewer.rs`). |
 | H3 | not started | |
 | H4 | not started | |
-| H6 | not started | |
+| H6 | in progress | Branch fix/audit-h6 from main; strengthen analyzer/builder registration with well-formedness, exact arity and head constant tags. Remove unused analyzer_wf/rule_constants_tagged rather than claim an unproved connection. Full monitor and analyzer gates running. |
 | H5 | not started | Monitor first, analyzer second. |
 | H2 | not started | |
 | H7 | not started | |
@@ -24,7 +24,7 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 
 Merged items: none. PR numbers and merge commits: none.
 
-Verification: H1 library merge gate `history-analysis --no-default-features --features runtime,std`: **603 verified, 0 errors**. Ghost-erased clippy passed (`--all-targets -- -D warnings`); package tests **27 passed**. Final package fmt passed after removing the throwaway smoke example. Runtime smoke observed counterexample candidate `[Constant(C0(3)), Constant(C1(7))]`, empty history, both coordinates declared; concrete `(3,7), []` refutes All ⊆ Empty. Reviewer gate still running. No ensures weakened; no trusted items added; no paper or benchmark edits.
+Verification: H1 library merge gate `history-analysis --no-default-features --features runtime,std`: **603 verified, 0 errors**; reviewer: **17 verified, 0 errors**. Ghost-erased clippy passed (`--all-targets -- -D warnings`); package tests **27 passed**. Final package fmt passed after removing the throwaway smoke example. Runtime smoke observed counterexample candidate `[Constant(C0(3)), Constant(C1(7))]`, empty history, both coordinates declared; concrete `(3,7), []` refutes All ⊆ Empty. No ensures weakened; no trusted items added; no paper or benchmark edits.
 
 Toolchain: downloaded pinned Z3 cannot execute on host glibc 2.31. Existing `/ssd0/zkent/junco-proof-tools/compat-verus` and `z3-compat` pass the script's pinned version checks; these are used for verification.
 
