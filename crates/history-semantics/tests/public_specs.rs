@@ -286,6 +286,7 @@ fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: R
                 && state@.history == seq![request.event],
             Ok(Decision::Denied(denial)) => !universal && denial.event == request.event
                 && denial.mode == RuleMode::Require
+                && denial.index == 0
                 && state@.history == Seq::<E>::empty(),
             Err(_) => state@.history == Seq::<E>::empty(),
         },
@@ -320,8 +321,7 @@ fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: R
                 assert(state@.history =~= seq![request.event]);
             },
             Ok(Decision::Denied(ref denial)) => {
-                let index = choose|index: int| #[trigger] dsl::least_violation(before@.rules, request.event, before@.history, index)
-                    && denial.mode == before@.rules[index].mode;
+                let index = denial.index as int;
                 assert(index == 0);
                 assert(dsl::rule_violated(before@.rules[0], request.event, before@.history));
             },

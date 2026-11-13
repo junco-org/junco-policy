@@ -35,6 +35,8 @@ use vstd::prelude::*;
 #[verus_verify(external_derive)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Denial<E: Event> {
+    /// Zero-based source-order index of the first violated rule.
+    pub index: usize,
     /// Whether the violated rule required or forbade its tail language.
     pub mode: RuleMode,
     /// Candidate event that was denied and was not appended to history.
@@ -247,6 +249,7 @@ impl<E: Event> Validator<E> {
                 }
             }
             let denial = Denial {
+                index,
                 mode,
                 event: request.event,
                 message,
@@ -638,10 +641,31 @@ mod tests {
             }
             let mut validator = builder.finish().unwrap();
             assert!(
-                matches!(validator.check(Request::new(release(), ())).unwrap(), Decision::Denied(Denial { mode, .. }) if mode == first)
+                matches!(validator.check(Request::new(release(), ())).unwrap(), Decision::Denied(Denial { index: 0, mode, .. }) if mode == first)
             );
             assert!(validator.history().is_empty());
         }
+        // The index must distinguish violations with the same mode, after a nonviolating rule.
+        let mut builder = Validator::builder(store());
+        builder
+            .add_rule(Rule::new(RuleMode::Require, any_head(), R::all()))
+            .unwrap();
+        builder
+            .add_rule(Rule::new(RuleMode::Forbid, any_head(), R::all()))
+            .unwrap();
+        builder
+            .add_rule(Rule::new(RuleMode::Forbid, any_head(), R::all()))
+            .unwrap();
+        let mut validator = builder.finish().unwrap();
+        assert!(matches!(
+            validator.check(Request::new(release(), ())).unwrap(),
+            Decision::Denied(Denial {
+                index: 1,
+                mode: RuleMode::Forbid,
+                ..
+            })
+        ));
+        assert!(validator.history().is_empty());
         let mut empty = Validator::<Document>::builder(store()).finish().unwrap();
         assert!(empty.permits(&release()).unwrap());
         assert!(empty.check(Request::new(release(), ())).unwrap().is_grant());

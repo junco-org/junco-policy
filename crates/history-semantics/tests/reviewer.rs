@@ -37,7 +37,7 @@ broadcast use vstd::seq::group_seq_lemmas;
 // ----- thm:matcher at the monitor level -----
 
 /// The three readable cases of `check_step` (R5): a grant means no rule is violated; a denial
-/// names the first violated rule, in source order, by its mode; an error is never an invariant
+/// names the first violated rule, in source order, by index and mode; errors are never invariant
 /// failure. Spelled out with R2's `rule_violated` so a reader needs no further unfolding.
 pub open spec fn stmt_monitor_check<E: Event, M>(
     before: ValidatorView<E>, request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>,
@@ -50,6 +50,7 @@ pub open spec fn stmt_monitor_check<E: Event, M>(
             0 <= i < before.rules.len()
             && rule_violated(#[trigger] before.rules[i], request.event, before.history)
             && denial.mode == before.rules[i].mode
+            && i == denial.index as int
             && forall|j: int| 0 <= j < i ==> !rule_violated(#[trigger] before.rules[j], request.event, before.history),
         Err(error) => !(error is Invariant),
     }
@@ -74,8 +75,7 @@ pub proof fn theorem_monitor_check<E: Event, M>(
             }
         },
         Ok(Decision::Denied(denial)) => {
-            let i = choose|i: int| #[trigger] least_violation(before.rules, request.event, before.history, i)
-                && denial.mode == before.rules[i].mode;
+            let i = denial.index as int;
             assert(rule_violated(before.rules[i], request.event, before.history));
         },
         Err(_) => {},

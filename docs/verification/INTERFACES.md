@@ -38,6 +38,9 @@ import from them. The flow is strictly downward: R1 → R2 → R3/R4 → R5/R6 �
   exact event arity and correctly tagged head constants (under the event hypotheses).
   Both executable reviewer clients use these postconditions. The unused `analyzer_wf`
   and `rule_constants_tagged` predicates have been removed; no separate view invariant is claimed.
+- A monitor denial carries `Denial::index`, the zero-based source-order index of its first
+  violated rule. `check_step` states `least_violation` at this exact index and gives its mode;
+  `stmt_monitor_check`, `stmt_matcher` and the public executable clients expose the same clause.
 
 ## Reading order for a reviewer
 
