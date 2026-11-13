@@ -1,6 +1,11 @@
 //! Ghost views and contracts linking the executable analyzer to the frozen refinement layers.
 
 pub(crate) mod constraint_unique;
+pub(crate) mod policy_bridge;
+pub(crate) mod policy_firing;
+pub(crate) mod policy_operands;
+pub(crate) mod policy_queries;
+pub(crate) mod policy_source;
 pub(crate) mod prune_exec;
 pub(crate) mod reconstruction;
 pub(crate) mod search_exec;
@@ -2538,7 +2543,7 @@ pub use frontend::{analyzer_state_wf, constructor_capacity, query_capacity};
 
 pub(crate) mod frontend {
     use super::*;
-    use crate::analyzer::{Domains, PolicyAnalyzer};
+    use crate::analyzer::{Domains, PolicyAnalyzer, RuleId, StoredRule};
     use junco_core::flat::{FlatHead, FlatPair};
     use junco_core::verify::{encoding as enc, flatten as fl};
     use vstd::std_specs::cmp::PartialEqSpec;
@@ -2885,6 +2890,71 @@ pub(crate) mod frontend {
             a.constants.values@.len() + source.head@.len() + source.tests@.len() <= u32::MAX
         }
 
+        pub open(crate) spec fn add_rule_capacity<E: Event>(a: PolicyAnalyzer<E>, rule: history_syntax::Rule<E>) -> bool {
+            a.constants.values@.len() + arity::<E>() + fl::regex_cost::<E>(rule.tail@) <= u32::MAX
+        }
+
+        pub open(crate) spec fn rule_ids(ids: Seq<RuleId>) -> Seq<nat> {
+            ids.map_values(|id: RuleId| id.0 as nat)
+        }
+
+        pub open(crate) spec fn valid_ids<E: Event>(a: PolicyAnalyzer<E>, ids: Seq<RuleId>) -> bool {
+            forall|i: int| 0 <= i < ids.len() ==> ids[i].0 < a.rules@.len()
+        }
+
+        impl View for RuleId {
+            type V = nat;
+            open(crate) spec fn view(&self) -> nat { self.0 as nat }
+        }
+
+        pub(crate) open spec fn stored_rule_wf<E: Event>(c: Constants<E>, us: Universes, r: StoredRule<E>) -> bool {
+            &&& fl::flattened(r.original@, r.flat@)
+            &&& enc::constants_in_domain(r.flat@.source, fl::component_domain::<E>())
+            &&& enc::lowering(r.flat@.source, r.numeric, constant_book(c), fl::component_equality::<E>())
+            &&& r.mode == r.original@.mode
+            &&& junco_core::flat::verify::structural_wf(r.numeric)
+            &&& r.numeric.head@.len() == arity::<E>()
+            &&& r.constants@.len() == arity::<E>()
+            &&& numeric_head_wf(r.numeric.head@)
+            &&& head_view(r.constants@) == pins(r.numeric.head@)
+            &&& super::verdict::source_codes_wf(c, r.numeric)
+            &&& super::verdict::head_codes_wf(c, r.numeric.head@)
+            &&& match r.constraint {
+                Some(g) => constraint_wf(g) && super::verdict::constraint_codes_wf(c, g@)
+                    && (forall|k: int| 0 <= k < arity::<E>() ==> #[trigger] g@[k] == match r.constants@[k] {
+                        Some(v) => implementation::RegisterView::Equals(v as nat),
+                        None => implementation::RegisterView::Differs(Set::empty()),
+                    })
+                    && implementation::constraint_of(g@) == inclusion::head_constraint(pins(r.numeric.head@))
+                    && inclusion::satisfiable(ndomains(us), implementation::constraint_of(g@)),
+                None => !inclusion::satisfiable(ndomains(us), inclusion::head_constraint(pins(r.numeric.head@))),
+            }
+        }
+
+        pub(crate) proof fn lemma_store_extends<E: Event>(before: Constants<E>, after: Constants<E>,
+            us: Universes, rules: Seq<StoredRule<E>>)
+            requires constants_wf(before), constants_wf(after), analyzer_obligations::<E>(),
+                enc::extends(constant_book(before), constant_book(after), fl::component_equality::<E>()),
+                forall|i: int| 0 <= i < rules.len() ==> stored_rule_wf(before, us, rules[i]),
+            ensures forall|i: int| 0 <= i < rules.len() ==> stored_rule_wf(after, us, rules[i]),
+        {
+            assert forall|i: int| 0 <= i < rules.len() implies stored_rule_wf(after, us, rules[i]) by {
+                let r = rules[i];
+                enc::lemma_lowering_extends(r.flat@.source, r.numeric, constant_book(before),
+                    constant_book(after), fl::component_equality::<E>());
+                super::verdict::lemma_lowered_payload(after, r.flat@.source, r.numeric);
+                if let Some(g) = r.constraint {
+                    assert forall|field: Component, v: nat| field.0 < g@.len()
+                        && register_codes(implementation::register_of(g@, field)).contains(v)
+                        implies super::reconstruction::code_field(after, field, v) by {
+                        let value = before.values@[v as int - 1];
+                        lemma_stored_encoded(before, value, v as u32);
+                        super::verdict::lemma_encoded_payload(after, field, value, v as u64);
+                    }
+                }
+            }
+        }
+
         /// Cartesian-product overflow is reported by the generators, never assumed away here.
         pub open(crate) spec fn query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>) -> bool {
             a.constants.values@.len() + 2 * arity::<E>() + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) <= u32::MAX
@@ -2945,7 +3015,7 @@ pub(crate) mod frontend {
             open(crate) spec fn view(&self) -> Self::V {
                 analyzer::AnalyzerView {
                     domains: self.universes@.map_values(|u: Universe| selected_values(self.constants, u)),
-                    rules: Seq::empty(),
+                    rules: self.rules@.map_values(|r: StoredRule<E>| encoding::rule_view(r.original@)),
                     known: Seq::new(arity::<E>(), |i: int| component_of::<E>(self.constants.values@.to_set(), i)),
                 }
             }
@@ -2961,6 +3031,7 @@ pub(crate) mod frontend {
         /// Constant books and declared coordinate domains remain well formed across queries.
         pub open(crate) spec fn analyzer_state_wf<E: Event>(a: PolicyAnalyzer<E>) -> bool {
             constants_wf(a.constants) && universes_wf(a.constants, a.universes)
+                && forall|i: int| 0 <= i < a.rules@.len() ==> stored_rule_wf(a.constants, a.universes, a.rules@[i])
         }
 
         pub(crate) proof fn lemma_universes_frame<E: Event>(a: Constants<E>, b: Constants<E>, us: Universes)
@@ -2994,7 +3065,7 @@ pub(crate) mod frontend {
         }
 
         pub(crate) proof fn lemma_declared_wf<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
-            requires constants_wf(a.constants), declared_domains_encoded(a, d),
+            requires constants_wf(a.constants), declared_domains_encoded(a, d), a.rules@.len() == 0,
             ensures universes_wf(a.constants, a.universes), analyzer::analyzer_wf(a@),
         {
             assert forall|f: int| 0 <= f < a.universes@.len() implies match #[trigger] a.universes[f] {

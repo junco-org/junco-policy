@@ -2,20 +2,30 @@
 //! the typed semantics of `semantics`.
 //!
 //! `history-analysis` is Verus-checked. This module fixes the *view* of its state and results
-//! and the predicate each query's result must satisfy. `PolicyAnalyzer::tail_included` is the
-//! executable query and is verified to ensure `tail_included_ok`; the other predicates specify
-//! policy-level questions that `semantics` and `inclusion` reduce to tail inclusions, but have no
-//! executable entry point. The postconditions are
+//! and the predicates for query results. Policy-level correctness and per-case minimality are
+//! separate: `*_ok` is their conjunction, and an entry point can establish `*_correct` before
+//! minimality is proved. The policy-level contracts are
 //!
 //! ```text
-//! covered(&self, rule, by)            ensures r matches Ok(v) ==> covered_ok(self@, rule@, by@, v.inclusion@)
-//! redundant(&self, rule, policy)      ensures r matches Ok(v) ==> redundant_ok(self@, rule@, policy@, v.inclusion@)
-//! at_least_as_strict(&self, p, q)     ensures r matches Ok(v) ==> at_least_as_strict_ok(self@, p@, q@, v.inclusion@)
-//! never_fires(&self, rule)            ensures r matches Ok(v) ==> never_fires_ok(self@, rule@, v.inclusion@)
-//! always_fires(&self, rule)           ensures r matches Ok(v) ==> always_fires_ok(self@, rule@, v.inclusion@)
+//! covered(&self, rule, by)            ensures r matches Ok(v) ==> covered_correct(self@, rule@, by@, v.inclusion@)
+//! redundant(&self, rule, policy)      ensures r matches Ok(v) ==> redundant_correct(self@, rule@, policy@, v.inclusion@)
+//! at_least_as_strict(&self, p, q)     ensures r matches Ok(v) ==> at_least_as_strict_correct(self@, p@, q@, v.inclusion@)
 //! tail_included(&mut self, h, l, r)   ensures r matches Ok(v) ==> tail_included_ok(final(self)@, h@, l@, r@, v.inclusion@)
 //! add_rule(&mut self, rule)           ensures r matches Ok(id) ==> final(self)@.rules == old(self)@.rules.push(rule@)
 //!                                         && id@ == old(self)@.rules.len() && semantics::rule_wf(rule@)
+//! ```
+//!
+//! A policy counterexample explicitly negates the claimed property whenever it has an admissible
+//! instance (`cex_has_instance`). This condition preserves the original vacuous meaning on small
+//! unrestricted types; declared finite domains remain supported.
+//!
+//! The remaining `never_fires_ok` and `always_fires_ok` predicates are specification-only.
+//! The contracts above describe the intended policy entry points; see the executable definitions
+//! for their actual postconditions.
+//!
+//! ```text
+//! never_fires(&self, rule)            ensures r matches Ok(v) ==> never_fires_ok(self@, rule@, v.inclusion@)
+//! always_fires(&self, rule)           ensures r matches Ok(v) ==> always_fires_ok(self@, rule@, v.inclusion@)
 //! ```
 //!
 //! `Exhausted` (the graph budget) and `Err` carry no claim; they are explicit, never a silent
@@ -115,8 +125,17 @@ pub open spec fn admissible<C: PartialEq>(a: AnalyzerView<C>, cex: CexView<C>, f
         fresh_used(cex, i), a.known[i], a.domains[i])
 }
 
-/// Constants of a counterexample lie in their domains; fresh values occur only at unrestricted
-/// components. Under `infinite_type` for those components an admissible choice exists.
+/// A symbolic counterexample has an admissible concrete instantiation.
+pub open spec fn cex_has_instance<C: PartialEq>(a: AnalyzerView<C>, cex: CexView<C>) -> bool {
+    exists|f: FreshChoice<C>| #[trigger] admissible(a, cex, f)
+}
+
+/// The common component type is infinite if any component is unrestricted.
+pub open spec fn unrestricted_components_infinite<C: PartialEq>(domains: DomainsView<C>) -> bool {
+    (exists|i: int| 0 <= i < domains.len() && #[trigger] domains[i] is None) ==> infinite_type::<C>()
+}
+
+/// Every admissible instantiation stays in the domains. This need not imply one exists.
 pub open spec fn cex_values_ok<C: PartialEq>(a: AnalyzerView<C>, cex: CexView<C>) -> bool {
     forall|f: FreshChoice<C>| #[trigger] admissible(a, cex, f)
         ==> event_in(a.domains, event_of(cex.candidate, f)) && history_in(a.domains, history_of(cex, f))
@@ -172,9 +191,8 @@ pub open spec fn uncovered<C: PartialEq>(
     |c: Seq<C>, h: Seq<Seq<C>>| rule_denies(rule, c, h) && !policy_denies(p, c, h)
 }
 
-/// `covered(rule, by)`: Holds iff covered; a counterexample is denied by `rule` and by no rule of
-/// `by`, shortest within its candidate case.
-pub open spec fn covered_ok<C: PartialEq>(
+/// Sound answers and counterexample correctness, independently of minimality.
+pub open spec fn covered_correct<C: PartialEq>(
     a: AnalyzerView<C>, rule: nat, by: Seq<nat>, v: InclusionView<C>,
 ) -> bool {
     let p = rules_of(a, by);
@@ -182,34 +200,86 @@ pub open spec fn covered_ok<C: PartialEq>(
     match v {
         InclusionView::Holds => covers(a.domains, p, r),
         InclusionView::Counterexample(cex) => every_instance(a, cex, uncovered(p, r))
-            && forall|f: FreshChoice<C>| #[trigger] admissible(a, cex, f)
-                ==> shortest_in_case(a, event_of(cex.candidate, f), cex.history.len(), uncovered(p, r)),
+            && (cex_has_instance(a, cex) ==> !covers(a.domains, p, r)),
         InclusionView::Exhausted => true,
     }
 }
 
-/// `redundant(rule, policy)`: `covered(rule, policy without every occurrence of rule)`.
+pub open spec fn covered_minimal<C: PartialEq>(
+    a: AnalyzerView<C>, rule: nat, by: Seq<nat>, v: InclusionView<C>,
+) -> bool {
+    let p = rules_of(a, by);
+    let r = a.rules[rule as int];
+    match v {
+        InclusionView::Counterexample(cex) =>
+            forall|f: FreshChoice<C>| #[trigger] admissible(a, cex, f)
+                ==> shortest_in_case(a, event_of(cex.candidate, f), cex.history.len(), uncovered(p, r)),
+        _ => true,
+    }
+}
+
+pub open spec fn covered_ok<C: PartialEq>(
+    a: AnalyzerView<C>, rule: nat, by: Seq<nat>, v: InclusionView<C>,
+) -> bool {
+    covered_correct(a, rule, by, v) && covered_minimal(a, rule, by, v)
+}
+
+pub open spec fn without_rule(policy: Seq<nat>, rule: nat) -> Seq<nat> {
+    policy.filter(|id: nat| id != rule)
+}
+
+pub open spec fn redundant_correct<C: PartialEq>(
+    a: AnalyzerView<C>, rule: nat, policy: Seq<nat>, v: InclusionView<C>,
+) -> bool {
+    covered_correct(a, rule, without_rule(policy, rule), v)
+}
+
+pub open spec fn redundant_minimal<C: PartialEq>(
+    a: AnalyzerView<C>, rule: nat, policy: Seq<nat>, v: InclusionView<C>,
+) -> bool {
+    covered_minimal(a, rule, without_rule(policy, rule), v)
+}
+
 pub open spec fn redundant_ok<C: PartialEq>(
     a: AnalyzerView<C>, rule: nat, policy: Seq<nat>, v: InclusionView<C>,
 ) -> bool {
-    covered_ok(a, rule, policy.filter(|id: nat| id != rule), v)
+    redundant_correct(a, rule, policy, v) && redundant_minimal(a, rule, policy, v)
 }
 
-/// `at_least_as_strict(p, q)`: Holds iff `p ⊑ q`; a counterexample is permitted by `p` and
-/// denied by some rule of `q`, shortest for that rule within its candidate case.
-pub open spec fn at_least_as_strict_ok<C: PartialEq>(
+pub open spec fn at_least_as_strict_correct<C: PartialEq>(
     a: AnalyzerView<C>, p: Seq<nat>, q: Seq<nat>, v: InclusionView<C>,
 ) -> bool {
     let pp = rules_of(a, p);
     let qq = rules_of(a, q);
     match v {
         InclusionView::Holds => refines(a.domains, pp, qq),
+        InclusionView::Counterexample(cex) =>
+            (exists|j: int| 0 <= j < qq.len()
+                && every_instance(a, cex, #[trigger] uncovered(pp, qq[j])))
+            && (cex_has_instance(a, cex) ==> !refines(a.domains, pp, qq)),
+        InclusionView::Exhausted => true,
+    }
+}
+
+/// The shortest witness is for the same rule that every instance violates.
+pub open spec fn at_least_as_strict_minimal<C: PartialEq>(
+    a: AnalyzerView<C>, p: Seq<nat>, q: Seq<nat>, v: InclusionView<C>,
+) -> bool {
+    let pp = rules_of(a, p);
+    let qq = rules_of(a, q);
+    match v {
         InclusionView::Counterexample(cex) => exists|j: int| 0 <= j < qq.len()
             && every_instance(a, cex, #[trigger] uncovered(pp, qq[j]))
             && forall|f: FreshChoice<C>| #[trigger] admissible(a, cex, f)
                 ==> shortest_in_case(a, event_of(cex.candidate, f), cex.history.len(), uncovered(pp, qq[j])),
-        InclusionView::Exhausted => true,
+        _ => true,
     }
+}
+
+pub open spec fn at_least_as_strict_ok<C: PartialEq>(
+    a: AnalyzerView<C>, p: Seq<nat>, q: Seq<nat>, v: InclusionView<C>,
+) -> bool {
+    at_least_as_strict_correct(a, p, q, v) && at_least_as_strict_minimal(a, p, q, v)
 }
 
 pub open spec fn denies_fn<C: PartialEq>(
@@ -290,8 +360,49 @@ pub open spec fn fresh_finite<C>(cex: CexView<C>) -> bool {
     forall|i: int| 0 <= i < cex.candidate.len() ==> #[trigger] fresh_used(cex, i).finite()
 }
 
+/// Reconstructed values at a declared domain component are constants, never fresh numbers.
+pub open spec fn fresh_only_unrestricted<C: PartialEq>(
+    a: AnalyzerView<C>, cex: CexView<C>,
+) -> bool {
+    forall|i: int| 0 <= i < a.domains.len() && #[trigger] a.domains[i] is Some
+        ==> fresh_used(cex, i) == ISet::<nat>::empty()
+}
+
 
 // ----- proofs -----
+
+/// Once the returned symbolic counterexample has an instance, coverage is explicitly false.
+pub proof fn covered_counterexample_refutes<C: PartialEq>(
+    a: AnalyzerView<C>, rule: nat, by: Seq<nat>, cex: CexView<C>,
+)
+    requires
+        covered_correct(a, rule, by, InclusionView::Counterexample(cex)),
+        cex_has_instance(a, cex),
+    ensures !covers(a.domains, rules_of(a, by), a.rules[rule as int]),
+{
+}
+
+/// A redundant-query counterexample refutes coverage by the other rules.
+pub proof fn redundant_counterexample_refutes<C: PartialEq>(
+    a: AnalyzerView<C>, rule: nat, policy: Seq<nat>, cex: CexView<C>,
+)
+    requires
+        redundant_correct(a, rule, policy, InclusionView::Counterexample(cex)),
+        cex_has_instance(a, cex),
+    ensures !covers(a.domains, rules_of(a, without_rule(policy, rule)), a.rules[rule as int]),
+{
+}
+
+/// Once the returned symbolic counterexample has an instance, refinement is explicitly false.
+pub proof fn at_least_as_strict_counterexample_refutes<C: PartialEq>(
+    a: AnalyzerView<C>, p: Seq<nat>, q: Seq<nat>, cex: CexView<C>,
+)
+    requires
+        at_least_as_strict_correct(a, p, q, InclusionView::Counterexample(cex)),
+        cex_has_instance(a, cex),
+    ensures !refines(a.domains, rules_of(a, p), rules_of(a, q)),
+{
+}
 
 /// An injective choice avoiding `known` exists for every finite set of fresh numbers, given an
 /// infinite type whose `eq_spec` is an equivalence.
@@ -345,6 +456,84 @@ pub proof fn lemma_choice_for_used<T: PartialEq>(used: ISet<nat>, known: Set<T>)
         }
         f
     }
+}
+
+/// A finite candidate and history contain finitely many fresh numbers per coordinate.
+pub proof fn lemma_fresh_used_finite<C>(cex: CexView<C>, coordinate: int)
+    ensures fresh_used(cex, coordinate).finite(),
+{
+    broadcast use vstd::set::lemma_to_iset_finite, vstd::prelude::Seq::to_set_ensures;
+    let events = cex.history.to_set().insert(cex.candidate).to_iset();
+    let number = |c: ComponentsView<C>| if 0 <= coordinate < c.len() {
+        match c[coordinate] { ValueView::Fresh(n) => n, ValueView::Constant(_) => 0nat }
+    } else { 0nat };
+    events.lemma_map_finite(number);
+    assert forall|n: nat| fresh_used(cex, coordinate).contains(n)
+        implies events.map(number).contains(n) by {
+        let c = if 0 <= coordinate < cex.candidate.len()
+            && cex.candidate[coordinate] == ValueView::Fresh(n) {
+            cex.candidate
+        } else {
+            let i = choose|i: int| 0 <= i < cex.history.len() && 0 <= coordinate < cex.history[i].len()
+                && #[trigger] cex.history[i][coordinate] == ValueView::Fresh(n);
+            assert(cex.history.to_set().contains(cex.history[i]));
+            cex.history[i]
+        };
+        assert(events.contains(c));
+        assert(number(c) == n);
+        assert(events.map(number).contains(n));
+    }
+    vstd::iset_lib::lemma_iset_subset_finite(events.map(number), fresh_used(cex, coordinate));
+}
+
+pub proof fn lemma_fresh_finite<C>(cex: CexView<C>)
+    ensures fresh_finite(cex),
+{
+    assert forall|i: int| 0 <= i < cex.candidate.len() implies #[trigger] fresh_used(cex, i).finite() by {
+        lemma_fresh_used_finite(cex, i);
+    }
+}
+
+/// A declared component with no fresh numbers needs no values from its type.
+pub proof fn lemma_choice_for_component<C: PartialEq>(
+    used: ISet<nat>, known: Set<C>, domain: Option<Set<C>>,
+) -> (f: spec_fn(nat) -> C)
+    requires
+        used.finite(), eq_equivalence::<C>(),
+        domain.is_None() ==> infinite_type::<C>(),
+        domain.is_Some() ==> used == ISet::<nat>::empty(),
+    ensures choice_ok(f, used, known, domain),
+{
+    if domain.is_None() {
+        lemma_choice_for_used(used, known)
+    } else {
+        let f = |n: nat| known.choose();
+        assert(choice_ok(f, used, known, domain));
+        f
+    }
+}
+
+/// Declared domains may be finite or empty; fresh values occur only at unrestricted coordinates.
+pub proof fn lemma_choice_exists_mixed<C: PartialEq>(a: AnalyzerView<C>, cex: CexView<C>)
+    requires
+        eq_equivalence::<C>(),
+        1 <= a.domains.len() <= history_syntax::MAX_ARITY,
+        a.known.len() == a.domains.len(),
+        cex_arity(cex, a.domains.len()),
+        unrestricted_components_infinite(a.domains),
+        fresh_finite(cex),
+        fresh_only_unrestricted(a, cex),
+    ensures cex_has_instance(a, cex),
+{
+    assert forall|i: int| #![trigger fresh_used(cex, i)] 0 <= i < a.domains.len() implies
+        exists|f: spec_fn(nat) -> C| choice_ok(f, fresh_used(cex, i), a.known[i], a.domains[i]) by {
+        let f = lemma_choice_for_component(fresh_used(cex, i), a.known[i], a.domains[i]);
+    }
+    let f = Seq::new(a.domains.len(), |i: int| choose|f: spec_fn(nat) -> C|
+        choice_ok(f, fresh_used(cex, i), a.known[i], a.domains[i]));
+    assert forall|i: int| 0 <= i < a.domains.len() implies choice_ok(#[trigger] f[i],
+        fresh_used(cex, i), a.known[i], a.domains[i]) by {}
+    assert(admissible(a, cex, f));
 }
 
 pub proof fn theorem_choice_exists<C: PartialEq>()

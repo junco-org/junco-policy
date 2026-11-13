@@ -1,8 +1,8 @@
-# Specification of policy-refinement analysis (draft for freeze)
+# Specification of policy-refinement analysis
 
-Status: **all 23 frozen statement proofs complete; SymbolicLanguage contracts verified;
-analyzer port and executable implementation link in progress.** The only new trusted leaves
-are the approved native hashbrown wrappers described in §11.
+Status: **frozen statements, executable search, and end-to-end policy-query correctness
+proved.** Policy counterexample minimality is not attached to the executable contracts.
+The trusted native hashbrown wrappers are described in §11; this end-to-end work adds no trust.
 Spec module: `crates/history-semantics/src/verify/refinement/` (registered in `verify/mod.rs`;
 compiled only under `verus_keep_ghost` + `runtime`, like the rest of `verify`). Every theorem is a
 `stmt_*` spec function returning the proposition, with a public
@@ -29,19 +29,26 @@ semantics of `refinement/semantics.rs`:
 | `always_fires(R)` | `always_denies(D, R)` | R matches the candidate and grants; globally shortest | no claim |
 | `tail_included(h, l, r)` | `tails_included(D, h, l, r)` | matches `h`, history in `l` not `r`; globally shortest | no claim |
 
-Only `tail_included` exists on this branch; all other query rows and `add_rule` are spec-only
-until those queries return to `main`.
+The executable policy queries use stable indices returned by `add_rule(&Rule<E>)`.
+`covered`, `redundant`, and `at_least_as_strict` ensure their `*_correct` contracts.
+The existing `*_ok` predicates factor correctness and the separate `*_minimal` predicates.
+The table above describes the full specification; the executable policy queries ensure only
+`*_correct`, not `*_minimal`. `never_fires` and `always_fires` remain specification-only and
+are outside this work.
 
-`Err(_)` carries no claim. Planned exec postconditions (once `history-analysis` is put under
-Verus; see Q1):
+The policy-query preconditions include native equality/projection laws, valid stored-rule
+indices, and `unrestricted_components_infinite`: the tagged component model is infinite if
+any coordinate has no declared domain. With this hypothesis, every returned counterexample has
+an admissible instance and explicitly implies `!covers` or `!refines`, in addition to the
+`every_instance` witness guarantee. Fully declared finite domains require no infinity premise.
+The general `*_correct` predicates retain the original vacuous meaning when no admissible
+instance exists; named counterexample-refutation corollaries make the nonvacuity step explicit.
 
-```rust
-pub fn at_least_as_strict(&self, stricter: &[RuleId], than: &[RuleId]) -> (r: Result<Verdict<E>, HistoryError>)
-    requires analyzer_wf(self@),
-    ensures r matches Ok(v) ==> at_least_as_strict_ok(self@, ids(stricter@), ids(than@), v.inclusion@);
-// likewise covered_ok, redundant_ok, never_fires_ok, always_fires_ok, tail_included_ok (final(self)@),
-// add_rule: Ok(id) ==> final(self)@.rules == old(self)@.rules.push(rule@) && rule_wf(rule@)
-```
+All policy queries ensure `no_internal_error`. `tail_included` retains `tail_included_ok` and
+additionally ensures `no_internal_compile_error`; `add_rule` also excludes internal compile
+errors. `Exhausted` carries no property claim. Resource and invalid-input errors remain explicit.
+Registration and tail encoding retain sufficient constant-id capacity preconditions;
+per-state product overflows use the rebased implementation's checked runtime errors.
 
 Key definitions (`refinement/analyzer.rs`). `C` is the event's tagged component type
 `E::Component`; events are `Seq<C>`, and per-coordinate sequences have the event's arity
@@ -61,8 +68,10 @@ pub open spec fn stmt_choice_exists<C>() -> bool   // infinite types ⇒ an admi
 Design decisions in the top layer:
 - **Counterexamples are symbolic** (`Value::Fresh(n)`), so their meaning quantifies over
   instantiations: *every* admissible choice of distinct values outside the known constants yields
-  a failing pair. With infinite component types a choice exists (`stmt_choice_exists`); for a
-  finite type (e.g. `u32`) with too few spare values the claim is vacuous, not false.
+  a failing pair. `lemma_choice_exists_mixed` supplies an instance when unrestricted
+  coordinates have an infinite component model and declared coordinates use no fresh values.
+  The standalone contracts still permit vacuity on small unrestricted types; the executable
+  policy-query infinity premise excludes it.
 - **`Holds` is sound for every component type**, not only infinite ones, by genericity
   (`semantics::stmt_genericity`, `encoding::stmt_numeric_genericity`): a pair over any type maps
   injectively into the numeric model fixing the constants.
@@ -71,12 +80,12 @@ Design decisions in the top layer:
   shorter failing pair *for the same rule R* among candidates that agree with the returned
   candidate on equality with every known constant (`same_profile`, a refinement of every case
   partition the analyzer uses). For the single-search queries it is global.
-- **Exhaustion is explicit**: `Exhausted` (max_items, or `GraphLimit` from compile or search) and
-  `Err` never claim anything.
-- **Termination**: every query returns — the graph budget bounds the states a search can create,
-  so termination of the Rust loops does not depend on Lemma 4.2. *Not being `Exhausted`* for
-  large enough limits needs finitely many reachable items (`search::stmt_search_terminates`),
-  which is **open for the implementation** (§5).
+- **Exhaustion is explicit**: `Exhausted` (graph budget) claims no property. Errors exclude
+  internal invariant failures under the executable contracts' preconditions.
+- **Termination**: every query returns. Outer policy and split loops have explicit finite
+  measures; the real search loop decreases the finite reachable-item bound supplied by
+  `finiteness::theorem_impl_items_bound` for the implemented normalizer and successors
+  (`SPEC.md` §9 item 31). This proof is independent of the graph budget.
 - **Declared finite domains** (`Domains::with_domain`): `DomainsView` carries them, and every
   predicate quantifies over the declared values. The paper's theorems cover only infinite domains
   (bg:14-18); the finite-domain variants are separate statements (`*_finite_domains`) and an

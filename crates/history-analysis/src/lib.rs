@@ -1,8 +1,8 @@
 //! Static analysis of history policies by inclusion between rule tails.
 //!
 //! Tails compare history events with constants and with the candidate's components, so their
-//! languages depend on the candidate. [`PolicyAnalyzer`] decides, for every candidate matching
-//! a head, whether every history in one tail is in another.
+//! languages depend on the candidate. [`PolicyAnalyzer`] registers rules with [`RuleId`] indices
+//! and decides coverage, redundancy, refinement, and inclusion between individual tails.
 //!
 //! An inclusion `left ⊑ right` under a constraint on the candidate is decided by a breadth-first
 //! search for a counterexample among the derivatives of `left ∩ ¬right`. These are the runtime's
@@ -23,8 +23,8 @@
 //!   syntactic simulation, a cheap relation between residuals that implies inclusion: it does not
 //!   insert a state whose residual is dead, some part having each of its pieces below an avoided
 //!   one, or that an inserted state subsumes, entailing its constraint, requiring all of its parts
-//!   and avoiding a piece above each of its pieces. Inserted states are never removed, so a
-//!   reported counterexample is a shortest one.
+//!   and avoiding a piece above each of that state's pieces. Inserted states are never removed,
+//!   so the search returns a shortest history within its start constraint.
 //!
 //! A component is assumed to have more values than the rules mention, unless [`Domains`] declares
 //! its values. Counterexamples name each component either by a constant or by a numbered fresh
@@ -34,8 +34,8 @@
 //! Rules are validated and lowered from borrowed inputs by
 //! [`junco_core::flatten::flatten_rule_parts`] and [`junco_core::lower_flat`], without cloning
 //! caller-owned syntax. Each search compiles one graph that may be charged 16 MiB; a search that
-//! exceeds it is reported as [`Inclusion::Exhausted`]. Verus links the native search and
-//! reconstruction to typed tail inclusion under the documented native laws and sufficient
+//! exceeds it is reported as [`Inclusion::Exhausted`]. The executable query contracts relate
+//! results to typed policy semantics under the documented native laws and sufficient
 //! resource-capacity preconditions.
 
 #![no_std]
@@ -72,4 +72,4 @@ pub use native::{
 };
 
 #[cfg(feature = "runtime")]
-pub use analyzer::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, Value};
+pub use analyzer::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, RuleId, Value};

@@ -202,7 +202,7 @@ impl CompiledPair {
     }
     /// Build a fresh graph that may be charged `budget` bytes from immutable numeric source,
     /// including after exhaustion. The runtime passes [`junco_core::limits::MAX_GRAPH_BYTES`].
-    /// Only the runtime budget guarantees construction without internal layout errors.
+    /// A source DAG and a layout-valid arena budget exclude internal construction errors.
     #[allow(
         clippy::shadow_unrelated,
         reason = "Separate lowering loops retain their proof-local index bindings"
@@ -211,7 +211,9 @@ impl CompiledPair {
     #[verus_spec(result => ensures
         result != Err(HistoryError::WrongHistoryOwner),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
-        flat::structural_wf(*template) && budget == junco_core::limits::MAX_GRAPH_BYTES
+        (source_dag_wf(*template) || flat::structural_wf(*template))
+            && (budget == junco_core::limits::MAX_GRAPH_BYTES
+                || history_store::graph::verify::construction_layout(budget))
             ==> language::no_internal_error(result),
         result matches Ok(pair) ==> {
         crate::progress::verify::pair_wf(pair)
@@ -230,6 +232,11 @@ impl CompiledPair {
         limits: &mut L,
         world: &mut ObservationWorld,
     ) -> KernelResult<Self> {
+        proof! {
+            if flat::structural_wf(*template) {
+                lemma_structural_source_dag(*template);
+            }
+        }
         limits.checkpoint().map_err(HistoryError::from)?;
         let mut store = if budget == junco_core::limits::MAX_GRAPH_BYTES {
             CanonicalStore::new()?
@@ -270,8 +277,8 @@ impl CompiledPair {
                 proof_decl! { let ghost mut selected_ids = Seq::<TestId>::empty(); }
                 proof! {
                     assert(*test == template.tests@[index as int]);
-                    if flat::structural_wf(*template) {
-                        assert(flat::test_wf(template.head@, *test, index as nat));
+                    if source_dag_wf(*template) {
+                        assert(source_test_dag(*test, index as nat));
                     }
                 }
                 let id = match test {
@@ -421,7 +428,7 @@ impl CompiledPair {
                 proof_decl! { let ghost mut selected_ids = Seq::<RegexId>::empty(); }
                 proof! {
                     assert(*regex == template.regexes@[index as int]);
-                    if flat::structural_wf(*template) {
+                    if source_dag_wf(*template) {
                         assert(flat::regex_wf(*regex, index as nat, template.tests@.len()));
                     }
                 }
@@ -636,6 +643,38 @@ pub mod verify {
     use junco_core::verify::history_specs::{EventView, Subst};
     verus! {
     broadcast use {junco_core::kernel::verify::group_kernel_views, vstd::set::group_set_lemmas};
+    /// Test references must point to earlier nodes; atoms need no head bindings
+    /// for compilation into a symbolic graph.
+    pub open spec fn source_test_dag(test: FlatTest<u64>, index: nat) -> bool {
+        match test {
+            FlatTest::And(children) | FlatTest::Or(children) =>
+                flat::references_before(children@, index),
+            _ => true,
+        }
+    }
+
+    /// Reference well-formedness sufficient for compiling a numeric source DAG.
+    pub open spec fn source_dag_wf(template: FlatPair<u64>) -> bool {
+        template.root < template.regexes@.len()
+        && (forall|i: int| 0 <= i < template.tests@.len() ==>
+            source_test_dag(#[trigger] template.tests@[i], i as nat))
+        && (forall|i: int| 0 <= i < template.regexes@.len() ==>
+            flat::regex_wf(#[trigger] template.regexes@[i], i as nat, template.tests@.len()))
+    }
+
+    pub proof fn lemma_structural_source_dag(template: FlatPair<u64>)
+        requires flat::structural_wf(template),
+        ensures source_dag_wf(template),
+    {
+        reveal(flat::structural_wf);
+        reveal(flat::prefix_wf);
+        assert forall|i: int| 0 <= i < template.tests@.len() implies
+            source_test_dag(template.tests@[i], i as nat) by {
+            assert(flat::test_wf(template.head@, template.tests@[i], i as nat));
+            reveal(flat::test_wf);
+        }
+    }
+
     #[verifier::opaque]
     pub open spec fn source_primitive_prefix(template: FlatPair<u64>, n: nat) -> Set<model::Primitive>
         decreases n,

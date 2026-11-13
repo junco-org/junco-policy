@@ -3,6 +3,7 @@
 //! Proposition `prop:policy` reduces refinement to one inclusion of denial expressions; the
 //! reduction proved here is the equivalent rule-by-rule form that the analyzer uses.
 use super::encoding::*;
+use super::search::{Outcome, follows, outcome_ok};
 use super::semantics::violated_by;
 use crate::verify::finite_states::lemma_powerset_finite;
 use alloc::boxed::Box;
@@ -140,6 +141,56 @@ pub open spec fn stmt_policy_reduction() -> bool {
             && #[trigger] split_ok(d, head_constraint(rule.head), head_pairs(p), cases)
             ==> (n_covers(d, p, rule) <==> forall|g1: Constraint| #[trigger] cases.contains(g1)
                 ==> included_under(d, g1, denial(rule), firing_denials(d, p, g1)))
+}
+
+/// No uncovered realization in the selected candidate case is shorter than `n`.
+pub open spec fn n_no_uncovered_shorter(d: NDomains, p: Seq<NRule>, rule: NRule, g: Constraint, n: nat) -> bool {
+    forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w)
+        && sat_by(theta, g) && w.len() < n
+        ==> !(#[trigger] n_rule_denies(rule, theta, w) && !n_policy_denies(p, theta, w))
+}
+
+/// Numeric meaning of a decided policy case. Refutations are realizable even for declared
+/// finite domains, because `outcome_ok` supplies both a candidate and a following history.
+pub open spec fn policy_case_outcome_ok(d: NDomains, p: Seq<NRule>, rule: NRule,
+    g0: Constraint, outcome: Outcome) -> bool {
+    match outcome {
+        Outcome::Holds => included_under(d, g0, denial(rule), firing_denials(d, p, g0)),
+        Outcome::Refuted(g, letters) => {
+            &&& !n_covers(d, p, rule)
+            &&& exists|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta)
+                && sat_by(theta, g) && #[trigger] follows(d, letters, theta, w)
+            &&& forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && sat_by(theta, g)
+                && #[trigger] follows(d, letters, theta, w)
+                ==> n_rule_denies(rule, theta, w) && !n_policy_denies(p, theta, w)
+            &&& n_no_uncovered_shorter(d, p, rule, g0, letters.len())
+        },
+        Outcome::Exhausted => true,
+    }
+}
+
+/// A valid case family together with its individual search contracts.
+pub open spec fn policy_search_outcomes_ok(d: NDomains, p: Seq<NRule>, rule: NRule,
+    cases: Set<Constraint>, outcomes: spec_fn(Constraint) -> Outcome) -> bool {
+    &&& rule.head.len() == d.len()
+    &&& forall|i: int| 0 <= i < p.len() ==> #[trigger] p[i].head.len() == d.len()
+    &&& split_ok(d, head_constraint(rule.head), head_pairs(p), cases)
+    &&& forall|g: Constraint| #[trigger] cases.contains(g)
+        ==> outcome_ok(d, g, denial(rule), firing_denials(d, p, g), outcomes(g))
+}
+
+/// Search outcomes compose with the policy reduction for any valid split family. No
+/// unrestricted-domain premise is needed: realizability is part of each search outcome.
+pub open spec fn stmt_policy_search_composition() -> bool {
+    forall|d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>,
+        outcomes: spec_fn(Constraint) -> Outcome|
+        #[trigger] policy_search_outcomes_ok(d, p, rule, cases, outcomes)
+        ==> {
+            &&& ((forall|g: Constraint| #[trigger] cases.contains(g) ==> outcomes(g) is Holds)
+                ==> n_covers(d, p, rule))
+            &&& forall|g: Constraint| #[trigger] cases.contains(g)
+                ==> policy_case_outcome_ok(d, p, rule, g, outcomes(g))
+        }
 }
 
 /// `R` never denies iff `ρ_R ⊑_{Γ_R} ∅`; `R` denies every matching candidate and history iff
@@ -543,6 +594,115 @@ pub proof fn lemma_firing_lang(d: NDomains, p: Seq<NRule>, g1: Constraint, theta
     }
 }
 
+/// In a case deciding every policy head constant, the firing language is exactly policy denial.
+/// This single-case interface does not require constructing or retaining the entire split.
+pub proof fn lemma_firing_policy_iff(d: NDomains, p: Seq<NRule>, g: Constraint,
+    theta: Subst, w: Seq<EventView>)
+    requires
+        forall|i: int| 0 <= i < p.len() ==> #[trigger] p[i].head.len() == d.len(),
+        n_theta_ok(d, theta),
+        sat_by(theta, g),
+        forall|pair: (Component, nat)| head_pairs(p).contains(pair)
+            ==> #[trigger] decides(d, g, pair.0, pair.1),
+    ensures n_lang(theta, firing_denials(d, p, g), w) == n_policy_denies(p, theta, w),
+{
+    lemma_head_pairs(p);
+    lemma_firing_lang(d, p, g, theta, w);
+    if n_policy_denies(p, theta, w) {
+        let j = choose|j: int| 0 <= j < p.len() && #[trigger] n_rule_denies(p[j], theta, w);
+        let gj = head_constraint(p[j].head);
+        lemma_rule_denies_iff(p[j], theta, w);
+        lemma_head_constraint(p[j].head);
+        assert forall|l: Literal| #[trigger] gj.contains(l)
+            implies l.equal && decides(d, g, l.component, l.value) by {
+            assert(n_head_field(p[j].head, l.component) == Some(l.value));
+            assert(head_pairs(p).contains((l.component, l.value)));
+        }
+        lemma_decided_entails(d, g, gj, theta);
+    }
+    if n_lang(theta, firing_denials(d, p, g), w) {
+        let j = choose|j: int| 0 <= j < p.len()
+            && entails(d, g, head_constraint(p[j].head)) && #[trigger] n_lang(theta, denial(p[j]), w);
+        assert(sat_by(theta, head_constraint(p[j].head)));
+        lemma_rule_denies_iff(p[j], theta, w);
+        assert(n_rule_denies(p[j], theta, w));
+    }
+}
+
+/// Transfer one numeric inclusion witness to an uncovered rule witness, including explicit
+/// failure of coverage. This is shared by the reduction, search composition, and typed bridge.
+pub proof fn lemma_policy_counterexample_transfer(d: NDomains, p: Seq<NRule>, rule: NRule,
+    g: Constraint, theta: Subst, w: Seq<EventView>)
+    requires
+        rule.head.len() == d.len(),
+        forall|i: int| 0 <= i < p.len() ==> #[trigger] p[i].head.len() == d.len(),
+        entails(d, g, head_constraint(rule.head)),
+        forall|pair: (Component, nat)| head_pairs(p).contains(pair)
+            ==> #[trigger] decides(d, g, pair.0, pair.1),
+        inclusion_cex(d, g, denial(rule), firing_denials(d, p, g), theta, w),
+    ensures
+        n_rule_denies(rule, theta, w),
+        !n_policy_denies(p, theta, w),
+        !n_covers(d, p, rule),
+{
+    assert(sat_by(theta, head_constraint(rule.head)));
+    lemma_rule_denies_iff(rule, theta, w);
+    lemma_firing_policy_iff(d, p, g, theta, w);
+}
+
+/// Per-case minimum length transfers in the reverse direction: any shorter uncovered pair
+/// would be a shorter counterexample to the selected constrained inclusion.
+pub proof fn lemma_policy_no_shorter(d: NDomains, p: Seq<NRule>, rule: NRule, g: Constraint, n: nat)
+    requires
+        rule.head.len() == d.len(),
+        forall|i: int| 0 <= i < p.len() ==> #[trigger] p[i].head.len() == d.len(),
+        forall|pair: (Component, nat)| head_pairs(p).contains(pair)
+            ==> #[trigger] decides(d, g, pair.0, pair.1),
+        no_cex_shorter(d, g, denial(rule), firing_denials(d, p, g), n),
+    ensures n_no_uncovered_shorter(d, p, rule, g, n),
+{
+    assert forall|theta: Subst, w: Seq<EventView>| n_theta_ok(d, theta) && n_history_in(d, w)
+        && sat_by(theta, g) && w.len() < n
+        implies !(#[trigger] n_rule_denies(rule, theta, w) && !n_policy_denies(p, theta, w)) by {
+        lemma_rule_denies_iff(rule, theta, w);
+        lemma_firing_policy_iff(d, p, g, theta, w);
+        if n_rule_denies(rule, theta, w) && !n_policy_denies(p, theta, w) {
+            assert(inclusion_cex(d, g, denial(rule), firing_denials(d, p, g), theta, w));
+        }
+    }
+}
+
+/// Compose a single decided search case, independently of the other cases in the family.
+pub proof fn lemma_policy_case_outcome(d: NDomains, p: Seq<NRule>, rule: NRule,
+    g0: Constraint, outcome: Outcome)
+    requires
+        rule.head.len() == d.len(),
+        forall|i: int| 0 <= i < p.len() ==> #[trigger] p[i].head.len() == d.len(),
+        entails(d, g0, head_constraint(rule.head)),
+        forall|pair: (Component, nat)| head_pairs(p).contains(pair)
+            ==> #[trigger] decides(d, g0, pair.0, pair.1),
+        outcome_ok(d, g0, denial(rule), firing_denials(d, p, g0), outcome),
+    ensures policy_case_outcome_ok(d, p, rule, g0, outcome),
+{
+    match outcome {
+        Outcome::Refuted(g, letters) => {
+            let theta = choose|theta: Subst| n_theta_ok(d, theta) && #[trigger] sat_by(theta, g);
+            let w = choose|w: Seq<EventView>| #[trigger] follows(d, letters, theta, w);
+            lemma_policy_counterexample_transfer(d, p, rule, g0, theta, w);
+            assert(exists|t: Subst, u: Seq<EventView>| n_theta_ok(d, t)
+                && sat_by(t, g) && #[trigger] follows(d, letters, t, u));
+            assert forall|t: Subst, u: Seq<EventView>| n_theta_ok(d, t) && sat_by(t, g)
+                && #[trigger] follows(d, letters, t, u)
+                implies n_rule_denies(rule, t, u) && !n_policy_denies(p, t, u) by {
+                lemma_policy_counterexample_transfer(d, p, rule, g0, t, u);
+            }
+            lemma_policy_no_shorter(d, p, rule, g0, letters.len());
+        },
+        Outcome::Holds => {},
+        Outcome::Exhausted => {},
+    }
+}
+
 pub proof fn lemma_policy_reduction(d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>)
     requires split_ok(d, head_constraint(rule.head), head_pairs(p), cases),
         rule.head.len() == d.len(),
@@ -552,8 +712,6 @@ pub proof fn lemma_policy_reduction(d: NDomains, p: Seq<NRule>, rule: NRule, cas
             ==> included_under(d, g1, denial(rule), firing_denials(d, p, g1)),
 {
     let gr = head_constraint(rule.head);
-    let pi = head_pairs(p);
-    lemma_head_pairs(p);
     if n_covers(d, p, rule) {
         assert forall|g1: Constraint| #[trigger] cases.contains(g1)
             implies included_under(d, g1, denial(rule), firing_denials(d, p, g1)) by {
@@ -563,16 +721,7 @@ pub proof fn lemma_policy_reduction(d: NDomains, p: Seq<NRule>, rule: NRule, cas
                 assert(sat_by(theta, gr));
                 lemma_rule_denies_iff(rule, theta, w);
                 assert(n_rule_denies(rule, theta, w));
-                let j = choose|j: int| 0 <= j < p.len() && #[trigger] n_rule_denies(p[j], theta, w);
-                let gj = head_constraint(p[j].head);
-                lemma_rule_denies_iff(p[j], theta, w);
-                lemma_head_constraint(p[j].head);
-                assert forall|l: Literal| #[trigger] gj.contains(l) implies l.equal && decides(d, g1, l.component, l.value) by {
-                    assert(n_head_field(p[j].head, l.component) == Some(l.value));
-                    assert(pi.contains((l.component, l.value)));
-                }
-                lemma_decided_entails(d, g1, gj, theta);
-                lemma_firing_lang(d, p, g1, theta, w);
+                lemma_firing_policy_iff(d, p, g1, theta, w);
             }
         }
     }
@@ -584,12 +733,7 @@ pub proof fn lemma_policy_reduction(d: NDomains, p: Seq<NRule>, rule: NRule, cas
             let g1 = choose|g1: Constraint| #[trigger] cases.contains(g1) && sat_by(theta, g1);
             assert(included_under(d, g1, denial(rule), firing_denials(d, p, g1)));
             assert(n_lang(theta, firing_denials(d, p, g1), w));
-            lemma_firing_lang(d, p, g1, theta, w);
-            let j = choose|j: int| 0 <= j < p.len()
-                && entails(d, g1, head_constraint(p[j].head)) && #[trigger] n_lang(theta, denial(p[j]), w);
-            assert(sat_by(theta, head_constraint(p[j].head)));
-            lemma_rule_denies_iff(p[j], theta, w);
-            assert(n_rule_denies(p[j], theta, w));
+            lemma_firing_policy_iff(d, p, g1, theta, w);
         }
     }
 }
@@ -604,6 +748,49 @@ pub proof fn theorem_policy_reduction()
         implies (n_covers(d, p, rule) <==> forall|g1: Constraint| #[trigger] cases.contains(g1)
             ==> included_under(d, g1, denial(rule), firing_denials(d, p, g1))) by {
         lemma_policy_reduction(d, p, rule, cases);
+    }
+}
+
+pub proof fn lemma_policy_search_composition(d: NDomains, p: Seq<NRule>, rule: NRule,
+    cases: Set<Constraint>, outcomes: spec_fn(Constraint) -> Outcome)
+    requires
+        rule.head.len() == d.len(),
+        forall|i: int| 0 <= i < p.len() ==> #[trigger] p[i].head.len() == d.len(),
+        split_ok(d, head_constraint(rule.head), head_pairs(p), cases),
+        forall|g: Constraint| #[trigger] cases.contains(g)
+            ==> outcome_ok(d, g, denial(rule), firing_denials(d, p, g), outcomes(g)),
+    ensures
+        (forall|g: Constraint| #[trigger] cases.contains(g) ==> outcomes(g) is Holds)
+            ==> n_covers(d, p, rule),
+        forall|g: Constraint| #[trigger] cases.contains(g)
+            ==> policy_case_outcome_ok(d, p, rule, g, outcomes(g)),
+{
+    lemma_policy_reduction(d, p, rule, cases);
+    if forall|g: Constraint| #[trigger] cases.contains(g) ==> outcomes(g) is Holds {
+        assert forall|g: Constraint| #[trigger] cases.contains(g)
+            implies included_under(d, g, denial(rule), firing_denials(d, p, g)) by {
+            assert(outcomes(g) == Outcome::Holds);
+        }
+    }
+    assert forall|g: Constraint| #[trigger] cases.contains(g)
+        implies policy_case_outcome_ok(d, p, rule, g, outcomes(g)) by {
+        lemma_policy_case_outcome(d, p, rule, g, outcomes(g));
+    }
+}
+
+pub proof fn theorem_policy_search_composition()
+    ensures stmt_policy_search_composition(),
+{
+    assert forall|d: NDomains, p: Seq<NRule>, rule: NRule, cases: Set<Constraint>,
+        outcomes: spec_fn(Constraint) -> Outcome|
+        #[trigger] policy_search_outcomes_ok(d, p, rule, cases, outcomes)
+        implies {
+            &&& ((forall|g: Constraint| #[trigger] cases.contains(g) ==> outcomes(g) is Holds)
+                ==> n_covers(d, p, rule))
+            &&& forall|g: Constraint| #[trigger] cases.contains(g)
+                ==> policy_case_outcome_ok(d, p, rule, g, outcomes(g))
+        } by {
+        lemma_policy_search_composition(d, p, rule, cases, outcomes);
     }
 }
 

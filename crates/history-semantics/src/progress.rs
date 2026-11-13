@@ -1774,7 +1774,7 @@ pub(crate) mod verify {
             }
         }
 
-        pub(super) proof fn lemma_atom_count_bound(g: model::Graph, ids: Seq<TestId>)
+        pub(crate) proof fn lemma_atom_count_bound(g: model::Graph, ids: Seq<TestId>)
             requires model::atom_ids_wf(g, ids),
             ensures ids.len() <= u32::MAX as nat + 1, ids.len() <= g.tests.len(),
         {
@@ -1797,7 +1797,7 @@ pub(crate) mod verify {
                 requires word < (1u64 << shift), 1 <= shift <= 8;
         }
 
-        pub(super) proof fn lemma_assignment_set(count: nat, before: Seq<u64>, after: Seq<u64>, index: nat)
+        pub proof fn lemma_assignment_set(count: nat, before: Seq<u64>, after: Seq<u64>, index: nat)
             requires symbolic::verify::assignment_valid(count, before), index < count,
                 after == before.update((index / 64) as int,
                     before[(index / 64) as int] | (1u64 << ((index % 64) as u32))),
@@ -2398,7 +2398,7 @@ pub(crate) mod verify {
 
 
 
-    pub(super) proof fn lemma_zero_truth_words(words: Seq<u64>, count: nat)
+    pub proof fn lemma_zero_truth_words(words: Seq<u64>, count: nat)
         requires forall|i: int| 0 <= i < words.len() ==> words[i] == 0,
             count + 63 <= usize::MAX, words.len() == (count + 63) / 64,
         ensures forall|j: nat| !symbolic::verify::truth_word_bit(words, j),

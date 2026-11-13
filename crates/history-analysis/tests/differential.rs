@@ -1,15 +1,14 @@
-//! Differential test of tail inclusion against a direct interpreter of the source expressions.
+//! Differential tests of tail inclusion and policy queries against a source interpreter.
 //!
-//! Random tail pairs are decided by the analyzer and by brute force over every history up to a
-//! length bound. The brute force ranges over concrete events and merges two of them only when
-//! every atom of the pair has the same value on both, which cannot merge events that the tails
-//! tell apart. A counterexample must fail by the interpreter and by the runtime, and no shorter
-//! history within the bound may fail.
+//! Brute force visits bounded histories over finite event domains, merging events only when
+//! every source atom has the same value on them. Returned witnesses are checked against both
+//! the interpreter and the runtime, with every admissible decoding in the small test domains.
+//! Each randomized campaign has its own fixed seed and analyzer instances.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use history_analysis::{Components, Domains, Inclusion, PolicyAnalyzer, Value};
+use history_analysis::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, Value};
 use history_semantics::{PolicyDecision, TracePolicy, TraceRule};
 use history_store::{History, Store};
 use history_syntax::{
@@ -88,6 +87,478 @@ fn inclusion_agrees_with_brute_force() {
             "{tail:?} and its rewrite {rewritten:?} differ"
         );
     }
+}
+
+/// All components are declared, so each returned symbolic witness has exactly one admissible
+/// decoding. Unlike the tail campaign, policies vary their heads as well as their modes.
+#[test]
+fn policy_queries_agree_with_brute_force() {
+    let mut rng = Rng(0x6a75_6e63_6f00_0002);
+    let setup = policy_setup();
+    for case in 0..48 {
+        let rules = (0..4)
+            .map(|index| {
+                let mut source = policy_setup();
+                source.principal_register = rng.below(2) == 0;
+                source.action_register = rng.below(2) == 0;
+                source.resource_register = rng.below(2) == 0;
+                source.head = Head::new([
+                    if source.principal_register {
+                        ComponentPattern::variable("p")
+                    } else {
+                        ComponentPattern::constant(AccessComponent::Principal(
+                            1 + rng.below(2) as u32,
+                        ))
+                    },
+                    if source.action_register {
+                        ComponentPattern::variable("a")
+                    } else {
+                        ComponentPattern::constant(AccessComponent::Action(
+                            ACTIONS[rng.below(ACTIONS.len())],
+                        ))
+                    },
+                    if source.resource_register {
+                        ComponentPattern::variable("r")
+                    } else {
+                        ComponentPattern::constant(AccessComponent::Resource(
+                            MENTIONED + rng.below(2) as u32,
+                        ))
+                    },
+                ]);
+                let mode = if case >> index & 1 == 0 {
+                    RuleMode::Forbid
+                } else {
+                    RuleMode::Require
+                };
+                Rule::new(mode, source.head.clone(), source.regex(&mut rng, 2))
+            })
+            .collect::<Vec<_>>();
+        let mut analyzer = PolicyAnalyzer::new(setup.domains.clone());
+        let ids = rules
+            .iter()
+            .map(|rule| analyzer.add_rule(rule).unwrap())
+            .collect::<Vec<_>>();
+        let p = [ids[0], ids[1]];
+        let q = [ids[2], ids[3]];
+        check_policy(
+            &setup,
+            &rules,
+            &[0, 1],
+            &[2],
+            analyzer.covered(ids[2], &p).unwrap(),
+        );
+        check_policy(
+            &setup,
+            &rules,
+            &[0, 1],
+            &[2, 3],
+            analyzer.at_least_as_strict(&p, &q).unwrap(),
+        );
+        check_policy(
+            &setup,
+            &rules,
+            &[2, 3],
+            &[0, 1],
+            analyzer.at_least_as_strict(&q, &p).unwrap(),
+        );
+        // Removing a redundant rule removes every occurrence, not just the first.
+        check_policy(
+            &setup,
+            &rules,
+            &[0, 1],
+            &[2],
+            analyzer
+                .redundant(ids[2], &[ids[2], ids[0], ids[2], ids[1]])
+                .unwrap(),
+        );
+        assert!(check_policy(
+            &setup,
+            &rules,
+            &[0, 1],
+            &[0, 1],
+            analyzer.at_least_as_strict(&p, &p).unwrap(),
+        ));
+        assert!(check_policy(
+            &setup,
+            &rules,
+            &[2],
+            &[2],
+            analyzer.covered(ids[2], &[ids[2], ids[2]]).unwrap(),
+        ));
+        check_policy(
+            &setup,
+            &rules,
+            &[],
+            &[2],
+            analyzer.redundant(ids[2], &[ids[2], ids[2]]).unwrap(),
+        );
+        check_policy(
+            &setup,
+            &rules,
+            &[],
+            &[2],
+            analyzer.covered(ids[2], &[]).unwrap(),
+        );
+        assert!(check_policy(
+            &setup,
+            &rules,
+            &[],
+            &[],
+            analyzer.at_least_as_strict(&[], &[]).unwrap(),
+        ));
+    }
+}
+
+#[test]
+fn complementary_modes_and_disjoint_heads_cover() {
+    let setup = policy_setup();
+    let read = RegexExpr::Test(TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::new(
+            Component(1),
+            ComponentPattern::constant(AccessComponent::Action(Action::Read)),
+        ),
+    ));
+    let mut rules = vec![
+        Rule::new(RuleMode::Forbid, setup.head.clone(), RegexExpr::All),
+        Rule::new(RuleMode::Forbid, setup.head.clone(), read.clone()),
+        Rule::new(RuleMode::Require, setup.head.clone(), read),
+    ];
+    // Finite domains let these three disjoint heads cover the unrestricted head.
+    for principal in [1, 2, 3] {
+        let mut head = setup.head.clone();
+        head.0[0] = ComponentPattern::constant(AccessComponent::Principal(principal));
+        rules.push(Rule::new(RuleMode::Forbid, head, RegexExpr::All));
+    }
+    // A head outside the declared domain never fires, even when Require(Empty) would deny.
+    let mut impossible = setup.head.clone();
+    impossible.0[0] = ComponentPattern::constant(AccessComponent::Principal(99));
+    rules.push(Rule::new(RuleMode::Require, impossible, RegexExpr::Empty));
+    let mut analyzer = PolicyAnalyzer::new(setup.domains.clone());
+    let ids = rules
+        .iter()
+        .map(|rule| analyzer.add_rule(rule).unwrap())
+        .collect::<Vec<_>>();
+    assert!(check_policy(
+        &setup,
+        &rules,
+        &[1, 2],
+        &[0],
+        analyzer.covered(ids[0], &ids[1..3]).unwrap(),
+    ));
+    assert!(check_policy(
+        &setup,
+        &rules,
+        &[3, 4, 5],
+        &[0],
+        analyzer.covered(ids[0], &ids[3..6]).unwrap(),
+    ));
+    assert!(check_policy(
+        &setup,
+        &rules,
+        &[],
+        &[6],
+        analyzer.covered(ids[6], &[]).unwrap(),
+    ));
+    assert!(check_policy(
+        &setup,
+        &rules,
+        &[1, 2],
+        &[0, 6],
+        analyzer
+            .at_least_as_strict(&ids[1..3], &[ids[0], ids[6]])
+            .unwrap(),
+    ));
+}
+
+/// Splitting only on the left rule's head misses Bob: Alice is covered by R1, but Bob needs R2.
+/// Run with both a declared principal domain and unrestricted principals. In the latter case,
+/// check every admissible assignment of fresh principals in the small domain {Alice, Bob, Carol}.
+#[test]
+fn alice_bob_coverage_regression() {
+    const ALICE: u32 = 1;
+    const BOB: u32 = 2;
+    for finite in [true, false] {
+        for history_in_r2 in [false, true] {
+            let mut setup = policy_setup();
+            if !finite {
+                setup.domains = Domains::infinite()
+                    .with_domain(Component(1), ACTIONS.map(AccessComponent::Action))
+                    .with_domain(
+                        Component(2),
+                        [MENTIONED, MENTIONED + 1].map(AccessComponent::Resource),
+                    );
+                setup.principal_domain = None;
+            }
+            let head = Head::new([
+                ComponentPattern::variable("p"),
+                ComponentPattern::constant(AccessComponent::Action(Action::Edit)),
+                ComponentPattern::variable("r"),
+            ]);
+            let r = RegexExpr::Test(TestExpr::atom(
+                Comparison::Eq,
+                AtomPattern::new(
+                    Component(1),
+                    ComponentPattern::constant(AccessComponent::Action(Action::Read)),
+                ),
+            ));
+            let rules = vec![
+                Rule::new(RuleMode::Forbid, head.clone(), r.clone()),
+                Rule::new(
+                    RuleMode::Forbid,
+                    Head::new([
+                        ComponentPattern::constant(AccessComponent::Principal(ALICE)),
+                        ComponentPattern::constant(AccessComponent::Action(Action::Edit)),
+                        ComponentPattern::variable("r"),
+                    ]),
+                    r.clone(),
+                ),
+                Rule::new(
+                    RuleMode::Forbid,
+                    head,
+                    if history_in_r2 { r } else { RegexExpr::Empty },
+                ),
+            ];
+            let mut analyzer = PolicyAnalyzer::new(setup.domains.clone());
+            let ids = rules
+                .iter()
+                .map(|rule| analyzer.add_rule(rule).unwrap())
+                .collect::<Vec<_>>();
+            let verdict = analyzer.covered(ids[0], &ids[1..]).unwrap();
+            if let Inclusion::Counterexample(witness) = &verdict {
+                let instances = policy_instances(&setup, witness);
+                assert!(
+                    instances
+                        .iter()
+                        .all(|(candidate, _)| candidate.principal != ALICE)
+                );
+                assert!(
+                    instances
+                        .iter()
+                        .any(|(candidate, _)| candidate.principal == BOB)
+                );
+                assert!(instances.iter().all(|(_, history)| history.len() == 1));
+            }
+            assert_eq!(
+                check_policy(&setup, &rules, &[1, 2], &[0], verdict),
+                history_in_r2,
+            );
+            assert_eq!(
+                check_policy(
+                    &setup,
+                    &rules,
+                    &[1, 2],
+                    &[0],
+                    analyzer.at_least_as_strict(&ids[1..], &ids[..1]).unwrap(),
+                ),
+                history_in_r2,
+            );
+        }
+    }
+}
+
+fn policy_setup() -> Setup {
+    let mut setup = Setup {
+        head: Head::new([
+            ComponentPattern::variable("p"),
+            ComponentPattern::variable("a"),
+            ComponentPattern::variable("r"),
+        ]),
+        domains: Domains::infinite()
+            .with_domain(Component(0), [1, 2, 3].map(AccessComponent::Principal))
+            .with_domain(Component(1), ACTIONS.map(AccessComponent::Action))
+            .with_domain(
+                Component(2),
+                [MENTIONED, MENTIONED + 1].map(AccessComponent::Resource),
+            ),
+        principal_register: true,
+        action_register: true,
+        resource_register: true,
+        principal_domain: Some(vec![1, 2, 3]),
+        resource_domain: Some(vec![MENTIONED, MENTIONED + 1]),
+        candidates: Vec::new(),
+    };
+    setup.candidates = setup.events().collect();
+    setup
+}
+
+fn head_matches(head: &Head<Access>, candidate: Access) -> bool {
+    fn matches<T: PartialEq>(pattern: &ComponentPattern<T>, value: T) -> bool {
+        match pattern {
+            ComponentPattern::Constant(constant) => *constant == value,
+            ComponentPattern::Variable(_) => true,
+        }
+    }
+    head.0
+        .iter()
+        .enumerate()
+        .all(|(index, pattern)| matches(pattern, candidate.component(index)))
+}
+
+/// The complete denial language at a fixed candidate, including mode and head matching.
+fn denials(rules: &[Rule<Access>], policy: &[usize], candidate: Access) -> RegexExpr<Access> {
+    RegexExpr::Union(
+        policy
+            .iter()
+            .filter_map(|&index| {
+                let rule = &rules[index];
+                head_matches(&rule.head, candidate).then(|| match rule.mode {
+                    RuleMode::Forbid => rule.tail.clone(),
+                    RuleMode::Require => RegexExpr::Not(Box::new(rule.tail.clone())),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn runtime_denies(
+    rules: &[Rule<Access>],
+    policy: &[usize],
+    history: &[Access],
+    candidate: Access,
+) -> bool {
+    let store = Arc::new(Store::new().unwrap());
+    let rules = policy
+        .iter()
+        .map(|&index| TraceRule::new(rules[index].clone(), |_| (String::new(), Vec::new())))
+        .collect::<Vec<_>>();
+    let mut policy = TracePolicy::new(store.clone(), rules).unwrap();
+    let history = History::from_events(store, history.iter().copied()).unwrap();
+    policy.decide(&history, &candidate).unwrap() != PolicyDecision::Grant
+}
+
+/// Check P ⊑ Q, equivalently that P covers every rule of Q. This deliberately does not assert
+/// global shortestness: policy queries return the first failing head case/rule, not the shortest.
+fn check_policy(
+    setup: &Setup,
+    rules: &[Rule<Access>],
+    p: &[usize],
+    q: &[usize],
+    verdict: Inclusion<Access>,
+) -> bool {
+    let brute = setup
+        .candidates
+        .iter()
+        .map(|&candidate| {
+            let tails = [denials(rules, q, candidate), denials(rules, p, candidate)];
+            let mut interpreter = Interpreter::default();
+            let roots = tails.each_ref().map(|tail| interpreter.add(tail));
+            let letters = interpreter.letters(setup, candidate);
+            let bound = bound(letters.len());
+            (
+                candidate,
+                bound,
+                interpreter.shortest(roots, &letters, bound)[0],
+            )
+        })
+        .collect::<Vec<_>>();
+    let context = || format!("P={p:?}, Q={q:?}, rules={rules:?}, setup={setup:?}");
+    match verdict {
+        Inclusion::Holds => {
+            assert!(
+                brute.iter().all(|(_, _, shortest)| shortest.is_none()),
+                "holds despite a bounded failing history: {brute:?}; {}",
+                context(),
+            );
+            true
+        }
+        Inclusion::Counterexample(witness) => {
+            let instances = policy_instances(setup, &witness);
+            assert!(
+                !instances.is_empty(),
+                "no admissible small-domain instance: {witness:?}"
+            );
+            for (candidate, history) in instances {
+                let tails = [denials(rules, q, candidate), denials(rules, p, candidate)];
+                let mut interpreter = Interpreter::default();
+                let roots = tails.each_ref().map(|tail| interpreter.add(tail));
+                assert!(
+                    interpreter.accepts(roots[0], &history, candidate)
+                        && !interpreter.accepts(roots[1], &history, candidate),
+                    "source interpreter rejects {witness:?}, decoded as {candidate:?}/{history:?}: {}",
+                    context(),
+                );
+                assert!(
+                    runtime_denies(rules, q, &history, candidate)
+                        && !runtime_denies(rules, p, &history, candidate),
+                    "runtime rejects {witness:?}, decoded as {candidate:?}/{history:?}: {}",
+                    context(),
+                );
+                let (_, bound, shortest) = brute
+                    .iter()
+                    .find(|(searched, _, _)| *searched == candidate)
+                    .expect("every decoded candidate is enumerated");
+                if history.len() <= *bound {
+                    assert!(
+                        shortest.is_some_and(|length| length <= history.len()),
+                        "brute force misses {witness:?}: {}",
+                        context(),
+                    );
+                }
+            }
+            false
+        }
+        Inclusion::Exhausted => panic!("policy search exhausted: {}", context()),
+    }
+}
+
+/// Declared components must decode to declared constants. Only the unrestricted regression
+/// uses fresh principals; Alice is its only known principal, so enumerate all injective choices
+/// for its fresh numbers from {Bob, Carol}, shared consistently by candidate and history.
+fn policy_instances(setup: &Setup, witness: &Counterexample<Access>) -> Vec<(Access, Vec<Access>)> {
+    if setup.principal_domain.is_some() {
+        return vec![(
+            setup.concrete(&witness.candidate),
+            witness
+                .history
+                .iter()
+                .map(|event| setup.concrete(event))
+                .collect(),
+        )];
+    }
+    let mut fresh = Vec::new();
+    for event in std::iter::once(&witness.candidate).chain(&witness.history) {
+        if let Value::Fresh(number) = event.values[0]
+            && !fresh.contains(&number)
+        {
+            fresh.push(number);
+        }
+    }
+    fn assignments(
+        fresh: &[usize],
+        current: &mut HashMap<usize, u32>,
+        result: &mut Vec<HashMap<usize, u32>>,
+    ) {
+        let Some((&number, rest)) = fresh.split_first() else {
+            result.push(current.clone());
+            return;
+        };
+        for value in [2, 3] {
+            if !current.values().any(|&used| used == value) {
+                current.insert(number, value);
+                assignments(rest, current, result);
+                current.remove(&number);
+            }
+        }
+    }
+    let mut choices = Vec::new();
+    assignments(&fresh, &mut HashMap::new(), &mut choices);
+    choices
+        .into_iter()
+        .map(|choice| {
+            let decode = |event: &Components<Access>| {
+                let mut event = event.clone();
+                if let Value::Fresh(number) = event.values[0] {
+                    event.values[0] = Value::Constant(AccessComponent::Principal(choice[&number]));
+                }
+                setup.concrete(&event)
+            };
+            (
+                decode(&witness.candidate),
+                witness.history.iter().map(decode).collect(),
+            )
+        })
+        .collect()
 }
 
 /// Decides `left ⊑ right` and `right ⊑ left` under `setup`, checks both verdicts against brute
@@ -211,6 +682,8 @@ impl Rng {
 struct Setup {
     head: Head<Access>,
     domains: Domains<Access>,
+    /// Whether the head binds the principal.
+    principal_register: bool,
     /// Whether the head binds the action, so tails may compare actions with the candidate's.
     action_register: bool,
     /// Whether the head binds the resource, so tails may compare resources with the candidate's.
@@ -286,6 +759,7 @@ impl Setup {
         Self {
             head,
             domains,
+            principal_register: true,
             action_register,
             resource_register,
             principal_domain,
@@ -324,7 +798,13 @@ impl Setup {
             };
         }
         let pattern = match rng.below(6) {
-            0 => AtomPattern::new(Component(0), ComponentPattern::variable("p")),
+            0 if self.principal_register => {
+                AtomPattern::new(Component(0), ComponentPattern::variable("p"))
+            }
+            0 => AtomPattern::new(
+                Component(0),
+                ComponentPattern::constant(AccessComponent::Principal(1)),
+            ),
             1 if self.action_register => {
                 AtomPattern::new(Component(1), ComponentPattern::variable("a"))
             }

@@ -485,19 +485,29 @@ misses are reported rather than tuned away.
 
 ## Static analysis
 
-`history_analysis::PolicyAnalyzer::tail_included(head, left, right)` decides whether every
-history in `left` is in `right` for every candidate matching `head`. It returns `Holds`, a
-shortest `Counterexample` (a candidate and the history before it), or `Exhausted` once a search
-exceeds its 16 MiB graph budget. Validation and other runtime failures return `CompileError`.
+`history_analysis::PolicyAnalyzer` registers borrowed rules with `add_rule(&rule)` and returns
+stable `RuleId` indices. `covered(rule, by)` checks whether the policy `by` denies every pair
+denied by `rule`; `redundant(rule, policy)` checks coverage after removing every occurrence of
+that rule; `at_least_as_strict(p, q)` checks whether every pair permitted by `p` is permitted by
+`q`. `tail_included(head, left, right)` remains available without registering rules.
 
-Rules are validated and lowered by `junco_core::flatten_rule` and `lower_flat`, as for the
-runtime. Each question reduces to inclusions between tails, decided by a breadth-first search
+Queries return `Holds`, a symbolic `Counterexample` (a candidate and the history before it), or
+`Exhausted` once a search exceeds its 16 MiB graph budget. Registration and tail validation use
+`CompileError`; stored-policy queries use `HistoryError`. The query contracts exclude internal
+invariant errors. `tail_included` preserves its global shortest-history guarantee; policy-query
+minimality is specified separately, within the returned candidate's split case.
+
+Rules are validated and lowered from borrowed inputs by `junco_core::flatten_rule_parts` and
+`lower_flat`, as for the runtime. Each question reduces to inclusions between tails, decided by
+a breadth-first search
 over the derivatives of `left ∩ ¬right`. The derivatives are the runtime's:
 `history_semantics::SymbolicLanguage` compiles the difference with the runtime's normalizing
 constructors and exposes its verified symbolic derivatives and successor interpretation, keyed
 by the truth values of the atoms a derivative tests. A search state branches over classes of
 events rather than events: per component, a value that its atoms mention or any other value.
-The candidate is case-split only where an atom compares one of its components with a constant.
+Policy coverage first splits the left head's constraint on every covering rule's head constants.
+Within each case it compares the left denial with the union of exactly the firing rules'
+denials, complementing a `Require` tail. Search also splits on constants mentioned by its atoms.
 Components are infinite unless `Domains` declares their values, as an action enum should. A
 generic `Event` cannot be built from components, so a counterexample names each component by a
 constant or by a numbered fresh value.
@@ -512,15 +522,14 @@ a sound under-approximation of inclusion decided by memoised recursion on pairs 
 compares unions, intersections, concatenations factor by factor, stars and complements
 structurally, and tests by recursion through their conjunctions and disjunctions. Parts are
 compared by identity, so inserted states are indexed by their parts. Inserted states are never
-removed, so counterexamples stay shortest.
+removed, so each individual search preserves shortest histories within its start constraint.
 
 Each search compiles one graph with its own 16 MiB budget, through `CanonicalStore::with_budget`,
 where the runtime keeps `MAX_GRAPH_BYTES` (100 KiB) per rule. The search, its classes of events,
 and its pruning are verified against the policy-analysis specification (see `VERIFY.md`). In
-addition, the tests replay
-every counterexample through `TracePolicy`, and a differential test compares the verdicts on
-random tail pairs, including counterexample lengths, with brute force over every history up to
-a length bound.
+addition, the tests replay counterexamples through `TracePolicy`. Differential tests compare
+tail inclusion, coverage, and policy refinement with bounded brute-force enumeration, including
+mixed modes, different heads, finite domains, and the Alice/Bob head-splitting regression.
 
 ## Fuzzing and the independent oracle
 
@@ -577,7 +586,7 @@ Import generic APIs from the package that owns them:
 | `junco-core` | Shared IR, encoding, errors and contracts |
 | `history-store` | Histories, interning, graph storage and cache containers |
 | `history-semantics` | Compilation, evaluation, `TracePolicy` and `Validator` |
-| `history-analysis` | Static tail-inclusion analysis: `PolicyAnalyzer` |
+| `history-analysis` | Static policy coverage, redundancy, refinement, and tail inclusion: `PolicyAnalyzer` |
 | `junco-policy` | Policy facades: `RulePolicy`, `LockPolicy`, `AgentPolicy`, `FlowPolicy` |
 
 An `Event` is a compact `Copy` value with a policy-chosen arity; see "Policy-defined events".

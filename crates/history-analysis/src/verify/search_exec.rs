@@ -1187,6 +1187,8 @@ pub(crate) open spec fn vocabulary_wf(s: Search<'_>, v: Seq<Set<nat>>) -> bool {
     &&& forall|j: int| #![trigger s.items@[j]] 0 <= j < s.items@.len() ==> {
         let q = s.items@[j].residual;
         finite_impl::regex_nf(facade::abs(*s.language,q))
+            && (facade::primitives_search_safe(symbolic::regex_primitives(s.start@.state))
+                ==> facade::residual_search_safe(*s.language,q))
             && paper::atoms_bounded(facade::residual_primitives(*s.language,q),v.len())
             && forall|c: history_syntax::syntax::Component| c.0 < v.len() ==>
                 facade::residual_codes(*s.language,q,c).subset_of(v[crate::verify::component_index(c) as int])
@@ -1362,6 +1364,7 @@ pub(crate) open spec fn expansion_state(s: Search<'_>,index: nat,records: Seq<Em
 pub(crate) proof fn lemma_vocabulary_frame(a: Search<'_>,b: Search<'_>,v: Seq<Set<nat>>)
     requires vocabulary_wf(a,v),facade::language_wf(*a.language),facade::language_wf(*b.language),
         facade::frame(*a.language,*b.language),a.items@ == b.items@,a.constraints@ == b.constraints@,
+        a.start@ == b.start@,
         *a.universes == *b.universes,ids_valid(facade::graph(*a.language),a.constraints@,a.items@),
     ensures vocabulary_wf(b,v),
 {
@@ -1371,6 +1374,8 @@ pub(crate) proof fn lemma_vocabulary_frame(a: Search<'_>,b: Search<'_>,v: Seq<Se
     assert forall|j: int| #![trigger b.items@[j]] 0 <= j < b.items@.len() implies {
         let q = b.items@[j].residual;
         finite_impl::regex_nf(facade::abs(*b.language,q))
+            && (facade::primitives_search_safe(symbolic::regex_primitives(b.start@.state))
+                ==> facade::residual_search_safe(*b.language,q))
             && paper::atoms_bounded(facade::residual_primitives(*b.language,q),v.len())
             && forall|c: history_syntax::syntax::Component| c.0 < v.len() ==>
                 facade::residual_codes(*b.language,q,c).subset_of(v[crate::verify::component_index(c) as int])

@@ -2562,10 +2562,12 @@ pub mod verify {
         &&& capacity as int % vstd::layout::align_of::<TransitionId>() as int == 0
     }
 
-    /// Establishes constructor layout readiness on the pinned 64-bit verification target.
+    /// Every 16-byte-aligned budget satisfies the native arena layout checks on the pinned
+    /// 64-bit verification target. Small budgets may still report graph/resource exhaustion.
     #[cfg(target_pointer_width = "64")]
-    pub(super) proof fn lemma_production_layout()
-        ensures construction_layout(ARENA_CAPACITY),
+    pub proof fn lemma_aligned_budget_layout(capacity: usize)
+        requires capacity as int % 16 == 0,
+        ensures construction_layout(capacity),
     {
         // Activate the existing global-layout directives' generated theorems locally.
         broadcast use {
@@ -2585,9 +2587,17 @@ pub mod verify {
         assert(vstd::layout::align_of::<TestId>() == 4);
         assert(vstd::layout::align_of::<RegexId>() == 4);
         assert(vstd::layout::align_of::<TransitionId>() == 4);
-        assert(ARENA_CAPACITY == 102400) by (compute);
         assert(CHUNK_ALIGN == 16) by (compute);
-        assert(102400int % 8 == 0 && 102400int % 4 == 0) by (compute);
+        assert(capacity as int % 8 == 0 && capacity as int % 4 == 0);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    pub(super) proof fn lemma_production_layout()
+        ensures construction_layout(ARENA_CAPACITY),
+    {
+        assert(ARENA_CAPACITY == 102400) by (compute);
+        assert(102400int % 16 == 0) by (compute);
+        lemma_aligned_budget_layout(ARENA_CAPACITY);
     }
 
     pub(super) open spec fn layout_premises() -> bool {
