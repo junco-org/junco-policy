@@ -264,6 +264,10 @@ fn flatten_atom<E: Event>(
         && (forall|i: int| 0 <= i < children@.len()
             ==> crate::verify::dsl::regex_scoped(children@[i]@, head))
         ==> work_scoped::<E>(final(work)@, head),
+    result is Ok ==> forall|head| work_wf::<E>(old(work)@, head)
+        && (forall|i: int| 0 <= i < children@.len()
+            ==> crate::spec::semantics::regex_wf::<E>(children@[i]@, head))
+        ==> work_wf::<E>(final(work)@, head),
 )]
 fn schedule_regexes<'a, E: Event, L: Limits>(
     work: &mut Vec<Work<'a, E>>,
@@ -283,6 +287,10 @@ fn schedule_regexes<'a, E: Event, L: Limits>(
                 && (forall|i: int| 0 <= i < children@.len()
                     ==> crate::verify::dsl::regex_scoped(children@[i]@, head))
                 ==> work_scoped::<E>(work@, head),
+            forall|head| work_wf::<E>(before, head)
+                && (forall|i: int| 0 <= i < children@.len()
+                    ==> crate::spec::semantics::regex_wf::<E>(children@[i]@, head))
+                ==> work_wf::<E>(work@, head),
         decreases index,
     ))]
     while index > 0 {
@@ -297,6 +305,12 @@ fn schedule_regexes<'a, E: Event, L: Limits>(
                     ==> crate::verify::dsl::regex_scoped(children@[i]@, head))
                 implies work_scoped::<E>(work@, head) by {
                 lemma_work_scoped_push::<E>(previous, Work::Regex(&children[index as int]), head);
+            }
+            assert forall|head| work_wf::<E>(before, head)
+                && (forall|i: int| 0 <= i < children@.len()
+                    ==> crate::spec::semantics::regex_wf::<E>(children@[i]@, head))
+                implies work_wf::<E>(work@, head) by {
+                lemma_work_wf_push::<E>(previous, Work::Regex(&children[index as int]), head);
             }
             assert(match work@.last() { Work::Regex(source) => source@ == children@[index as int]@, _ => false });
             reveal_with_fuel(regex_forest_cost, 2);
@@ -332,6 +346,10 @@ fn schedule_regexes<'a, E: Event, L: Limits>(
         && (forall|i: int| 0 <= i < children@.len()
             ==> crate::verify::dsl::test_scoped(children@[i]@, head))
         ==> work_scoped::<E>(final(work)@, head),
+    result is Ok ==> forall|head| work_wf::<E>(old(work)@, head)
+        && (forall|i: int| 0 <= i < children@.len()
+            ==> crate::spec::semantics::test_wf::<E>(children@[i]@, head))
+        ==> work_wf::<E>(final(work)@, head),
 )]
 fn schedule_tests<'a, E: Event, L: Limits>(
     work: &mut Vec<Work<'a, E>>,
@@ -351,6 +369,10 @@ fn schedule_tests<'a, E: Event, L: Limits>(
                 && (forall|i: int| 0 <= i < children@.len()
                     ==> crate::verify::dsl::test_scoped(children@[i]@, head))
                 ==> work_scoped::<E>(work@, head),
+            forall|head| work_wf::<E>(before, head)
+                && (forall|i: int| 0 <= i < children@.len()
+                    ==> crate::spec::semantics::test_wf::<E>(children@[i]@, head))
+                ==> work_wf::<E>(work@, head),
         decreases index,
     ))]
     while index > 0 {
@@ -365,6 +387,12 @@ fn schedule_tests<'a, E: Event, L: Limits>(
                     ==> crate::verify::dsl::test_scoped(children@[i]@, head))
                 implies work_scoped::<E>(work@, head) by {
                 lemma_work_scoped_push::<E>(previous, Work::Test(&children[index as int]), head);
+            }
+            assert forall|head| work_wf::<E>(before, head)
+                && (forall|i: int| 0 <= i < children@.len()
+                    ==> crate::spec::semantics::test_wf::<E>(children@[i]@, head))
+                implies work_wf::<E>(work@, head) by {
+                lemma_work_wf_push::<E>(previous, Work::Test(&children[index as int]), head);
             }
             assert(match work@.last() { Work::Test(source) => source@ == children@[index as int]@, _ => false });
             reveal_with_fuel(test_forest_cost, 2);
@@ -398,8 +426,12 @@ fn schedule_tests<'a, E: Event, L: Limits>(
         && crate::verify::dsl::regex_scoped(rule.tail@, rule.head@)
         ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
             && !(result matches Err(CompileError::UnboundVariable { .. })),
+    E::obeys_projection_spec() && crate::spec::semantics::rule_wf::<E>(*rule) ==>
+        !(result matches Err(CompileError::HeadArity { .. }))
+        && !(result matches Err(CompileError::ComponentCoordinate { .. })),
     result matches Ok(flat) ==> flattened::<E>(*rule, flat)
         && (E::obeys_projection_spec() ==> crate::verify::encoding::constants_in_domain(flat.source, component_domain::<E>())),
+    result is Ok && E::obeys_projection_spec() ==> crate::spec::semantics::rule_wf::<E>(*rule),
     result matches Ok(flat) ==> flat.source.tests@.len() + flat.source.regexes@.len()
         <= regex_cost::<E>(rule.tail@),
 )]
@@ -408,7 +440,15 @@ pub fn flatten_rule<E: Event, L: Limits>(
     limits: &mut L,
     world: &mut ObservationWorld,
 ) -> Result<FlatRule<E::Component>, CompileError> {
-    flatten_rule_parts(rule.mode, &rule.head, &rule.tail, limits, world)
+    let result = flatten_rule_parts(rule.mode, &rule.head, &rule.tail, limits, world);
+    proof! {
+        if let Ok(flat) = &result {
+            if E::obeys_projection_spec() {
+                lemma_flattened_rule_wf::<E>(*rule, *flat);
+            }
+        }
+    }
+    result
 }
 
 /// Lowers borrowed syntax in source order without constructing an executable graph.
@@ -425,6 +465,10 @@ pub fn flatten_rule<E: Event, L: Limits>(
         && crate::verify::dsl::regex_scoped(source_tail@, source_head@)
         ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
             && !(result matches Err(CompileError::UnboundVariable { .. })),
+    E::obeys_projection_spec() && crate::spec::semantics::head_wf::<E>(source_head@)
+        && crate::spec::semantics::regex_wf::<E>(source_tail@, source_head@) ==>
+        !(result matches Err(CompileError::HeadArity { .. }))
+        && !(result matches Err(CompileError::ComponentCoordinate { .. })),
     result matches Ok(flat) ==> flattened::<E>(Rule { mode, head: *source_head, tail: *source_tail }, flat)
         && (E::obeys_projection_spec() ==> crate::verify::encoding::constants_in_domain(flat.source, component_domain::<E>())),
     result matches Ok(flat) ==> flat.source.tests@.len() + flat.source.regexes@.len()
@@ -438,6 +482,14 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
     world: &mut ObservationWorld,
 ) -> Result<FlatRule<E::Component>, CompileError> {
     proof_decl! { let ghost rule = Rule { mode, head: *source_head, tail: *source_tail }; }
+    proof! {
+        if crate::spec::semantics::head_wf::<E>(rule.head@) {
+            lemma_head_wf_lowering::<E>(rule.head@);
+        }
+        if crate::spec::semantics::regex_wf::<E>(rule.tail@, rule.head@) {
+            lemma_regex_wf_scoped::<E>(rule.tail@, rule.head@);
+        }
+    }
     limits.checkpoint().map_err(HistoryError::from)?;
     let mut scope = VariableScope::new(E::Arity::value());
     let head = flatten_head(source_head, &mut scope, limits, world)?;
@@ -459,6 +511,9 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
         if crate::verify::dsl::regex_scoped(rule.tail@, rule.head@) {
             assert(work_scoped::<E>(work@, rule.head@)) by { reveal(work_scoped); }
         }
+        if crate::spec::semantics::regex_wf::<E>(rule.tail@, rule.head@) {
+            assert(work_wf::<E>(work@, rule.head@)) by { reveal(work_wf); }
+        }
     }
     #[cfg_attr(verus_keep_ghost, verus_spec(
         invariant builder.wf(),
@@ -468,6 +523,8 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
             scope_matches::<E>(scope, rule.head@),
             crate::verify::dsl::regex_scoped(rule.tail@, rule.head@)
                 ==> work_scoped::<E>(work@, rule.head@),
+            crate::spec::semantics::regex_wf::<E>(rule.tail@, rule.head@)
+                ==> work_wf::<E>(work@, rule.head@),
             E::obeys_projection_spec() ==> forall|i: int| 0 <= i < builder.head_view().len()
                 ==> crate::verify::encoding::head_in_domain(
                     builder.head_view()[i], crate::verify::encoding::field_at(i), component_domain::<E>()),
@@ -503,6 +560,12 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                 lemma_work_scoped_pop::<E>(old_work, rule.head@);
                 assert(work_scoped::<E>(work@, rule.head@));
             }
+            if crate::spec::semantics::regex_wf::<E>(rule.tail@, rule.head@) {
+                lemma_work_wf_pop::<E>(old_work, rule.head@);
+                assert(work_wf::<E>(work@, rule.head@));
+                reveal_with_fuel(crate::spec::semantics::regex_wf, 2);
+                reveal_with_fuel(crate::spec::semantics::test_wf, 2);
+            }
             reveal_with_fuel(work_cost, 2);
             reveal_with_fuel(history_syntax::verify::dsl::regex_view, 2);
             reveal_with_fuel(history_syntax::verify::dsl::test_view, 2);
@@ -534,6 +597,13 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                         lemma_work_cost_push::<E>(work@, Work::FinishRegex(regex, tests.len()));
                         lemma_work_cost_push::<E>(work@.push(Work::FinishRegex(regex, tests.len())), Work::Test(test));
                     }
+                    proof! {
+                        if crate::spec::semantics::regex_wf::<E>(rule.tail@, rule.head@) {
+                            lemma_work_wf_push::<E>(work@, Work::FinishRegex(regex, tests.len()), rule.head@);
+                            lemma_work_wf_push::<E>(work@.push(Work::FinishRegex(regex, tests.len())),
+                                Work::Test(test), rule.head@);
+                        }
+                    }
                     push(
                         &mut work,
                         Work::FinishRegex(regex, tests.len()),
@@ -551,6 +621,13 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                         lemma_visit_unary_regex::<E>(work@, regex, child, regexes.len(), test_sources, regex_sources, rule.head@);
                         lemma_work_cost_push::<E>(work@, Work::FinishRegex(regex, regexes.len()));
                         lemma_work_cost_push::<E>(work@.push(Work::FinishRegex(regex, regexes.len())), Work::Regex(child));
+                    }
+                    proof! {
+                        if crate::spec::semantics::regex_wf::<E>(rule.tail@, rule.head@) {
+                            lemma_work_wf_push::<E>(work@, Work::FinishRegex(regex, regexes.len()), rule.head@);
+                            lemma_work_wf_push::<E>(work@.push(Work::FinishRegex(regex, regexes.len())),
+                                Work::Regex(child), rule.head@);
+                        }
                     }
                     push(
                         &mut work,
@@ -577,6 +654,13 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                         if crate::verify::dsl::regex_scoped(rule.tail@, rule.head@) {
                             assert forall|i: int| 0 <= i < children@.len() implies
                                 crate::verify::dsl::regex_scoped(children@[i]@, rule.head@) by {
+                                assert(regex_views::<E>(children@)[i] == children@[i]@);
+                            }
+                        }
+                        if crate::spec::semantics::regex_wf::<E>(rule.tail@, rule.head@) {
+                            lemma_work_wf_push::<E>(work@, Work::FinishRegex(regex, regexes.len()), rule.head@);
+                            assert forall|i: int| 0 <= i < children@.len() implies
+                                crate::spec::semantics::regex_wf::<E>(children@[i]@, rule.head@) by {
                                 assert(regex_views::<E>(children@)[i] == children@[i]@);
                             }
                         }
@@ -610,6 +694,10 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                                     assert(crate::verify::dsl::atom_scoped(pattern@, rule.head@)) by {
                                         reveal_with_fuel(crate::verify::dsl::test_scoped, 1);
                                     }
+                                }
+                                if crate::spec::semantics::regex_wf::<E>(rule.tail@, rule.head@) {
+                                    assert(atom_coordinates_wf::<E>(pattern@));
+                                    assert(crate::verify::dsl::atom_scoped(pattern@, rule.head@));
                                 }
                             }
                             let (field, term) = flatten_atom(pattern, &scope)?;
@@ -649,6 +737,13 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                         if crate::verify::dsl::regex_scoped(rule.tail@, rule.head@) {
                             assert forall|i: int| 0 <= i < children@.len() implies
                                 crate::verify::dsl::test_scoped(children@[i]@, rule.head@) by {
+                                assert(test_views::<E>(children@)[i] == children@[i]@);
+                            }
+                        }
+                        if crate::spec::semantics::regex_wf::<E>(rule.tail@, rule.head@) {
+                            lemma_work_wf_push::<E>(work@, Work::FinishTest(test, tests.len()), rule.head@);
+                            assert forall|i: int| 0 <= i < children@.len() implies
+                                crate::spec::semantics::test_wf::<E>(children@[i]@, rule.head@) by {
                                 assert(test_views::<E>(children@)[i] == children@[i]@);
                             }
                         }

@@ -271,6 +271,20 @@ pub proof fn lemma_flattened_rule_wf<E: Event>(rule: Rule<E>, lowered: FlatRule<
         lowered.source.root as nat, rule.tail@, head);
 }
 
+/// Canonical head well-formedness entails the lowering scope and coordinate predicates.
+pub proof fn lemma_head_wf_lowering<E: Event>(head: SourceHead<E>)
+    requires crate::spec::semantics::head_wf::<E>(head),
+    ensures dsl::head_scoped(head), head_coordinates_wf::<E>(head),
+{
+    assert forall|i: int, j: int| 0 <= i < j < head.len() implies
+        dsl::distinct_names(#[trigger] head[i], #[trigger] head[j]) by {
+        match (head[i], head[j]) {
+            (PatternView::Variable(_), PatternView::Variable(_)) => {},
+            _ => {},
+        }
+    }
+}
+
 /// Canonical test well-formedness entails the scoping needed by the lowering worklist.
 pub proof fn lemma_test_wf_scoped<E: Event>(test: SourceTest<E>, head: SourceHead<E>)
     requires crate::spec::semantics::test_wf::<E>(test, head),
@@ -336,6 +350,57 @@ pub(crate) open spec fn work_scoped<E: Event>(work: Seq<Work<'_, E>>, head: Sour
         Work::Test(source) | Work::FinishTest(source, _) => dsl::test_scoped(source@, head),
     }
 }
+/// Pending visits and finish frames retain R2 source well-formedness.
+#[verifier::opaque]
+pub(crate) open spec fn work_wf<E: Event>(work: Seq<Work<'_, E>>, head: SourceHead<E>) -> bool {
+    forall|i: int| 0 <= i < work.len() ==> match #[trigger] work[i] {
+        Work::Regex(source) | Work::FinishRegex(source, _) =>
+            crate::spec::semantics::regex_wf::<E>(source@, head),
+        Work::Test(source) | Work::FinishTest(source, _) =>
+            crate::spec::semantics::test_wf::<E>(source@, head),
+    }
+}
+
+pub(crate) proof fn lemma_work_wf_push<'a, E: Event>(work: Seq<Work<'a, E>>,
+    task: Work<'a, E>, head: SourceHead<E>)
+    requires work_wf::<E>(work, head), match task {
+        Work::Regex(source) | Work::FinishRegex(source, _) =>
+            crate::spec::semantics::regex_wf::<E>(source@, head),
+        Work::Test(source) | Work::FinishTest(source, _) =>
+            crate::spec::semantics::test_wf::<E>(source@, head),
+    },
+    ensures work_wf::<E>(work.push(task), head),
+{
+    reveal(work_wf);
+    assert forall|i: int| 0 <= i < work.push(task).len() implies match #[trigger] work.push(task)[i] {
+        Work::Regex(source) | Work::FinishRegex(source, _) =>
+            crate::spec::semantics::regex_wf::<E>(source@, head),
+        Work::Test(source) | Work::FinishTest(source, _) =>
+            crate::spec::semantics::test_wf::<E>(source@, head),
+    } by {
+        if i < work.len() { assert(work.push(task)[i] == work[i]); }
+        else { assert(i == work.len()); }
+    }
+}
+
+pub(crate) proof fn lemma_work_wf_pop<E: Event>(work: Seq<Work<'_, E>>, head: SourceHead<E>)
+    requires work_wf::<E>(work, head), work.len() > 0,
+    ensures work_wf::<E>(work.drop_last(), head), match work.last() {
+        Work::Regex(source) | Work::FinishRegex(source, _) =>
+            crate::spec::semantics::regex_wf::<E>(source@, head),
+        Work::Test(source) | Work::FinishTest(source, _) =>
+            crate::spec::semantics::test_wf::<E>(source@, head),
+    },
+{
+    reveal(work_wf);
+    assert forall|i: int| 0 <= i < work.drop_last().len() implies match #[trigger] work.drop_last()[i] {
+        Work::Regex(source) | Work::FinishRegex(source, _) =>
+            crate::spec::semantics::regex_wf::<E>(source@, head),
+        Work::Test(source) | Work::FinishTest(source, _) =>
+            crate::spec::semantics::test_wf::<E>(source@, head),
+    } by { assert(work.drop_last()[i] == work[i]); }
+}
+
 
 pub(crate) proof fn lemma_work_scoped_push<'a, E: Event>(work: Seq<Work<'a, E>>,
     task: Work<'a, E>, head: SourceHead<E>)
