@@ -164,7 +164,7 @@ impl<K: Copy + Eq + Hash> Codebook<K> {
             book_receipts_wf(*old(self), index as int, issuer),
         ensures book_receipts_wf(*final(self), index as int, issuer),
             result != Err(HistoryError::WrongHistoryOwner),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Err(error) ==> error == HistoryError::AllocationFailed
                 || error == (HistoryError::IdExhausted { domain }),
             result matches Err(_) ==> final(self).issued@ == old(self).issued@,
@@ -321,7 +321,7 @@ impl<E: Event> Codebooks<E> {
         -> (result: Result<(usize, Tracked<crate::store::HistoryKeyReceipt>), HistoryError>)
         requires registry_wf(*old(self)), crate::store::verify::numeric_store_wf(*numeric_store),
         ensures self_same_books(*old(self), *final(self)), registry_wf(*final(self)),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Err(error) ==> error == (HistoryError::IdExhausted { domain: "history" }),
             final(self).history_resources@ == old(self).history_resources@,
             match result {
@@ -370,7 +370,7 @@ impl<E: Event> Codebooks<E> {
         requires registry_wf(*old(self)), crate::store::verify::numeric_store_wf(*numeric_store),
             match prior { Some(registration) => registration.id() == old(self).history_resources@.id(), None => true },
         ensures registry_wf(*final(self)), self_same_books(*old(self), *final(self)),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Err(error) ==> error == (HistoryError::IdExhausted { domain: "history" }),
             final(self).history_resources@.id() == old(self).history_resources@.id(),
             (old(self).history_resources@)@.submap_of((final(self).history_resources@)@),
@@ -500,7 +500,7 @@ fn allocate_store_id(Ghost(registry): Ghost<vstd::resource::Loc>)
     ensures result matches Ok((id, receipt)) ==> id > 0
         && receipt@.id() == store_id_authority() && receipt@.key() == id
         && receipt@.value() == registry,
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
         result matches Err(error) ==> error == (HistoryError::IdExhausted { domain: "store" }),
 {
     proof { reveal(store_id_authority); }
@@ -517,7 +517,7 @@ impl<E: Event> Store<E> {
     /// Create an empty typed view. Store-ID exhaustion is reported before wrapping.
     pub fn new() -> (result: Result<Self, HistoryError>)
         ensures result matches Ok(store) ==> store_wf(store),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Err(error) ==> error == (HistoryError::IdExhausted { domain: "store" }),
     {
         let tracked (mut authority, empty) = vstd::resource::map::GhostMapAuth::new(
@@ -562,7 +562,7 @@ impl<E: Event> Store<E> {
     pub(crate) fn allocate_history_id(&self) -> (result: Result<usize, HistoryError>)
         requires store_wf(*self),
         ensures result matches Ok(id) ==> 0 < id < usize::MAX,
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Err(error) ==> error == (HistoryError::IdExhausted { domain: "history" }),
     {
         let (id, _registration, _receipt) = self.allocate_history_id_for_resource(Ghost(arbitrary()), Tracked(None))?;
@@ -582,7 +582,7 @@ impl<E: Event> Store<E> {
             && receipt@.value() == (crate::store::HistoryIssuer::Typed {
                 store: registry_id(self), lifecycle: location })
             && match prior { Some(previous) => previous.key() < id, None => true },
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Err(error) ==> error == (HistoryError::IdExhausted { domain: "history" }),
     {
         proof { if native_obligations::<E>() { lemma_empty_maps_wf::<E>(); } }
@@ -595,7 +595,7 @@ impl<E: Event> Store<E> {
                     crate::store::verify::numeric_store_wf(*numeric_store),
                     match prior { Some(previous) => previous.id() == registry, None => true },
                 ensures publication_frame(*old(books), *final(books)),
-                    junco_core::verify::history_specs::no_internal_error(result),
+                    junco_core::verify::history_specs::no_invariant_failure(result),
                     result matches Err(error) ==> error == (HistoryError::IdExhausted { domain: "history" }),
                     result matches Ok((id, registration, receipt)) ==> 0 < id < usize::MAX
                         && registration@.id() == registry && registration@.key() == id
@@ -615,7 +615,7 @@ impl<E: Event> Store<E> {
             native_obligations::<E>() ==> (result matches Ok(numeric) ==>
             exists|maps: ComponentMaps<E>| snapshot_published::<E>(registry_id(self), maps)
                 && maps_wf::<E>(maps) && event_encoded::<E>(maps, *event, numeric)),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
     {
         proof { if native_obligations::<E>() { lemma_empty_maps_wf::<E>(); } }
@@ -635,7 +635,7 @@ impl<E: Event> Store<E> {
         ensures snapshot_published::<E>(registry_id(self), result.1@),
             result.0 != Err(HistoryError::WrongHistoryOwner),
             result.0 matches Ok(numeric) ==> numeric@.len() == arity::<E>(),
-            junco_core::verify::history_specs::no_internal_error(result.0),
+            junco_core::verify::history_specs::no_invariant_failure(result.0),
             !(result.0 matches Err(HistoryError::InvalidPolicy { .. })),
             native_obligations::<E>() ==> maps_wf::<E>(result.1@)
                 && maps_extend::<E>(first, result.1@) && maps_extend::<E>(second, result.1@)
@@ -651,7 +651,7 @@ impl<E: Event> Store<E> {
                 ensures publication_frame(*old(books), *final(books)),
                     output.0 != Err(HistoryError::WrongHistoryOwner),
                     output.0 matches Ok(numeric) ==> numeric@.len() == arity::<E>(),
-                    junco_core::verify::history_specs::no_internal_error(output.0),
+                    junco_core::verify::history_specs::no_invariant_failure(output.0),
                     !(output.0 matches Err(HistoryError::InvalidPolicy { .. })),
                     output.1@ == books_maps(*final(books)),
                     native_obligations::<E>() ==> maps_wf::<E>(output.1@)
@@ -691,7 +691,7 @@ impl<E: Event> Store<E> {
                 && snapshot_published::<E>(registry_id(self), prior),
         ensures result.0 matches Ok(numeric) ==> junco_core::flat::verify::structural_wf(numeric),
             snapshot_published::<E>(registry_id(self), result.1@),
-            native_obligations::<E>() ==> junco_core::verify::history_specs::no_internal_error(result.0),
+            native_obligations::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(result.0),
             native_obligations::<E>() && junco_core::flat::verify::structural_wf(*source)
                 && junco_core::verify::encoding::constants_in_domain(*source, domain::<E>())
                 ==> !(result.0 matches Err(HistoryError::InvalidPolicy { .. })),
@@ -714,7 +714,7 @@ impl<E: Event> Store<E> {
                 ensures publication_frame(*old(books), *final(books)),
                     output.1@ == books_maps(*final(books)),
                     output.0 matches Ok(numeric) ==> junco_core::flat::verify::structural_wf(numeric),
-                    native_obligations::<E>() ==> junco_core::verify::history_specs::no_internal_error(output.0),
+                    native_obligations::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(output.0),
                     native_obligations::<E>() && junco_core::flat::verify::structural_wf(*source)
                         && junco_core::verify::encoding::constants_in_domain(*source, domain::<E>())
                         ==> !(output.0 matches Err(HistoryError::InvalidPolicy { .. })),
@@ -784,7 +784,7 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
         -> (result: Result<u64, HistoryError>)
         ensures encoder_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
             native_obligations::<E>() && domain::<E>()(field, *value)
                 ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
     {
@@ -810,7 +810,7 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
             final(self).restoration() == old(self).restoration(),
             final(self).calls == old(self).calls,
             result != Err(HistoryError::WrongHistoryOwner),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Err(error) ==> error == HistoryError::AllocationFailed
                 || error == (HistoryError::IdExhausted { domain: "component" }),
             native_obligations::<E>() && components_wf(*old(self).books) ==>
@@ -865,7 +865,7 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
         ensures final(self).state_wf(), components_wf(*final(self).books),
             result matches Ok(numeric) ==> numeric@.len() == arity::<E>(),
             result != Err(HistoryError::WrongHistoryOwner),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).books.registry@ == old(self).books.registry@,
             native_obligations::<E>() ==>

@@ -78,7 +78,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         memo_grows(*old(self), *final(self), 2 * facade::graph(*old(language)).regexes.len()),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> forall|i: int| #![trigger xs@[i]] 0 <= i < xs@.len()
                 ==> index_range(xs@.len(), i) && (exists|j: int| 0 <= j < ys@.len()
                     && #[trigger] regex_le(*final(language), xs@[i], ys@[j])),
@@ -150,7 +150,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         memo_grows(*old(self), *final(self), x@ + y@ + 1),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> regex_le(*final(language), x, y),
         decreases 1nat, x@ + y@, 4nat,
     {
@@ -184,7 +184,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         memo_grows(*old(self), *final(self), x@ + y@),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> regex_le(*final(language), x, y),
         decreases 1nat, x@ + y@, 3nat,
     {
@@ -327,7 +327,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         memo_grows(*old(self), *final(self), bound),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> paper::cat_padded(semantic_le(),
                 facade::abs(*final(language), x), lifts(*final(language), ys@)),
             result matches Ok(true) ==> paper::lang_le(facade::abs(*final(language), x),
@@ -439,7 +439,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         memo_grows(*old(self), *final(self), bound),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> forall|i: int| 0 <= i < xs@.len() ==> regex_le(*final(language), xs@[i], ys@[i]),
         decreases 1nat, bound, 1nat,
     {
@@ -475,7 +475,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         memo_grows(*old(self), *final(self), bound),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> forall|i: int| 0 <= i < xs@.len() ==> regex_le(*final(language), xs@[i], y),
         decreases 1nat, bound, 1nat,
     {
@@ -511,7 +511,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         memo_grows(*old(self), *final(self), bound),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> forall|i: int| 0 <= i < ys@.len() ==> regex_le(*final(language), x, ys@[i]),
         decreases 1nat, bound, 1nat,
     {
@@ -547,7 +547,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         memo_grows(*old(self), *final(self), bound),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> exists|i: int| 0 <= i < xs@.len() && regex_le(*final(language), xs@[i], y),
         decreases 1nat, bound, 1nat,
     {
@@ -583,7 +583,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         memo_grows(*old(self), *final(self), bound),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> exists|i: int| 0 <= i < ys@.len() && regex_le(*final(language), x, ys@[i]),
         decreases 1nat, bound, 1nat,
     {
@@ -620,7 +620,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         tests_grow(*old(self), *final(self), phi@ + psi@ + 1),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> test_le(*final(language), phi, psi),
         decreases 0nat, phi@ + psi@, 4nat,
     {
@@ -653,7 +653,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         tests_grow(*old(self), *final(self), phi@ + psi@),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> test_le(*final(language), phi, psi),
         decreases 0nat, phi@ + psi@, 3nat,
     {
@@ -744,7 +744,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         tests_grow(*old(self), *final(self), bound),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> forall|i: int| 0 <= i < phis@.len() ==> test_le(*final(language), phis@[i], psi),
         decreases 0nat, bound, 1nat,
     {
@@ -779,7 +779,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         tests_grow(*old(self), *final(self), bound),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> forall|i: int| 0 <= i < psis@.len() ==> test_le(*final(language), phi, psis@[i]),
         decreases 0nat, bound, 1nat,
     {
@@ -814,7 +814,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         tests_grow(*old(self), *final(self), bound),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> exists|i: int| 0 <= i < phis@.len() && test_le(*final(language), phis@[i], psi),
         decreases 0nat, bound, 1nat,
     {
@@ -849,7 +849,7 @@ impl Simulation {
         ensures
         *final(language) == *old(language), memo_wf(*final(self), *final(language)),
         tests_grow(*old(self), *final(self), bound),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(true) ==> exists|i: int| 0 <= i < psis@.len() && test_le(*final(language), phi, psis@[i]),
         decreases 0nat, bound, 1nat,
     {
@@ -897,7 +897,7 @@ fn node(language: &mut SymbolicLanguage, id: RegexId) -> (result: Result<(Node, 
     requires facade::language_wf(*old(language)),
     ensures *final(language) == *old(language),
         id@ < facade::graph(*final(language)).regexes.len()
-            ==> junco_core::verify::history_specs::no_internal_error(result),
+            ==> junco_core::verify::history_specs::no_invariant_failure(result),
         result matches Ok((n, nullable)) ==> node_wf(*final(language), id, n)
             && nullable == junco_core::verify::history_specs::nullable(facade::abs(*final(language), id)),
 {
@@ -925,7 +925,7 @@ fn is_all(language: &mut SymbolicLanguage, id: RegexId) -> (result: Result<bool,
     requires facade::language_wf(*old(language)),
     ensures *final(language) == *old(language),
         id@ < facade::graph(*final(language)).regexes.len()
-            ==> junco_core::verify::history_specs::no_internal_error(result),
+            ==> junco_core::verify::history_specs::no_invariant_failure(result),
         result matches Ok(true) ==> facade::abs(*final(language), id) is All,
 {
     let result = language.read_regex(id, |view: RegexView<'_>| -> (all: bool)
@@ -945,7 +945,7 @@ fn test_node(language: &mut SymbolicLanguage, id: TestId)
     requires facade::language_wf(*old(language)),
     ensures *final(language) == *old(language),
         id@ < facade::graph(*final(language)).tests.len()
-            ==> junco_core::verify::history_specs::no_internal_error(result),
+            ==> junco_core::verify::history_specs::no_invariant_failure(result),
         result matches Ok(n) ==> test_node_wf(*final(language), id, n),
 {
     let result = language.read_test(id, |view: TestView<'_>| -> (n: TestNode)

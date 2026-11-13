@@ -7,7 +7,7 @@ use crate::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
 use crate::verify::encoding::*;
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_specs::no_internal_error;
+use crate::verify::history_specs::no_invariant_failure;
 use alloc::vec::Vec;
 use history_syntax::Event;
 #[cfg(verus_keep_ghost)]
@@ -56,7 +56,7 @@ pub trait FlatEncoder<C>: Sized {
             final(self).restoration() == old(self).restoration(),
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             old(self).errors_are_non_invariant() && encoder_wf_clause!(Self, old(self))
-                ==> no_internal_error(result)
+                ==> no_invariant_failure(result)
                     && (Self::domain()(field, *value)
                         ==> !(result matches Err(HistoryError::InvalidPolicy { .. }))),
             encoder_wf_clause!(Self, old(self)) ==> {
@@ -108,7 +108,7 @@ fn invalid_source() -> (error: HistoryError)
 fn copy_ids<L: Limits>(source: &[u32], limits: &mut L, world: &mut ObservationWorld)
     -> (result: Result<Vec<u32>, HistoryError>)
     ensures result matches Ok(ids) ==> ids@ == source@,
-        no_internal_error(result),
+        no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
 {
     let mut ids = Vec::new();
@@ -137,7 +137,7 @@ fn encode_head<C, M: FlatEncoder<C>>(source: &FlatHead<C>, field: Component, enc
         encoder_wf::<C, M>(*old(encoder)) ==>
             final(encoder).encoding_calls() <= old(encoder).encoding_calls() + 1,
         old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
-            ==> no_internal_error(result)
+            ==> no_invariant_failure(result)
                 && (head_in_domain(*source, field, M::domain())
                     ==> !(result matches Err(HistoryError::InvalidPolicy { .. }))),
         encoder_wf::<C, M>(*old(encoder)) ==> encoder_wf::<C, M>(*final(encoder))
@@ -162,7 +162,7 @@ fn encode_test<C, M: FlatEncoder<C>, L: Limits>(source: &FlatTest<C>, encoder: &
         encoder_wf::<C, M>(*old(encoder)) ==>
             final(encoder).encoding_calls() <= old(encoder).encoding_calls() + 1,
         old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
-            ==> no_internal_error(result)
+            ==> no_invariant_failure(result)
                 && (test_in_domain(*source, M::domain())
                     ==> !(result matches Err(HistoryError::InvalidPolicy { .. }))),
         encoder_wf::<C, M>(*old(encoder)) ==> encoder_wf::<C, M>(*final(encoder))
@@ -187,7 +187,7 @@ fn encode_test<C, M: FlatEncoder<C>, L: Limits>(source: &FlatTest<C>, encoder: &
 fn copy_regex<L: Limits>(source: &FlatRegex, limits: &mut L, world: &mut ObservationWorld)
     -> (result: Result<FlatRegex, HistoryError>)
     ensures result matches Ok(regex) ==> regex_same(*source, regex),
-        no_internal_error(result),
+        no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
 {
     Ok(match source {
@@ -219,7 +219,7 @@ pub fn lower_flat<C, M: FlatEncoder<C>, L: Limits>(source: &FlatPair<C>, encoder
             final(encoder).encoding_calls() <= old(encoder).encoding_calls()
                 + source.head@.len() + source.tests@.len(),
         old(encoder).errors_are_non_invariant() && encoder_wf::<C, M>(*old(encoder))
-            ==> no_internal_error(result)
+            ==> no_invariant_failure(result)
                 && (crate::flat::verify::structural_wf(*source)
                     && constants_in_domain(*source, M::domain())
                     ==> !(result matches Err(HistoryError::InvalidPolicy { .. }))),

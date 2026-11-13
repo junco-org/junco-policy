@@ -77,7 +77,7 @@ fn compiled_truth_table<E: Event>(
         && compiled::source_rule(rule) == (Rule { mode, head,
             tail: if universal { RegexExpr::All } else { RegexExpr::Empty } })
         && answer != Err(HistoryError::WrongHistoryOwner)
-        && history_specs::no_internal_error(answer)
+        && history_specs::no_invariant_failure(answer)
         && (answer matches Ok(option) ==>
             option == (if dsl::head_matches(head@, event_view(*candidate)) {
                 Some(universal)

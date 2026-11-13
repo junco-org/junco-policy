@@ -15,7 +15,7 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::flatten::*;
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_specs::{no_internal_compile_error, no_internal_error};
+use crate::verify::history_specs::{no_internal_compile_error, no_invariant_failure};
 #[cfg(verus_keep_ghost)]
 use history_syntax::event::specs::{EventSpec, arity};
 
@@ -37,7 +37,7 @@ pub(crate) enum Work<'a, E: Event> {
 #[verus_spec(result => ensures
     result is Ok ==> final(values)@ == old(values)@.push(value),
     result is Err ==> final(values)@ == old(values)@,
-    no_internal_error(result),
+    no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
 )]
 fn push<T, L: Limits>(
@@ -57,7 +57,7 @@ fn push<T, L: Limits>(
 
 #[verus_verify]
 #[verus_spec(result => ensures
-    start <= old(values)@.len() ==> no_internal_error(result),
+    start <= old(values)@.len() ==> no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
     match result {
         Ok(children) => start <= old(values)@.len()
@@ -258,7 +258,7 @@ fn flatten_atom<E: Event>(
         rs + regex_views::<E>(children@)),
     result is Ok ==> work_cost::<E>(final(work)@) == work_cost::<E>(old(work)@)
         + regex_forest_cost::<E>(regex_views::<E>(children@)),
-    no_internal_error(result),
+    no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
     result is Ok ==> forall|head| work_scoped::<E>(old(work)@, head)
         && (forall|i: int| 0 <= i < children@.len()
@@ -326,7 +326,7 @@ fn schedule_regexes<'a, E: Event, L: Limits>(
         ts + test_views::<E>(children@), rs),
     result is Ok ==> work_cost::<E>(final(work)@) == work_cost::<E>(old(work)@)
         + test_forest_cost::<E>(test_views::<E>(children@)),
-    no_internal_error(result),
+    no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
     result is Ok ==> forall|head| work_scoped::<E>(old(work)@, head)
         && (forall|i: int| 0 <= i < children@.len()

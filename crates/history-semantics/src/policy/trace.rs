@@ -15,7 +15,7 @@ use super::rule::{Diagnostic, PolicyRule, pack_policy_rule};
 use history_store::{History, Store};
 use history_syntax::{Event, Rule};
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{no_internal_compile_error, no_internal_error};
+use junco_core::verify::history_specs::{no_internal_compile_error, no_invariant_failure};
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
@@ -104,7 +104,7 @@ pub mod verify {
         result: Result<PolicyDecision, HistoryError>,
     ) -> bool {
         super::super::evaluate::policy_decision_result(before.compiled, after.compiled, history, candidate, result)
-            && no_internal_error(result)
+            && no_invariant_failure(result)
             && trace_wf(after) && trace_store(after) == trace_store(before)
             && trace_sources(after) == trace_sources(before)
             && trace_diagnostic_ids(after) == trace_diagnostic_ids(before)
@@ -160,7 +160,7 @@ pub mod verify {
         ensures trace_wf(after), trace_frame(before, after),
             trace_store(after) == trace_store(before), trace_sources(after) == trace_sources(before),
             trace_diagnostic_ids(after) == trace_diagnostic_ids(before),
-            no_internal_error(result),
+            no_invariant_failure(result),
             (result == Err(HistoryError::WrongHistoryOwner))
                 == !history_store::typed::verify::same_store_owner(trace_store(before), history_store::history::verify::store_of(history)),
             match result {
@@ -398,7 +398,7 @@ impl<E: Event + 'static> TracePolicy<E> {
     /// Operational errors cannot be internal invariant failures.
     #[verus_spec(result => requires trace_wf(*old(self)), history_store::history::verify::history_wf(*history),
         ensures trace_decision_result(*old(self), *final(self), *history, *candidate, result),
-            no_internal_error(result))]
+            no_invariant_failure(result))]
     pub fn decide(
         &mut self,
         history: &History<E>,

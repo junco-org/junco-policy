@@ -18,7 +18,7 @@ use junco_core::observation::SmallVecSpecFns;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_assumptions::KernelStoreSpec;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::no_internal_error;
+use junco_core::verify::history_specs::no_invariant_failure;
 use junco_core::{error::HistoryError, kernel::*};
 use verus_bumpalo::{AllocErr, CHUNK_ALIGN, SliceArena};
 use vstd::prelude::*;
@@ -599,7 +599,7 @@ impl ArenaTables {
         && verify::empty_tables(verify::tables_graph(&t))
         && verify::tables_capacity(&t) == capacity && verify::tables_slack(&t) == 0,
         result matches Err(error) ==> error is Invariant || error is AllocationFailed,
-        verify::construction_layout(capacity) ==> no_internal_error(result))]
+        verify::construction_layout(capacity) ==> no_invariant_failure(result))]
     #[allow(clippy::manual_is_multiple_of)]
     fn with_capacity(capacity: usize) -> KernelResult<Self> {
         vstd::layout::layout_for_type_is_valid::<TestNode>();
@@ -1192,7 +1192,7 @@ impl ArenaStorage {
     #[verus_spec(result => ensures result matches Ok(s) ==> verify::empty_tables(s.graph())
         && s.has_tables() && s.capacity() == capacity && s.slack() == 0,
         result matches Err(error) ==> error is Invariant || error is AllocationFailed,
-        verify::construction_layout(capacity) ==> no_internal_error(result))]
+        verify::construction_layout(capacity) ==> no_invariant_failure(result))]
     pub(crate) fn with_capacity(capacity: usize) -> KernelResult<Self> {
         Ok(Self {
             tables: Some(ArenaTables::with_capacity(capacity)?),
@@ -1237,7 +1237,7 @@ impl ArenaStorage {
             && self.graph().tests[id@ as int] == view@,
             r matches Ok(None) ==> !self.graph().tests.contains(view@),
             r matches Err(error) ==> error is Invariant || error is GraphLimit,
-            self.tables is Some ==> no_internal_error(r)
+            self.tables is Some ==> no_invariant_failure(r)
     )]
     fn find_test(&self, view: TestView<'_>) -> KernelResult<Option<TestId>> {
         proof! { use_type_invariant(&*self); }
@@ -1248,7 +1248,7 @@ impl ArenaStorage {
             && self.graph().regexes[id@ as int] == view@,
             r matches Ok(None) ==> !self.graph().regexes.contains(view@),
             r matches Err(error) ==> error is Invariant || error is GraphLimit,
-            self.tables is Some ==> no_internal_error(r)
+            self.tables is Some ==> no_invariant_failure(r)
     )]
     fn find_regex(&self, view: RegexView<'_>) -> KernelResult<Option<RegexId>> {
         proof! { use_type_invariant(&*self); }
@@ -1259,7 +1259,7 @@ impl ArenaStorage {
             && self.graph().transitions[id@ as int] == view@,
             r matches Ok(None) ==> !self.graph().transitions.contains(view@),
             r matches Err(error) ==> error is Invariant || error is GraphLimit,
-            self.tables is Some ==> no_internal_error(r)
+            self.tables is Some ==> no_invariant_failure(r)
     )]
     fn find_transition(&self, view: TransitionView<'_>) -> KernelResult<Option<TransitionId>> {
         proof! { use_type_invariant(&*self); }
@@ -1269,7 +1269,7 @@ impl ArenaStorage {
         requires !old(self).graph().tests.contains(view@),
         ensures
             (final(self).tables is Some) == (old(self).tables is Some),
-            old(self).tables is Some ==> no_internal_error(r),
+            old(self).tables is Some ==> no_invariant_failure(r),
             final(self).graph().constants == old(self).graph().constants,
             final(self).graph().regexes == old(self).graph().regexes,
             final(self).graph().transitions == old(self).graph().transitions,
@@ -1310,7 +1310,7 @@ impl ArenaStorage {
         requires !old(self).graph().regexes.contains(view@),
         ensures
             (final(self).tables is Some) == (old(self).tables is Some),
-            old(self).tables is Some ==> no_internal_error(r),
+            old(self).tables is Some ==> no_invariant_failure(r),
             final(self).graph().constants == old(self).graph().constants,
             final(self).graph().tests == old(self).graph().tests,
             final(self).graph().transitions == old(self).graph().transitions,
@@ -1350,7 +1350,7 @@ impl ArenaStorage {
         requires !old(self).graph().transitions.contains(view@),
         ensures
             (final(self).tables is Some) == (old(self).tables is Some),
-            old(self).tables is Some ==> no_internal_error(r),
+            old(self).tables is Some ==> no_invariant_failure(r),
             final(self).graph().constants == old(self).graph().constants,
             final(self).graph().tests == old(self).graph().tests,
             final(self).graph().regexes == old(self).graph().regexes,
@@ -1457,7 +1457,7 @@ impl CanonicalStore {
     #[verus_spec(result => ensures match result {
         Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
         Err(error) => error is GraphLimit || error is ArenaExhausted || error is AllocationFailed,
-    }, no_internal_error(result))]
+    }, no_invariant_failure(result))]
     pub fn new() -> KernelResult<Self> {
         proof! {
             #[cfg(target_pointer_width = "64")]
@@ -1474,7 +1474,7 @@ impl CanonicalStore {
         Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
         Err(error) => error is GraphLimit || error is ArenaExhausted || error is AllocationFailed
             || error is Invariant,
-    }, verify::construction_layout(budget) ==> no_internal_error(result))]
+    }, verify::construction_layout(budget) ==> no_invariant_failure(result))]
     pub fn with_budget(budget: usize) -> KernelResult<Self> {
         Self::from_storage(ArenaStorage::with_capacity(budget)?, budget)
     }

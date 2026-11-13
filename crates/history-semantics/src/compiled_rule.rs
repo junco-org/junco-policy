@@ -24,7 +24,7 @@ use history_store::typed::verify as books;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::{
     dsl, encoding, flatten as source,
-    history_specs::{no_internal_compile_error, no_internal_error},
+    history_specs::{no_internal_compile_error, no_invariant_failure},
 };
 #[cfg(verus_keep_ghost)]
 use verify::*;
@@ -250,7 +250,7 @@ pub mod verify {
     pub open(crate) spec fn decision_result<E: Event>(before: CompiledRule<E>, after: CompiledRule<E>,
         history: History<E>, candidate: E, result: Result<Option<bool>, HistoryError>) -> bool {
         compiled_structure_frame(before, after) && after.maps@ == before.maps@
-            && no_internal_error(result)
+            && no_invariant_failure(result)
             && (result is Err ==> after.runtime.cursors@ == before.runtime.cursors@)
             && (books::native_obligations::<E>() ==> dsl_result(before.source@, history, candidate, result))
             && ((result == Err(HistoryError::WrongHistoryOwner))
@@ -265,7 +265,7 @@ pub mod verify {
         ensures compiled_wf(after), compiled_structure_frame(before, after),
             source_rule(after) == source_rule(before), compiled_store(after) == compiled_store(before),
             compiled_maps_frame(before, after),
-            no_internal_error(result),
+            no_invariant_failure(result),
             result is Err ==> compiled_cursor_frame(before, after),
             raw::history_wf(history) ==> decision_requires(after, history),
             (result == Err(HistoryError::WrongHistoryOwner))
@@ -511,7 +511,7 @@ impl<E: Event> CompiledRule<E> {
     /// Readiness excludes internal invariant failures on both matching and foreign-owner paths.
     #[verus_spec(result => requires decision_requires(*old(self), *history),
         ensures decision_result(*old(self), *final(self), *history, *candidate, result),
-            no_internal_error(result))]
+            no_invariant_failure(result))]
     pub fn accepts_history(
         &mut self,
         history: &History<E>,
@@ -522,7 +522,7 @@ impl<E: Event> CompiledRule<E> {
 
     #[verus_spec(result => requires decision_requires(*old(self), *history),
         ensures decision_result(*old(self), *final(self), *history, *candidate, result),
-            no_internal_error(result))]
+            no_invariant_failure(result))]
     pub(crate) fn accepts_history_with_limits<L: Limits>(
         &mut self,
         history: &History<E>,
