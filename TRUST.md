@@ -41,11 +41,11 @@ is not verified at all (see Unverified glue below).
 | `admit` | 0 | 0 | 0 | 0 | 0 | 0 |
 | `assume` | 0 | 0 | 0 | 0 | 0 | 0 |
 | `exec_allows_no_decreases_clause` | 0 | 1 | 1 | 0 | 0 | 2 |
-| `axiom` | 5 | 0 | 0 | 3 | 0 | 8 |
-| `uninterp` | 3 | 9 | 22 | 0 | 3 | 37 |
+| `axiom` | 5 | 0 | 0 | 0 | 0 | 5 |
+| `uninterp` | 3 | 9 | 22 | 0 | 4 | 38 |
 | `derived_eq_claim` | 2 | 0 | 1 | 0 | 10 | 13 |
 | `unannotated_pub_fn` | 2 | 16 | 3 | 0 | 0 | 21 |
-| **total** | **23** | **40** | **72** | **8** | **39** | **182** |
+| **total** | **23** | **40** | **72** | **5** | **40** | **180** |
 
 ## `crates/history-analysis`
 
@@ -252,12 +252,6 @@ is not verified at all (see Unverified glue below).
 - `crates/history-syntax/src/event.rs:253`: `trait ExArity: sealed::Sealed (with external_trait_extension)`
 - `crates/history-syntax/src/event.rs:273`: `trait ExEvent: Copy + Debug + Eq + Hash (with external_trait_extension)`
 
-### `axiom` (3)
-
-- `crates/history-syntax/src/verify/key_axioms.rs:15`: `fn axiom_component2_key_model`
-- `crates/history-syntax/src/verify/key_axioms.rs:19`: `fn axiom_component3_key_model`
-- `crates/history-syntax/src/verify/key_axioms.rs:23`: `fn axiom_component4_key_model`
-
 ## `crates/junco-core`
 
 ### `assume_specification` (19)
@@ -298,9 +292,10 @@ is not verified at all (see Unverified glue below).
 
 - `crates/junco-core/src/observation.rs:53`: `trait ExSmallVecArray`
 
-### `uninterp` (3)
+### `uninterp` (4)
 
 - `crates/junco-core/src/observation.rs:73`: `fn view`
+- `crates/junco-core/src/spec/hypotheses.rs:22`: `fn hash_coherent` — **meaning**: the single hashing hypothesis (R4): a key type's `Hash`/`Eq` are faithful to `eq_spec`, so the external_body hash containers behave as maps on `eq_spec` classes
 - `crates/junco-core/src/verify/history_assumptions.rs:59`: `fn arc_identity` — **meaning**: native allocation identity of an `Arc`; faithful because every compared type has a unique-per-allocation value (comment at the declaration)
 - `crates/junco-core/src/verify/history_assumptions.rs:60`: `fn reference_identity` — **meaning**: native identity of a `&T`; same fidelity argument as `arc_identity`
 
