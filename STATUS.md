@@ -16,9 +16,11 @@ Plan: `local://reviewer-surface-b-plan.md` (integration owner's copy). Deleted i
 | F-prep | merged `8ede44d` (first gate failed only on a duplicate import in `tests.rs` from C's merge) | `track/f-b` | closed `wf`, ghost `declared`/`known` set by contract, verified `Domains::{infinite,with_domain}` with `DomainError`, R6 capacities in `requires`, `RuleId` owner tags + `UnknownId`, vacuity via refinement |
 | B | merged `35e817c`; reconciled onto F as `1d05e99` (15 conflict hunks: F's `wf`/owner/capacities/ghost fields + B's semantic `ensures`; duplicate `analyzer_view` removed, `lemma_view_links` from `domains_linked`; `paper.rs` retyped `::<C>` → `::<E>` with `stmt_vacuity_via_refinement`) | `track/b-b` | typed semantics over events (R2/R3/R6), `junco_core::verify::capacity`, bridges re-proved, `refinement/analyzer.rs` deleted; wave-1 query `ensures` = Holds clauses + `cex_arity` + (capacity ⇒ instance) + tail `shortest`; refutation/`every_instance`/`minimal_in_case` are bridge lemmas with clause 3 as `requires` (wave 2) |
 | F (final) | merged `b57f072` | `track/f2-b` | step 0 (trait-level `grows_by` on `FlatEncoder::encode`, `lemma_flattened_constants`, `flatten_rule_parts` rlimit 30 → 45), clause 3 (`stored_known`) in `analyzer_state_wf`, the four queries ensure R6 `covered_spec`/`redundant_spec`/`at_least_as_strict_spec`/`tail_included_spec`, open `View` impls for `Inclusion`/`Counterexample`, `Exhausted` iff `GraphBudget` (documented, A5 prose), four `pair_*` differential tests; S12 not attempted; F observed analysis 602/0, core 287/0, store 289/0, semantics 1618/0 |
-| T | not started | `track/t-b` | wave 3 |
+| T | running since `84d144f` | `track/t-b` | wave 3: reviewer test targets, paper index entries, hygiene renames (M5), VERIFY.md rewrite, docs moves, config registration |
 
 ## Last gate results
+
+Wave-2 gate at `84d144f`: eleven configurations cached from the F merge (203/287/289/1618/1623/19/602), fmt, clippy, workspace tests 202 passed, fuzz oracle 8, spec-check, TRUST.md reproducible after the line-drift regeneration. (Re-run in progress to confirm; the first run failed only on the stale TRUST.md.)
 
 Wave-1 gate at `56726bd`: all eleven configurations (cached from the B merge: 191/275/288/1618/1623/19/593), fmt, clippy (workspace + fuzz), `cargo test --workspace --features junco-policy/test-util` 198 passed, fuzz oracle 8 passed, spec-check, TRUST.md reproducible (regenerated: 5 axioms, totals 181). PASSED.
 
