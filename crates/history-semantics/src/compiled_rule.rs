@@ -185,12 +185,25 @@ pub mod verify {
             rule@, candidate, raw::raw_events(history))
     }
 
+    /// Outcome of the ordered scan: the first violated source (R2 `least_violation`) or none
+    /// (R2 `policy_permits`), under the event laws.
     pub open spec fn ordered_result<E: Event>(sources: Seq<Rule<E>>, history: History<E>, candidate: E,
         result: Result<Option<usize>, HistoryError>) -> bool {
         junco_core::spec::hypotheses::event_obligations::<E>() ==> match result {
             Ok(Some(index)) => dsl::least_violation(dsl::rule_views(sources), candidate, raw::raw_events(history), index as int),
-            Ok(None) => forall|j: int| 0 <= j < sources.len() ==> !dsl::rule_violated(sources[j]@, candidate, raw::raw_events(history)),
+            Ok(None) => dsl::policy_permits(dsl::rule_views(sources), candidate, raw::raw_events(history)),
             Err(_) => true,
+        }
+    }
+
+    /// A scan that violated no source permits the candidate (`policy_permits` over the views).
+    pub proof fn lemma_no_violation_permits<E: Event>(sources: Seq<Rule<E>>, candidate: E, history: Seq<E>)
+        requires forall|j: int| 0 <= j < sources.len() ==> !dsl::rule_violated(sources[j]@, candidate, history),
+        ensures dsl::policy_permits(dsl::rule_views(sources), candidate, history),
+    {
+        assert forall|i: int| 0 <= i < dsl::rule_views(sources).len() implies
+            !dsl::rule_violated(dsl::rule_views(sources)[i], candidate, history) by {
+            assert(dsl::rule_views(sources)[i] == sources[i]@);
         }
     }
 

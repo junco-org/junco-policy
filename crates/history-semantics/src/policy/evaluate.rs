@@ -269,9 +269,8 @@ pub mod verify {
                     && policy_context_calls(after) == policy_context_calls(before)
                     && policy_diagnostic_calls(after) == policy_diagnostic_calls(before)
                     && compiled::ordered_result(policy_sources(before), history, candidate, Ok(None))
-                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==> forall|i: int| 0 <= i < policy_sources(before).len() ==>
-                        !sem::rule_violated(policy_sources(before)[i]@, candidate,
-                            history_store::history::verify::raw_events(history))),
+                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==> sem::policy_permits(
+                        sem::rule_views(policy_sources(before)), candidate, history_store::history::verify::raw_events(history))),
                 Ok(PolicyDecision::Deny { .. }) => policy_selected_index(after) < policy_sources(before).len()
                     && policy_selected_source(after) == policy_sources(before)[policy_selected_index(after) as int]
                     && policy_selected_diagnostic_id(after) == policy_diagnostic_ids(before)[policy_selected_index(after) as int]
@@ -646,6 +645,12 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                 return Ok(Some(index));
             }
             index += 1;
+        }
+        proof! {
+            if junco_core::spec::hypotheses::event_obligations::<E>() {
+                crate::compiled_rule::verify::lemma_no_violation_permits(
+                    verify::policy_sources(entry), *probe, history_store::history::verify::raw_events(*history));
+            }
         }
         Ok(None)
     }
