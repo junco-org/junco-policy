@@ -522,8 +522,11 @@ fn allocate_store_id(Ghost(registry): Ghost<vstd::resource::Loc>)
 /// Its linear birth certificate makes independently owned tokens provably distinct.
 pub struct OwnerId {
     id: u64,
+    #[cfg(verus_keep_ghost)]
     registry: Ghost<vstd::resource::Loc>,
+    #[cfg(verus_keep_ghost)]
     receipt: Tracked<StoreIdReceipt>,
+    #[cfg(verus_keep_ghost)]
     birth: Tracked<RegistryBirth>,
 }
 
@@ -548,11 +551,18 @@ impl OwnerId {
             Map::<usize, vstd::resource::Loc>::empty());
         let ghost registry = authority.id();
         let tracked birth = authority.insert(0, registry);
-        let (id, receipt) = match allocate_store_id(Ghost(registry)) {
+        let (id, _receipt) = match allocate_store_id(Ghost(registry)) {
             Ok(value) => value,
             Err(_) => return Err(HistoryError::IdExhausted { domain: "owner" }),
         };
-        Ok(Self { id, registry: Ghost(registry), receipt, birth: Tracked(birth) })
+        Ok(Self { id,
+            #[cfg(verus_keep_ghost)]
+            registry: Ghost(registry),
+            #[cfg(verus_keep_ghost)]
+            receipt: _receipt,
+            #[cfg(verus_keep_ghost)]
+            birth: Tracked(birth),
+        })
     }
 
     /// Returns the native identity, with the same value used by verified owner checks.
@@ -563,17 +573,17 @@ impl OwnerId {
     }
 
     /// Establishes separation of two simultaneously owned tokens; erased proofs do no runtime work.
-    pub fn establish_distinct(&mut self, other: &Self)
-        requires old(self).wf(), other.wf(),
+    pub fn establish_distinct(&mut self, _other: &Self)
+        requires old(self).wf(), _other.wf(),
         ensures final(self).wf(), final(self).value() == old(self).value(),
-            final(self).value() != other.value(),
+            final(self).value() != _other.value(),
     {
         proof {
             reveal(OwnerId::wf);
             reveal(OwnerId::value);
-            lemma_registry_births_distinct(self.birth.borrow_mut(), other.birth.borrow());
-            lemma_store_receipts_distinct(self.registry@, other.registry@,
-                self.receipt.borrow(), other.receipt.borrow());
+            lemma_registry_births_distinct(self.birth.borrow_mut(), _other.birth.borrow());
+            lemma_store_receipts_distinct(self.registry@, _other.registry@,
+                self.receipt.borrow(), _other.receipt.borrow());
         }
     }
 }
