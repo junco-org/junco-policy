@@ -2,56 +2,69 @@
 
 ## Current wave
 
-Wave 1 proof engineering is active in isolated worktrees. Latest maintainer inbox incorporated:
-`baff915`. G and E are integrated and their full-feature downstream gate is green. A/B/C
-prerequisites are being assembled in an independent integration worktree while the monitor
-and native analyzer proof workers close their remaining obligations. The integration branch
-is `refactor/reviewer-surface`.
+The monitor and native analyzer proof tracks are closed. The atomic A/B/C/D/F source at
+`92f4e9d` passed all six full-feature merge configurations with zero errors and is being
+published on `refactor/reviewer-surface`. Native workspace/fuzz checks also passed.
+Latest inbox acknowledged: `baff915`; Exhausted is unit/no-claim and blocks nothing.
+Reviewer clients T, remaining naming hygiene, docs consolidation and final CI remain.
 
 ## Last checks actually run
 
 - Pinned Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0`, Rust `1.98.1` reused from the previously
   checksum-verified installation.
 - Completed Wave 0 full matrix: all eleven configurations passed, zero errors.
-- Latest G/E full-feature merge gate, including the corrected executable successor bridge:
+- Complete atomic full-feature merge gate: all six configurations passed.
 
   | Configuration | Verified functions | Errors |
   |---|---:|---:|
-  | syntax `serde,std` | 55 | 0 |
-  | core `runtime,std,serde` | 258 | 0 |
-  | store `runtime,std` | 287 | 0 |
-  | semantics `runtime,std,cache` | 1631 | 0 |
+  | syntax `serde,std` | 63 (cached; prior same-source count) | 0 |
+  | core `runtime,std,serde` | 323 | 0 |
+  | store `runtime,std` | 306 | 0 |
+  | semantics `runtime,std,cache` | 1646 | 0 |
   | semantics `public_specs` | 21 | 0 |
-  | analyzer `runtime,std` | 571 | 0 |
+  | analyzer `runtime,std` | 626 | 0 |
 
 - The first G/E gate found the removed finite-domain successor-theorem caller. Replacing it
   with the explicitly instantiated common theorem closed the downstream proof; no statement
-  was weakened. These are integrated G/E counts, not the unfinished native B/F cutover.
+  was weakened. The atomic analyzer gate is now green, including its native entry-point proofs.
 - Default sequential driver crosscheck passed the original eleven configurations in
   **1075.16 seconds**, matching the parallel run's counts exactly. Final confirmation remains.
 - Critical R6 correction: focused core questions/hypotheses **6/0**, analyzer spec **1/0**.
   A throwaway proof rejected a fabricated out-of-source known set (**1/0**); removed afterward.
-- Latest native gate: **194 default workspace tests**, **2 explicit instrumentation tests**,
-  **8 fuzz tests**; workspace fmt, default and instrumentation Clippy, fuzz default and
-  replay-probe Clippy with `-D warnings` all passed. Instrumentation stays out of benchmarks.
+- Latest atomic integration native gate: **198 workspace tests across 25 suites**,
+  **2 explicit instrumentation tests**, **8 fuzz tests**; workspace and fuzz formatting,
+  default/instrumentation/replay-probe Clippy with `-D warnings` passed. Instrumentation
+  remains out of benchmarks.
 - `scripts/spec-check.sh`: **18 passed**, including the reduced assumed-spec boundary.
+- Staged foundation/monitor native package tests: **127 passed across 16 suites**.
+  Both concrete public hypothesis clients passed (**2 verified, 0 errors**), taking only
+  the component type's `hash_coherent` premise.
+  The monitor worker also exercised grant/denial, read-only permits, rollback,
+  foreign/future checkpoints, append-error atomicity and recovery in a removed executable.
+- Additional foundation no-default gates passed: syntax **63**, core **239**, store **303**,
+  semantics **1641**, all zero errors. These precede the final F owner/state additions.
+- B's native bridge focuses passed **57/0** (typed/reconstruction), **62/0** (policy,
+  verdict and minimality), **12/0** (source support), and **14/0** (table assembly).
+  These are worker module results, not a claimed whole-analyzer result.
 
 ## Work in progress
 
 R1–R6 and `INTERFACES.md`: `42ab190`, with scoped-equivalence and ownership clarification
 `4c39737`. Invariant-failure rename: `54a58fe` (separate verified mechanical commit).
-Least-violation relocation: `da1df1d` (separate mechanical commit). The latter retains the old
-typed meaning until B performs the semantic cutover; no compatibility lemma was added.
-PR #10's head is incorporated locally by `0f40cb6`; B/F preserve its guarantees exactly.
-The native analyzer view and its active callers require an atomic B/F cutover after A/C:
-the old view includes component-tuple rules and accumulated known values, while R6 does not.
-Retaining a compatibility view is not an acceptable workaround.
+Least-violation relocation: `da1df1d` (separate mechanical commit); B's staged cutover now states
+it over real events. PR #10's head is incorporated locally by `0f40cb6`; B/F preserve its exact
+same-rule, returned-profile minimality and arbitrary-id removal guarantees.
+The native analyzer view/callers are migrated atomically: actual source rules, retained exact
+declared domains, query-local known contexts, and owner-checked rule ids. No compatibility
+view or legacy-predicate shim is retained.
 
 G's singleton-axiom/dead-std-spec removals, trust inventory, identity audit and instrumentation
 build split are integrated. E's thirteen-row paper index and independent hygiene are integrated,
-including its downstream successor caller. C's complete error split and caller migration are
-staged; A/B actual-event and equality prerequisites are being integrated together. Native B/F
-proofs remain an atomic cutover; dedicated monitor and analyzer workers own disjoint worktrees.
+including its downstream successor caller. C's complete error split/callers and A/B event
+foundations are staged and passed the gates above. D's complete monitor track is staged.
+Native B/F proof closure and public adapters are now integrated in staging. T starts after the
+running merge gate passes. Independent numeric-algebra naming hygiene is prepared separately
+so it cannot invalidate or delay the active proof gate.
 
 ## Decisions and checks
 
