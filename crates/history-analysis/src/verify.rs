@@ -3530,9 +3530,9 @@ pub(crate) mod frontend {
         /// What `new` establishes about the view: no rules, the declared domains, and the declared
         /// values as the known constants (R6).
         pub open spec fn constructed_from<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
-            &&& analyzer_view(a).rules == Seq::<RuleView<E::Component>>::empty()
-            &&& analyzer_view(a).domains == d@
-            &&& analyzer_view(a).known == declared_sets(d@)
+            &&& a@.rules == Seq::<RuleView<E::Component>>::empty()
+            &&& a@.domains == d@
+            &&& a@.known == declared_sets(d@)
         }
 
         pub(crate) proof fn lemma_constructor_domains<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)

@@ -611,15 +611,15 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// rule's constants enter `known` on every return: interning may precede a failure.
     pub fn add_rule(&mut self, rule: &Rule<E>) -> (result: Result<RuleId, CompileError>)
         requires views::analyzer_obligations::<E>(), old(self).wf(),
-            crate::spec::analyzer::add_rule_capacity::<E>(analyzer_view(*old(self)), rule@),
+            crate::spec::analyzer::add_rule_capacity::<E>(old(self)@, rule@),
         ensures final(self).wf(), final(self).owner() == old(self).owner(),
-            analyzer_view(*final(self)).domains == analyzer_view(*old(self)).domains,
-            analyzer_view(*final(self)).known == crate::spec::analyzer::known_with(
-                analyzer_view(*old(self)).known, junco_core::spec::questions::rule_constants(rule@)),
-            result matches Ok(id) ==> analyzer_view(*final(self)).rules == analyzer_view(*old(self)).rules.push(rule@)
-                && id.index() == analyzer_view(*old(self)).rules.len() && id.owner() == final(self).owner()
+            final(self)@.domains == old(self)@.domains,
+            final(self)@.known == crate::spec::analyzer::known_with(
+                old(self)@.known, junco_core::spec::questions::rule_constants(rule@)),
+            result matches Ok(id) ==> final(self)@.rules == old(self)@.rules.push(rule@)
+                && id.index() == old(self)@.rules.len() && id.owner() == final(self).owner()
                 && junco_core::spec::semantics::rule_wf(rule@),
-            result is Err ==> analyzer_view(*final(self)).rules == analyzer_view(*old(self)).rules,
+            result is Err ==> final(self)@.rules == old(self)@.rules,
             junco_core::verify::history_specs::no_invariant_compile_failure(result),
     {
         let ghost before = *self;
@@ -1147,12 +1147,12 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// Both tails may refer to the head's variables. A counterexample is a matching candidate and
     /// a history in `left` but not in `right`, of minimum length.
     #[verus_spec(result => requires views::analyzer_obligations::<E>(), old(self).wf(),
-        crate::spec::analyzer::query_capacity::<E>(analyzer_view(*old(self)), left@, right@),
+        crate::spec::analyzer::query_capacity::<E>(old(self)@, left@, right@),
         ensures final(self).wf(), final(self).owner() == old(self).owner(),
-            analyzer_view(*final(self)).domains == analyzer_view(*old(self)).domains,
-            analyzer_view(*final(self)).rules == analyzer_view(*old(self)).rules,
-            analyzer_view(*final(self)).known == crate::spec::analyzer::known_with(
-                analyzer_view(*old(self)).known, crate::spec::analyzer::tail_constants(head@, left@, right@)),
+            final(self)@.domains == old(self)@.domains,
+            final(self)@.rules == old(self)@.rules,
+            final(self)@.known == crate::spec::analyzer::known_with(
+                old(self)@.known, crate::spec::analyzer::tail_constants(head@, left@, right@)),
             junco_core::verify::history_specs::no_invariant_compile_failure(result),
             result matches Ok(v) ==> junco_core::spec::semantics::head_tails_wf(head@, left@, right@)
                 && head@.len() == arity::<E>()
