@@ -328,7 +328,7 @@ pub(crate) fn flat_template_cached_decision<L: Limits>(
             junco_core::verify::encoding::numeric_equality()),
         Some(accepted) => junco_core::flat::verify::head_matches(template.head@, candidate,
             junco_core::verify::encoding::numeric_equality())
-            && accepted == junco_core::flat::verify::lang(template.tests@, template.regexes@,
+            && accepted == junco_core::flat::verify::flat_lang(template.tests@, template.regexes@,
                 template.root as nat, candidate, word, junco_core::verify::encoding::numeric_equality()),
     },
 {
