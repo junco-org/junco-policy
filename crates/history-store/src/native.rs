@@ -195,4 +195,52 @@ mod tests {
         assert_eq!(groups.get(&ClassKey(21)).unwrap().as_slice(), &[7, 9]);
         assert!(groups.get(&ClassKey(2)).is_none());
     }
+
+    #[test]
+    fn parts_keys_compare_contents_across_storage_representations() {
+        use junco_core::kernel::RegexId;
+        use junco_core::observation::PartsKey;
+        use smallvec::SmallVec;
+
+        let ids = [
+            RegexId::from_index(1).unwrap(),
+            RegexId::from_index(2).unwrap(),
+        ];
+        let inline = SmallVec::<[RegexId; 4]>::from_slice(&ids);
+        let mut spilled = SmallVec::<[RegexId; 4]>::with_capacity(8);
+        spilled.extend_from_slice(&ids);
+        assert!(!inline.spilled());
+        assert!(spilled.spilled());
+        let inline = PartsKey::from_smallvec(inline);
+        let spilled = PartsKey::from_smallvec(spilled);
+        assert_eq!(inline, spilled);
+        assert_eq!(inline.len(), ids.len());
+        assert_eq!(inline.as_slice(), &ids);
+        assert!(!inline.is_empty());
+        assert_ne!(
+            inline,
+            PartsKey::from_smallvec(SmallVec::from_slice(&[ids[1], ids[0]])),
+        );
+        assert_ne!(
+            inline,
+            PartsKey::from_smallvec(SmallVec::from_slice(&ids[..1]))
+        );
+
+        let mut groups = NativeGroups::new();
+        groups.push(inline, 7);
+        groups.push(spilled, 9);
+        let lookup = PartsKey::from_smallvec(SmallVec::from_slice(&ids));
+        assert_eq!(groups.get(&lookup).unwrap().as_slice(), &[7, 9]);
+        let empty = PartsKey::from_smallvec(SmallVec::new());
+        assert!(empty.is_empty());
+        assert!(groups.get(&empty).is_none());
+        groups.push(empty, 11);
+        assert_eq!(
+            groups
+                .get(&PartsKey::from_smallvec(SmallVec::new()))
+                .unwrap()
+                .as_slice(),
+            &[11],
+        );
+    }
 }

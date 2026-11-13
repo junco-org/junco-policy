@@ -9,9 +9,8 @@ use history_semantics::verify::refinement::{
 };
 use history_store::native::groups;
 use junco_core::kernel::{RegexId, verify as model};
-use junco_core::observation::SmallVecSpecFns;
+use junco_core::observation::{PartsKey, SmallVecSpecFns};
 use junco_core::verify::numeric_regex::Regex;
-use smallvec::SmallVec;
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -314,18 +313,18 @@ pub(crate) proof fn lemma_intersection(g: model::Graph, cs: Seq<RegexId>, q: Reg
     }
 }
 
-pub(crate) open spec fn valid_entry(g: model::Graph,table: ConstraintTable,key: SmallVec<[RegexId;4]>,
+pub(crate) open spec fn valid_entry(g: model::Graph,table: ConstraintTable,key: PartsKey,
     entry: Entry) -> bool {
     valid(g,key.view()) && entry.constraint < table@.len() && valid(g,entry.pieces@)
 }
 
 pub(crate) open spec fn entries_valid(a: Antichain, g: model::Graph, table: ConstraintTable) -> bool {
-    forall|key: SmallVec<[RegexId;4]>, i: int| #![trigger groups(a.groups)[key][i]] groups(a.groups).dom().contains(key)
+    forall|key: PartsKey, i: int| #![trigger groups(a.groups)[key][i]] groups(a.groups).dom().contains(key)
         && 0 <= i < groups(a.groups)[key].len() ==> valid_entry(g,table,key,groups(a.groups)[key][i])
 }
 
 pub(crate) open spec fn entry_matches(g: model::Graph, table: ConstraintTable,
-    key: SmallVec<[RegexId;4]>, entry: Entry, item: search::Item) -> bool {
+    key: PartsKey, entry: Entry, item: search::Item) -> bool {
     item.constraint == implementation::constraint_of(table@[entry.constraint as int])
         && (forall|p: Regex<model::Test>| #[trigger] paper::required(item.state,p)
             == lifted(g,key.view()).contains(p))
@@ -333,7 +332,7 @@ pub(crate) open spec fn entry_matches(g: model::Graph, table: ConstraintTable,
             == lifted(g,entry.pieces@).contains(p))
 }
 
-pub(crate) open spec fn indexed_entry(g: model::Graph,table: ConstraintTable,key: SmallVec<[RegexId;4]>,
+pub(crate) open spec fn indexed_entry(g: model::Graph,table: ConstraintTable,key: PartsKey,
     entry: Entry,nodes: Seq<search::Node>) -> bool {
     valid_entry(g,table,key,entry)
         && exists|k: int| 0 <= k < nodes.len() && entry_matches(g,table,key,entry,nodes[k].item)
@@ -341,7 +340,7 @@ pub(crate) open spec fn indexed_entry(g: model::Graph,table: ConstraintTable,key
 
 pub(crate) open spec fn antichain_wf(a: Antichain, g: model::Graph, table: ConstraintTable,
     nodes: Seq<search::Node>) -> bool {
-    forall|key: SmallVec<[RegexId;4]>,i: int| #![trigger groups(a.groups)[key][i]]
+    forall|key: PartsKey,i: int| #![trigger groups(a.groups)[key][i]]
         groups(a.groups).dom().contains(key) && 0 <= i < groups(a.groups)[key].len()
         ==> #[trigger] indexed_entry(g,table,key,groups(a.groups)[key][i],nodes)
 }
@@ -351,7 +350,7 @@ pub(crate) proof fn lemma_antichain_valid(a: Antichain,g: model::Graph,table: Co
     requires antichain_wf(a,g,table,nodes),
     ensures entries_valid(a,g,table),
 {
-    assert forall|key: SmallVec<[RegexId;4]>,i: int| #![trigger groups(a.groups)[key][i]]
+    assert forall|key: PartsKey,i: int| #![trigger groups(a.groups)[key][i]]
         groups(a.groups).dom().contains(key) && 0 <= i < groups(a.groups)[key].len()
         implies valid_entry(g,table,key,groups(a.groups)[key][i]) by {
         assert(indexed_entry(g,table,key,groups(a.groups)[key][i],nodes));
@@ -359,7 +358,7 @@ pub(crate) proof fn lemma_antichain_valid(a: Antichain,g: model::Graph,table: Co
 }
 
 pub(crate) open spec fn entry_subsumes(a: Antichain,g: model::Graph,table: ConstraintTable,
-    constraint: implementation::ConstraintView,d: Decomposition,key: SmallVec<[RegexId;4]>,i: int) -> bool {
+    constraint: implementation::ConstraintView,d: Decomposition,key: PartsKey,i: int) -> bool {
     groups(a.groups).dom().contains(key) && 0 <= i < groups(a.groups)[key].len()
         && key.view().to_set().subset_of(d.parts.view().to_set())
         && (forall|domains: encoding::NDomains| inclusion::entails(domains,
@@ -374,7 +373,7 @@ pub(crate) open spec fn entry_subsumes(a: Antichain,g: model::Graph,table: Const
 
 pub(crate) open spec fn raw_subsumes(a: Antichain,g: model::Graph,table: ConstraintTable,
     constraint: implementation::ConstraintView,d: Decomposition) -> bool {
-    exists|ki: (SmallVec<[RegexId;4]>,int)| #[trigger] entry_subsumes(a,g,table,constraint,d,ki.0,ki.1)
+    exists|ki: (PartsKey,int)| #[trigger] entry_subsumes(a,g,table,constraint,d,ki.0,ki.1)
 }
 
 pub(crate) open spec fn dominates_some(domains: encoding::NDomains,nodes: Seq<search::Node>,
@@ -391,7 +390,7 @@ pub(crate) proof fn lemma_domination(a: Antichain, g: model::Graph, table: Const
 {
     reveal(raw_subsumes);
     reveal(entry_subsumes); reveal(antichain_wf); reveal(entry_matches); reveal(decomposition_of);
-    let (key,i) = choose|ki: (SmallVec<[RegexId;4]>,int)| entry_subsumes(a,g,table,c,d,ki.0,ki.1);
+    let (key,i) = choose|ki: (PartsKey,int)| entry_subsumes(a,g,table,c,d,ki.0,ki.1);
     assert(entry_subsumes(a,g,table,c,d,key,i));
     let entry = groups(a.groups)[key][i];
     let k = choose|k: int| 0 <= k < nodes.len() && entry_matches(g,table,key,entry,nodes[k].item);
@@ -462,7 +461,7 @@ pub(crate) proof fn lemma_antichain_frame(chain: Antichain,a: model::Graph,b: mo
     ensures antichain_wf(chain,b,after,nodes),
 {
     reveal(antichain_wf); reveal(entries_valid); reveal(entry_matches);
-    assert forall|key: SmallVec<[RegexId;4]>,i: int| #![trigger groups(chain.groups)[key][i]] groups(chain.groups).dom().contains(key)
+    assert forall|key: PartsKey,i: int| #![trigger groups(chain.groups)[key][i]] groups(chain.groups).dom().contains(key)
         && 0 <= i < groups(chain.groups)[key].len() implies
         indexed_entry(b,after,key,groups(chain.groups)[key][i],nodes) by {
         let entry = groups(chain.groups)[key][i];

@@ -5,6 +5,8 @@ use alloc::vec::Vec;
 #[cfg(feature = "runtime")]
 use smallvec::SmallVec;
 use vstd::prelude::*;
+#[cfg(verus_keep_ghost)]
+use vstd::std_specs::cmp::PartialEqSpec;
 
 #[cfg(any(test, feature = "test-util"))]
 std::thread_local! {
@@ -73,6 +75,71 @@ verus! {
         uninterp spec fn view(&self) -> Seq<A::Item>;
     }
 }
+
+/// Owned ordered regex parts with native equality verified against its sequence model.
+///
+/// SmallVec's external `PartialEq` implementation has no equality specification in
+/// the pinned vstd. This key keeps the same storage and hashing, but compares the
+/// borrowed ID slices through the verified implementation instead.
+#[cfg(feature = "runtime")]
+#[allow(clippy::derived_hash_with_manual_eq)]
+#[verus_verify]
+#[verus_verify(external_derive)]
+#[derive(Debug, Hash)]
+pub struct PartsKey(SmallVec<[crate::kernel::RegexId; 4]>);
+
+#[cfg(feature = "runtime")]
+#[verus_verify]
+impl PartsKey {
+    #[verus_spec(result => ensures result.view() == parts.view())]
+    pub fn from_smallvec(parts: SmallVec<[crate::kernel::RegexId; 4]>) -> Self {
+        Self(parts)
+    }
+
+    #[verus_spec(result => ensures result == self.view().len())]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[verus_spec(result => ensures result == (self.view().len() == 0))]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[verus_spec(result => ensures result@ == self.view())]
+    pub fn as_slice(&self) -> &[crate::kernel::RegexId] {
+        &self.0
+    }
+}
+
+#[cfg(all(feature = "runtime", verus_keep_ghost))]
+verus! {
+    impl PartsKey {
+        pub closed spec fn view(&self) -> Seq<crate::kernel::RegexId> {
+            self.0.view()
+        }
+    }
+
+    impl vstd::std_specs::cmp::PartialEqSpecImpl for PartsKey {
+        open spec fn obeys_eq_spec() -> bool { true }
+        open spec fn eq_spec(&self, other: &Self) -> bool {
+            self.view() == other.view()
+        }
+    }
+}
+
+#[cfg(feature = "runtime")]
+#[verus_verify]
+impl PartialEq for PartsKey {
+    #[verus_spec(result => ensures result == (self.view() == other.view()))]
+    fn eq(&self, other: &Self) -> bool {
+        crate::kernel::id_slice_eq(self.as_slice(), other.as_slice())
+    }
+}
+
+#[cfg(feature = "runtime")]
+#[verus_verify]
+impl Eq for PartsKey {}
 
 /// Capability for native reservation observations during one history operation.
 #[verus_verify]

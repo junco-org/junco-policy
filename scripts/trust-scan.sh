@@ -103,11 +103,11 @@ ASSUME_SPEC = re.compile(r"\bassume_specification\b")
 EXEC_DECL = re.compile(r"(?:(pub(?:\([^)]*\))?)\s+)?(?:(?:unsafe|async|const)\s+)*fn\s+(\w+)")
 
 AXIOM_JUSTIFICATIONS = {
-    "lemma_search_key_laws": "decision 4 internal key (u32, RegexId), where u32 is ConstraintId: stable structural id Eq/Hash",
-    "lemma_regex_pair_key_laws": "decision 4 internal key (RegexId, RegexId): stable ordered structural id Eq/Hash",
-    "lemma_test_pair_key_laws": "decision 4 internal key (TestId, TestId): stable ordered structural id Eq/Hash",
-    "lemma_parts_key_laws": "decision 4 internal SmallVec<[RegexId; 4]> key: stable ordered id Eq/Hash and native equality implies equal sequence views",
-    "native_constraint_key_laws": "decision 4 exact Constraint key: ordered register-key equality and derived structural Hash; assumed exec specification is a key-law axiom despite not being an external-body proof fn",
+    "lemma_search_key_hash_coherent": "decision 4 exact internal (u32, RegexId) key: only hash_coherent is assumed; equality laws are verified",
+    "lemma_regex_pair_hash_coherent": "decision 4 exact internal (RegexId, RegexId) key: only hash_coherent is assumed; equality laws are verified",
+    "lemma_test_pair_hash_coherent": "decision 4 exact internal (TestId, TestId) key: only hash_coherent is assumed; equality laws are verified",
+    "lemma_parts_hash_coherent": "decision 4 internal ordered-parts key, represented by PartsKey: only hash_coherent is assumed; native equality and view facts are verified",
+    "native_constraint_hash_coherent": "decision 4 exact internal Constraint key: only hash_coherent is assumed; its assumed exec specification is a hashing axiom, not an equality axiom",
 }
 def describe(text):
     """A short name for the declaration starting at `text`."""
@@ -346,13 +346,14 @@ print("constructor, Clone implementation or unsafe duplicator requires re-auditi
 print()
 print("## Approved key trust")
 print()
-print("Only decision 4's concrete internal-key axioms may add proof trust. Primitive-key and")
-print("Component2/3/4 compositional axioms are NOT approved. The canonical R4 hashing requirement")
-print("is a single uninterpreted hash_coherent hypothesis. A concrete u8/u32 event witness may")
-print("assume only its exact component-type hash premise and must prove all other bundle conjuncts.")
+print("Only decision 4's five internal-key hash_coherent introductions may add proof trust.")
+print("Native equality, equivalence and PartsKey view reflection are proved, never assumed.")
+print("Primitive-key and Component2/3/4 compositional axioms are NOT approved. R4 retains one")
+print("uninterpreted hash_coherent hypothesis. Concrete u8/u32 event witnesses may assume only")
+print("their exact component-type hash premise and must prove all other bundle conjuncts.")
 print("Every actual proof axiom is enumerated below, including helper dependency axioms; counts")
 print("describe scanned source, not anticipated migration results. No arbitrary-user-key axiom is approved.")
-print("An assumed exec key-law introduction is also an axiom: native_constraint_key_laws is")
+print("An assumed exec hashing introduction is also an axiom: native_constraint_hash_coherent is")
 print("reported under assume_specification when present, not proof_axiom. The latter counts external-body")
 print("proof functions only; it must not be mistaken for the total number of logical axioms.")
 print()

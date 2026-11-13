@@ -331,15 +331,15 @@ impl Constraint {
 /// Index of an interned constraint.
 pub(crate) type ConstraintId = u32;
 
-/// Decision 4's exact internal-key introduction; not an axiom for user component types.
-/// Constraint's verified equality compares every ordered register key; derived Hash hashes it.
+/// Decision 4's hashing-only introduction for the exact internal Constraint key type.
+/// Equality and its laws are separate verified facts, never assumed here.
 #[inline(always)]
-fn native_constraint_key_laws() {}
+fn native_constraint_hash_coherent() {}
 
 #[cfg(verus_keep_ghost)]
 verus! {
-    assume_specification[native_constraint_key_laws]()
-        ensures junco_core::spec::hypotheses::key_laws::<Constraint>();
+    assume_specification[native_constraint_hash_coherent]()
+        ensures junco_core::spec::hypotheses::hash_coherent::<Constraint>();
 }
 
 /// Interned constraints, local to one search.
@@ -353,7 +353,11 @@ pub(crate) struct ConstraintTable {
 impl ConstraintTable {
     #[verus_spec(result => ensures table_wf(result), result@.len() == 0)]
     pub(crate) fn new() -> Self {
-        native_constraint_key_laws();
+        native_constraint_hash_coherent();
+        proof! {
+            equality::lemma_constraint_equality_laws();
+            assert(junco_core::spec::hypotheses::key_laws::<Constraint>());
+        }
         Self {
             constraints: Vec::new(),
             ids: NativeMap::new(),
@@ -923,6 +927,28 @@ pub(crate) mod equality {
         open spec fn obeys_eq_spec() -> bool { true }
         open(crate) spec fn eq_spec(&self, other: &Self) -> bool {
             constraint_key(*self) == constraint_key(*other)
+        }
+    }
+
+    /// Native `eq` below verifies this key equality for every input, without a
+    /// well-formedness restriction; its equivalence laws are those of spec equality.
+    pub(crate) proof fn lemma_constraint_equality_laws()
+        ensures Constraint::obeys_eq_spec(),
+            junco_core::spec::hypotheses::eq_equivalence::<Constraint>(
+                |a: Constraint, b: Constraint| a.eq_spec(&b), |_: Constraint| true),
+    {
+        assert forall|a: Constraint| #[trigger] a.eq_spec(&a) by {
+            assert(constraint_key(a) == constraint_key(a));
+        }
+        assert forall|a: Constraint, b: Constraint|
+            #[trigger] a.eq_spec(&b) == b.eq_spec(&a) by {
+            assert((constraint_key(a) == constraint_key(b))
+                == (constraint_key(b) == constraint_key(a)));
+        }
+        assert forall|a: Constraint, b: Constraint, c: Constraint|
+            a.eq_spec(&b) && b.eq_spec(&c) implies a.eq_spec(&c) by {
+            assert(constraint_key(a) == constraint_key(b));
+            assert(constraint_key(b) == constraint_key(c));
         }
     }
     }

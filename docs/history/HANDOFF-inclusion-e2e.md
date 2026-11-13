@@ -41,7 +41,7 @@ points first ensure `*_correct`; `*_minimal` is added when proved.
 plus this file). Work on a new branch from it; file and line references below are to that state.
 Pre-verification reference code: `origin/feat/inclusion-simulation` (`e2aa01e`). Read
 `VERIFY.md` first ("Differences between the paper and the mechanization", items 5-10) and
-`docs/verification/SPEC.md`.
+[archived SPEC.md](SPEC.md).
 
 ## What already exists (do not re-prove)
 

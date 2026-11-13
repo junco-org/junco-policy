@@ -118,147 +118,65 @@ up to eight coordinates inline.
 
 ## What Verus proves
 
-### The top-level `pair_language` property
+The single reviewer guide is [VERIFY.md](VERIFY.md): commands, source-reported evidence,
+the six public semantic surfaces, hypotheses, paper differences and trust boundaries.
+The [13-row checked paper index](crates/history-semantics/src/verify/paper.rs)
+maps paper labels to actual `stmt_*` / `theorem_*` pairs without unstable line anchors.
 
-A rule has a head that matches the candidate and a tail that describes a language of
-committed histories. The pair-language specification is named
-[`pair_lang`](crates/junco-core/src/verify/history_specs.rs#L701-L704) in the source:
+### Real-event semantics
 
-$$
-\operatorname{pair\_lang}(H,R,q,w)
-\iff
-\exists\theta.\;
-\operatorname{head\_match}(H,q,\theta)
-\land
-w \in \mathcal{L}_{\theta}(R).
-$$
+A candidate supplies bindings to a scoped head; it is **not** appended to the history
+being checked. Histories are oldest-first sequences of real events. The public
+[`lang`, `head_matches`, and `rule_violated`](crates/junco-core/src/spec/semantics.rs)
+definitions give the meaning: Forbid denies tail membership; Require denies its
+complement when the head matches. `All` accepts any whole history, `Epsilon` only
+empty history, and `Test` exactly one event. Concat/Star split ordered histories;
+union/intersection/complement operate on whole languages.
 
-Here $H$ is the candidate head, $R$ the tail expression, $q$ the proposed event and
-$w$ the committed history, ordered oldest to newest. The substitution $\theta$ holds
-the values bound by the candidate, one slot per coordinate. A head constant must
-equal the corresponding candidate value; a bound variable captures that value for use
-in the same coordinate of a tail test. The numeric model uses zero for coordinates
-that do not bind. Head matching determines a unique substitution, as proved by
-[`lemma_head_match_unique_subst`](crates/junco-core/src/verify/history_specs.rs#L706-L714).
+For example, `All · Test(principal=p ∧ action=Edit ∧ resource=r) · All` requires an
+earlier matching edit for a release candidate. Empty history or another principal's
+edit does not satisfy it. The numeric
+[`pair_lang` examples](crates/history-semantics/src/verify/history_examples.rs)
+illustrate this semantics; the public real-event surface is authoritative.
 
-The candidate supplies bindings. It is not added to the history being checked.
+### Monitor and analyzer contracts
 
-$\mathcal{L}_{\theta}(R)$ is the set of complete histories accepted by $R$ after
-substituting those bindings. The
-[`lang` definition](crates/junco-core/src/verify/history_specs.rs#L91-L105) gives each
-operator its meaning:
+[`Validator::check`](crates/history-semantics/src/validator.rs) calls the verified
+implementation: grant appends exactly a permitted request; denial selects the least
+violated source rule; denial/error preserve history. `permits` is read-only.
+The [monitor surface](crates/history-semantics/src/spec/monitor.rs) states committed
+trace safety: every committed event was permitted against its strict prefix.
+The [public reviewer client](crates/history-semantics/tests/reviewer.rs) consumes
+these contracts without private compilation or encoding imports.
 
-- `Empty` accepts no history. `Epsilon` accepts only the empty history.
-- `All` accepts any complete history, including empty and multi-event histories.
-- `Test(p)` accepts exactly one event, and only when that event satisfies `p`.
-- `Concat` splits the history into ordered pieces, one for each child expression.
-  `Star` accepts zero or more such pieces, each accepted by its child.
-- Union, intersection and complement operate on whole languages.
+The [analyzer surface](crates/history-analysis/src/spec/analyzer.rs) specifies
+coverage, redundancy, strictness and tail inclusion over real events inside declared
+domains. Holds is sound without fresh capacity; every admissible counterexample
+instance witnesses failure, while existence/refutation requires the returned
+counterexample's coordinate capacity. Unit Exhausted makes no claim; errors exclude
+invariant failure. Policy minima are within the returned constant profile, not
+global/per-rule minima; strictness uses the same selected Q rule for failure/minimum.
+Q denies implies P denies, equivalently P permits implies Q permits. Redundancy
+removes all copies of a target id; absent targets retain coverage meaning.
+See the [analyzer reviewer client](crates/history-analysis/tests/reviewer.rs).
 
-These distinctions matter: `All` is not a one-event wildcard, and `Test(true)` does
-not accept an empty history. Verus checks that empty-history distinction in
-[`epsilon_versus_test_true_on_empty_history`](crates/history-semantics/src/verify/history_examples.rs#L54-L62).
+The [hypothesis bundles](crates/junco-core/src/spec/hypotheses.rs) require stable,
+correctly tagged native projections, arity and faithful equality/hashing; analyzer
+use adds surjectivity. Concrete u8 and u32-coordinate tuple lemmas prove all other
+laws assuming only component `hash_coherent`. Declared domains are runtime-input
+assumptions, not monitor checks: outside-domain events have no transfer guarantee.
 
-### A prior edit, expressed as a language
+[TRUST.md](TRUST.md) records native containers, successor caches, mutex/record/Arc
+adapters, callbacks, allocation leaves and assumed library contracts. Arc identity
+is restricted to internal live-owner construction invariants, not generic Arc
+injectivity. Hash/Eq panic/unwind recovery is outside scope. Root `RulePolicy`
+remains **unverified glue**: could_fire filtering, per-event TracePolicy construction,
+decide-then-append, audit append and error-to-deny are not the atomic Validator theorem.
+Root event adapters need the stated projection/equality/hash laws.
 
-Consider a Require rule whose head matches a release by principal $p$ on resource $r$.
-Its tail is
-
-$$
-\texttt{All}\;\cdot\;
-\texttt{Test}(\text{principal}=p \land \text{action}=\text{Edit} \land \text{resource}=r)
-\;\cdot\;\texttt{All}.
-$$
-
-The two `All` expressions allow arbitrary history before and after one matching edit.
-The rule therefore requires an earlier edit by the releasing principal on the same
-resource. An empty history cannot satisfy it. An edit by another principal or on a
-different resource cannot serve as the witness.
-
-[`prior_edit_grants_matching_release`](crates/history-semantics/src/verify/history_examples.rs#L80-L102)
-proves that a singleton matching-edit history satisfies `pair_lang` for the release
-candidate. That proof example assigns numeric action 2 to edit and 3 to release.
-This is an illustrative Require rule; the ownership-lock policy above has its own
-seven-rule definition.
-
-### From the specification to runtime answers
-
-The proof covers the running compiled-rule implementation. The
-[`public_compiled_decision`](crates/history-semantics/src/verify/typed_decision.rs#L121)
-verification endpoint calls the actual `CompiledRule::new` constructor and
-`accepts_history` method. Given a well-formed store and history, and the native-type
-obligations below, its successful result has this meaning:
-
-```text
-Ok(None)            The candidate does not match the head.
-Ok(Some(accepted))  The head matches, and accepted equals source-tail
-                   language membership over the raw committed history.
-```
-
-For a matching head, `accepted` is true exactly when the history is in the tail's language
-under the typed rule semantics (`dsl::rule_evaluation`). This equivalence
-rules out both accepting a history outside the declared language and rejecting one
-inside it on a successful evaluation. The result keeps a head mismatch separate from
-a matching head whose tail rejects the history.
-
-Checked `CompiledPolicy` and `Validator` bodies skip nonmatching heads and select the
-first violating Require or Forbid rule. Their constructors preserve source order;
-policy construction also preserves each source's diagnostic pairing. The
-[composition clients](crates/history-semantics/src/verify/typed_decision.rs#L186)
-call the real constructors and decisions. A validator grant appends the exact request
-event and returns its metadata; denial and error preserve committed history.
-Only a selected policy denial calls context and diagnostic, once each, through a
-native invocation leaf. Grants and errors call neither.
-
-The body proofs cover DSL structure and lowering, constant encoding as codebooks grow,
-numeric compilation and evaluation, raw-to-numeric history correspondence, and cached
-lifecycle and publication receipts. The
-[`retained_history_lifecycle` and `compiled_cached_decision` endpoints](crates/history-semantics/src/verify/typed_decision.rs#L137)
-exercise retained evaluation across append, rollback, replacement, truncation and a
-fresh-owner fork, and the same production method used by cached clients.
-
-Trace observers and result elimination reuse the compiled-policy proofs. Shared
-combination lemmas handle membership inclusion and pointwise Boolean equivalence,
-including empty sequences and duplicate members; atom collection uses one inclusion
-proof for graph and sequence growth. These are proof-only changes: public contracts,
-native signatures and trust boundaries are unchanged.
-
-Coordinate, history-key and store-ID issuance use checked successor, key-absence and
-map-insertion proofs over authorities retained in the process mutexes. Persistent
-receipts distinguish byte and typed issuers and independent typed registries.
-[Independent store construction](crates/history-store/src/typed.rs#L1063) derives both
-registry and scalar owner inequality; the
-[foreign rollback client](crates/history-store/src/history.rs#L1112) takes an actual
-source checkpoint and proves `WrongCheckpointOwner` without changing the target.
-Stale-frontier failures consume an ID; exhaustion does not. Later consumer failures
-do not remove issued IDs.
-
-The theorem is conditional on stable `Event` projections and component equality and
-hashing that agree with their models. Modeled equality must be reflexive, symmetric
-and transitive; equal native keys must hash coherently. These obligations are explicit
-in [`native_obligations`](crates/history-store/src/typed.rs#L1135-L1138) and
-[`key_obligations`](crates/history-store/src/typed/map.rs#L21-L30), not universal proofs
-about arbitrary user types. Native field projections, callback invocation, const/static
-installation and reference identity, mutex/Arc/record adapters, container operations
-and reservations remain proof boundaries. Callbacks may panic or diverge; no purity
-or determinism is assumed. Caching remains trusted. Checked byte-record callbacks
-publish lifecycle snapshots at their lock acquisitions; observed byte-binding receipts
-prove path reuse and separation across calls. DSL helpers and `TracePolicy` have checked
-contracts. Root `LockPolicy` remains a native facade caller, and `LockEvent` remains a
-native projection adapter.
-
-Public ghost APIs expose source decisions, readiness introductions and result facts
-without revealing writable graphs or native maps. The
-[`public_specs` integration target](crates/history-semantics/tests/public_specs.rs)
-uses only public imports to consume these contracts, including exact iterator-backed
-histories, owner checks, diagnostic ordering and lifecycle receipts.
-
-Under the native event laws, production compilation and valid decisions exclude
-`HistoryError::Invariant`. Scoped sources also exclude unbound-variable,
-variable-component-conflict and wrapped `InvalidPolicy` errors. Allocation, limits,
-ID/revision exhaustion and foreign owners remain distinct failures. Generic stores
-and encoders retain arbitrary errors unless they opt into the corresponding ghost
-capabilities.
+The [public_specs clients](crates/history-semantics/tests/public_specs.rs) additionally
+exercise public lifecycle/ownership and diagnostic contracts. Current commands and
+evidence are centralized in VERIFY rather than repeated counts here.
 
 ## Fast repeated decisions
 
@@ -626,35 +544,27 @@ Semantics `cache` enables optional precompilation. Neither feature implies `runt
 Core `serde` enables portable source serialization. The root `junco-policy` package selects
 core/Syntax `std`, Store `runtime,std` and Semantics `runtime,std,cache`.
 Semantics `test-util` is a dev-only integration probe feature.
-Analysis has no features; it is no_std + alloc and outside the Verus job. It uses Semantics
-`runtime` through `SymbolicLanguage`, a native facade like `TracePolicy` that owns a compiled
-pair and calls only verified graph operations.
+Analysis supports `runtime` and `std` configurations and is a verified target.
+Its four public query contracts and declared-domain/capacity qualifications are
+documented in [VERIFY.md](VERIFY.md).
 
 ## Reproduce the verification
 
-The pinned toolchain is Rust `1.98.1`, Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0` and
-`vstd = 0.0.0-2026-10-04-0306`. With `verus` and `cargo-verus` on `PATH`, and
-`VERUS_Z3_PATH` pointing to that Z3 binary, run the core and cached-runtime gates:
+Use [VERIFY.md](VERIFY.md) for the pinned toolchain, complete configuration matrix
+and evidence qualifications. The [driver](scripts/verify-all.sh) and
+[CI workflow](.github/workflows/ci.yml) register the same original eleven
+configurations plus exactly two public reviewer targets:
 
 ```sh
-cargo verus verify --locked -p junco-core --features runtime,std,serde
-cargo verus verify --locked -p history-semantics --features runtime,std,cache
-cargo verus verify --locked -p history-semantics --features runtime,std,cache --test public_specs
+scripts/verify-all.sh -- --num-threads 64
+cargo verus verify --locked -p history-semantics --features runtime,std,cache --test reviewer -- --num-threads 64
+cargo verus verify --locked -p history-analysis --no-default-features --features runtime,std --test reviewer -- --num-threads 64
 ```
 
-The [CI workflow](.github/workflows/ci.yml#L86-L150) contains the toolchain setup and
-full library feature matrix. Verified helper dependencies are pinned to
-[bumpus](https://github.com/elefthei/bumpus) (`verus-bumpalo`) commit
-`888a6983370524cf1686d82e5814dd17a2dd14e5` and
-[hashconsius](https://github.com/elefthei/hashconsius) commit
-`d7c17483a46b42a9e179cbfa0fdae9b7e8043dbf`.
-
-The trusted std and smallvec specifications in
-[`history_assumptions.rs`](crates/junco-core/src/verify/history_assumptions.rs) are not
-proved. `scripts/spec-check.sh` tests each of them against the real implementation with
-[verus-spec-check](https://github.com/verus-lang/verus-spec-check) (the `spec-check` CI job).
-The ordering and equality specifications require vstd's `obeys_cmp` and `obeys_eq` laws of
-their element type.
+`scripts/spec-check.sh` exercises the assumed std/smallvec contracts against native
+implementations, not a proof of those assumptions. See [TRUST.md](TRUST.md).
+Historical audit/handoff/finiteness documents are archived in [docs/history](docs/history/);
+they are not current contracts or current verification evidence.
 
 ## Regorus integration
 

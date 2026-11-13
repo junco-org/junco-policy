@@ -2,56 +2,87 @@
 
 ## Current wave
 
-Wave 1 proof engineering is active in isolated worktrees. Latest maintainer inbox incorporated:
-`baff915`. G and E are integrated and their full-feature downstream gate is green. A/B/C
-prerequisites are being assembled in an independent integration worktree while the monitor
-and native analyzer proof workers close their remaining obligations. The integration branch
-is `refactor/reviewer-surface`.
+The complete monitor/analyzer source, both reviewer clients, and the hash-only trust repair
+are pushed through `8baaf29` (source `00fbeed`). **All thirteen Verus configurations passed,
+zero errors, in 770.50 seconds.** Workspace **201 tests**, fuzz **8 tests**, formatting,
+workspace/fuzz Clippy `-D warnings`, and **18 spec-check tests** also pass. Independent
+monitor/analyzer surface reviews found no blocking defect. Remaining work is optional internal
+numeric/finite-set hygiene and the final default sequential gate. Exhausted blocks nothing.
 
 ## Last checks actually run
 
 - Pinned Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0`, Rust `1.98.1` reused from the previously
   checksum-verified installation.
 - Completed Wave 0 full matrix: all eleven configurations passed, zero errors.
-- Latest G/E full-feature merge gate, including the corrected executable successor bridge:
+- Complete hash-only source and reviewer-client gate at `00fbeed`: all thirteen passed.
 
   | Configuration | Verified functions | Errors |
   |---|---:|---:|
-  | syntax `serde,std` | 55 | 0 |
-  | core `runtime,std,serde` | 258 | 0 |
-  | store `runtime,std` | 287 | 0 |
-  | semantics `runtime,std,cache` | 1631 | 0 |
+  | syntax no-default | 63 (cached; prior unchanged-source count) | 0 |
+  | syntax `serde,std` | 63 (cached; prior unchanged-source count) | 0 |
+  | core no-default | 239 | 0 |
+  | core `runtime,std,serde` | 332 | 0 |
+  | store `runtime` no-default | 306 | 0 |
+  | store `runtime,std` | 306 | 0 |
+  | semantics `runtime` no-default | 1641 | 0 |
+  | semantics `runtime,std,cache` | 1646 | 0 |
   | semantics `public_specs` | 21 | 0 |
-  | analyzer `runtime,std` | 571 | 0 |
+  | analyzer `runtime` no-default | 627 | 0 |
+  | analyzer `runtime,std` no-default | 627 | 0 |
+  | monitor reviewer | 4 | 0 |
+  | analyzer reviewer | 9 | 0 |
+- Earlier atomic full-feature/all-eleven gates at `92f4e9d` / `e525e20` passed too;
+  the thirteen-configuration result above supersedes their pre-narrowing trust boundary.
+- Reviewer-client integration gate: monitor **4 verified / 0 errors**, analyzer **9 / 0**;
+  both configurations passed in **311.43 seconds**. Parent also ran both executable reviewer
+  smoke tests: monitor grant/denial and all four analyzer query families' verdict cases passed.
+- Hash-only repair worker focuses: Core observation/internal keys **9/0**, analyzer pruning
+  **39/0**, store native **3/0**, constraint **73/0**. Native repair suites passed **99 tests**,
+  with Clippy `-D warnings`; the worker applied three wrapping-only formatting corrections.
+  Parent's combined verification and native CI gates now pass as recorded above.
 
 - The first G/E gate found the removed finite-domain successor-theorem caller. Replacing it
   with the explicitly instantiated common theorem closed the downstream proof; no statement
-  was weakened. These are integrated G/E counts, not the unfinished native B/F cutover.
+  was weakened. The atomic analyzer gate is now green, including its native entry-point proofs.
 - Default sequential driver crosscheck passed the original eleven configurations in
   **1075.16 seconds**, matching the parallel run's counts exactly. Final confirmation remains.
 - Critical R6 correction: focused core questions/hypotheses **6/0**, analyzer spec **1/0**.
   A throwaway proof rejected a fabricated out-of-source known set (**1/0**); removed afterward.
-- Latest native gate: **194 default workspace tests**, **2 explicit instrumentation tests**,
-  **8 fuzz tests**; workspace fmt, default and instrumentation Clippy, fuzz default and
-  replay-probe Clippy with `-D warnings` all passed. Instrumentation stays out of benchmarks.
+- Latest integrated native gate: **201 workspace tests across 27 suites**, **8 fuzz tests**;
+  workspace and fuzz formatting and Clippy `-D warnings` pass. The earlier explicit
+  **2 instrumentation tests** and replay-probe Clippy also passed; final confirmation follows
+  the internal hygiene merge. Instrumentation remains out of benchmarks.
 - `scripts/spec-check.sh`: **18 passed**, including the reduced assumed-spec boundary.
+- Staged foundation/monitor native package tests: **127 passed across 16 suites**.
+  Both concrete public hypothesis clients passed (**2 verified, 0 errors**), taking only
+  the component type's `hash_coherent` premise.
+  The monitor worker also exercised grant/denial, read-only permits, rollback,
+  foreign/future checkpoints, append-error atomicity and recovery in a removed executable.
+- Additional foundation no-default gates passed: syntax **63**, core **239**, store **303**,
+  semantics **1641**, all zero errors. These precede the final F owner/state additions.
+- B's native bridge focuses passed **57/0** (typed/reconstruction), **62/0** (policy,
+  verdict and minimality), **12/0** (source support), and **14/0** (table assembly).
+  These are worker module results, not a claimed whole-analyzer result.
 
 ## Work in progress
 
 R1–R6 and `INTERFACES.md`: `42ab190`, with scoped-equivalence and ownership clarification
 `4c39737`. Invariant-failure rename: `54a58fe` (separate verified mechanical commit).
-Least-violation relocation: `da1df1d` (separate mechanical commit). The latter retains the old
-typed meaning until B performs the semantic cutover; no compatibility lemma was added.
-PR #10's head is incorporated locally by `0f40cb6`; B/F preserve its guarantees exactly.
-The native analyzer view and its active callers require an atomic B/F cutover after A/C:
-the old view includes component-tuple rules and accumulated known values, while R6 does not.
-Retaining a compatibility view is not an acceptable workaround.
+Least-violation relocation: `da1df1d` (separate mechanical commit); B's staged cutover now states
+it over real events. PR #10's head is incorporated locally by `0f40cb6`; B/F preserve its exact
+same-rule, returned-profile minimality and arbitrary-id removal guarantees.
+The native analyzer view/callers are migrated atomically: actual source rules, retained exact
+declared domains, query-local known contexts, and owner-checked rule ids. No compatibility
+view or legacy-predicate shim is retained.
 
 G's singleton-axiom/dead-std-spec removals, trust inventory, identity audit and instrumentation
 build split are integrated. E's thirteen-row paper index and independent hygiene are integrated,
-including its downstream successor caller. C's complete error split and caller migration are
-staged; A/B actual-event and equality prerequisites are being integrated together. Native B/F
-proofs remain an atomic cutover; dedicated monitor and analyzer workers own disjoint worktrees.
+including its downstream successor caller. C's complete error split/callers, A/B event
+foundations, D's monitor, and F's native query contracts are integrated. T's two reviewer
+clients and consolidated reviewer guide are integrated and passed the client gate above.
+Two independent workers finish Core/analyzer and semantics-proof numeric-algebra hygiene;
+parent owns the executable semantics callers. This separate batch cannot invalidate or delay
+the active hash-only proof gate.
 
 ## Decisions and checks
 
@@ -105,6 +136,16 @@ passed with analyzer counts 570/570, semantics counts 1615/1620, and 196 workspa
 B/F migrate that content exactly to the new vocabulary and remove superseded predicates.
 
 ## Inbox acknowledgements
+
+**2026-11-13: Internal-key axioms may assert only hash_coherent** (`bb1b19d`): acknowledged,
+rechecked at this gate, and repaired in `6458d98`–`00fbeed`. All five introductions assert exactly
+hash_coherent. Tuple and constraint equality/equivalence are now proved. SmallVec's existing
+model has an uninterpreted view and no equality specification; focused attempts failed its
+obeys_eq_spec, equivalence, and eq_spec-to-view obligations independently. The conservative
+alternative is the library-owned `PartsKey`, retaining SmallVec storage/hash but implementing
+verified sequence equality over borrowed slices. The single parts hashing axiom is retargeted
+to PartsKey; the SmallVec axiom is removed. No additional trusted fact, equality/view axiom,
+primitive hashing axiom, or lookup allocation is introduced.
 
 **2026-11-13: Exhausted is not a blocker** (`baff915`): acknowledged. The unit/no-claim
 fallback is already implemented and pushed in `a3a0313`; no wave or merge waits for a token.

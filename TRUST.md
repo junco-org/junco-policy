@@ -99,13 +99,14 @@ constructor, Clone implementation or unsafe duplicator requires re-auditing this
 
 ## Approved key trust
 
-Only decision 4's concrete internal-key axioms may add proof trust. Primitive-key and
-Component2/3/4 compositional axioms are NOT approved. The canonical R4 hashing requirement
-is a single uninterpreted hash_coherent hypothesis. A concrete u8/u32 event witness may
-assume only its exact component-type hash premise and must prove all other bundle conjuncts.
+Only decision 4's five internal-key hash_coherent introductions may add proof trust.
+Native equality, equivalence and PartsKey view reflection are proved, never assumed.
+Primitive-key and Component2/3/4 compositional axioms are NOT approved. R4 retains one
+uninterpreted hash_coherent hypothesis. Concrete u8/u32 event witnesses may assume only
+their exact component-type hash premise and must prove all other bundle conjuncts.
 Every actual proof axiom is enumerated below, including helper dependency axioms; counts
 describe scanned source, not anticipated migration results. No arbitrary-user-key axiom is approved.
-An assumed exec key-law introduction is also an axiom: native_constraint_key_laws is
+An assumed exec hashing introduction is also an axiom: native_constraint_hash_coherent is
 reported under assume_specification when present, not proof_axiom. The latter counts external-body
 proof functions only; it must not be mistaken for the total number of logical axioms.
 
@@ -113,63 +114,44 @@ proof functions only; it must not be mistaken for the total number of logical ax
 
 | kind | `history-analysis` | `history-semantics` | `history-store` | `history-syntax` | `junco-core` | `hashconsius` | `verus-bumpalo` | total |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `proof_axiom` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `uninterpreted_spec` | 4 | 9 | 23 | 0 | 4 | 0 | 2 | 42 |
-| `external_derive_claim` | 2 | 2 | 1 | 4 | 12 | 0 | 0 | 21 |
-| `unannotated_public_exec` | 12 | 53 | 42 | 3 | 27 | 0 | 0 | 137 |
-| `assume_specification` | 0 | 0 | 0 | 0 | 19 | 0 | 2 | 21 |
+| `proof_axiom` | 0 | 0 | 0 | 0 | 4 | 0 | 0 | 4 |
+| `uninterpreted_spec` | 0 | 9 | 24 | 0 | 4 | 0 | 2 | 39 |
+| `external_derive_claim` | 2 | 2 | 1 | 4 | 13 | 0 | 0 | 22 |
+| `unannotated_public_exec` | 10 | 53 | 44 | 3 | 27 | 0 | 0 | 137 |
+| `assume_specification` | 1 | 0 | 0 | 0 | 19 | 0 | 2 | 22 |
 | `external_fn_specification` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `external_body` | 11 | 14 | 41 | 1 | 3 | 0 | 2 | 72 |
+| `external_body` | 0 | 14 | 48 | 1 | 3 | 0 | 2 | 68 |
 | `external_type_specification` | 0 | 0 | 2 | 2 | 3 | 0 | 1 | 8 |
 | `external_trait_specification` | 0 | 0 | 0 | 2 | 1 | 0 | 0 | 3 |
 | `external` | 0 | 0 | 2 | 0 | 0 | 2 | 2 | 6 |
 | `admit` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `assume` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `exec_allows_no_decreases_clause` | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
-| **total** | **29** | **79** | **112** | **12** | **69** | **2** | **9** | **312** |
+| **total** | **13** | **79** | **122** | **12** | **74** | **2** | **9** | **311** |
 
 ## `crates/history-analysis`
 
-### `uninterpreted_spec` (4)
-
-- `crates/history-analysis/src/native.rs:19`: `spec fn representatives`
-- `crates/history-analysis/src/native.rs:23`: `spec fn hash_coherent`
-- `crates/history-analysis/src/native.rs:73`: `spec fn members`
-- `crates/history-analysis/src/native.rs:103`: `spec fn groups`
-
 ### `external_derive_claim` (2)
 
-- `crates/history-analysis/src/constraint.rs:867`: `spec fn obeys_eq_spec = true (file contains external_derive)`
-- `crates/history-analysis/src/constraint.rs:909`: `spec fn obeys_eq_spec = true (file contains external_derive)`
+- `crates/history-analysis/src/constraint.rs:885`: `spec fn obeys_eq_spec = true (file contains external_derive)`
+- `crates/history-analysis/src/constraint.rs:927`: `spec fn obeys_eq_spec = true (file contains external_derive)`
 
-### `unannotated_public_exec` (12)
+### `unannotated_public_exec` (10)
 
-- `crates/history-analysis/src/analyzer.rs:107`: `impl<E: Event> Domains<E> :: fn infinite`
-- `crates/history-analysis/src/analyzer.rs:117`: `impl<E: Event> Domains<E> :: fn with_domain`
 - `crates/history-analysis/src/tests.rs:45`: `impl Event for Access :: fn component`
 - `crates/history-analysis/src/tests.rs:53`: `impl Event for Access :: fn coordinate`
 - `crates/history-analysis/src/tests.rs:442`: `impl Event for IndexedEvent<$length> :: fn component`
 - `crates/history-analysis/src/tests.rs:450`: `impl Event for IndexedEvent<$length> :: fn coordinate`
-- `crates/history-analysis/src/tests.rs:599`: `impl PartialEq for UntaggedEqualityComponent :: fn eq`
-- `crates/history-analysis/src/tests.rs:607`: `impl core::hash::Hash for UntaggedEqualityComponent :: fn hash`
-- `crates/history-analysis/src/tests.rs:619`: `impl Event for UntaggedEqualityEvent :: fn component`
-- `crates/history-analysis/src/tests.rs:627`: `impl Event for UntaggedEqualityEvent :: fn coordinate`
+- `crates/history-analysis/src/tests.rs:603`: `impl PartialEq for UntaggedEqualityComponent :: fn eq`
+- `crates/history-analysis/src/tests.rs:611`: `impl core::hash::Hash for UntaggedEqualityComponent :: fn hash`
+- `crates/history-analysis/src/tests.rs:623`: `impl Event for UntaggedEqualityEvent :: fn component`
+- `crates/history-analysis/src/tests.rs:631`: `impl Event for UntaggedEqualityEvent :: fn coordinate`
 - `crates/history-analysis/tests/differential.rs:46`: `impl Event for Access :: fn component`
 - `crates/history-analysis/tests/differential.rs:54`: `impl Event for Access :: fn coordinate`
 
-### `external_body` (11)
+### `assume_specification` (1)
 
-- `crates/history-analysis/src/native.rs:12`: `struct NativeMap<K: Eq + Hash, V: Copy>`
-- `crates/history-analysis/src/native.rs:35`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn new`
-- `crates/history-analysis/src/native.rs:42`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn lookup`
-- `crates/history-analysis/src/native.rs:55`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn insert_fresh`
-- `crates/history-analysis/src/native.rs:67`: `struct NativeSet<K: Eq + Hash>`
-- `crates/history-analysis/src/native.rs:76`: `impl<K: Eq + Hash> NativeSet<K> :: fn new`
-- `crates/history-analysis/src/native.rs:83`: `impl<K: Eq + Hash> NativeSet<K> :: fn insert`
-- `crates/history-analysis/src/native.rs:96`: `struct NativeGroups<K: Eq + Hash, V>`
-- `crates/history-analysis/src/native.rs:106`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn new`
-- `crates/history-analysis/src/native.rs:113`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn get`
-- `crates/history-analysis/src/native.rs:124`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn push`
+- `crates/history-analysis/src/constraint.rs:341`: `native_constraint_hash_coherent` — decision 4 exact internal Constraint key: only hash_coherent is assumed; its assumed exec specification is a hashing axiom, not an equality axiom
 
 ## `crates/history-semantics`
 
@@ -179,11 +161,11 @@ proof functions only; it must not be mistaken for the total number of logical ax
 - `crates/history-semantics/src/policy/rule.rs:51`: `spec fn policy_rule_source`
 - `crates/history-semantics/src/policy/rule.rs:52`: `spec fn policy_rule_diagnostic`
 - `crates/history-semantics/src/policy/rule.rs:59`: `spec fn diagnostic_output`
-- `crates/history-semantics/src/policy/trace.rs:49`: `spec fn trace_callback_identity`
-- `crates/history-semantics/src/policy/trace.rs:50`: `spec fn trace_diagnostic_identity`
-- `crates/history-semantics/src/policy/trace.rs:52`: `spec fn trace_arc_call`
-- `crates/history-semantics/src/policy/trace.rs:54`: `spec fn trace_rule_source`
-- `crates/history-semantics/src/policy/trace.rs:55`: `spec fn trace_rule_diagnostic`
+- `crates/history-semantics/src/policy/trace.rs:124`: `spec fn trace_callback_identity`
+- `crates/history-semantics/src/policy/trace.rs:125`: `spec fn trace_diagnostic_identity`
+- `crates/history-semantics/src/policy/trace.rs:127`: `spec fn trace_arc_call`
+- `crates/history-semantics/src/policy/trace.rs:129`: `spec fn trace_rule_source`
+- `crates/history-semantics/src/policy/trace.rs:130`: `spec fn trace_rule_diagnostic`
 
 ### `external_derive_claim` (2)
 
@@ -192,20 +174,20 @@ proof functions only; it must not be mistaken for the total number of logical ax
 
 ### `unannotated_public_exec` (53)
 
-- `crates/history-semantics/src/compiled_rule.rs:634`: `impl<E: Event> CompiledRule<E> :: fn new_lazy`
-- `crates/history-semantics/src/compiled_rule.rs:638`: `impl<E: Event> CompiledRule<E> :: fn work_counters`
-- `crates/history-semantics/src/compiled_rule.rs:642`: `impl<E: Event> CompiledRule<E> :: fn work_events`
-- `crates/history-semantics/src/compiled_rule.rs:646`: `impl<E: Event> CompiledRule<E> :: fn reset_work_events`
-- `crates/history-semantics/src/compiled_rule.rs:650`: `impl<E: Event> CompiledRule<E> :: fn cursor_positions`
-- `crates/history-semantics/src/compiled_rule.rs:656`: `impl<E: Event> CompiledRule<E> :: fn replace_graph_byte_pressure`
-- `crates/history-semantics/src/compiled_rule.rs:660`: `impl<E: Event> CompiledRule<E> :: fn set_answer_checkpoint_failure`
-- `crates/history-semantics/src/compiled_rule.rs:682`: `impl Event for Probe :: fn component`
-- `crates/history-semantics/src/compiled_rule.rs:689`: `impl Event for Probe :: fn coordinate`
-- `crates/history-semantics/src/compiled_rule.rs:746`: `impl Limits for FailPublication :: fn checkpoint`
-- `crates/history-semantics/src/compiled_rule.rs:749`: `impl Limits for FailPublication :: fn publication_checkpoint`
-- `crates/history-semantics/src/compiled_rule.rs:752`: `impl Limits for FailPublication :: fn enforce_memory`
-- `crates/history-semantics/src/compiled_rule.rs:902`: `impl Event for Counted :: fn component`
-- `crates/history-semantics/src/compiled_rule.rs:906`: `impl Event for Counted :: fn coordinate`
+- `crates/history-semantics/src/compiled_rule.rs:706`: `impl<E: Event> CompiledRule<E> :: fn new_lazy`
+- `crates/history-semantics/src/compiled_rule.rs:710`: `impl<E: Event> CompiledRule<E> :: fn work_counters`
+- `crates/history-semantics/src/compiled_rule.rs:714`: `impl<E: Event> CompiledRule<E> :: fn work_events`
+- `crates/history-semantics/src/compiled_rule.rs:718`: `impl<E: Event> CompiledRule<E> :: fn reset_work_events`
+- `crates/history-semantics/src/compiled_rule.rs:722`: `impl<E: Event> CompiledRule<E> :: fn cursor_positions`
+- `crates/history-semantics/src/compiled_rule.rs:728`: `impl<E: Event> CompiledRule<E> :: fn replace_graph_byte_pressure`
+- `crates/history-semantics/src/compiled_rule.rs:732`: `impl<E: Event> CompiledRule<E> :: fn set_answer_checkpoint_failure`
+- `crates/history-semantics/src/compiled_rule.rs:754`: `impl Event for Probe :: fn component`
+- `crates/history-semantics/src/compiled_rule.rs:761`: `impl Event for Probe :: fn coordinate`
+- `crates/history-semantics/src/compiled_rule.rs:818`: `impl Limits for FailPublication :: fn checkpoint`
+- `crates/history-semantics/src/compiled_rule.rs:821`: `impl Limits for FailPublication :: fn publication_checkpoint`
+- `crates/history-semantics/src/compiled_rule.rs:824`: `impl Limits for FailPublication :: fn enforce_memory`
+- `crates/history-semantics/src/compiled_rule.rs:974`: `impl Event for Counted :: fn component`
+- `crates/history-semantics/src/compiled_rule.rs:978`: `impl Event for Counted :: fn coordinate`
 - `crates/history-semantics/src/policy/tests.rs:34`: `impl fmt::Display for Editor :: fn fmt`
 - `crates/history-semantics/src/policy/tests.rs:47`: `impl fmt::Display for SrcX :: fn fmt`
 - `crates/history-semantics/src/policy/tests.rs:78`: `impl Event for DocEvent :: fn component`
@@ -213,7 +195,7 @@ proof functions only; it must not be mistaken for the total number of logical ax
 - `crates/history-semantics/src/policy/tests.rs:306`: `impl junco_core::limits::Limits for FailPublication :: fn checkpoint`
 - `crates/history-semantics/src/policy/tests.rs:309`: `impl junco_core::limits::Limits for FailPublication :: fn publication_checkpoint`
 - `crates/history-semantics/src/policy/tests.rs:312`: `impl junco_core::limits::Limits for FailPublication :: fn enforce_memory`
-- `crates/history-semantics/src/policy/trace.rs:321`: `impl<E: Event> fmt::Debug for TraceRule<E> :: fn fmt`
+- `crates/history-semantics/src/policy/trace.rs:340`: `impl<E: Event> fmt::Debug for TraceRule<E> :: fn fmt`
 - `crates/history-semantics/src/progress.rs:2780`: `impl CompiledPair :: fn reset_work_counters`
 - `crates/history-semantics/src/progress.rs:2784`: `impl CompiledPair :: fn reset_work_events`
 - `crates/history-semantics/src/progress.rs:2788`: `impl CompiledPair :: fn work_events`
@@ -228,13 +210,13 @@ proof functions only; it must not be mistaken for the total number of logical ax
 - `crates/history-semantics/src/runtime.rs:1183`: `impl Limits for FailPublication :: fn checkpoint`
 - `crates/history-semantics/src/runtime.rs:1186`: `impl Limits for FailPublication :: fn enforce_memory`
 - `crates/history-semantics/src/runtime.rs:1189`: `impl Limits for FailPublication :: fn publication_checkpoint`
-- `crates/history-semantics/src/validator.rs:308`: `impl<E: Event> Validator<E> :: fn reset_work_events`
-- `crates/history-semantics/src/validator.rs:316`: `impl<E: Event> Validator<E> :: fn work_events`
-- `crates/history-semantics/src/validator.rs:452`: `impl Event for Document :: fn component`
-- `crates/history-semantics/src/validator.rs:460`: `impl Event for Document :: fn coordinate`
-- `crates/history-semantics/src/validator.rs:608`: `impl Limits for PublicationFailure :: fn checkpoint`
-- `crates/history-semantics/src/validator.rs:611`: `impl Limits for PublicationFailure :: fn enforce_memory`
-- `crates/history-semantics/src/validator.rs:614`: `impl Limits for PublicationFailure :: fn publication_checkpoint`
+- `crates/history-semantics/src/validator.rs:405`: `impl<E: Event> Validator<E> :: fn reset_work_events`
+- `crates/history-semantics/src/validator.rs:413`: `impl<E: Event> Validator<E> :: fn work_events`
+- `crates/history-semantics/src/validator.rs:594`: `impl Event for Document :: fn component`
+- `crates/history-semantics/src/validator.rs:602`: `impl Event for Document :: fn coordinate`
+- `crates/history-semantics/src/validator.rs:750`: `impl Limits for PublicationFailure :: fn checkpoint`
+- `crates/history-semantics/src/validator.rs:753`: `impl Limits for PublicationFailure :: fn enforce_memory`
+- `crates/history-semantics/src/validator.rs:756`: `impl Limits for PublicationFailure :: fn publication_checkpoint`
 - `crates/history-semantics/tests/syntax_semantics.rs:31`: `impl Event for Record :: fn component`
 - `crates/history-semantics/tests/syntax_semantics.rs:39`: `impl Event for Record :: fn coordinate`
 - `crates/history-semantics/tests/typed_history.rs:25`: `impl PartialEq for Part :: fn eq`
@@ -248,30 +230,33 @@ proof functions only; it must not be mistaken for the total number of logical ax
 
 ### `external_body` (14)
 
-- `crates/history-semantics/src/compiled_rule.rs:420`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
-- `crates/history-semantics/src/policy/evaluate.rs:67`: `fn render_denial`
-- `crates/history-semantics/src/policy/evaluate.rs:158`: `fn unpack_policy_rule`
+- `crates/history-semantics/src/compiled_rule.rs:483`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
+- `crates/history-semantics/src/policy/evaluate.rs:69`: `fn render_denial`
+- `crates/history-semantics/src/policy/evaluate.rs:192`: `fn unpack_policy_rule`
 - `crates/history-semantics/src/policy/rule.rs:23`: `struct PolicyRule<E: Event, C>`
 - `crates/history-semantics/src/policy/rule.rs:35`: `struct NativeDiagnostic<C>`
 - `crates/history-semantics/src/policy/rule.rs:67`: `fn diagnostic_from_fn`
 - `crates/history-semantics/src/policy/rule.rs:92`: `fn pack_policy_rule`
-- `crates/history-semantics/src/policy/trace.rs:36`: `struct NativeTraceDiagnostic<E>`
-- `crates/history-semantics/src/policy/trace.rs:198`: `fn store_trace_diagnostic`
-- `crates/history-semantics/src/policy/trace.rs:223`: `fn pack_trace_rule`
-- `crates/history-semantics/src/policy/trace.rs:231`: `fn unpack_trace_rule`
-- `crates/history-semantics/src/policy/trace.rs:242`: `fn forward_trace_diagnostic`
-- `crates/history-semantics/src/policy/trace.rs:276`: `struct TraceRule<E: Event>`
-- `crates/history-semantics/src/policy/trace.rs:305`: `impl<E: Event> Clone for TraceRule<E> :: fn clone`
+- `crates/history-semantics/src/policy/trace.rs:38`: `struct NativeTraceDiagnostic<E>`
+- `crates/history-semantics/src/policy/trace.rs:213`: `fn store_trace_diagnostic`
+- `crates/history-semantics/src/policy/trace.rs:238`: `fn pack_trace_rule`
+- `crates/history-semantics/src/policy/trace.rs:246`: `fn unpack_trace_rule`
+- `crates/history-semantics/src/policy/trace.rs:257`: `fn forward_trace_diagnostic`
+- `crates/history-semantics/src/policy/trace.rs:291`: `struct TraceRule<E: Event>`
+- `crates/history-semantics/src/policy/trace.rs:323`: `impl<E: Event> Clone for TraceRule<E> :: fn clone`
 
 ### `exec_allows_no_decreases_clause` (1)
 
-- `crates/history-semantics/src/policy/evaluate.rs:381`: `impl<E: Event, C> CompiledPolicy<E, C> :: fn from_iterator`
+- `crates/history-semantics/src/policy/evaluate.rs:407`: `impl<E: Event, C> CompiledPolicy<E, C> :: fn from_iterator`
 
 ## `crates/history-store`
 
-### `uninterpreted_spec` (23)
+### `uninterpreted_spec` (24)
 
 - `crates/history-store/src/cache.rs:257`: `spec fn successor_cache_view`
+- `crates/history-store/src/native.rs:23`: `spec fn representatives`
+- `crates/history-store/src/native.rs:74`: `spec fn members`
+- `crates/history-store/src/native.rs:104`: `spec fn groups`
 - `crates/history-store/src/store.rs:871`: `spec fn record_id`
 - `crates/history-store/src/store.rs:872`: `spec fn lifecycle_id`
 - `crates/history-store/src/store.rs:933`: `spec fn native_domain_valid`
@@ -287,69 +272,81 @@ proof functions only; it must not be mistaken for the total number of logical ax
 - `crates/history-store/src/store.rs:1497`: `spec fn numeric_authorities`
 - `crates/history-store/src/store.rs:1831`: `spec fn cell_view`
 - `crates/history-store/src/store.rs:1832`: `spec fn record_view`
-- `crates/history-store/src/typed.rs:973`: `spec fn store_ids_authority_id`
-- `crates/history-store/src/typed.rs:974`: `spec fn process_store_ids`
-- `crates/history-store/src/typed.rs:978`: `spec fn store_ids_mutex_valid`
-- `crates/history-store/src/typed.rs:1175`: `spec fn snapshot_published`
-- `crates/history-store/src/typed.rs:1305`: `spec fn mutex_valid`
-- `crates/history-store/src/typed/map.rs:19`: `spec fn representatives`
-- `crates/history-store/src/typed/map.rs:22`: `spec fn hash_coherent`
+- `crates/history-store/src/typed.rs:1055`: `spec fn store_ids_authority_id`
+- `crates/history-store/src/typed.rs:1056`: `spec fn process_store_ids`
+- `crates/history-store/src/typed.rs:1060`: `spec fn store_ids_mutex_valid`
+- `crates/history-store/src/typed.rs:1231`: `spec fn snapshot_published`
+- `crates/history-store/src/typed.rs:1361`: `spec fn mutex_valid`
 
 ### `external_derive_claim` (1)
 
 - `crates/history-store/src/store.rs:1513`: `spec fn obeys_eq_spec = true (file contains external_derive)`
 
-### `unannotated_public_exec` (42)
+### `unannotated_public_exec` (44)
 
-- `crates/history-store/src/graph.rs:542`: `impl ArenaLifetimeCounts :: fn snapshot`
-- `crates/history-store/src/graph.rs:562`: `impl ArenaStorage :: fn track_lifetime`
-- `crates/history-store/src/graph.rs:1792`: `impl CanonicalStore :: fn replace_graph_byte_pressure`
-- `crates/history-store/src/graph.rs:1796`: `impl CanonicalStore :: fn charged_bytes`
-- `crates/history-store/src/graph.rs:1803`: `impl CanonicalStore :: fn table_counts`
-- `crates/history-store/src/history.rs:604`: `impl<E: TypedEvent> fmt::Debug for History<E> :: fn fmt`
-- `crates/history-store/src/history.rs:613`: `impl<E: TypedEvent> PartialEq for History<E> :: fn eq`
-- `crates/history-store/src/history.rs:1220`: `impl Limits for FailMemory :: fn checkpoint`
-- `crates/history-store/src/history.rs:1223`: `impl Limits for FailMemory :: fn publication_checkpoint`
-- `crates/history-store/src/history.rs:1226`: `impl Limits for FailMemory :: fn enforce_memory`
-- `crates/history-store/src/history.rs:1333`: `impl TypedEvent for TestEvent :: fn component`
-- `crates/history-store/src/history.rs:1337`: `impl TypedEvent for TestEvent :: fn coordinate`
-- `crates/history-store/src/history.rs:1424`: `impl TypedEvent for Other :: fn component`
-- `crates/history-store/src/history.rs:1428`: `impl TypedEvent for Other :: fn coordinate`
-- `crates/history-store/src/history.rs:1476`: `impl Limits for FailLimits :: fn checkpoint`
-- `crates/history-store/src/history.rs:1486`: `impl Limits for FailLimits :: fn publication_checkpoint`
-- `crates/history-store/src/history.rs:1489`: `impl Limits for FailLimits :: fn enforce_memory`
-- `crates/history-store/src/history.rs:1622`: `impl Clone for CopyOnly :: fn clone`
-- `crates/history-store/src/history.rs:1631`: `impl TypedEvent for CopyOnly :: fn component`
-- `crates/history-store/src/history.rs:1636`: `impl TypedEvent for CopyOnly :: fn coordinate`
+- `crates/history-store/src/graph.rs:540`: `impl ArenaLifetimeCounts :: fn snapshot`
+- `crates/history-store/src/graph.rs:560`: `impl ArenaStorage :: fn track_lifetime`
+- `crates/history-store/src/graph.rs:1808`: `impl CanonicalStore :: fn replace_graph_byte_pressure`
+- `crates/history-store/src/graph.rs:1812`: `impl CanonicalStore :: fn charged_bytes`
+- `crates/history-store/src/graph.rs:1819`: `impl CanonicalStore :: fn table_counts`
+- `crates/history-store/src/history.rs:632`: `impl<E: TypedEvent> fmt::Debug for History<E> :: fn fmt`
+- `crates/history-store/src/history.rs:641`: `impl<E: TypedEvent> PartialEq for History<E> :: fn eq`
+- `crates/history-store/src/history.rs:1406`: `impl Limits for FailMemory :: fn checkpoint`
+- `crates/history-store/src/history.rs:1409`: `impl Limits for FailMemory :: fn publication_checkpoint`
+- `crates/history-store/src/history.rs:1412`: `impl Limits for FailMemory :: fn enforce_memory`
+- `crates/history-store/src/history.rs:1519`: `impl TypedEvent for TestEvent :: fn component`
+- `crates/history-store/src/history.rs:1523`: `impl TypedEvent for TestEvent :: fn coordinate`
+- `crates/history-store/src/history.rs:1610`: `impl TypedEvent for Other :: fn component`
+- `crates/history-store/src/history.rs:1614`: `impl TypedEvent for Other :: fn coordinate`
+- `crates/history-store/src/history.rs:1662`: `impl Limits for FailLimits :: fn checkpoint`
+- `crates/history-store/src/history.rs:1672`: `impl Limits for FailLimits :: fn publication_checkpoint`
+- `crates/history-store/src/history.rs:1675`: `impl Limits for FailLimits :: fn enforce_memory`
+- `crates/history-store/src/history.rs:1808`: `impl Clone for CopyOnly :: fn clone`
+- `crates/history-store/src/history.rs:1817`: `impl TypedEvent for CopyOnly :: fn component`
+- `crates/history-store/src/history.rs:1822`: `impl TypedEvent for CopyOnly :: fn coordinate`
+- `crates/history-store/src/native.rs:166`: `impl PartialEq for ClassKey :: fn eq`
+- `crates/history-store/src/native.rs:172`: `impl Hash for ClassKey :: fn hash`
 - `crates/history-store/src/store.rs:146`: `impl core::hash::Hash for Event :: fn hash`
 - `crates/history-store/src/store.rs:2526`: `impl Hasher for TestHasher :: fn finish`
 - `crates/history-store/src/store.rs:2529`: `impl Hasher for TestHasher :: fn write`
 - `crates/history-store/src/store.rs:2913`: `impl Limits for FailMemory :: fn checkpoint`
 - `crates/history-store/src/store.rs:2916`: `impl Limits for FailMemory :: fn publication_checkpoint`
 - `crates/history-store/src/store.rs:2919`: `impl Limits for FailMemory :: fn enforce_memory`
-- `crates/history-store/src/typed.rs:929`: `impl<E: Event> core::fmt::Debug for Store<E> :: fn fmt`
-- `crates/history-store/src/typed.rs:1385`: `impl PartialEq for Key :: fn eq`
-- `crates/history-store/src/typed.rs:1391`: `impl Hash for Key :: fn hash`
-- `crates/history-store/src/typed.rs:1400`: `impl Event for TestEvent :: fn component`
-- `crates/history-store/src/typed.rs:1407`: `impl Event for TestEvent :: fn coordinate`
-- `crates/history-store/src/typed.rs:1527`: `impl Event for OtherEvent :: fn component`
-- `crates/history-store/src/typed.rs:1535`: `impl Event for OtherEvent :: fn coordinate`
-- `crates/history-store/src/typed.rs:1683`: `impl PartialEq for Borrowed<'_> :: fn eq`
-- `crates/history-store/src/typed.rs:1689`: `impl Hash for Borrowed<'_> :: fn hash`
-- `crates/history-store/src/typed.rs:1698`: `impl<'a> Event for BorrowedEvent<'a> :: fn component`
-- `crates/history-store/src/typed.rs:1705`: `impl<'a> Event for BorrowedEvent<'a> :: fn coordinate`
-- `crates/history-store/src/typed.rs:1760`: `impl Hash for PanickingKey :: fn hash`
-- `crates/history-store/src/typed.rs:1770`: `impl Event for PanicEvent :: fn component`
-- `crates/history-store/src/typed.rs:1777`: `impl Event for PanicEvent :: fn coordinate`
-- `crates/history-store/src/typed.rs:1804`: `impl Event for SizedEvent :: fn component`
-- `crates/history-store/src/typed.rs:1808`: `impl Event for SizedEvent :: fn coordinate`
+- `crates/history-store/src/typed.rs:1011`: `impl<E: Event> core::fmt::Debug for Store<E> :: fn fmt`
+- `crates/history-store/src/typed.rs:1465`: `impl PartialEq for Key :: fn eq`
+- `crates/history-store/src/typed.rs:1471`: `impl Hash for Key :: fn hash`
+- `crates/history-store/src/typed.rs:1480`: `impl Event for TestEvent :: fn component`
+- `crates/history-store/src/typed.rs:1487`: `impl Event for TestEvent :: fn coordinate`
+- `crates/history-store/src/typed.rs:1607`: `impl Event for OtherEvent :: fn component`
+- `crates/history-store/src/typed.rs:1615`: `impl Event for OtherEvent :: fn coordinate`
+- `crates/history-store/src/typed.rs:1763`: `impl PartialEq for Borrowed<'_> :: fn eq`
+- `crates/history-store/src/typed.rs:1769`: `impl Hash for Borrowed<'_> :: fn hash`
+- `crates/history-store/src/typed.rs:1778`: `impl<'a> Event for BorrowedEvent<'a> :: fn component`
+- `crates/history-store/src/typed.rs:1785`: `impl<'a> Event for BorrowedEvent<'a> :: fn coordinate`
+- `crates/history-store/src/typed.rs:1840`: `impl Hash for PanickingKey :: fn hash`
+- `crates/history-store/src/typed.rs:1850`: `impl Event for PanicEvent :: fn component`
+- `crates/history-store/src/typed.rs:1857`: `impl Event for PanicEvent :: fn coordinate`
+- `crates/history-store/src/typed.rs:1884`: `impl Event for SizedEvent :: fn component`
+- `crates/history-store/src/typed.rs:1888`: `impl Event for SizedEvent :: fn coordinate`
 
-### `external_body` (41)
+### `external_body` (48)
 
 - `crates/history-store/src/cache.rs:69`: `impl GraphCaches :: fn successor_cache`
 - `crates/history-store/src/cache.rs:79`: `impl GraphCaches :: fn successor_get`
 - `crates/history-store/src/cache.rs:93`: `impl GraphCaches :: fn successor_put`
 - `crates/history-store/src/cache.rs:129`: `impl HistoryCursor :: fn position`
+- `crates/history-store/src/native.rs:15`: `struct NativeMap<K: Eq + Hash, V: Copy>`
+- `crates/history-store/src/native.rs:26`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn new`
+- `crates/history-store/src/native.rs:33`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn lookup`
+- `crates/history-store/src/native.rs:45`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn reserve_one`
+- `crates/history-store/src/native.rs:56`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn insert_fresh`
+- `crates/history-store/src/native.rs:68`: `struct NativeSet<K: Eq + Hash>`
+- `crates/history-store/src/native.rs:77`: `impl<K: Eq + Hash> NativeSet<K> :: fn new`
+- `crates/history-store/src/native.rs:84`: `impl<K: Eq + Hash> NativeSet<K> :: fn insert`
+- `crates/history-store/src/native.rs:97`: `struct NativeGroups<K: Eq + Hash, V>`
+- `crates/history-store/src/native.rs:107`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn new`
+- `crates/history-store/src/native.rs:114`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn get`
+- `crates/history-store/src/native.rs:125`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn push`
 - `crates/history-store/src/store.rs:214`: `impl Domain :: fn path_lookup`
 - `crates/history-store/src/store.rs:225`: `impl Domain :: fn path_insert`
 - `crates/history-store/src/store.rs:233`: `impl Domain :: fn path_remove`
@@ -373,20 +370,15 @@ proof functions only; it must not be mistaken for the total number of logical ax
 - `crates/history-store/src/store.rs:1812`: `impl<'a> NativeRecordReadGuard<'a> :: fn acquire`
 - `crates/history-store/src/store.rs:1821`: `impl<'a> NativeRecordReadGuard<'a> :: fn cell`
 - `crates/history-store/src/store.rs:1885`: `impl HistoryStore :: fn new`
-- `crates/history-store/src/typed.rs:114`: `struct NativeStoreIds`
-- `crates/history-store/src/typed.rs:120`: `impl NativeStoreIds :: fn new`
-- `crates/history-store/src/typed.rs:127`: `impl NativeStoreIds :: fn with_state`
-- `crates/history-store/src/typed.rs:414`: `struct NativeBooks<E: Event>`
-- `crates/history-store/src/typed.rs:421`: `impl<E: Event> NativeBooks<E> :: fn new`
-- `crates/history-store/src/typed.rs:433`: `impl<E: Event> NativeBooks<E> :: fn with_books`
-- `crates/history-store/src/typed.rs:475`: `fn share_store`
-- `crates/history-store/src/typed.rs:485`: `fn borrow_store`
-- `crates/history-store/src/typed.rs:493`: `fn process_store_ids_ref`
-- `crates/history-store/src/typed/map.rs:12`: `struct NativeMap<K: Copy + Eq + Hash>`
-- `crates/history-store/src/typed/map.rs:33`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn new`
-- `crates/history-store/src/typed/map.rs:40`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn lookup`
-- `crates/history-store/src/typed/map.rs:53`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn reserve_one`
-- `crates/history-store/src/typed/map.rs:64`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn insert_fresh`
+- `crates/history-store/src/typed.rs:117`: `struct NativeStoreIds`
+- `crates/history-store/src/typed.rs:123`: `impl NativeStoreIds :: fn new`
+- `crates/history-store/src/typed.rs:130`: `impl NativeStoreIds :: fn with_state`
+- `crates/history-store/src/typed.rs:419`: `struct NativeBooks<E: Event>`
+- `crates/history-store/src/typed.rs:426`: `impl<E: Event> NativeBooks<E> :: fn new`
+- `crates/history-store/src/typed.rs:438`: `impl<E: Event> NativeBooks<E> :: fn with_books`
+- `crates/history-store/src/typed.rs:480`: `fn share_store`
+- `crates/history-store/src/typed.rs:490`: `fn borrow_store`
+- `crates/history-store/src/typed.rs:498`: `fn process_store_ids_ref`
 
 ### `external_type_specification` (2)
 
@@ -395,20 +387,20 @@ proof functions only; it must not be mistaken for the total number of logical ax
 
 ### `external` (2)
 
-- `crates/history-store/src/graph.rs:524`: `impl Drop for ArenaStorage`
-- `crates/history-store/src/graph.rs:1379`: `impl core::fmt::Debug for ArenaStorage`
+- `crates/history-store/src/graph.rs:522`: `impl Drop for ArenaStorage`
+- `crates/history-store/src/graph.rs:1377`: `impl core::fmt::Debug for ArenaStorage`
 
 ### `exec_allows_no_decreases_clause` (1)
 
-- `crates/history-store/src/history.rs:309`: `impl<E: TypedEvent> History<E> :: fn from_iterator`
+- `crates/history-store/src/history.rs:322`: `impl<E: TypedEvent> History<E> :: fn from_iterator`
 
 ## `crates/history-syntax`
 
 ### `external_derive_claim` (4)
 
-- `crates/history-syntax/src/event.rs:306`: `spec fn obeys_projection_spec = true (file contains external_derive)`
-- `crates/history-syntax/src/event.rs:319`: `spec fn obeys_projection_spec = true (file contains external_derive)`
-- `crates/history-syntax/src/event.rs:334`: `spec fn obeys_projection_spec = true (file contains external_derive)`
+- `crates/history-syntax/src/event.rs:252`: `spec fn obeys_projection_spec = true (file contains external_derive)`
+- `crates/history-syntax/src/event.rs:265`: `spec fn obeys_projection_spec = true (file contains external_derive)`
+- `crates/history-syntax/src/event.rs:280`: `spec fn obeys_projection_spec = true (file contains external_derive)`
 - `crates/history-syntax/src/syntax.rs:412`: `spec fn obeys_not_spec = true (file contains external_derive)`
 
 ### `unannotated_public_exec` (3)
@@ -423,27 +415,34 @@ proof functions only; it must not be mistaken for the total number of logical ax
 
 ### `external_type_specification` (2)
 
-- `crates/history-syntax/src/event.rs:263`: `struct ExCoproduct<H, T>(Coproduct<H, T>)`
-- `crates/history-syntax/src/event.rs:268`: `struct ExCNil(CNil) (opaque)`
+- `crates/history-syntax/src/spec/events.rs:24`: `struct ExCoproduct<H, T>(Coproduct<H, T>)`
+- `crates/history-syntax/src/spec/events.rs:29`: `struct ExCNil(CNil) (opaque)`
 
 ### `external_trait_specification` (2)
 
-- `crates/history-syntax/src/event.rs:253`: `trait ExArity: sealed::Sealed (with external_trait_extension)`
-- `crates/history-syntax/src/event.rs:273`: `trait ExEvent: Copy + Debug + Eq + Hash (with external_trait_extension)`
+- `crates/history-syntax/src/spec/events.rs:14`: `trait ExArity: sealed::Sealed (with external_trait_extension)`
+- `crates/history-syntax/src/spec/events.rs:34`: `trait ExEvent: Copy + Debug + Eq + Hash (with external_trait_extension)`
 
 ## `crates/junco-core`
 
+### `proof_axiom` (4)
+
+- `crates/junco-core/src/spec/hypotheses.rs:157`: `fn lemma_search_key_hash_coherent` — decision 4 exact internal (u32, RegexId) key: only hash_coherent is assumed; equality laws are verified
+- `crates/junco-core/src/spec/hypotheses.rs:163`: `fn lemma_regex_pair_hash_coherent` — decision 4 exact internal (RegexId, RegexId) key: only hash_coherent is assumed; equality laws are verified
+- `crates/junco-core/src/spec/hypotheses.rs:169`: `fn lemma_test_pair_hash_coherent` — decision 4 exact internal (TestId, TestId) key: only hash_coherent is assumed; equality laws are verified
+- `crates/junco-core/src/spec/hypotheses.rs:175`: `fn lemma_parts_hash_coherent` — decision 4 internal ordered-parts key, represented by PartsKey: only hash_coherent is assumed; native equality and view facts are verified
+
 ### `uninterpreted_spec` (4)
 
-- `crates/junco-core/src/observation.rs:73`: `spec fn view`
-- `crates/junco-core/src/spec/hypotheses.rs:26`: `spec fn hash_coherent`
+- `crates/junco-core/src/observation.rs:75`: `spec fn view`
+- `crates/junco-core/src/spec/hypotheses.rs:44`: `spec fn hash_coherent`
 - `crates/junco-core/src/verify/history_assumptions.rs:49`: `spec fn arc_identity`
 - `crates/junco-core/src/verify/history_assumptions.rs:50`: `spec fn reference_identity`
 
-### `external_derive_claim` (12)
+### `external_derive_claim` (13)
 
-- `crates/junco-core/src/error.rs:166`: `spec fn obeys_from_spec = true (file contains external_derive)`
-- `crates/junco-core/src/error.rs:171`: `spec fn obeys_from_spec = true (file contains external_derive)`
+- `crates/junco-core/src/error.rs:236`: `spec fn obeys_from_spec = true (file contains external_derive)`
+- `crates/junco-core/src/error.rs:241`: `spec fn obeys_from_spec = true (file contains external_derive)`
 - `crates/junco-core/src/kernel.rs:960`: `spec fn obeys_eq_spec = true (file contains external_derive)`
 - `crates/junco-core/src/kernel.rs:964`: `spec fn obeys_cmp_spec = true (file contains external_derive)`
 - `crates/junco-core/src/kernel.rs:972`: `spec fn obeys_partial_cmp_spec = true (file contains external_derive)`
@@ -454,15 +453,16 @@ proof functions only; it must not be mistaken for the total number of logical ax
 - `crates/junco-core/src/kernel.rs:1070`: `spec fn obeys_eq_spec = true (file contains external_derive)`
 - `crates/junco-core/src/kernel.rs:1074`: `spec fn obeys_eq_spec = true (file contains external_derive)`
 - `crates/junco-core/src/kernel.rs:1097`: `spec fn obeys_eq_spec = true (file contains external_derive)`
+- `crates/junco-core/src/observation.rs:124`: `spec fn obeys_eq_spec = true (file contains external_derive)`
 
 ### `unannotated_public_exec` (27)
 
 - `crates/junco-core/src/kernel.rs:221`: `impl core::hash::Hash for Bindings :: fn hash`
 - `crates/junco-core/src/limits.rs:35`: `impl fmt::Debug for LimitError :: fn fmt`
 - `crates/junco-core/src/limits.rs:56`: `impl fmt::Display for LimitError :: fn fmt`
-- `crates/junco-core/src/observation.rs:21`: `impl Drop for ReservationFailureGuard :: fn drop`
-- `crates/junco-core/src/observation.rs:27`: `fn fail_reservations_after`
-- `crates/junco-core/src/observation.rs:34`: `fn reservation_checkpoint`
+- `crates/junco-core/src/observation.rs:23`: `impl Drop for ReservationFailureGuard :: fn drop`
+- `crates/junco-core/src/observation.rs:29`: `fn fail_reservations_after`
+- `crates/junco-core/src/observation.rs:36`: `fn reservation_checkpoint`
 - `crates/junco-core/tests/dsl.rs:19`: `impl Event for DocumentEvent :: fn component`
 - `crates/junco-core/tests/dsl.rs:26`: `impl Event for DocumentEvent :: fn coordinate`
 - `crates/junco-core/tests/dsl.rs:306`: `impl PartialEq for Identity :: fn eq`
@@ -509,19 +509,19 @@ proof functions only; it must not be mistaken for the total number of logical ax
 
 ### `external_body` (3)
 
-- `crates/junco-core/src/observation.rs:83`: `impl ObservationWorld :: fn try_reserve_vec`
-- `crates/junco-core/src/observation.rs:97`: `impl ObservationWorld :: fn try_reserve_vec_exact`
-- `crates/junco-core/src/observation.rs:111`: `impl ObservationWorld :: fn try_reserve_words`
+- `crates/junco-core/src/observation.rs:150`: `impl ObservationWorld :: fn try_reserve_vec`
+- `crates/junco-core/src/observation.rs:164`: `impl ObservationWorld :: fn try_reserve_vec_exact`
+- `crates/junco-core/src/observation.rs:178`: `impl ObservationWorld :: fn try_reserve_words`
 
 ### `external_type_specification` (3)
 
 - `crates/junco-core/src/limits.rs:85`: `struct ExLimitError(LimitError) (opaque)`
-- `crates/junco-core/src/observation.rs:59`: `struct ExSmallVec<A: smallvec::Array>(SmallVec<A>) (opaque)`
-- `crates/junco-core/src/observation.rs:64`: `struct ExCollectionAllocErr(smallvec::CollectionAllocErr) (opaque)`
+- `crates/junco-core/src/observation.rs:61`: `struct ExSmallVec<A: smallvec::Array>(SmallVec<A>) (opaque)`
+- `crates/junco-core/src/observation.rs:66`: `struct ExCollectionAllocErr(smallvec::CollectionAllocErr) (opaque)`
 
 ### `external_trait_specification` (1)
 
-- `crates/junco-core/src/observation.rs:53`: `trait ExSmallVecArray`
+- `crates/junco-core/src/observation.rs:55`: `trait ExSmallVecArray`
 
 ## `dependencies/hashconsius`
 

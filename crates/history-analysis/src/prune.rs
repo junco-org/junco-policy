@@ -17,6 +17,7 @@ use history_semantics::{normalize_verify as norm, symbolic_language_verify as fa
 use history_store::native::NativeGroups;
 use junco_core::HistoryError;
 use junco_core::kernel::{RegexId, RegexKindView, RegexView};
+use junco_core::observation::PartsKey;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::numeric_regex::Regex;
 #[cfg(verus_keep_ghost)]
@@ -44,7 +45,7 @@ pub(crate) enum Root {
 
 #[verus_verify]
 pub(crate) struct Decomposition {
-    pub(crate) parts: SmallVec<[RegexId; 4]>,
+    pub(crate) parts: PartsKey,
     pub(crate) pieces: SmallVec<[RegexId; 8]>,
 }
 
@@ -174,7 +175,10 @@ impl Decomposition {
             lemma_valid_set(g,collected,pieces.view());
             assert(lifted(g,pieces.view()) == lifted(g,collected));
         }
-        let d = Self { parts, pieces };
+        let d = Self {
+            parts: PartsKey::from_smallvec(parts),
+            pieces,
+        };
         proof! {
             lemma_lifted(g,d.parts.view()); lemma_lifted(g,d.pieces.view());
             assert(decomposition_of(g,facade::abs(*language,residual),d));
@@ -204,7 +208,7 @@ impl Decomposition {
             memo_wf(*simulation,*language),index <= self.parts.view().len(),
             decreases self.parts.view().len()-index))]
         while index < self.parts.len() {
-            let parts: &[RegexId] = &self.parts;
+            let parts: &[RegexId] = self.parts.as_slice();
             let part = parts[index];
             let members = push_pieces(language, part, SmallVec::new())?;
             proof! { lemma_ordered(self.pieces.view()); }
@@ -436,7 +440,7 @@ fn normalize_pieces(values: &mut SmallVec<[RegexId; 8]>) {
 
 #[verus_verify]
 pub(crate) struct Antichain {
-    pub(crate) groups: NativeGroups<SmallVec<[RegexId; 4]>, Entry>,
+    pub(crate) groups: NativeGroups<PartsKey, Entry>,
 }
 
 #[verus_verify]
@@ -509,13 +513,14 @@ impl Antichain {
                     decreases parts.view().len()-bit))]
                 while bit < parts.len() {
                     if mask & (1usize << bit) != 0 {
-                        let slice: &[RegexId] = parts;
+                        let slice: &[RegexId] = parts.as_slice();
                         proof! { lemma_valid_push(facade::graph(*language),subset.view(),slice[bit as int]); }
                         subset.push(slice[bit]);
                         proof! { assert(subset.view().to_set().subset_of(parts.view().to_set())); }
                     }
                     bit += 1;
                 }
+                let subset = PartsKey::from_smallvec(subset);
                 found =
                     self.group_subsumes(language, simulation, constraints, c, &subset, state)?;
                 mask += 1;
@@ -551,14 +556,14 @@ impl Antichain {
         simulation: &mut Simulation,
         constraints: &ConstraintTable,
         constraint: &Constraint,
-        parts: &SmallVec<[RegexId; 4]>,
+        parts: &PartsKey,
         state: &Decomposition,
     ) -> Result<bool, HistoryError> {
         let Some(entries) = self.groups.get(parts) else {
             return Ok(false);
         };
         proof_decl! {
-            let ghost key = choose|key: SmallVec<[RegexId;4]>|
+            let ghost key = choose|key: PartsKey|
                 history_store::native::groups(self.groups).dom().contains(key)
                 && parts.eq_spec(&key) && entries@ == history_store::native::groups(self.groups)[key];
         }
@@ -636,7 +641,7 @@ impl Antichain {
                 antichain_wf(before,g,table,nodes) && constraint < table@.len()
                 && node.item.constraint == implementation::constraint_of(table@[constraint as int])
                 && decomposition_of(g,node.item.state,old_state) implies antichain_wf(*self,g,table,nodes.push(node)) by {
-                assert forall|key: SmallVec<[RegexId;4]>,i: int|
+                assert forall|key: PartsKey,i: int|
                     history_store::native::groups(self.groups).dom().contains(key)
                     && 0 <= i < history_store::native::groups(self.groups)[key].len() implies
                     indexed_entry(g,table,key,history_store::native::groups(self.groups)[key][i],nodes.push(node)) by {
