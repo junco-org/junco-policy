@@ -3,30 +3,31 @@
 ## Current wave
 
 Wave 1 proof engineering is active in isolated worktrees. Latest maintainer inbox incorporated:
-`baff915`. G and E are integrated and their full-feature downstream gate is green. A/B/C
-prerequisites are being assembled in an independent integration worktree while the monitor
-and native analyzer proof workers close their remaining obligations. The integration branch
-is `refactor/reviewer-surface`.
+`baff915`. G and E are integrated and their full-feature downstream gate is green. The
+independent integration worktree now contains A/B/C foundations and the completed monitor
+track; syntax/core/store/semantics/public-client gates passed there. Native B/F analyzer
+proofs remain the critical path. The integration branch is `refactor/reviewer-surface`.
 
 ## Last checks actually run
 
 - Pinned Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0`, Rust `1.98.1` reused from the previously
   checksum-verified installation.
 - Completed Wave 0 full matrix: all eleven configurations passed, zero errors.
-- Latest G/E full-feature merge gate, including the corrected executable successor bridge:
+- Full-feature gate counts, separating the published G/E batch from the newer integration
+  worktree's A/B/C foundations and completed monitor batch:
 
-  | Configuration | Verified functions | Errors |
-  |---|---:|---:|
-  | syntax `serde,std` | 55 | 0 |
-  | core `runtime,std,serde` | 258 | 0 |
-  | store `runtime,std` | 287 | 0 |
-  | semantics `runtime,std,cache` | 1631 | 0 |
-  | semantics `public_specs` | 21 | 0 |
-  | analyzer `runtime,std` | 571 | 0 |
+  | Configuration | Published G/E | Staged foundations/monitor | Staged errors |
+  |---|---:|---:|---:|
+  | syntax `serde,std` | 55 | 63 | 0 |
+  | core `runtime,std,serde` | 258 | 323 | 0 |
+  | store `runtime,std` | 287 | 303 | 0 |
+  | semantics `runtime,std,cache` | 1631 | 1646 | 0 |
+  | semantics `public_specs` | 21 | 21 | 0 |
+  | analyzer `runtime,std` | 571 | pending native B/F cutover | — |
 
 - The first G/E gate found the removed finite-domain successor-theorem caller. Replacing it
   with the explicitly instantiated common theorem closed the downstream proof; no statement
-  was weakened. These are integrated G/E counts, not the unfinished native B/F cutover.
+  was weakened. Staged analyzer correctness is not claimed before the native B/F gate.
 - Default sequential driver crosscheck passed the original eleven configurations in
   **1075.16 seconds**, matching the parallel run's counts exactly. Final confirmation remains.
 - Critical R6 correction: focused core questions/hypotheses **6/0**, analyzer spec **1/0**.
@@ -35,6 +36,11 @@ is `refactor/reviewer-surface`.
   **8 fuzz tests**; workspace fmt, default and instrumentation Clippy, fuzz default and
   replay-probe Clippy with `-D warnings` all passed. Instrumentation stays out of benchmarks.
 - `scripts/spec-check.sh`: **18 passed**, including the reduced assumed-spec boundary.
+- Staged foundation/monitor native package tests: **127 passed across 16 suites**.
+  Both concrete public hypothesis clients passed (**2 verified, 0 errors**), taking only
+  the component type's `hash_coherent` premise.
+  The monitor worker also exercised grant/denial, read-only permits, rollback,
+  foreign/future checkpoints, append-error atomicity and recovery in a removed executable.
 
 ## Work in progress
 
@@ -49,9 +55,9 @@ Retaining a compatibility view is not an acceptable workaround.
 
 G's singleton-axiom/dead-std-spec removals, trust inventory, identity audit and instrumentation
 build split are integrated. E's thirteen-row paper index and independent hygiene are integrated,
-including its downstream successor caller. C's complete error split and caller migration are
-staged; A/B actual-event and equality prerequisites are being integrated together. Native B/F
-proofs remain an atomic cutover; dedicated monitor and analyzer workers own disjoint worktrees.
+including its downstream successor caller. C's complete error split/callers and A/B event
+foundations are staged and passed the gates above. D's complete monitor track is staged.
+Native B/F proofs remain an atomic cutover; reviewer clients T and final CI follow it.
 
 ## Decisions and checks
 
