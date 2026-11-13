@@ -3274,7 +3274,7 @@ pub mod verify {
         ensures norm::transition_lang(g, theta, out, event, word)
             == language::lang(model::gsem(theta), language::interp_transition(model::gsem(theta), event, algebra::symbolic_derivative(model::lift_regex(g, root))), word),
     {
-        algebra::theorem_symbolic_derivative_correct(model::gsem(theta), event, model::lift_regex(g, root), word);
+        algebra::lemma_symbolic_derivative_correct(model::gsem(theta), event, model::lift_regex(g, root), word);
     }
 
     pub proof fn lemma_regex_graph_child_vocab(g: model::Graph, root: nat, child: nat)
