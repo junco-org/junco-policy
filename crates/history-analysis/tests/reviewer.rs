@@ -410,6 +410,9 @@ fn analyzer_client<E: Event>(rule: &Rule<E>, head: &Head<E>, left: &RegexExpr<E>
     ensures result matches Ok((a, covered, redundant, strict, tails)) ==> {
         let v = AnalyzerView { domains: a@.domains, rules: seq![rule@], known: known_with(declared_sets(a@.domains), rule_constants(rule@)) };
         &&& a.wf()
+        &&& junco_core::spec::semantics::rule_wf(rule@)
+        &&& rule@.head.len() == arity::<E>()
+        &&& junco_core::verify::flatten::head_coordinates_wf::<E>(rule@.head)
         &&& a@.domains == Seq::new(arity::<E>(), |i: int| None::<Set<E::Component>>)
         &&& covered matches Ok(c) ==> covered_spec::<E>(v, 0, seq![0nat], c@)
         &&& redundant matches Ok(c) ==> redundant_spec::<E>(v, 0, seq![0nat], c@)

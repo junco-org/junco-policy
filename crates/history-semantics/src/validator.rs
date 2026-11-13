@@ -14,6 +14,8 @@ use history_store::history::{Checkpoint, History};
 use history_store::typed::Store;
 use history_syntax::Event;
 #[cfg(verus_keep_ghost)]
+use history_syntax::event::specs::EventSpec;
+#[cfg(verus_keep_ghost)]
 use history_syntax::spec::events::RuleView;
 use history_syntax::syntax::{Rule, RuleMode};
 use junco_core::errors::{CompileError, HistoryError};
@@ -118,6 +120,9 @@ impl<E: Event> ValidatorBuilder<E> {
             Err(_) => final(self).wf() && final(self).rules() == old(self).rules(),
             Ok(borrow) => mut_ref_current(borrow).wf()
                 && mut_ref_current(borrow).rules() == old(self).rules().push(source@)
+                && (event_obligations::<E>() ==> junco_core::spec::semantics::rule_wf(source@)
+                    && source@.head.len() == history_syntax::spec::events::arity::<E>()
+                    && junco_core::verify::flatten::head_coordinates_wf::<E>(source@.head))
                 && mut_ref_future(borrow) == *final(self),
         })]
     pub fn add_rule(&mut self, source: Rule<E>) -> Result<&mut Self, CompileError> {
@@ -130,6 +135,25 @@ impl<E: Event> ValidatorBuilder<E> {
             return Err(HistoryError::AllocationFailed.into());
         }
         let runtime = CompiledRule::new(self.store.clone(), source)?;
+        proof! {
+            if event_obligations::<E>() {
+                let flat = choose|flat: junco_core::flat::FlatRule<E::Component>|
+                    junco_core::verify::flatten::flattened::<E>(supplied, flat)
+                        && junco_core::verify::encoding::lowering(flat.source, runtime.template,
+                            runtime.maps@, junco_core::verify::flatten::component_equality::<E>())
+                        && junco_core::verify::encoding::constants_in_domain(flat.source,
+                            history_store::typed::verify::domain::<E>());
+                assert forall|i: int| 0 <= i < supplied@.head.len() implies
+                    match #[trigger] supplied@.head[i] {
+                        history_syntax::spec::events::PatternView::Constant(value) => E::coordinate_spec(value) == i,
+                        _ => true,
+                    } by {
+                    assert(junco_core::verify::flatten::head_slot_represents(flat.source.head@[i], supplied@.head[i]));
+                    assert(junco_core::verify::encoding::head_in_domain(flat.source.head@[i],
+                        junco_core::verify::encoding::field_at(i), history_store::typed::verify::domain::<E>()));
+                }
+            }
+        }
         self.rules.push(runtime);
         proof! {
             assert(verify::builder_sources(*self) =~= verify::builder_sources(before).push(supplied));
