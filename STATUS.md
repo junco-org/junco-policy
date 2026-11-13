@@ -8,9 +8,11 @@ Plan: `local://reviewer-surface-b-plan.md` (integration owner's copy). Deleted i
 | Track | State | Branch | Notes |
 |---|---|---|---|
 | 0 | done | integration | 0.0–0.4 and M4 done at `b18250c`; M5 deferred to Track T; timing table below |
-| G | reported `c176803`, merge pending | `track/g-b` | singleton axiom gone; dead `mem::replace` spec gone; `Arc`/`&T` identity documented (no coincidence possible for the compared singleton types); trust-scan kinds `uninterp`/`derived_eq_claim`/`unannotated_pub_fn` + helper crates; D2 benches without `test-util` (CI test step now `--features junco-policy/test-util`; bench numbers moved because counters are compiled out) |
+| G | rebased `track/g-b`, merge gate re-running after the rlimit fix | `track/g-b` | singleton axiom gone; dead `mem::replace` spec gone; `Arc`/`&T` identity documented (no coincidence possible for the compared singleton types); trust-scan kinds `uninterp`/`derived_eq_claim`/`unannotated_pub_fn` + helper crates; D2 benches without `test-util` (CI test step now `--features junco-policy/test-util`; bench numbers moved because counters are compiled out) |
 | E | reported `1f157b2`, merge pending | `track/e-b` | `verify/paper.rs` index (14 statements), `stmt_/theorem_` convention, named finiteness conditions, `expansion_ok`/`covered_with_ok`/`n_unrestricted` deleted; needs two one-token edits at B's merge (`::<C>` → `::<E>` in `stmt_app_policy_reduction`/`theorem_paper_index`) |
-| A, B, C, D, F-prep | running (5 agents) | `track/{a,b,c,d,f}-b` from `0f71984` | wave 1; B absorbed the verdict half of `refinement/analyzer.rs`, `policy_removal.rs`, `verify/{policy_minimality,policy_case_profile,policy_queries}.rs`, the four query `ensures` and `impl View for PolicyAnalyzer` (F keeps `new`/`with_domain`/capacities/RuleId ownership/vacuity/opaque `wf`); F adds ghost `declared`/`known` fields set by contract |
+| C | reported `44437ee` (incl. the owner's two-line `analyzer.rs` arm change C could not make), merge pending | `track/c-b` | `GraphLimit` → `GraphBudget { limit }` + `GraphIndex`; `charge`/`projected` ensure `charged + bytes > budget` on `GraphBudget`; `search`'s budget error is by construction (single constructor), not a spec; `TransitionAction::step` rlimit 30 → 40 |
+| D | reported `7d85d2f`, merge pending | `track/d-b` | `Validator` `View`/closed `wf`, R5 contracts on `check`/`permits`/`rollback`/`finish`, `trace_safe` lemmas, `policy_permits` in `CompiledPolicy`/`TracePolicy`, `TraceRule::clone` source equality (external_body claim, TRUST note), arity-3 `requires`; `public_specs` 19 (two statements moved by F) |
+| A, B, F-prep | running (3 agents) | `track/{a,b,c,d,f}-b` from `0f71984` | wave 1; B absorbed the verdict half of `refinement/analyzer.rs`, `policy_removal.rs`, `verify/{policy_minimality,policy_case_profile,policy_queries}.rs`, the four query `ensures` and `impl View for PolicyAnalyzer` (F keeps `new`/`with_domain`/capacities/RuleId ownership/vacuity/opaque `wf`); F adds ghost `declared`/`known` fields set by contract |
 | F | not started | `track/f-b` | wave 2 |
 | T | not started | `track/t-b` | wave 3 |
 
@@ -26,6 +28,8 @@ Each gate: the five full-feature `cargo verus verify` configurations of `scripts
 | M3 R2 move | `595708e` | cached | 249/0 | 287/0 | 1620/0 | 21/0 | 570/0 | ok / ok / 196 pass | 166 s |
 | 0.4 R1–R6 | `b981486` | 55/0 | 249/0 | 287/0 | 1620/0 | 21/0 | 571/0 | ok / ok / 196 pass | 172 s |
 | M4 R4 cutover | `b18250c` | 55/0 | 249/0 | 287/0 | 1620/0 | 21/0 | 571/0 | ok / ok / 196 pass | 170 s |
+| no-default configs on `0f71984` (INBOX request) | `0f71984` | FAIL (vstd `std_specs::hash` needs `std`) ×5 | | | | | | | 271 s |
+| INBOX fix, all eleven | `d0f700d` | 55/0, 55/0 | 170/0, 254/0 | 287/0, 287/0 | 1615/0, 1620/0 | 21/0 | 571/0, 570/1 (rlimit in `normalize_pieces`, fixed by `rlimit(20)`: 571/0 on re-run) | ok / ok / 196 pass | 308 s |
 
 M3 needed two proof repairs after the first gate: `lemma_trace_decision_result` (the Deny clause now states `least_violation` directly) and a broadcast lemma `junco_core::verify::dsl::lemma_rule_views_index` (`rule_views(rules)[i] == rules[i]@`) that `public_specs` uses.
 
