@@ -456,3 +456,154 @@ pub(crate) proof fn lemma_refutation_input<E: Event>(a: PolicyAnalyzer<E>, start
     }
 }
 }
+
+verus! {
+/// Search correctness for one query: a start state with the language of `left & ¬right` gives
+/// `outcome_ok` for that query (`search::initial_ok`).
+pub(crate) proof fn lemma_query_outcome(d: encoding::NDomains, start: search::Item,
+    left: language::Regex<model::Test>, right: language::Regex<model::Test>, outcome: search::Outcome)
+    requires exec::search_result(d, start, outcome), search::initial_ok(start.state, left, right),
+    ensures search::outcome_ok(d, start.constraint, left, right, outcome),
+{
+    reveal(exec::search_result);
+}
+
+/// The refutation and slots behind a decided counterexample.
+pub(crate) proof fn lemma_decided_slots<E: Event>(a: PolicyAnalyzer<E>, g: implementation::ConstraintView,
+    left: language::Regex<model::Test>, right: language::Regex<model::Test>, cex: Counterexample<E>)
+    -> (r: (Constraint, Seq<Letter>, Seq<Set<model::Primitive>>, Seq<implementation::SlotView>, Seq<Seq<implementation::SlotView>>))
+    requires policy::decided(a, g, left, right, Inclusion::Counterexample(cex)),
+    ensures slots::constructed(a.constants, a.universes, r.0, r.1, r.3, r.4),
+        cex@ == slots::cex_of_slots(a.constants, r.3, r.4),
+        implementation::reconstruction_ok(ndomains(a.universes), implementation::constraint_of(r.0@),
+            exec::chain_assignments(r.1, r.2), r.3, r.4, slots::known_codes(a.constants)),
+        search::outcome_ok(ndomains(a.universes), implementation::constraint_of(g), left, right,
+            search::Outcome::Refuted(implementation::constraint_of(r.0@), exec::chain_assignments(r.1, r.2))),
+        cex@.history.len() == r.4.len(), r.4.len() == r.1.len(),
+        r.1.len() == exec::chain_assignments(r.1, r.2).len(),
+{
+    let (g1, letters, alphabets) = choose|g1: Constraint, letters: Seq<Letter>, alphabets: Seq<Set<model::Primitive>>|
+        #[trigger] slots::reconstructed(a.constants, a.universes, g1, letters, alphabets, cex)
+        && search::outcome_ok(ndomains(a.universes), implementation::constraint_of(g), left, right,
+            search::Outcome::Refuted(implementation::constraint_of(g1@), exec::chain_assignments(letters, alphabets)));
+    let (candidate, history) = choose|candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>|
+        #[trigger] slots::constructed(a.constants, a.universes, g1, letters, candidate, history)
+            && cex@ == slots::cex_of_slots(a.constants, candidate, history)
+            && implementation::reconstruction_ok(ndomains(a.universes), implementation::constraint_of(g1@),
+                exec::chain_assignments(letters, alphabets), candidate, history, slots::known_codes(a.constants));
+    (g1, letters, alphabets, candidate, history)
+}
+
+/// Every admissible instance of a decided counterexample is, under a coding that fixes the
+/// constant book, a numeric counterexample to the query `left ⊑_g right` within the domains.
+pub(crate) proof fn lemma_decided_instance<E: Event>(a: PolicyAnalyzer<E>, g: implementation::ConstraintView,
+    left: language::Regex<model::Test>, right: language::Regex<model::Test>, cex: Counterexample<E>,
+    f: analyzer::FreshChoice<E::Principal, E::Action, E::Resource>) -> (coding: typed::NatCoding<E>)
+    requires analyzer_state_wf(a), analyzer_obligations::<E>(),
+        policy::decided(a, g, left, right, Inclusion::Counterexample(cex)),
+        analyzer::admissible(a@, cex@, f),
+    ensures ({
+        let c = analyzer::event_of(cex@.candidate, f);
+        let h = analyzer::history_of(cex@, f);
+        let theta = typed::numeric_event(coding, c);
+        let w = typed::numeric_history(coding, h);
+        &&& typed::fixes_book(a.constants, coding)
+        &&& typed::covered_event(coding, c)
+        &&& forall|i: int| 0 <= i < h.len() ==> #[trigger] typed::covered_event(coding, h[i])
+        &&& semantics::event_in(a@.domains, c)
+        &&& semantics::history_in(a@.domains, h)
+        &&& w.len() == h.len()
+        &&& inclusion::inclusion_cex(ndomains(a.universes), implementation::constraint_of(g), left, right, theta, w)
+    }),
+{
+    let (g1, letters, alphabets, candidate, history) = lemma_decided_slots(a, g, left, right, cex);
+    let coding = typed::lemma_slot_embedding(a, candidate, history, f);
+    let c = analyzer::event_of(cex@.candidate, f);
+    let h = analyzer::history_of(cex@, f);
+    let theta = typed::numeric_event(coding, c);
+    let w = typed::numeric_history(coding, h);
+    assert(inclusion::sat_by(theta, implementation::constraint_of(g1@)));
+    assert(encoding::n_event_in(ndomains(a.universes), theta));
+    assert(search::follows(ndomains(a.universes), exec::chain_assignments(letters, alphabets), theta, w));
+    assert(encoding::n_history_in(ndomains(a.universes), w));
+    assert(w.len() == h.len());
+    typed::lemma_domain_event(a, coding, c);
+    assert forall|j: int| 0 <= j < h.len() implies #[trigger] semantics::event_in(a@.domains, h[j]) by {
+        assert(w[j] == typed::numeric_event(coding, h[j]));
+        assert(encoding::n_event_in(ndomains(a.universes), w[j]));
+        typed::lemma_domain_event(a, coding, h[j]);
+    }
+    assert(inclusion::inclusion_cex(ndomains(a.universes), implementation::constraint_of(g), left, right, theta, w));
+    coding
+}
+
+/// No counterexample to the query is shorter than a decided counterexample.
+pub(crate) proof fn lemma_decided_shortest<E: Event>(a: PolicyAnalyzer<E>, g: implementation::ConstraintView,
+    left: language::Regex<model::Test>, right: language::Regex<model::Test>, cex: Counterexample<E>)
+    requires policy::decided(a, g, left, right, Inclusion::Counterexample(cex)),
+    ensures inclusion::no_cex_shorter(ndomains(a.universes), implementation::constraint_of(g), left, right,
+        cex@.history.len()),
+{
+    let (g1, letters, alphabets, candidate, history) = lemma_decided_slots(a, g, left, right, cex);
+}
+
+/// A decided counterexample uses fresh numbers only at components without a declared universe.
+pub(crate) proof fn lemma_decided_fresh<E: Event>(a: PolicyAnalyzer<E>, g: implementation::ConstraintView,
+    left: language::Regex<model::Test>, right: language::Regex<model::Test>, cex: Counterexample<E>)
+    requires policy::decided(a, g, left, right, Inclusion::Counterexample(cex)),
+    ensures analyzer::fresh_unrestricted(a@.domains, cex@),
+{
+    let (g1, letters, alphabets, candidate, history) = lemma_decided_slots(a, g, left, right, cex);
+    let v = cex@;
+    assert forall|k: int, n: nat| 0 <= k < 3 && a.universes[k] is Some implies
+        candidate[k] != implementation::SlotView::Fresh(n)
+        && forall|i: int| 0 <= i < history.len() ==> #[trigger] history[i][k] != implementation::SlotView::Fresh(n) by {
+        assert(slots::candidate_field_ok(a.constants, a.universes, g1, k, candidate[k]));
+        assert forall|i: int| 0 <= i < history.len() implies #[trigger] history[i][k] != implementation::SlotView::Fresh(n) by {
+            assert(slots::slot_domain(history[i][k], domain_view(a.universes[k])));
+        }
+    }
+    if a.universes[0] is Some {
+        assert(analyzer::fresh_used(v, |c: analyzer::ComponentsView<E::Principal, E::Action, E::Resource>| c.principal)
+            =~= ISet::<nat>::empty()) by {
+            assert forall|n: nat| !(v.candidate.principal == analyzer::ValueView::<E::Principal>::Fresh(n)
+                || exists|i: int| 0 <= i < v.history.len() && #[trigger] v.history[i].principal == analyzer::ValueView::<E::Principal>::Fresh(n)) by {
+                assert(candidate[0] != implementation::SlotView::Fresh(n));
+                assert forall|i: int| 0 <= i < v.history.len() implies #[trigger] v.history[i].principal != analyzer::ValueView::<E::Principal>::Fresh(n) by {
+                    assert(history[i][0] != implementation::SlotView::Fresh(n));
+                    assert(slots::slot_wf(a.constants, history[i]));
+                    assert(v.history[i] == slots::components_of_slots(a.constants, history[i]));
+                }
+            }
+        }
+    }
+    if a.universes[1] is Some {
+        assert(analyzer::fresh_used(v, |c: analyzer::ComponentsView<E::Principal, E::Action, E::Resource>| c.action)
+            =~= ISet::<nat>::empty()) by {
+            assert forall|n: nat| !(v.candidate.action == analyzer::ValueView::<E::Action>::Fresh(n)
+                || exists|i: int| 0 <= i < v.history.len() && #[trigger] v.history[i].action == analyzer::ValueView::<E::Action>::Fresh(n)) by {
+                assert(candidate[1] != implementation::SlotView::Fresh(n));
+                assert forall|i: int| 0 <= i < v.history.len() implies #[trigger] v.history[i].action != analyzer::ValueView::<E::Action>::Fresh(n) by {
+                    assert(history[i][1] != implementation::SlotView::Fresh(n));
+                    assert(slots::slot_wf(a.constants, history[i]));
+                    assert(v.history[i] == slots::components_of_slots(a.constants, history[i]));
+                }
+            }
+        }
+    }
+    if a.universes[2] is Some {
+        assert(analyzer::fresh_used(v, |c: analyzer::ComponentsView<E::Principal, E::Action, E::Resource>| c.resource)
+            =~= ISet::<nat>::empty()) by {
+            assert forall|n: nat| !(v.candidate.resource == analyzer::ValueView::<E::Resource>::Fresh(n)
+                || exists|i: int| 0 <= i < v.history.len() && #[trigger] v.history[i].resource == analyzer::ValueView::<E::Resource>::Fresh(n)) by {
+                assert(candidate[2] != implementation::SlotView::Fresh(n));
+                assert forall|i: int| 0 <= i < v.history.len() implies #[trigger] v.history[i].resource != analyzer::ValueView::<E::Resource>::Fresh(n) by {
+                    assert(history[i][2] != implementation::SlotView::Fresh(n));
+                    assert(slots::slot_wf(a.constants, history[i]));
+                    assert(v.history[i] == slots::components_of_slots(a.constants, history[i]));
+                }
+            }
+        }
+    }
+}
+}
