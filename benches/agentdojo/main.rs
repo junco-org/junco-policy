@@ -595,8 +595,7 @@ fn summarize(outcomes: &[Outcome], options: &Options) {
     let outside_travel: Vec<_> = outcomes
         .iter()
         .filter(|o| {
-            o.task.suite != "travel"
-                && o.deny_prefix_counterfactual.injection_success == Some(true)
+            o.task.suite != "travel" && o.deny_prefix_counterfactual.injection_success == Some(true)
         })
         .map(|o| o.task.label())
         .collect();

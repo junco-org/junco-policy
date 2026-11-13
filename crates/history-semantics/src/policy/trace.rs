@@ -92,6 +92,18 @@ pub mod verify {
         super::super::evaluate::verify::policy_callbacks_frame(before.compiled, after.compiled)
     }
 
+    // Keep facade representation facts available to its implementation, not public clients.
+    pub(super) proof fn lemma_trace_representation<E: Event>(policy: TracePolicy<E>)
+        ensures
+            trace_wf(policy) == super::super::evaluate::verify::policy_wf(policy.compiled),
+            trace_store(policy) == super::super::evaluate::verify::policy_store(policy.compiled),
+            trace_sources(policy) == super::super::evaluate::verify::policy_sources(policy.compiled),
+            trace_diagnostic_ids(policy) == super::super::evaluate::verify::policy_diagnostic_ids(policy.compiled),
+            trace_context_calls(policy) == super::super::evaluate::verify::policy_context_calls(policy.compiled),
+            trace_diagnostic_calls(policy) == super::super::evaluate::verify::policy_diagnostic_calls(policy.compiled),
+            trace_selected_index(policy) == super::super::evaluate::verify::policy_selected_index(policy.compiled),
+    {}
+
     /// Exposes constructor readiness without exposing the compiled policy field.
     pub proof fn lemma_trace_wf<E: Event>(policy: TracePolicy<E>)
         requires trace_wf(policy),
@@ -392,14 +404,6 @@ impl<E: Event + 'static> TracePolicy<E> {
         store: Arc<Store<E>>,
         rules: I,
     ) -> Result<Self, CompileError> {
-        proof! {
-            reveal(trace_wf);
-            reveal(trace_store);
-            reveal(trace_sources);
-            reveal(trace_diagnostic_ids);
-            reveal(trace_context_calls);
-            reveal(trace_diagnostic_calls);
-        }
         proof_decl! { let ghost input = rules; }
         let convert = I::into_iter;
         let iterator = convert(rules);
@@ -440,7 +444,9 @@ impl<E: Event + 'static> TracePolicy<E> {
                     =~= items.map(|i: int, item: TraceRule<E>| trace_rule_diagnostic_id(item)));
             }
         }
-        Ok(Self { compiled })
+        let policy = Self { compiled };
+        proof! { lemma_trace_representation(policy); }
+        Ok(policy)
     }
 
     /// Decides against the unchanged external history, using the candidate as the actual context.
@@ -459,15 +465,7 @@ impl<E: Event + 'static> TracePolicy<E> {
         history: &History<E>,
         candidate: &E,
     ) -> Result<PolicyDecision, HistoryError> {
-        proof! {
-            reveal(trace_wf);
-            reveal(trace_store);
-            reveal(trace_sources);
-            reveal(trace_diagnostic_ids);
-            reveal(trace_context_calls);
-            reveal(trace_diagnostic_calls);
-            reveal(trace_selected_index);
-        }
+        proof! { lemma_trace_representation(*self); }
         proof_decl! { let ghost before = *self; }
         let context =
             verus_exec_expr! { || -> (value: E) ensures value == *candidate { *candidate } };
@@ -475,6 +473,7 @@ impl<E: Event + 'static> TracePolicy<E> {
         proof! { assert(call_requires(context, ())); }
         let result = self.compiled.decide(history, candidate, context);
         proof! {
+            lemma_trace_representation(*self);
             if let Ok(PolicyDecision::Deny { ref failed_precondition, ref allowed_fixes }) = result {
                 let value = choose|value: E| call_ensures(actual_context, (), value)
                     && diagnostic_output(super::evaluate::verify::policy_trace(self.compiled).calls.last().diagnostic_id,

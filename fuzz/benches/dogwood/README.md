@@ -22,6 +22,26 @@ granted append occur together in verified code, with denials leaving history unc
 Read-only warm/cold decision probes retain the public `CompiledPolicy::decide` contract and do
 not append. Filtering, diagnostic glue and conversion of errors remain outside the proofs.
 
+Local before/after `lock_policy` measurements used Rust 1.98.1 on Xeon E7-8867 v4, with
+50 samples, 500 ms warm-up and 2 s targets. These are read-only warm-decision probes;
+verified grant/commit construction is outside their timed region. They are not replay-ingestion
+latency or a replacement for the paper's measurements. Geometric means of per-case mean
+estimates (six lengths per action), in nanoseconds:
+
+| Action | Before (ns) | After (ns) | Change |
+|---|---:|---:|---:|
+| read | 535.144 | 576.787 | +7.78% |
+| edit | 870.135 | 899.487 | +3.37% |
+| release | 573.722 | 606.746 | +5.76% |
+| remove | 919.145 | 932.003 | +1.40% |
+| all 24 cases | 703.940 | 735.967 | +4.55% |
+
+[`verified-commit-timings.csv`](../lock-policy/verified-commit-timings.csv) preserves all cases,
+medians and 95% mean confidence intervals. No causal attribution is made; code-layout and host
+effects are not removed. The existing standalone replay smoke also completed 2,048 enforcing
+decisions, with each generated grant committed exactly once. The three-engine replay requires
+VeriMon, which was not on this workstation's PATH.
+
 
 | Junco rule | Dogwood `@id` |
 | --- | --- |
