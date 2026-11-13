@@ -29,10 +29,14 @@ Verus clients of these files in `crates/history-semantics/tests/reviewer.rs` (mo
 - *grant*: no rule of $P$ is violated by $e$ after $u$, and the history becomes $u\,e$;
 - *denial*: the history stays $u$, and the denial carries the index and mode of the first rule
   of $P$ that $e$ violates after $u$;
-- *an error*: the history stays $u$, and the error is a resource error (`resource_error`: graph
-  budget or index overflow, allocation, arena, identifier, revision or configured time limit).
+- *an error*: the history stays $u$, and the error is one of a fixed set of resource kinds
+  (`resource_error`: graph budget or index overflow, or allocation, arena, identifier, revision
+  or configured-limit exhaustion), never an input, unknown-identifier, ownership or invariant
+  error.
 
-So, short of exhausting a resource, `check` grants exactly when the policy permits the request.
+The contract restricts the kind of error but does not prove that a resource was exhausted:
+allocation failures come from trusted wrappers that may fail at any time, and each rule has a
+fixed 100 KiB graph budget.
 Every state reached by `check` and `rollback` from a new validator is trace safe: each committed
 event was permitted by every rule against the history before it (`theorem_trace_safe`).
 `Validator::permits` answers the same question without committing.
@@ -60,11 +64,11 @@ Each query terminates and returns `Holds`, a counterexample, `Exhausted`, or an 
 - A counterexample has a shortest history: among all counterexamples for `tail_included`; among
   the counterexamples whose candidate agrees with it on every known constant for the other
   queries; for `at_least_as_strict`, among those the same rule of `q` denies.
-- `Exhausted` means a search or compilation exceeded the graph budget (stated in the analyzer
-  specification's header, not proved). For identifiers the analyzer issued and well-formed rules
-  of the event's arity, an error is a resource error; adding a valid rule never fails with an
-  input error. So if the property fails, a query that neither exhausts a resource nor returns
-  `Exhausted` returns a counterexample.
+- The contracts make no claim about `Exhausted` (the implementation returns it when a search or
+  compilation exceeds the graph budget). For identifiers the analyzer issued and well-formed,
+  correctly tagged rules of the event's arity, an error is one of the resource kinds above; adding
+  such a rule never fails with an input error. So if the property fails, a query that returns
+  neither `Exhausted` nor an error returns a counterexample.
 
 Rule vacuity (a rule that denies nothing, or denies every request its head matches) is decided
 with `at_least_as_strict` (`theorem_vacuity_corollaries`). If `at_least_as_strict(p, q)` returns
