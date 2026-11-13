@@ -25,7 +25,7 @@ scripts/verify-all.sh --list
 
 # Optional selection and persistent independent Cargo target directories.
 scripts/verify-all.sh --jobs 1 --target-root /path/to/targets \
-  --only '--test reviewer' -- --num-threads 64
+  --only 'test reviewer' -- --num-threads 64
 
 cargo verus verify --locked -p history-semantics --features runtime,std,cache \
   --test reviewer -- --num-threads 64
