@@ -85,12 +85,20 @@ external body.
 
 ## Ownership and merge protocol
 
-Track A owns R4 and obligation definitions. Track B owns R1–R3 and the typed/numeric bridges;
-A's equivalence-only changes in `typed_numeric.rs` are coordinated separately. C owns error
+Track A owns R4 and obligation definitions. `eq_equivalence(eq, domain)` is the canonical
+equivalence law on a carrier: native keys use the full carrier, numeric encodings instantiate
+one carrier per coordinate. B owns R1–R3 and the typed/numeric bridges, including all edits to
+`typed_numeric.rs`; A hands B its equivalence consolidation instead of editing that file.
+C owns error
 variants and error contracts, D owns R5 and monitor/policy implementations, and F owns R6 and
 analyzer state/results. F-prep changes no A1–A5 proof obligations before A/B/C merge. E owns the
 paper index and specified hygiene files; G owns builds/trust scanning and root event adapters.
 T starts only after D/F and uses only public items.
+
+To keep one owner per file, B alone edits `history-syntax/src/event.rs` while moving EventSpec
+and adding the cardinality hook. A puts the `PartialEqSpecImpl` implementations in a separate
+`history-syntax/src/spec/equality.rs` module and owns that module's registration in `spec/mod.rs`.
+The implementations remain in their defining crate; no orphan-rule workaround or alias is used.
 
 The rename and least-violation relocation are separate integration commits before Wave 1. Each
 track gets its own worktree and target directory, shares `CARGO_HOME`, and iterates with module/
