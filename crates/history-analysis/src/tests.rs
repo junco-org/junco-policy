@@ -10,6 +10,7 @@ use history_store::{History, Store};
 use history_syntax::{
     AtomPattern, Comparison, ComponentPattern, Event, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
+use junco_core::CompileError;
 
 use crate::constraint::{Atom, Constraint, Operand, Universes, steps};
 use crate::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, Value};
@@ -389,4 +390,29 @@ fn a_declared_register_takes_each_declared_value() {
         counterexample.history[0].action,
         counterexample.candidate.action
     );
+}
+
+#[test]
+fn added_rules_get_consecutive_ids_and_ill_scoped_rules_are_rejected() {
+    let mut analyzer = PolicyAnalyzer::new(finite_actions());
+    let first = analyzer
+        .add_rule(&forbid(head(), ever(resource_is(Comparison::Eq, Some(X)))))
+        .unwrap();
+    let second = analyzer
+        .add_rule(&forbid(head(), ever(principal_is_p())))
+        .unwrap();
+    assert_eq!((first.0, second.0), (0, 1));
+    assert_eq!(analyzer.rules.len(), 2);
+    assert_eq!(analyzer.rules[0].constants[1], analyzer.rules[1].constants[1]);
+    assert!(analyzer.rules[0].constants[0].is_none());
+
+    let unbound = ever(TestExpr::atom(
+        Comparison::Eq,
+        AtomPattern::Principal(ComponentPattern::variable("q")),
+    ));
+    assert!(matches!(
+        analyzer.add_rule(&forbid(head(), unbound)),
+        Err(CompileError::UnboundVariable { .. })
+    ));
+    assert_eq!(analyzer.rules.len(), 2);
 }
