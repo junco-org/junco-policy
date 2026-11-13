@@ -154,6 +154,7 @@ impl CursorCache {
         result != Err(HistoryError::WrongHistoryOwner),
         junco_core::verify::history_specs::no_invariant_failure(result),
         result matches Err(error) ==> error is AllocationFailed || error is Limit,
+        result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
         result matches Ok(cache) ==> cache@ == Seq::<HistoryCursor>::empty() && cursor_cache_wf(cache@))]
     pub fn new<L: Limits>(
         limits: &mut L,

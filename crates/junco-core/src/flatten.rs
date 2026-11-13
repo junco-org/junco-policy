@@ -41,6 +41,7 @@ pub(crate) enum Work<'a, E: Event> {
     result is Err ==> final(values)@ == old(values)@,
     no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
+    result matches Err(error) ==> crate::spec::semantics::resource_error(error),
 )]
 fn push<T, L: Limits>(
     values: &mut Vec<T>,
@@ -61,6 +62,7 @@ fn push<T, L: Limits>(
 #[verus_spec(result => ensures
     start <= old(values)@.len() ==> no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
+    start <= old(values)@.len() ==> (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
     match result {
         Ok(children) => start <= old(values)@.len()
             && children@ == old(values)@.subrange(start as int, old(values)@.len() as int)
@@ -114,6 +116,7 @@ fn take_children<L: Limits>(
         && crate::spec::semantics::head_scoped(head@) ==> result is Ok || result matches Err(CompileError::Runtime(_)),
     no_invariant_compile_failure(result),
     !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
+    result matches Err(CompileError::Runtime(error)) ==> crate::spec::semantics::resource_error(error),
 )]
 fn flatten_head<'a, E: Event, L: Limits>(
     head: &'a Head<E>,
@@ -262,6 +265,7 @@ fn flatten_atom<E: Event>(
         + regex_forest_cost::<E>(regex_views::<E>(children@)),
     no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
+    result matches Err(error) ==> crate::spec::semantics::resource_error(error),
     result is Ok ==> forall|head| work_scoped::<E>(old(work)@, head)
         && (forall|i: int| 0 <= i < children@.len()
             ==> crate::spec::semantics::regex_scoped(children@[i]@, head))
@@ -341,6 +345,7 @@ fn schedule_regexes<'a, E: Event, L: Limits>(
         + test_forest_cost::<E>(test_views::<E>(children@)),
     no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
+    result matches Err(error) ==> crate::spec::semantics::resource_error(error),
     result is Ok ==> forall|head| work_scoped::<E>(old(work)@, head)
         && (forall|i: int| 0 <= i < children@.len()
             ==> crate::spec::semantics::test_scoped(children@[i]@, head))
@@ -426,6 +431,9 @@ fn schedule_tests<'a, E: Event, L: Limits>(
         && (E::obeys_projection_spec() ==> crate::verify::encoding::constants_in_domain(flat.source, component_domain::<E>())),
     result matches Ok(flat) ==> flat.source.tests@.len() + flat.source.regexes@.len()
         <= regex_cost::<E>(rule.tail@),
+    crate::spec::hypotheses::event_obligations::<E>() && crate::spec::semantics::rule_wf(rule@)
+        && rule@.head.len() == arity::<E>() && crate::spec::semantics::rule_constants_tagged::<E>(rule@)
+        ==> (result is Ok || (result matches Err(CompileError::Runtime(error)) && crate::spec::semantics::resource_error(error))),
 )]
 pub fn flatten_rule<E: Event, L: Limits>(
     rule: &Rule<E>,
@@ -440,7 +448,7 @@ pub fn flatten_rule<E: Event, L: Limits>(
 /// The continuation invariant excludes internal stack and operand-guard failures.
 #[verus_verify]
 #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
-#[cfg_attr(verus_keep_ghost, verifier::rlimit(45))]
+#[cfg_attr(verus_keep_ghost, verifier::rlimit(90))]
 #[verus_spec(result => ensures
     no_invariant_compile_failure(result),
     crate::spec::semantics::regex_scoped(source_tail@, source_head@) ==>
@@ -453,6 +461,11 @@ pub fn flatten_rule<E: Event, L: Limits>(
         && (E::obeys_projection_spec() ==> crate::verify::encoding::constants_in_domain(flat.source, component_domain::<E>())),
     result matches Ok(flat) ==> flat.source.tests@.len() + flat.source.regexes@.len()
         <= regex_cost::<E>(source_tail@),
+    crate::spec::hypotheses::event_obligations::<E>()
+        && crate::spec::semantics::rule_wf(Rule { mode, head: *source_head, tail: *source_tail }@)
+        && source_head@.len() == arity::<E>()
+        && crate::spec::semantics::rule_constants_tagged::<E>(Rule { mode, head: *source_head, tail: *source_tail }@)
+        ==> (result is Ok || (result matches Err(CompileError::Runtime(error)) && crate::spec::semantics::resource_error(error))),
 )]
 pub fn flatten_rule_parts<E: Event, L: Limits>(
     mode: RuleMode,
@@ -464,6 +477,12 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
     proof_decl! { let ghost rule = Rule { mode, head: *source_head, tail: *source_tail }; }
     limits.checkpoint().map_err(HistoryError::from)?;
     let mut scope = VariableScope::new(E::Arity::value());
+    proof! {
+        if crate::spec::hypotheses::event_obligations::<E>() && crate::spec::semantics::rule_wf(rule@)
+            && rule@.head.len() == arity::<E>() && crate::spec::semantics::rule_constants_tagged::<E>(rule@) {
+            lemma_rule_head_coordinates::<E>(rule@);
+        }
+    }
     let head = flatten_head(source_head, &mut scope, limits, world)?;
     let mut builder = FlatBuilder::new(head);
     let mut work = Vec::new();
@@ -488,6 +507,7 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
     #[cfg_attr(verus_keep_ghost, verus_spec(
         invariant builder.wf(),
             rule.head@ == source_head@, rule.tail@ == source_tail@,
+            rule == (Rule { mode, head: *source_head, tail: *source_tail }),
             head_represents::<E>(builder.head_view(), rule.head@),
             crate::spec::semantics::head_scoped(rule.head@),
             scope_matches::<E>(scope, rule.head@),
@@ -645,7 +665,32 @@ pub fn flatten_rule_parts<E: Event, L: Limits>(
                                     }
                                 }
                             }
-                            let (field, term) = flatten_atom(pattern, &scope)?;
+                            proof! {
+                                if crate::spec::hypotheses::event_obligations::<E>() && crate::spec::semantics::rule_wf(rule@)
+                                    && rule@.head.len() == arity::<E>() && crate::spec::semantics::rule_constants_tagged::<E>(rule@) {
+                                    assert(test_constants_within(test@, rule.tail@));
+                                    assert(atom_coordinates_wf::<E>(pattern@)) by {
+                                        if let history_syntax::spec::events::PatternView::Constant(value) = pattern@.pattern {
+                                            let i = pattern@.component as int;
+                                            assert(crate::spec::questions::test_constant_at(test@, i).contains(value));
+                                            assert(crate::spec::questions::regex_constant_at(rule.tail@, i).contains(value));
+                                            assert(crate::spec::questions::rule_constants(rule@)[i].contains(value));
+                                        }
+                                    }
+                                }
+                            }
+                            let atom_result = flatten_atom(pattern, &scope);
+                            proof! {
+                                if crate::spec::hypotheses::event_obligations::<E>()
+                                    && crate::spec::semantics::rule_wf(Rule { mode, head: *source_head, tail: *source_tail }@)
+                                    && source_head@.len() == arity::<E>()
+                                    && crate::spec::semantics::rule_constants_tagged::<E>(Rule { mode, head: *source_head, tail: *source_tail }@) {
+                                    assert(scope_matches::<E>(scope, rule.head@));
+                                    assert(crate::spec::semantics::atom_scoped(pattern@, rule.head@));
+                                    assert(atom_result is Ok);
+                                }
+                            }
+                            let (field, term) = atom_result?;
                             FlatTest::Atom {
                                 field,
                                 term,

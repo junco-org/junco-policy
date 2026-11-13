@@ -21,7 +21,7 @@ use history_semantics::validator::Decision;
 use history_semantics::verify::refinement::inclusion::theorem_vacuity_via_refinement;
 use history_syntax::event::Component2;
 use history_syntax::spec::events::{HeadView, RegexView, RuleView, arity, event_view};
-use history_syntax::{Event, Head, RegexExpr, Rule};
+use history_syntax::{Event, Head, RegexExpr, Rule, RuleMode};
 use junco_core::event::Request;
 use junco_core::spec::hypotheses::{event_obligations, hash_coherent};
 use junco_core::spec::questions::{
@@ -419,6 +419,9 @@ fn analyzer_client<E: Event>(rule: &Rule<E>, head: &Head<E>, left: &RegexExpr<E>
         &&& strict matches Ok(c) ==> at_least_as_strict_spec::<E>(v, seq![0nat], seq![0nat], c@)
         &&& tails matches Ok(c) ==> tail_included_spec::<E>(a@, head@, left@, right@, c@)
         &&& no_invariant_failure(covered) && no_invariant_failure(redundant) && no_invariant_failure(strict)
+        &&& covered matches Err(error) ==> junco_core::spec::semantics::resource_error(error)
+        &&& redundant matches Err(error) ==> junco_core::spec::semantics::resource_error(error)
+        &&& strict matches Err(error) ==> junco_core::spec::semantics::resource_error(error)
     },
 {
     let domains = Domains::<E>::infinite();
@@ -462,6 +465,33 @@ fn analyzer_client_u32_u64(rule: &Rule<(u32, u64)>, head: &Head<(u32, u64)>, lef
 {
     proof { lemma_u32_u64_event_hypotheses(); }
     analyzer_client(rule, head, left, right)
+}
+
+/// Valid source rules have no input-error exit from registration.
+fn resource_checked_registration<E: Event>(a: &mut PolicyAnalyzer<E>, rule: &Rule<E>)
+    -> (result: Result<history_analysis::RuleId, CompileError>)
+    requires old(a).wf(), analyzer_obligations::<E>(), add_rule_capacity::<E>(old(a)@, rule@),
+        junco_core::spec::semantics::rule_wf(rule@), rule@.head.len() == arity::<E>(),
+        junco_core::spec::semantics::rule_constants_tagged::<E>(rule@),
+    ensures final(a).wf(), result is Ok || (result matches Err(CompileError::Runtime(error))
+        && junco_core::spec::semantics::resource_error(error)),
+{
+    a.add_rule(rule)
+}
+
+/// Valid head/tail queries have no arity, coordinate, or scope-error exit.
+fn resource_checked_tail_inclusion<E: Event>(
+    a: &mut PolicyAnalyzer<E>, head: &Head<E>, left: &RegexExpr<E>, right: &RegexExpr<E>,
+) -> (result: Result<Inclusion<E>, CompileError>)
+    requires old(a).wf(), analyzer_obligations::<E>(), query_capacity::<E>(old(a)@, left@, right@),
+        junco_core::spec::semantics::head_tails_wf(head@, left@, right@),
+        head@.len() == arity::<E>(),
+        junco_core::spec::semantics::rule_constants_tagged::<E>(Rule { mode: RuleMode::Forbid, head: *head, tail: *left }@),
+        junco_core::spec::semantics::rule_constants_tagged::<E>(Rule { mode: RuleMode::Forbid, head: *head, tail: *right }@),
+    ensures final(a).wf(), result is Ok || (result matches Err(CompileError::Runtime(error))
+        && junco_core::spec::semantics::resource_error(error)),
+{
+    a.tail_included(head, left, right)
 }
 
 } // verus!

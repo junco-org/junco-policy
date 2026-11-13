@@ -51,6 +51,8 @@ use junco_core::observation::SmallVecSpecFns;
 #[cfg(verus_keep_ghost)]
 use junco_core::spec::questions::covers;
 #[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics as sem;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::{encoding as enc, flatten as fl};
 use junco_core::{CompileError, FlatEncoder, HistoryError, lower_flat};
 use vstd::prelude::*;
@@ -432,6 +434,7 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
         constants_wf(*self.constants) && crate::verify::analyzer_obligations::<E>()
     }
     open spec fn errors_are_non_invariant(&self) -> bool { true }
+    open spec fn errors_are_resource(&self) -> bool { true }
     #[verifier::prophetic]
     open(crate) spec fn restoration(&self) -> (enc::Codebook<E::Component>, bool) {
         let future = mut_ref_future(self.constants);
@@ -623,6 +626,9 @@ impl<E: Event> PolicyAnalyzer<E> {
                 && junco_core::verify::flatten::head_coordinates_wf::<E>(rule@.head),
             result is Err ==> final(self)@.rules == old(self)@.rules,
             junco_core::verify::history_specs::no_invariant_compile_failure(result),
+            sem::rule_wf(rule@) && rule@.head.len() == arity::<E>()
+                && sem::rule_constants_tagged::<E>(rule@)
+                ==> (result is Ok || (result matches Err(CompileError::Runtime(error)) && sem::resource_error(error))),
     {
         let ghost before = *self;
         proof {
@@ -677,6 +683,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     pub fn covered(&self, rule: RuleId, by: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), views::analyzer_obligations::<E>(),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            ids_owned(self, seq![rule] + by@) ==> (result matches Err(error) ==> sem::resource_error(error)),
             !ids_owned(self, seq![rule] + by@) ==> result matches Err(HistoryError::UnknownId { .. }),
             ids_owned(self, seq![rule] + by@) ==> (result matches Ok(v)
                 ==> crate::spec::analyzer::covered_spec::<E>(self@, rule@, ids_of(by@), v@)),
@@ -734,6 +741,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     pub fn redundant(&self, rule: RuleId, policy: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), views::analyzer_obligations::<E>(),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            ids_owned(self, seq![rule] + policy@) ==> (result matches Err(error) ==> sem::resource_error(error)),
             !ids_owned(self, seq![rule] + policy@) ==> result matches Err(HistoryError::UnknownId { .. }),
             ids_owned(self, seq![rule] + policy@) ==> (result matches Ok(v)
                 ==> crate::spec::analyzer::redundant_spec::<E>(self@, rule@, ids_of(policy@), v@)),
@@ -765,6 +773,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), views::analyzer_obligations::<E>(),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            ids_owned(self, stricter@ + than@) ==> (result matches Err(error) ==> sem::resource_error(error)),
             !ids_owned(self, stricter@ + than@) ==> result matches Err(HistoryError::UnknownId { .. }),
             ids_owned(self, stricter@ + than@) ==> (result matches Ok(v)
                 ==> crate::spec::analyzer::at_least_as_strict_spec::<E>(self@, ids_of(stricter@), ids_of(than@), v@)),
@@ -812,6 +821,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
             rule.0 < self.rules@.len(), valid_ids(*self, by@),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> sem::resource_error(error),
             result matches Ok(v) ==> crate::spec::analyzer::covered_spec::<E>(self@, rule@, queries::selected_rule_ids(by@, exclude), v@),
     {
         let analyzed = &self.rules[rule.0];
@@ -1008,6 +1018,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                 && views::codes(operands.constants@[k].view()).contains(v)
                 ==> views::reconstruction::code_field(self.constants, Component(k as u8), v),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> sem::resource_error(error),
             result matches Ok(difference) ==> decision_ready(*self, NumericInput {
                 left: inclusion::denial(queries::stored_numeric(self.rules@[rule.0 as int])),
                 right: inclusion::firing_denials(views::ndomains(self.universes),
@@ -1167,8 +1178,13 @@ impl<E: Event> PolicyAnalyzer<E> {
             final(self)@.known == crate::spec::analyzer::known_with(
                 old(self)@.known, crate::spec::analyzer::tail_constants(head@, left@, right@)),
             junco_core::verify::history_specs::no_invariant_compile_failure(result),
+            sem::head_tails_wf(head@, left@, right@) && head@.len() == arity::<E>()
+                && sem::rule_constants_tagged::<E>(Rule { mode: RuleMode::Forbid, head: *head, tail: *left }@)
+                && sem::rule_constants_tagged::<E>(Rule { mode: RuleMode::Forbid, head: *head, tail: *right }@)
+                ==> (result is Ok || (result matches Err(CompileError::Runtime(error)) && sem::resource_error(error))),
             result matches Ok(v) ==> junco_core::spec::semantics::head_tails_wf(head@, left@, right@)
                 && head@.len() == arity::<E>()
+                && fl::head_coordinates_wf::<E>(head@)
                 && crate::spec::analyzer::tail_included_spec::<E>(final(self)@, head@, left@, right@, v@))]
     pub fn tail_included(
         &mut self,
@@ -1191,6 +1207,15 @@ impl<E: Event> PolicyAnalyzer<E> {
             assert(left_rule.head@ == head@ && right_rule.head@ == head@);
             assert(left_rule.tail@ == left@ && right_rule.tail@ == right@);
             assert(head@.len() == arity::<E>());
+            assert forall|i: int| 0 <= i < head@.len() implies
+                match #[trigger] head@[i] {
+                    history_syntax::spec::events::PatternView::Constant(value) => E::coordinate_spec(value) == i,
+                    _ => true,
+                } by {
+                assert(fl::head_slot_represents(left_flat.source.head@[i], head@[i]));
+                assert(enc::head_in_domain(left_flat.source.head@[i],
+                    enc::field_at(i), fl::component_domain::<E>()));
+            }
             assert forall|k: int| 0 <= k < arity::<E>() implies
                 junco_core::spec::questions::rule_constants(left_rule@)[k].subset_of(#[trigger] staged.known@[k])
                 && junco_core::spec::questions::rule_constants(right_rule@)[k].subset_of(staged.known@[k]) by {
@@ -1325,6 +1350,8 @@ impl<E: Event> PolicyAnalyzer<E> {
             enc::grows_by(crate::verify::constant_book(old(self).constants), crate::verify::constant_book(final(self).constants),
                 enc::source_constants(*source)),
             junco_core::verify::history_specs::no_invariant_failure(result),
+            junco_core::flat::verify::structural_wf(*source) && enc::constants_in_domain(*source, fl::component_domain::<E>())
+                ==> (result matches Err(error) ==> sem::resource_error(error)),
             final(self).constants.values@.len() <= old(self).constants.values@.len() + source.head@.len() + source.tests@.len(),
             result matches Ok(target) ==> enc::lowering(*source, target, crate::verify::constant_book(final(self).constants), fl::component_equality::<E>())
                 && junco_core::flat::verify::structural_wf(target) && numeric_head_wf(target.head@),
@@ -1380,6 +1407,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         requires decision_ready(*self, input, constraint, difference),
         ensures result matches Ok(v) ==> numeric_decision_ok(*self, input, constraint@, v),
             junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> sem::resource_error(error),
     {
         proof {
             assert(numeric::source_dag_wf(difference)) by { reveal(views::table::dag); }
@@ -1464,7 +1492,8 @@ impl<E: Event> PolicyAnalyzer<E> {
             self.universes, *constraint, letters@, alphabets@),
         ensures result matches Ok(c) ==> crate::verify::reconstruction::reconstructed(self.constants,
             self.universes, *constraint, letters@, alphabets@, c),
-            junco_core::verify::history_specs::no_invariant_failure(result))]
+            junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> sem::resource_error(error))]
     fn counterexample(
         &self,
         constraint: &Constraint,

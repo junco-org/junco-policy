@@ -631,6 +631,7 @@ impl<E: Event> Store<E> {
                 && maps_wf::<E>(maps) && event_encoded::<E>(maps, *event, numeric)),
             junco_core::verify::history_specs::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
     {
         proof { if junco_core::spec::hypotheses::event_obligations::<E>() { lemma_empty_maps_wf::<E>(); } }
         let (result, _) = self.encode_event_with_snapshot(event,
@@ -651,6 +652,7 @@ impl<E: Event> Store<E> {
             result.0 matches Ok(numeric) ==> numeric@.len() == arity::<E>(),
             junco_core::verify::history_specs::no_invariant_failure(result.0),
             !(result.0 matches Err(HistoryError::InvalidPolicy { .. })),
+            result.0 matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
             junco_core::spec::hypotheses::event_obligations::<E>() ==> maps_wf::<E>(result.1@)
                 && maps_extend::<E>(first, result.1@) && maps_extend::<E>(second, result.1@)
                 && (result.0 matches Ok(numeric) ==> event_encoded::<E>(result.1@, *event, numeric)),
@@ -667,6 +669,7 @@ impl<E: Event> Store<E> {
                     output.0 matches Ok(numeric) ==> numeric@.len() == arity::<E>(),
                     junco_core::verify::history_specs::no_invariant_failure(output.0),
                     !(output.0 matches Err(HistoryError::InvalidPolicy { .. })),
+                    output.0 matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
                     output.1@ == books_maps(*final(books)),
                     junco_core::spec::hypotheses::event_obligations::<E>() ==> maps_wf::<E>(output.1@)
                         && maps_extend::<E>(first, output.1@) && maps_extend::<E>(second, output.1@)
@@ -709,6 +712,9 @@ impl<E: Event> Store<E> {
             junco_core::spec::hypotheses::event_obligations::<E>() && junco_core::flat::verify::structural_wf(*source)
                 && junco_core::verify::encoding::constants_in_domain(*source, domain::<E>())
                 ==> !(result.0 matches Err(HistoryError::InvalidPolicy { .. })),
+            junco_core::spec::hypotheses::event_obligations::<E>() && junco_core::flat::verify::structural_wf(*source)
+                && junco_core::verify::encoding::constants_in_domain(*source, domain::<E>())
+                ==> (result.0 matches Err(error) ==> junco_core::spec::semantics::resource_error(error)),
             junco_core::spec::hypotheses::event_obligations::<E>() ==> maps_wf::<E>(result.1@)
                 && maps_extend::<E>(prior, result.1@)
                 && (result.0 matches Ok(numeric) ==>
@@ -732,6 +738,9 @@ impl<E: Event> Store<E> {
                     junco_core::spec::hypotheses::event_obligations::<E>() && junco_core::flat::verify::structural_wf(*source)
                         && junco_core::verify::encoding::constants_in_domain(*source, domain::<E>())
                         ==> !(output.0 matches Err(HistoryError::InvalidPolicy { .. })),
+                    junco_core::spec::hypotheses::event_obligations::<E>() && junco_core::flat::verify::structural_wf(*source)
+                        && junco_core::verify::encoding::constants_in_domain(*source, domain::<E>())
+                        ==> (output.0 matches Err(error) ==> junco_core::spec::semantics::resource_error(error)),
                     junco_core::spec::hypotheses::event_obligations::<E>() ==> maps_wf::<E>(output.1@) && maps_extend::<E>(prior, output.1@)
                         && (output.0 matches Ok(numeric) ==>
                             junco_core::verify::encoding::lowering(*source, numeric, output.1@,
@@ -786,6 +795,7 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
         junco_core::spec::hypotheses::event_obligations::<E>() && components_wf(*self.books)
     }
     open spec fn errors_are_non_invariant(&self) -> bool { true }
+    open spec fn errors_are_resource(&self) -> bool { true }
 
     #[verifier::prophetic]
     open(crate) spec fn restoration(&self) -> (ComponentMaps<E>, bool) {
@@ -801,6 +811,8 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
             junco_core::verify::history_specs::no_invariant_failure(result),
             junco_core::spec::hypotheses::event_obligations::<E>() && domain::<E>()(field, *value)
                 ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            junco_core::spec::hypotheses::event_obligations::<E>() && domain::<E>()(field, *value)
+                ==> (result matches Err(error) ==> junco_core::spec::semantics::resource_error(error)),
     {
         proof {
             self.calls = Ghost(self.calls@ + 1);
@@ -893,6 +905,7 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
             result != Err(HistoryError::WrongHistoryOwner),
             junco_core::verify::history_specs::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
             final(self).books.registry@ == old(self).books.registry@,
             junco_core::spec::hypotheses::event_obligations::<E>() ==>
             maps_extend::<E>(component_maps(*old(self).books), component_maps(*final(self).books))

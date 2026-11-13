@@ -27,6 +27,8 @@ use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
 use junco_core::observation::SmallVecSpecFns;
 #[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics::resource_error;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::history_assumptions::*;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs as language;
@@ -86,6 +88,7 @@ impl CompiledPair {
     #[verus_spec(result => ensures language::no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
         result matches Err(error) ==> error is AllocationFailed || error is GraphIndex,
+        result matches Err(error) ==> resource_error(error),
         result matches Ok(bytes) ==> bytes as int ==
             growth * vstd::layout::size_of::<Option<AtomSet>>()
                 + count * vstd::layout::size_of::<TestId>())]
@@ -102,6 +105,8 @@ impl CompiledPair {
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             transition@ < atoms@.len() && atoms@[transition@ as int] is Some
                 ==> language::no_invariant_failure(result),
+            transition@ < atoms@.len() && atoms@[transition@ as int] is Some
+                ==> (result matches Err(error) ==> resource_error(error)),
             result matches Ok(set) ==> transition@ < atoms@.len() && atoms@[transition@ as int] == Some(*set),
     )]
     pub(crate) fn cached_atoms(
@@ -155,6 +160,7 @@ impl CompiledPair {
             result != Err(HistoryError::WrongHistoryOwner),
             language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            result matches Err(error) ==> resource_error(error),
             (*final(self)).store.graph() == (*old(self)).store.graph(),
             result matches Ok(answer) ==> answer == language::nullable(model::lift_regex((*final(self)).store.graph(), residual@)),
     )]
@@ -197,6 +203,7 @@ impl CompiledPair {
             result != Err(HistoryError::WrongHistoryOwner),
             language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            result matches Err(error) ==> resource_error(error),
             result matches Ok(out) ==> residual_folds(*final(self), bindings@, residual, history_store::store::verify::events_view(events@), out),
     )]
     pub(crate) fn fold<L: Limits>(
@@ -225,12 +232,14 @@ impl CompiledPair {
             invariant pair_wf(entry), pair_wf(*self), pair_frame(entry, *self),
                 failure matches Some(error) ==> error != HistoryError::WrongHistoryOwner
                     && !(error is Invariant) && !(error is InvalidPolicy),
+                failure matches Some(error) ==> resource_error(error),
                 index <= events@.len(),
                 residual_folds(*self, bindings@, from, history_store::store::verify::events_view(events@).take(index as int), residual),
                 history_store::store::verify::events_view(events@).take(events@.len() as int) == history_store::store::verify::events_view(events@),
             ensures pair_wf(*self), pair_frame(entry, *self),
                 failure matches Some(error) ==> error != HistoryError::WrongHistoryOwner
                     && !(error is Invariant) && !(error is InvalidPolicy),
+                failure matches Some(error) ==> resource_error(error),
                 failure is Some || residual_folds(*self, bindings@, from, history_store::store::verify::events_view(events@), residual),
             decreases events@.len() - index,
         ))]
@@ -326,6 +335,7 @@ impl CompiledPair {
             result != Err(HistoryError::WrongHistoryOwner),
             language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            result matches Err(error) ==> resource_error(error),
             result is Ok ==> has_atoms(*final(self), transition),
             final(self).caches.derivatives@ == old(self).caches.derivatives@,
             successor_entries(final(self).caches.successors) == successor_entries(old(self).caches.successors),
@@ -463,6 +473,7 @@ impl CompiledPair {
             result != Err(HistoryError::WrongHistoryOwner),
             language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            result matches Err(error) ==> resource_error(error),
             result is Ok ==> has_guard(*final(self), residual),
     )]
     /// Stores `residual`'s self-loop guard for `transition` once per residual.
@@ -575,6 +586,7 @@ impl CompiledPair {
             result != Err(HistoryError::WrongHistoryOwner),
             language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            result matches Err(error) ==> resource_error(error),
             final(self).caches.atoms@ == old(self).caches.atoms@, final(self).caches.guards@ == old(self).caches.guards@,
             result matches Ok(mask) ==> guard_wf(final(self).store.graph(), final(self).caches.atoms@, residual@ as int, Guard { transition, mask }),
     )]
@@ -697,6 +709,7 @@ impl CompiledPair {
             result != Err(HistoryError::WrongHistoryOwner),
             language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            result matches Err(error) ==> resource_error(error),
             final(self).caches.atoms@ == old(self).caches.atoms@, final(self).caches.guards@ == old(self).caches.guards@,
             successor_entries((*final(self)).caches.successors) == successor_entries((*old(self)).caches.successors),
             result matches Ok(true) ==> instantiation_result(*final(self), transition, bindings@, *event, residual),
@@ -730,6 +743,7 @@ impl CompiledPair {
             invariant pair_wf(*self), pair_frame(entry, *self),
                 failure matches Some(error) ==> error != HistoryError::WrongHistoryOwner
                     && !(error is Invariant) && !(error is InvalidPolicy),
+                failure matches Some(error) ==> resource_error(error),
                 self.store.graph() == entry.store.graph(), self.caches.derivatives@ == entry.caches.derivatives@,
                 successor_entries((*self).caches.successors) == successor_entries(entry.caches.successors), self.caches.atoms@ == entry.caches.atoms@, self.caches.guards@ == entry.caches.guards@,
                 index <= atoms@.len(), has_atoms(*self, transition), atoms@ == self.caches.atoms@[transition@ as int].unwrap()@,
@@ -811,6 +825,7 @@ impl CompiledPair {
             result != Err(HistoryError::WrongHistoryOwner),
             language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            result matches Err(error) ==> resource_error(error),
             result matches Ok(id) ==> instantiation_result(*final(self), transition, bindings@, *event, id),
     )]
     fn instantiate<L: Limits>(
@@ -876,6 +891,7 @@ impl CompiledPair {
             invariant pair_wf(*self), pair_frame(entry, *self),
                 failure matches Some(error) ==> error != HistoryError::WrongHistoryOwner
                     && !(error is Invariant) && !(error is InvalidPolicy),
+                failure matches Some(error) ==> resource_error(error),
                 index <= atoms@.len(), words.view().len() == word_count,
                 atoms@.len() + 63 <= usize::MAX, word_count == (atoms@.len() + 63) / 64,
                 symbolic::verify::assignment_valid(atoms@.len(), words.view()),
@@ -999,6 +1015,8 @@ impl CompiledPair {
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             symbolic::verify::assignment_valid(old(self).caches.atoms@[key.transition@ as int].unwrap()@.len(), key.words.view())
                 ==> language::no_invariant_failure(result),
+            symbolic::verify::assignment_valid(old(self).caches.atoms@[key.transition@ as int].unwrap()@.len(), key.words.view())
+                ==> (result matches Err(error) ==> resource_error(error)),
             final(self).caches.atoms@ == old(self).caches.atoms@,
             final(self).caches.derivatives@ == old(self).caches.derivatives@,
             result matches Ok(id) ==> successor_entries((*final(self)).caches.successors).contains_key(class_key(key))
@@ -1089,6 +1107,7 @@ impl CompiledPair {
             result != Err(HistoryError::WrongHistoryOwner),
             language::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
+            result matches Err(error) ==> resource_error(error),
     )]
     /// Eagerly builds derivatives, atom sets and successor classes for up to `PRECOMPILE_STATES`
     /// residual states reachable from `root`, depth-first, within the successor cache's capacity;
@@ -1252,6 +1271,9 @@ impl CompiledPair {
             final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            final(store).errors_are_resource() == old(store).errors_are_resource(),
+            old(store).errors_are_resource() && old(store).valid_store()
+                ==> (result matches Err(error) ==> resource_error(error)),
             old(store).errors_are_non_invalid_policy()
                 ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             old(store).errors_are_non_invariant() ==> language::no_invariant_failure(result),
@@ -1284,6 +1306,7 @@ impl CompiledPair {
             store.errors_are_non_owner() == old(store).errors_are_non_owner(),
             store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            store.errors_are_resource() == old(store).errors_are_resource(),
             forall|j: int| 0 <= j < primitives@.len() ==> primitives@[j]@ < store.graph().tests.len()
                 && #[trigger] store.graph().tests[primitives@[j]@ as int] matches model::TestNode::Atom(_, true),
             forall|j: int| #![trigger primitives@[j]] 0 <= j < primitives@.len() ==> match store.graph().tests[primitives@[j]@ as int] {
@@ -1303,6 +1326,7 @@ impl CompiledPair {
             store.errors_are_non_owner() == old(store).errors_are_non_owner(),
             store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+            store.errors_are_resource() == old(store).errors_are_resource(),
             forall|j: int| 0 <= j < primitives@.len() ==> primitives@[j]@ < store.graph().tests.len()
                 && #[trigger] store.graph().tests[primitives@[j]@ as int] matches model::TestNode::Atom(_, true),
             forall|j: int| #![trigger primitives@[j]] 0 <= j < primitives@.len() ==> match store.graph().tests[primitives@[j]@ as int] {

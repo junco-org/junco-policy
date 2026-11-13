@@ -36,9 +36,9 @@ broadcast use vstd::seq::group_seq_lemmas;
 
 // ----- thm:matcher at the monitor level -----
 
-/// The three readable cases of `check_step` (R5): a grant means no rule is violated; a denial
-/// names the first violated rule, in source order, by index and mode; errors are never invariant
-/// failure. Spelled out with R2's `rule_violated` so a reader needs no further unfolding.
+/// The three readable cases of `check_step`: a grant means no rule is violated; a denial
+/// names the first violated rule, in source order, by index and mode; errors are operational
+/// resource failures. Spelled out with `rule_violated` without further unfolding.
 pub open spec fn stmt_monitor_check<E: Event, M>(
     before: ValidatorView<E>, request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>,
 ) -> bool {
@@ -52,7 +52,7 @@ pub open spec fn stmt_monitor_check<E: Event, M>(
             && denial.mode == before.rules[i].mode
             && i == denial.index as int
             && forall|j: int| 0 <= j < i ==> !rule_violated(#[trigger] before.rules[j], request.event, before.history),
-        Err(error) => !(error is Invariant),
+        Err(error) => junco_core::spec::semantics::resource_error(error),
     }
 }
 
@@ -80,6 +80,35 @@ pub proof fn theorem_monitor_check<E: Event, M>(
         },
         Err(_) => {},
     }
+}
+
+/// Both monitor entry points reserve errors for operational resource failures.
+pub proof fn theorem_monitor_resource_errors<E: Event, M>(
+    before: ValidatorView<E>, request: Request<E, M>,
+    checked: Result<Decision<E, M>, HistoryError>, permitted: Result<bool, HistoryError>,
+)
+    requires check_step(before, request, checked),
+        history_semantics::spec::monitor::permits_result(before, request.event, permitted),
+    ensures checked matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
+        permitted matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
+        !(checked matches Err(HistoryError::UnknownId { .. })),
+        !(permitted matches Err(HistoryError::UnknownId { .. })),
+{
+}
+
+/// A well-formed, correctly tagged rule of the event arity has no input-error exit.
+fn valid_rule_registration<E: Event>(
+    builder: &mut history_semantics::validator::ValidatorBuilder<E>, rule: Rule<E>,
+) -> (result: Result<(), CompileError>)
+    requires old(builder).wf(), event_obligations::<E>(),
+        junco_core::spec::semantics::rule_wf(rule@),
+        rule@.head.len() == history_syntax::spec::events::arity::<E>(),
+        junco_core::spec::semantics::rule_constants_tagged::<E>(rule@),
+    ensures result is Ok || (result matches Err(CompileError::Runtime(error))
+        && junco_core::spec::semantics::resource_error(error)),
+{
+    builder.add_rule(rule)?;
+    Ok(())
 }
 
 /// `permits` answers exactly whether every rule accepts the candidate after the committed history.
