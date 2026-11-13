@@ -80,7 +80,7 @@ arbitrary order and duplicate ids handled). It does **not** touch `tail_included
 
 | Fact | Where |
 |---|---|
-| Executable `covered`, `redundant`, `at_least_as_strict` ensure `*_correct`, `cex_has_instance`, `¬covers`/`¬refines`, `no_internal_error` | `history-analysis/src/analyzer.rs` (≈ l.475–547) |
+| Executable `covered`, `redundant`, `at_least_as_strict` ensure `*_correct`, `cex_has_instance`, `¬covers`/`¬refines`, `no_internal_error`; with PR #10 also `*_ok` (per-case minimality) and `redundant_decisions_ok` | `history-analysis/src/analyzer.rs` |
 | `P ⊑ Q` iff `P` covers every rule of `Q`; redundancy iff covered | `refinement/semantics.rs`: `stmt_refines_iff_covers`, `stmt_redundant_iff_covered` |
 | Covering iff one constrained inclusion per split case; composition with search outcomes | `refinement/inclusion.rs`: `stmt_policy_reduction`, `stmt_policy_search_composition` |
 | Exact firing test on split cases | `history-analysis/src/verify/policy_firing.rs`: `lemma_head_firing_exact` |
