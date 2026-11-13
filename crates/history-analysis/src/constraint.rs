@@ -1455,7 +1455,8 @@ pub(crate) struct RegisterChoices {
 #[verus_verify]
 impl RegisterChoices {
     #[verus_spec(result => ensures junco_core::verify::history_specs::no_invariant_failure(result),
-        result matches Ok(n) ==> n == self@.len())]
+        result matches Ok(n) ==> n == self@.len(),
+        result matches Err(error) ==> error is GraphIndex)]
     fn len(&self) -> Result<usize, HistoryError> {
         match self
             .equals
@@ -1497,7 +1498,8 @@ pub(crate) struct ClassChoices {
 #[verus_verify]
 impl ClassChoices {
     #[verus_spec(result => ensures junco_core::verify::history_specs::no_invariant_failure(result),
-        result matches Ok(n) ==> n == self@.len())]
+        result matches Ok(n) ==> n == self@.len(),
+        result matches Err(error) ==> error is GraphIndex)]
     fn len(&self) -> Result<usize, HistoryError> {
         let extras = (if self.infinite { 1usize } else { 0 })
             + (if self.register { 1usize } else { 0 })

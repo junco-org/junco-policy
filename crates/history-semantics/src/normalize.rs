@@ -5053,7 +5053,8 @@ impl Action {
     )]
     #[verus_verify]
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
-    #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
+    // rlimit 30 was exceeded in the no-std configuration once `HistoryError` gained `GraphIndex`.
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(80))]
     #[verus_spec(result =>
         requires model::graph_wf(old(store).graph()), old(store).valid_store(),
             transition_configuration_valid(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view()),
@@ -5282,7 +5283,8 @@ impl Action {
 
     verus! {
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
-    #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
+    // rlimit 30 was exceeded once `HistoryError` gained the `GraphIndex` variant.
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(40))]
     #[verus_spec(result =>
         requires model::graph_wf(old(store).graph()), old(store).valid_store(),
             transition_action_valid(old(store).graph(), self@),

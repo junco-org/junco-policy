@@ -15,7 +15,9 @@ pub enum HistoryError {
     #[error("history variable {name:?} is not bound by request pattern")]
     UnboundVariable { name: String },
     #[error("history symbolic graph payload exceeds {limit} bytes")]
-    GraphLimit { limit: usize },
+    GraphBudget { limit: usize },
+    #[error("history graph index or size computation overflowed")]
+    GraphIndex,
     #[error("history allocation failed")]
     AllocationFailed,
     #[error("history arena exhausted")]
@@ -104,12 +106,10 @@ impl HistoryError {
         }
     }
     #[verus_verify]
-    #[verus_spec(result => ensures result is GraphLimit)]
+    #[verus_spec(result => ensures result is GraphIndex)]
     #[inline]
     pub const fn graph_index_overflow() -> HistoryError {
-        HistoryError::GraphLimit {
-            limit: crate::limits::MAX_GRAPH_BYTES,
-        }
+        HistoryError::GraphIndex
     }
     #[cfg(feature = "runtime")]
     #[verus_verify]
