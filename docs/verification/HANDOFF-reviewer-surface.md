@@ -220,7 +220,6 @@ Files: `junco-core/src/error.rs`, `history-store/src/graph.rs`, `junco-core/src/
 - Optional (decision 3, non-blocking): split the error; specify `charge`/`projected`; carry
   "budget exceeded" through `search`'s error contract. Required: rename `no_internal_error` →
   `no_invariant_failure` everywhere (mechanical; coordinate
-  contract. Rename `no_internal_error` → `no_invariant_failure` everywhere (mechanical; coordinate
   the rename with all tracks by doing it first in this track, in one commit).
 
 ### Track D — Monitor surface (R5; S13 monitor parts)
