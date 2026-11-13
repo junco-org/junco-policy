@@ -219,6 +219,8 @@ runtime check. Allocation and vocabulary/index limits remain fallible, not hidde
 of infinite resources. Abstract successor/search theorems also state component-local atoms,
 valid starting constraints and the finite-items termination premise; implementation links
 discharge these for the executable search. No obsolete `infinite_type` premise is needed.
+Graph-local `RuleRuntime::resume_cursor` and `advance_cursor` are crate-private; public
+clients use the monitor/runtime decision boundary rather than exchanging raw cursors.
 
 `lemma_u8_event_hypotheses` for `(u8,u8,u8)` and `lemma_u32_event_hypotheses` for
 `(u32,u8,u8)` prove every non-hash conjunct from the verified tuple/equality implementation.

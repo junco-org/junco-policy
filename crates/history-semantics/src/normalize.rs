@@ -4098,6 +4098,8 @@ impl Action {
     }
 
     #[verus_verify]
+    #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
+    #[cfg_attr(verus_keep_ghost, verifier::rlimit(20))]
     #[verus_spec(result =>
         requires model::graph_wf(old(store).graph()), old(store).valid_store(),
             transition_configuration_valid(old(store).graph(), transition_action_views(old(tasks).view()), old(values).view()),

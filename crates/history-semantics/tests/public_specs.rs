@@ -8,7 +8,6 @@ use history_semantics::policy::evaluate::verify as policy;
 use history_semantics::policy::rule::verify::diagnostic_output;
 use history_semantics::policy::trace::verify as trace;
 use history_semantics::policy::{CompiledPolicy, PolicyDecision, TracePolicy, TraceRule};
-use history_semantics::runtime::{RuleRuntime, verify as runtime};
 use history_semantics::spec::monitor;
 use history_semantics::validator::{Decision, Validator, verify as validator};
 use history_store::history::{History, verify as history};
@@ -18,7 +17,6 @@ use history_syntax::spec::events::{EventSpec, arity, event_view, projection_laws
 use history_syntax::spec::events::{HeadView, RegexView, TestView};
 use history_syntax::{Component, Event, Head, MAX_ARITY, RegexExpr, Rule, RuleMode};
 use junco_core::event::Request;
-use junco_core::flat::{FlatHead, FlatPair, FlatRegex};
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
 use junco_core::spec::semantics;
@@ -769,52 +767,4 @@ fn retained_raw_observations<L: Limits>(arity: usize, events: &[history_store::s
     Ok(())
 }
 
-fn numeric_runtime_readiness<L: Limits>(bindings: &junco_core::kernel::Bindings,
-    limits: &mut L, world: &mut ObservationWorld) -> Result<(), HistoryError>
-    requires numeric_regex::event_wf(bindings@, bindings@.len()),
-        1 <= bindings@.len() <= MAX_ARITY,
-{
-    let arity = bindings.arity();
-    let owner = HistoryStore::new(arity);
-    let store = history_store::store::borrow_numeric_owner(&owner);
-    let handle = owner.new_history(limits, world)?;
-    let record = store.history_record(&handle)?;
-    let guard = record.read();
-    let stored: &history_store::history::StoredHistory = &guard;
-    let target = stored.len();
-    let mut regexes = Vec::new();
-    regexes.push(FlatRegex::All);
-    let mut head = Vec::new();
-    while head.len() < arity
-        invariant head@.len() <= arity,
-            forall|i: int| 0 <= i < head@.len() ==> head@[i] == FlatHead::<u64>::Bind,
-        decreases arity - head@.len(),
-    {
-        head.push(FlatHead::<u64>::Bind);
-    }
-    let template = FlatPair {
-        head,
-        tests: Vec::new(), regexes, root: 0,
-    };
-    let mut state = RuleRuntime::new(&owner, &template, false, limits, world)?;
-    let ghost constructed = state;
-    proof {
-        runtime::lemma_constructor_runtime_wf(state, owner, template);
-        runtime::lemma_constructor_snapshot_compatible(state, owner, template, *stored);
-        runtime::lemma_resume_requires(state, *bindings, *stored, target);
-    }
-    let mut cursor = state.resume_cursor(bindings, stored, target);
-    proof { runtime::lemma_resume_can_advance(constructed, state, cursor, *bindings, *stored, target); }
-    let ghost before = state;
-    let ghost start = cursor;
-    let answer = state.advance_cursor(&mut cursor, bindings, stored, target, target, limits, world);
-    proof {
-        runtime::lemma_advance_result_facts(before, state, start, cursor, *bindings, *stored, target, target, answer);
-        runtime::lemma_runtime_frame_accepts(constructed, before, bindings@, stored@.events.take(target as int));
-        assert(answer matches Ok(Some(accepted)) ==>
-            accepted == runtime::runtime_accepts(constructed, bindings@, stored@.events.take(target as int)));
-        assert(answer != Err(HistoryError::WrongHistoryOwner));
-    }
-    Ok(())
-}
 }

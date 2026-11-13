@@ -2,18 +2,18 @@
 
 ## Current wave
 
-Attempt-A source and optional hygiene are pushed through `a08f39d` (source `b3c3646`).
-The final default sequential run completed in **1173.54 seconds**: eleven configurations
-passed; no-std semantics hit one SMT resource limit in `normalize::pair_conditionals`,
-and no-std analysis failed through that dependency. This is not a green full gate.
-All std configurations and both reviewer targets passed; workspace **201 tests**, fuzz
-**8 tests**, Clippy, formatting and **18 spec-check tests** passed as recorded below.
+Draft comparison **PR #12** is open: https://github.com/junco-org/junco-policy/pull/12.
+Source/results were pushed at `c441afd`. The no-std `pair_conditionals` obligation now
+passes its isolated check (**1 verified / 0 errors**) with the existing local isolated-prover
+convention and `rlimit(20)` instead of the default 10; no contract or algorithm was weakened.
+Cursor continuation methods are now crate-private and their obsolete external-only proof
+client is removed; production internal proofs and native cursor regressions remain.
+The affected semantics native batch passed **47 tests**, Clippy and formatting pass.
+A complete default thirteen-configuration rerun follows; the earlier failed full gate is
+retained below rather than being silently called green.
 
-`main` independently merged attempt B in **PR #11** (`7050ac3`). The user selected
-**Comparison PR**: publish A as a draft against main and leave B untouched. Read-only
-comparisons identify A's narrower hash-only trust and query-scoped known bounds, plus
-remaining A cursor-visibility work. No attempt-B implementation is overwritten here.
-Exhausted blocks nothing.
+`main` / attempt B remains untouched. The user selected this comparison PR, not a port or
+replacement of the independently merged PR #11. Exhausted blocks nothing.
 
 ## Last checks actually run
 
