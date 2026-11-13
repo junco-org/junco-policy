@@ -1,15 +1,20 @@
-//! Warm lock-policy decision latency over committed fuzzed histories of 2^4 ..= 2^16 events.
+//! Warm and cold lock-policy decision latency over committed fuzzed histories of 2^4 ..= 2^16
+//! events.
 //!
 //! Same generator and probes as `../lock_policy.rs`; this target extends the length sweep to
-//! 65,536 events. Each length is its own tracked [`History`] built from one immutable prefix,
-//! decided repeatedly by one retained policy: after the first call every rule resumes its cached
-//! residual, so points are warm-progress decisions, not full-history replays.
+//! 65,536 events. Each length is its own tracked [`History`] built from one immutable prefix.
+//! `lock_scaling` decides it repeatedly with one retained policy: after the first call every rule
+//! resumes its cached residual, so points are warm-progress decisions, not full-history replays.
+//! `lock_cold` decides a never-seen clone of the prefix per iteration with a retained compiled
+//! policy, so every rule folds the whole history inside timing while cloning stays outside.
 
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, PlottingBackend, criterion_group, criterion_main};
+use criterion::{
+    BatchSize, BenchmarkId, Criterion, PlottingBackend, criterion_group, criterion_main,
+};
 use history_store::History;
 use junco_policy::LockPolicy;
 use lock_policy_harness::{BYTES_PER_EVENT, check, entropy, granted_history, probe_candidates};
@@ -64,6 +69,28 @@ fn lock_scaling(criterion: &mut Criterion) {
                     check(&mut policy, black_box(trace), black_box(candidate))
                         .expect("benchmark decision failed")
                 })
+            });
+        }
+    }
+    group.finish();
+
+    let mut group = criterion.benchmark_group("lock_cold");
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
+    group.sample_size(50);
+    for (name, candidate) in &probes {
+        for (length, prefix) in LENGTHS.iter().zip(&prefixes) {
+            let mut policy =
+                LockPolicy::new(Arc::clone(store)).expect("benchmark policy compilation failed");
+            group.bench_with_input(BenchmarkId::new(*name, length), prefix, |bencher, trace| {
+                bencher.iter_batched(
+                    || trace.try_clone().expect("benchmark history clone failed"),
+                    |clone| {
+                        check(&mut policy, black_box(&clone), black_box(candidate))
+                            .expect("benchmark decision failed")
+                    },
+                    BatchSize::PerIteration,
+                )
             });
         }
     }
