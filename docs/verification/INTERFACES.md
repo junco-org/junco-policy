@@ -41,11 +41,10 @@ constant profile; strictness uses the same selected Q rule for failure and minim
 Monitor hypotheses do not need surjectivity; analyzer hypotheses add it. Concrete
 `lemma_u8_event_hypotheses` and `lemma_u32_event_hypotheses` discharge every other law assuming
 only component `hash_coherent`. Primitive/component-compositional axioms are not permitted;
-the five internal-key introductions assume **only hash_coherent** and are listed in
-[TRUST.md](../../TRUST.md). Native equality, equivalence and view reflection are proved.
-The internal ordered-parts key uses a locally owned PartsKey wrapper because the external
-SmallVec model supplies no equality specification; its one hashing introduction replaces
-the former SmallVec introduction rather than adding an assumption.
+the five exact internal hashing introductions may assert **only `hash_coherent`**.
+Equality laws, `obeys_eq_spec`, and view/equality reflection must be proved separately,
+not asserted by those trusted introductions. The generated inventory is
+[TRUST.md](../../TRUST.md); the earlier green baseline predates this trust narrowing.
 No Event cardinality hook is used. An undeclared finite coordinate can produce Holds or a
 counterexample whose capacity fails there, never a capacity-satisfying real refutation of a
 true property. See VERIFY for counting methodology, paper differences and restricted Arc identity.

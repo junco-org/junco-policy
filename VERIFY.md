@@ -48,6 +48,8 @@ performed while editing this guide. Main reports that the full original eleven-c
 gate passed with zero errors, including the no-default configurations below. This is not
 the final thirteen-configuration gate with the new reviewer targets. The integration owner
 replaces this table with final observed results after integration.
+That snapshot predates the narrowing of internal-key introductions to hashing-only
+assumptions; its green result is not final approval of the revised trust boundary.
 
 | Configuration (`cargo verus verify --locked ...`) | Reported baseline |
 |---|---|
@@ -204,9 +206,11 @@ discharge these for the executable search. No obsolete `infinite_type` premise i
 `lemma_u8_event_hypotheses` for `(u8,u8,u8)` and `lemma_u32_event_hypotheses` for
 `(u32,u8,u8)` prove every non-hash conjunct from the verified tuple/equality implementation.
 Each assumes **only `hash_coherent` for its tagged Component3 type**. No primitive-key or
-component-compositional hash axiom is claimed. The five approved internal key introductions
+component-compositional hash axiom is claimed. The five approved internal hashing introductions
 are for Constraint, `(ConstraintId,RegexId)`, `(RegexId,RegexId)`, `(TestId,TestId)` and
-`SmallVec<[RegexId;4]>`; they are trusted library facts, not user preconditions.
+`SmallVec<[RegexId;4]>`. Each may assert **only `hash_coherent`**; equality laws,
+`obeys_eq_spec`, and view/equality reflection are proved separately, not trusted axiom
+conclusions. These exact hashing assumptions are library facts, not user preconditions.
 
 Besides Verus/vstd, Z3 and Rust, [TRUST.md](TRUST.md) inventories assumed std/smallvec
 contracts, external native containers/locks/records/reservation/callback adapters, external
