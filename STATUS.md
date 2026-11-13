@@ -8,7 +8,9 @@ Plan: `local://reviewer-surface-b-plan.md` (integration owner's copy). Deleted i
 | Track | State | Branch | Notes |
 |---|---|---|---|
 | 0 | done | integration | 0.0–0.4 and M4 done at `b18250c`; M5 deferred to Track T; timing table below |
-| A, B, C, D, E, G, F-prep | running since 2026-11-13 (7 agents) | `track/{a,b,c,d,e,g,f}-b` from `0f71984` | wave 1; briefs in the owner's `local://reviewer-surface-b-briefs-wave1.md` (B2's items are inside B's brief) |
+| G | reported `c176803`, merge pending | `track/g-b` | singleton axiom gone; dead `mem::replace` spec gone; `Arc`/`&T` identity documented (no coincidence possible for the compared singleton types); trust-scan kinds `uninterp`/`derived_eq_claim`/`unannotated_pub_fn` + helper crates; D2 benches without `test-util` (CI test step now `--features junco-policy/test-util`; bench numbers moved because counters are compiled out) |
+| E | reported `1f157b2`, merge pending | `track/e-b` | `verify/paper.rs` index (14 statements), `stmt_/theorem_` convention, named finiteness conditions, `expansion_ok`/`covered_with_ok`/`n_unrestricted` deleted; needs two one-token edits at B's merge (`::<C>` → `::<E>` in `stmt_app_policy_reduction`/`theorem_paper_index`) |
+| A, B, C, D, F-prep | running (5 agents) | `track/{a,b,c,d,f}-b` from `0f71984` | wave 1; B absorbed the verdict half of `refinement/analyzer.rs`, `policy_removal.rs`, `verify/{policy_minimality,policy_case_profile,policy_queries}.rs`, the four query `ensures` and `impl View for PolicyAnalyzer` (F keeps `new`/`with_domain`/capacities/RuleId ownership/vacuity/opaque `wf`); F adds ghost `declared`/`known` fields set by contract |
 | F | not started | `track/f-b` | wave 2 |
 | T | not started | `track/t-b` | wave 3 |
 
