@@ -2,10 +2,14 @@
 # Reproduces the `verify-core` CI job (.github/workflows/ci.yml) locally: checks the pinned
 # toolchain, runs the eleven `cargo verus verify` configurations, and prints a summary table.
 #
-# Usage: scripts/verify-all.sh [--list] [--download DIR] [-- VERUS_ARGS...]
-#   --list          check the toolchain and print the commands; verify nothing
-#   --download DIR  fetch the pinned Verus and Z3 releases (sha256-checked) into DIR and use them
-#   -- ARGS         extra arguments passed to Verus by every command, e.g. -- --num-threads 8
+# Usage: scripts/verify-all.sh [--list] [--download DIR] [--jobs N] [--target-root DIR]
+#                              [--only PATTERN...] [-- VERUS_ARGS...]
+#   --list             check the toolchain and print selected commands; verify nothing
+#   --download DIR     fetch the pinned, sha256-checked Verus and Z3 releases into DIR
+#   --jobs N           run up to N configurations concurrently (default: 1)
+#   --target-root DIR  keep a separate persistent Cargo target directory per configuration
+#   --only PATTERN...  select configurations containing any supplied argument-string pattern
+#   -- ARGS            extra Verus arguments; concurrent jobs should divide the available cores
 #
 # Toolchain lookup: Verus from $VERUS_DIST (an unpacked release directory) or from `verus` and
 # `cargo-verus` on PATH; Z3 from $VERUS_Z3_PATH or `z3` on PATH; Rust via rustup.
@@ -35,18 +39,39 @@ configs=(
     "-p history-analysis --no-default-features --features runtime,std"
 )
 
-usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
 fail() { echo "verify-all: $*" >&2; exit 1; }
 
 list_only=0
 download_dir=
 verus_args=()
+jobs=1
+target_root=
+only_patterns=()
 while (($#)); do
     case $1 in
         --list) list_only=1; shift ;;
         --download)
             (($# >= 2)) || fail "--download needs a directory"
             download_dir=$2; shift 2 ;;
+        --jobs)
+            (($# >= 2)) || fail "--jobs needs a positive integer"
+            [[ $2 =~ ^[1-9][0-9]*$ ]] || fail "--jobs needs a positive integer"
+            jobs=$2
+            ((jobs > 0)) || fail "--jobs needs a positive integer"
+            shift 2 ;;
+        --target-root)
+            (($# >= 2)) && [[ -n $2 ]] || fail "--target-root needs a directory"
+            target_root=$2; shift 2 ;;
+        --only)
+            shift
+            before=${#only_patterns[@]}
+            while (($#)) && [[ $1 != --* && $1 != -h ]]; do
+                only_patterns+=("$1")
+                shift
+            done
+            ((${#only_patterns[@]} > before)) || fail "--only needs at least one pattern"
+            ;;
         --) shift; verus_args=("$@"); break ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
@@ -55,6 +80,34 @@ done
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$root"
+
+selected=()
+for i in "${!configs[@]}"; do
+    if ((${#only_patterns[@]} == 0)); then
+        selected+=("$i")
+    else
+        for pattern in "${only_patterns[@]}"; do
+            if [[ ${configs[$i]} == *"$pattern"* ]]; then
+                selected+=("$i")
+                break
+            fi
+        done
+    fi
+done
+((${#selected[@]})) || fail "--only matched no configurations"
+
+if ((jobs > 1)) && [[ -z $target_root ]]; then
+    target_root="${CARGO_TARGET_DIR:-$root/target}/verify-all"
+fi
+if [[ -n $target_root ]]; then
+    mkdir -p "$target_root"
+    target_root="$(cd "$target_root" && pwd -P)"
+fi
+
+target_of() {
+    local name=${1//[^a-zA-Z0-9]/_}
+    printf '%s/%s' "$target_root" "$name"
+}
 
 # Fetches URL into DIR/NAME unless a copy with the expected sha256 is already there.
 fetch() {
@@ -128,36 +181,52 @@ echo
 command_of() {
     local cmd="cargo verus verify --locked $1"
     ((${#verus_args[@]})) && cmd+=" -- ${verus_args[*]}"
+    if [[ -n $target_root ]]; then
+        cmd="CARGO_TARGET_DIR=$(printf '%q' "$(target_of "$1")") $cmd"
+    fi
     printf '%s' "$cmd"
 }
 
 if ((list_only)); then
     echo "cargo fetch --locked"
-    for config in "${configs[@]}"; do command_of "$config"; echo; done
+    for i in "${selected[@]}"; do command_of "${configs[$i]}"; echo; done
     exit 0
 fi
 
 cargo fetch --locked
 
 logs="$(mktemp -d)"
-trap 'rm -rf -- "$logs"' EXIT
+pids=()
+cleanup() {
+    local pid
+    for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+    rm -rf -- "$logs"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 results=()
 failed=0
-for i in "${!configs[@]}"; do
+
+run_config() {
+    local i=$1
+    local -a args
     read -r -a args <<<"${configs[$i]}"
-    log="$logs/$i.log"
-    printf '\n==> %s\n' "$(command_of "${configs[$i]}")"
-    status=0
-    if ((${#verus_args[@]})); then
-        cargo verus verify --locked "${args[@]}" -- "${verus_args[@]}" 2>&1 | tee "$log" || status=$?
-    else
-        cargo verus verify --locked "${args[@]}" 2>&1 | tee "$log" || status=$?
+    if [[ -n $target_root ]]; then
+        export CARGO_TARGET_DIR
+        CARGO_TARGET_DIR="$(target_of "${configs[$i]}")"
     fi
-    # One results line per crate Verus checks in this run (dependencies too, unless cached);
-    # the target package is checked last. Errors are summed over all lines.
-    counts="$(sed -n 's/.*verification results:: \([0-9]*\) verified, \([0-9]*\) errors.*/\1 \2/p' "$log")"
-    verified=-
-    errors=0
+    if ((${#verus_args[@]})); then
+        cargo verus verify --locked "${args[@]}" -- "${verus_args[@]}"
+    else
+        cargo verus verify --locked "${args[@]}"
+    fi
+}
+
+record_result() {
+    local i=$1 status=$2 counts verified=- errors=0 verdict
+    # The target package is checked last; sum errors from its dependencies as well.
+    counts="$(sed -n 's/.*verification results:: \([0-9]*\) verified, \([0-9]*\) errors.*/\1 \2/p' "$logs/$i.log")"
     if [[ -n $counts ]]; then
         verified="$(tail -n1 <<<"$counts" | cut -d' ' -f1)"
         errors="$(awk '{ s += $2 } END { print s }' <<<"$counts")"
@@ -170,16 +239,62 @@ for i in "${!configs[@]}"; do
     else
         verdict=pass
     fi
-    results+=("${configs[$i]}|$verified|$errors|$verdict")
-done
+    results[$i]="${configs[$i]}|$verified|$errors|$verdict"
+}
+
+if ((jobs == 1)); then
+    # Preserve the default live output and shared Cargo target/cache behavior.
+    for i in "${selected[@]}"; do
+        printf '\n==> %s\n' "$(command_of "${configs[$i]}")"
+        status=0
+        run_config "$i" 2>&1 | tee "$logs/$i.log" || status=$?
+        record_result "$i" "$status"
+    done
+else
+    next=0
+    running=0
+    while ((next < ${#selected[@]} || running > 0)); do
+        while ((next < ${#selected[@]} && running < jobs)); do
+            i=${selected[$next]}
+            printf '\n==> Starting %s\n' "$(command_of "${configs[$i]}")"
+            (
+                status=0
+                run_config "$i" >"$logs/$i.log" 2>&1 || status=$?
+                printf '%s\n' "$status" >"$logs/$i.status"
+                exit "$status"
+            ) &
+            pids[$i]=$!
+            next=$((next + 1))
+            running=$((running + 1))
+        done
+        # Refill on completion, not by launch order. Bash 5.0 lacks wait -n -p.
+        wait -n || true
+        for i in "${!pids[@]}"; do
+            if [[ -f $logs/$i.status ]]; then
+                read -r status <"$logs/$i.status"
+            elif kill -0 "${pids[$i]}" 2>/dev/null; then
+                continue
+            else
+                status=0
+                wait "${pids[$i]}" || status=$?
+            fi
+            wait "${pids[$i]}" 2>/dev/null || true
+            printf '\n==> Completed %s\n' "$(command_of "${configs[$i]}")"
+            cat "$logs/$i.log"
+            record_result "$i" "$status"
+            unset 'pids[i]'
+            running=$((running - 1))
+        done
+    done
+fi
 
 printf '\n| %s | %s | %s | %s |\n|---|---:|---:|---|\n' "cargo verus verify --locked ..." verified errors result
-for row in "${results[@]}"; do
-    IFS='|' read -r config verified errors verdict <<<"$row"
+for i in "${selected[@]}"; do
+    IFS='|' read -r config verified errors verdict <<<"${results[$i]}"
     printf '| `%s` | %s | %s | %s |\n' "$config" "$verified" "$errors" "$verdict"
 done
 if ((failed)); then
     echo "verify-all: at least one configuration failed" >&2
     exit 1
 fi
-echo "All ${#configs[@]} configurations verified."
+echo "All ${#selected[@]} configurations verified."
