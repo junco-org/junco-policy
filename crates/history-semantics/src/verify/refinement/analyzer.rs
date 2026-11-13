@@ -2,27 +2,27 @@
 //! the typed semantics of `semantics`.
 //!
 //! `history-analysis` is Verus-checked. This module fixes the *view* of its state and results
-//! and the predicates for query results. Correctness (`*_correct`) and per-case minimality
-//! (`*_minimal`) are separate predicates; `*_ok` is their conjunction. The executable entry points
-//! ensure (abbreviated; see `history-analysis/src/analyzer.rs` for the full contracts):
+//! and the predicates for query results. Policy-level correctness and per-case minimality are
+//! separate predicates; the executable entry points ensure their conjunction `*_ok`.
+//! The policy-level contracts are
 //!
 //! ```text
-//! add_rule(&mut self, rule)          Ok(id) ==> final(self)@.rules == old(self)@.rules.push(rule_view(*rule))
-//!                                        && id@ == old(self)@.rules.len() && rule_wf(rule_view(*rule));
-//!                                    final(self)@.domains == old(self)@.domains
-//! covered(&self, rule, by)           Ok(v) ==> covered_correct(self@, rule@, rule_ids(by@), v@);
-//!                                    Ok(Counterexample(c)) ==> cex_has_instance(self@, c@) && !covers(..)
-//! redundant(&self, rule, policy)     Ok(v) ==> redundant_correct(self@, rule@, rule_ids(policy@), v@);
-//!                                    Ok(Counterexample(c)) ==> cex_has_instance(self@, c@) && !covers(..)
-//! at_least_as_strict(&self, p, q)    Ok(v) ==> at_least_as_strict_correct(self@, rule_ids(p@), rule_ids(q@), v@);
-//!                                    Ok(Counterexample(c)) ==> cex_has_instance(self@, c@) && !refines(..)
-//! tail_included(&mut self, h, l, r)  Ok(v) ==> tail_included_ok(final(self)@, h@, l@, r@, v@)
+//! covered(&self, rule, by)            ensures r matches Ok(v) ==> covered_ok(self@, rule@, rule_ids(by@), v@)
+//! redundant(&self, rule, policy)      ensures r matches Ok(v) ==> redundant_ok(self@, rule@, rule_ids(policy@), v@)
+//! at_least_as_strict(&self, p, q)     ensures r matches Ok(v) ==> at_least_as_strict_ok(self@, rule_ids(p@), rule_ids(q@), v@)
+//! tail_included(&mut self, h, l, r)   ensures r matches Ok(v) ==> tail_included_ok(final(self)@, h@, l@, r@, v@)
+//! add_rule(&mut self, rule)           ensures r matches Ok(id) ==> final(self)@.rules == old(self)@.rules.push(rule@)
+//!                                         && id@ == old(self)@.rules.len() && semantics::rule_wf(rule@)
 //! ```
 //!
+//! `redundant` also ensures `policy_removal::redundant_decisions_ok`: Holds preserves every
+//! deny/permit decision under removal of all target ids. Counterexamples change a decision
+//! when the target occurs; arbitrary order and duplicate ids are handled explicitly.
+//!
 //! The three policy queries also require `unrestricted_components_infinite(self@.domains)` and
-//! ensure `no_invariant_failure`; `tail_included` ensures `no_internal_compile_error`. No entry point
-//! ensures `*_minimal`. `tail_included` does not ensure `cex_has_instance`, so its counterexample
-//! clause holds vacuously when no admissible instance exists.
+//! ensure `no_invariant_failure`; `tail_included` ensures `no_internal_compile_error`.
+//! `tail_included` does not ensure `cex_has_instance`, so its counterexample clause holds
+//! vacuously when no admissible instance exists.
 //!
 //! `never_fires_ok` and `always_fires_ok` are specification-only: no executable `never_fires` or
 //! `always_fires` exists.

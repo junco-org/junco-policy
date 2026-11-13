@@ -16,7 +16,8 @@ use alloc::vec::Vec;
 use history_semantics::SymbolicLanguage;
 #[cfg(verus_keep_ghost)]
 use history_semantics::verify::refinement::{
-    analyzer as verdict, encoding, implementation, inclusion, search as paper, semantics,
+    analyzer as verdict, encoding, implementation, inclusion, policy_removal as removal,
+    search as paper, semantics,
 };
 #[cfg(verus_keep_ghost)]
 use history_semantics::{compile_verify as numeric, symbolic_language_verify as facade};
@@ -163,7 +164,8 @@ pub struct Components<E: Event> {
 /// A candidate and a history on which an inclusion fails.
 ///
 /// What failing means depends on the query; each query documents it. Tail-inclusion witnesses
-/// have minimum history length; policy-query correctness does not claim global minimality.
+/// have globally minimum history length. Policy witnesses are shortest within the returned
+/// candidate's constant profile, for the rule whose coverage fails.
 #[verus_verify]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Counterexample<E: Event> {
@@ -480,20 +482,28 @@ impl<E: Event> PolicyAnalyzer<E> {
             rule@ < self@.rules.len(), valid_ids(*self, by@),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
-            result matches Ok(v) ==> verdict::covered_correct(self@, rule@, rule_ids(by@), v@),
+            result matches Ok(v) ==> verdict::covered_ok(self@, rule@, rule_ids(by@), v@),
             result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
                 && !semantics::covers(self@.domains, verdict::rules_of(self@, rule_ids(by@)), self@.rules[rule@ as int]),
     {
         self.covered_with(rule, by, None)
     }
 
-    /// Excludes every occurrence of `rule`, without allocating a filtered policy.
+    /// Checks coverage after excluding every occurrence of `rule`, without a filtered allocation.
+    ///
+    /// `Holds` proves removal preserves every deny/permit decision. A counterexample proves
+    /// removal changes a decision when `policy` contains `rule`; an absent rule retains the
+    /// coverage-query interpretation.
     pub fn redundant(&self, rule: RuleId, policy: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
             rule@ < self@.rules.len(), valid_ids(*self, policy@),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
-            result matches Ok(v) ==> verdict::redundant_correct(self@, rule@, rule_ids(policy@), v@),
+            result matches Ok(v) ==> verdict::redundant_ok(self@, rule@, rule_ids(policy@), v@),
+            result matches Ok(v) ==> removal::redundant_decisions_ok(self@, rule@, rule_ids(policy@), v@),
+            result matches Ok(Inclusion::Holds) ==> removal::removal_preserves_decisions(self@, rule@, rule_ids(policy@)),
+            result matches Ok(Inclusion::Counterexample(_)) ==> (rule_ids(policy@).contains(rule@)
+                ==> !removal::removal_preserves_decisions(self@, rule@, rule_ids(policy@))),
             result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
                 && !semantics::covers(self@.domains,
                     verdict::rules_of(self@, verdict::without_rule(rule_ids(policy@), rule@)), self@.rules[rule@ as int]),
@@ -503,6 +513,17 @@ impl<E: Event> PolicyAnalyzer<E> {
             queries::lemma_selected_ids(*self, policy@, Some(rule));
             assert(queries::selected_rule_ids(policy@, Some(rule)) == verdict::without_rule(rule_ids(policy@), rule@));
             bridge::lemma_redundancy_result(self@, rule@, rule_ids(policy@), result@);
+            views::policy_minimality::lemma_redundancy_minimal_result(self@, rule@, rule_ids(policy@), result@);
+            assert forall|i: int| 0 <= i < rule_ids(policy@).len()
+                implies #[trigger] rule_ids(policy@)[i] < self@.rules.len() by {
+                assert(policy@[i].0 < self.rules@.len());
+            }
+            removal::lemma_redundant_decisions(self@, rule@, rule_ids(policy@), result@);
+            if let verdict::InclusionView::Counterexample(c) = result@ {
+                if rule_ids(policy@).contains(rule@) {
+                    removal::lemma_redundant_counterexample_refutes(self@, rule@, rule_ids(policy@), c);
+                }
+            }
         }
         Ok(result)
     }
@@ -514,7 +535,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             valid_ids(*self, stricter@), valid_ids(*self, than@),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
-            result matches Ok(v) ==> verdict::at_least_as_strict_correct(self@, rule_ids(stricter@), rule_ids(than@), v@),
+            result matches Ok(v) ==> verdict::at_least_as_strict_ok(self@, rule_ids(stricter@), rule_ids(than@), v@),
             result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
                 && !semantics::refines(self@.domains, verdict::rules_of(self@, rule_ids(stricter@)),
                     verdict::rules_of(self@, rule_ids(than@))),
@@ -532,7 +553,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             match inclusion {
                 Inclusion::Holds => {},
                 _ => {
-                    proof { bridge::lemma_refinement_result(self@, rule_ids(stricter@), rule_ids(than@), index as int, inclusion@); }
+                    proof { views::policy_minimality::lemma_refinement_minimal_result(self@, rule_ids(stricter@), rule_ids(than@), index as int, inclusion@); }
                     return Ok(inclusion);
                 },
             }
@@ -548,7 +569,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             rule.0 < self.rules@.len(), valid_ids(*self, by@),
             verdict::unrestricted_components_infinite(self@.domains),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
-            result matches Ok(v) ==> verdict::covered_correct(self@, rule@, queries::selected_rule_ids(by@, exclude), v@),
+            result matches Ok(v) ==> verdict::covered_ok(self@, rule@, queries::selected_rule_ids(by@, exclude), v@),
             result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
                 && !semantics::covers(self@.domains, verdict::rules_of(self@, queries::selected_rule_ids(by@, exclude)),
                     self@.rules[rule@ as int]),
@@ -631,7 +652,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             let decision = self.decide(case.copy(), difference, Ghost(input))?;
             #[cfg(not(verus_keep_ghost))]
             let decision = self.decide(case.copy(), difference)?;
-            proof { queries::lemma_covered_decision(*self, rule, by@, exclude, input, case@, decision); }
+            proof { views::policy_minimality::lemma_covered_decision_minimal(*self, rule, by@, exclude, input, *case, decision); }
             match decision.inclusion {
                 Inclusion::Holds => {},
                 _ => return Ok(decision.inclusion),
