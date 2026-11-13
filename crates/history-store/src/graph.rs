@@ -1579,14 +1579,16 @@ impl CanonicalStore {
     pub fn projected(&self, bytes: usize) -> KernelResult<usize> {
         let total = match self.bytes.checked_add(bytes) {
             Some(total) => total,
-            None => return Err(HistoryError::GraphBudget(junco_core::error::BudgetExceeded::new(
-                self.budget, self.bytes, bytes,
-            ))),
+            None => {
+                return Err(HistoryError::GraphBudget(
+                    junco_core::error::BudgetExceeded::new(self.budget, self.bytes, bytes),
+                ));
+            }
         };
         if total > self.budget {
-            return Err(HistoryError::GraphBudget(junco_core::error::BudgetExceeded::new(
-                self.budget, self.bytes, bytes,
-            )));
+            return Err(HistoryError::GraphBudget(
+                junco_core::error::BudgetExceeded::new(self.budget, self.bytes, bytes),
+            ));
         }
         Ok(total)
     }

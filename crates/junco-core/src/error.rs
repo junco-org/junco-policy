@@ -44,7 +44,7 @@ pub enum HistoryError {
     Limit(LimitError),
 }
 
-/// Exact accounting for a failed graph charge, kept valid across error propagation.
+/// Arithmetic diagnostics for a failed graph charge, not an unforgeable provenance token.
 #[verus_verify]
 #[verus_verify(external_derive)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -70,13 +70,17 @@ impl BudgetExceeded {
         }
     }
 
-    /// Records the inputs of a charge that cannot fit the given budget.
+    /// Records arithmetic inputs that exceed a budget; this does not certify an execution.
     #[verus_spec(result =>
         requires charged as nat + requested as nat > limit as nat,
         ensures result.view() == (limit as nat, charged as nat, requested as nat),
     )]
     pub const fn new(limit: usize, charged: usize, requested: usize) -> Self {
-        Self { limit, charged, requested }
+        Self {
+            limit,
+            charged,
+            requested,
+        }
     }
 
     /// Byte limit of the graph whose charge failed.
@@ -106,21 +110,6 @@ impl BudgetExceeded {
         proof! { use_type_invariant(self); }
         (self.limit, self.charged, self.requested)
     }
-}
-
-/// Preserves a result while exposing the invariant of any propagated budget error.
-#[verus_verify]
-#[inline]
-#[verus_spec(output => ensures output == result, match output {
-    Err(HistoryError::GraphBudget(evidence)) =>
-        evidence.view().1 + evidence.view().2 > evidence.view().0,
-    _ => true,
-})]
-pub fn graph_budget_result<T>(result: Result<T, HistoryError>) -> Result<T, HistoryError> {
-    if let Err(HistoryError::GraphBudget(_evidence)) = &result {
-        proof! { use_type_invariant(_evidence); }
-    }
-    result
 }
 
 #[verus_verify]

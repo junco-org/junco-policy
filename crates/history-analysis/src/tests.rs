@@ -560,7 +560,7 @@ fn eight_coordinate_inclusion_and_counterexamples() {
 }
 
 #[test]
-fn overflowing_eight_coordinate_register_product_is_exhausted() {
+fn overflowing_eight_coordinate_register_product_is_an_error() {
     // 256^8 exceeds usize::MAX on both 32- and 64-bit targets. The analyzer must check
     // the whole product before reserving or enumerating any of its rows.
     let mut domains = Domains::<IndexedEvent<8>>::infinite();
@@ -581,12 +581,12 @@ fn overflowing_eight_coordinate_register_product_is_exhausted() {
         )
     })));
     let mut analyzer = PolicyAnalyzer::new(domains);
-    assert_eq!(
-        analyzer
-            .tail_included(&head, &tail, &RegexExpr::empty())
-            .unwrap(),
-        Inclusion::Exhausted,
-    );
+    assert!(matches!(
+        analyzer.tail_included(&head, &tail, &RegexExpr::empty()),
+        Err(junco_core::CompileError::Runtime(
+            junco_core::HistoryError::IndexOverflow
+        ))
+    ));
 }
 
 #[derive(Clone, Copy, Debug)]
