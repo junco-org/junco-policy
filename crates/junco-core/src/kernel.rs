@@ -1413,7 +1413,7 @@ pub mod verify {
     }
     pub open spec fn gsem(theta: Subst) -> spec_fn(Test, EventView) -> bool { |t: Test, e: EventView| test_holds(theta, t, e) }
     pub open spec fn regex_lang(g: Graph, theta: Subst, i: nat, word: Seq<EventView>) -> bool {
-        language::lang(gsem(theta), lift_regex(g, i), word)
+        language::numeric_lang(gsem(theta), lift_regex(g, i), word)
     }
     pub open spec fn atom_ids_wf(g: Graph, ids: Seq<TestId>) -> bool {
         strictly_increasing(test_ids(ids))

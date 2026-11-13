@@ -614,7 +614,7 @@ pub(crate) proof fn lemma_numeric_head_sat(h: encoding::NHead, theta: Subst)
 
 pub(crate) proof fn lemma_empty_language(theta: Subst, w: Seq<EventView>)
     ensures !encoding::n_lang(theta, language::Regex::<model::Test>::Empty, w),
-{ reveal_with_fuel(language::lang, 1); }
+{ reveal_with_fuel(language::numeric_lang, 1); }
 
 pub(crate) proof fn lemma_result_outcome(d: encoding::NDomains, start: search::Item, outcome: search::Outcome)
     requires exec::search_result(d, start, outcome),

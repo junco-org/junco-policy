@@ -144,7 +144,7 @@ pub(crate) proof fn lemma_source_model_at(p: FlatPair<u64>, index: nat, theta: S
 {
     reveal_with_fuel(source_model, 1);
     reveal_with_fuel(numeric::source_regex, 1);
-    reveal_with_fuel(language::lang, 2);
+    reveal_with_fuel(language::numeric_lang, 2);
     reveal(encoding::n_lang);
     if index < p.regexes@.len() {
         assert(junco_core::flat::verify::regex_wf(p.regexes@[index as int], index, p.tests@.len()));
@@ -167,14 +167,14 @@ pub(crate) proof fn lemma_source_model_at(p: FlatPair<u64>, index: nat, theta: S
                 }
                 if encoding::n_lang(theta, source_model(p, index), w) {
                     let i = choose|i: int| 0 <= i < actual.len()
-                        && language::lang(model::gsem(theta), actual[i], w);
+                        && language::numeric_lang(model::gsem(theta), actual[i], w);
                     assert(numeric::source_regex(p, cs@[i] as nat, theta, w));
                     assert(numeric::source_regex(p, index, theta, w));
                 }
                 if numeric::source_regex(p, index, theta, w) {
                     let i = choose|i: int| 0 <= i < cs@.len() && cs@[i] < index
                         && numeric::source_regex(p, cs@[i] as nat, theta, w);
-                    assert(language::lang(model::gsem(theta), actual[i], w));
+                    assert(language::numeric_lang(model::gsem(theta), actual[i], w));
                     assert(encoding::n_lang(theta, source_model(p, index), w));
                 }
             },
@@ -193,12 +193,12 @@ pub(crate) proof fn lemma_source_model_at(p: FlatPair<u64>, index: nat, theta: S
                 if encoding::n_lang(theta, source_model(p, index), w) {
                     assert forall|i: int| 0 <= i < cs@.len() implies cs@[i] < index
                         && numeric::source_regex(p, cs@[i] as nat, theta, w) by {
-                        assert(language::lang(model::gsem(theta), actual[i], w));
+                        assert(language::numeric_lang(model::gsem(theta), actual[i], w));
                     }
                 }
                 if numeric::source_regex(p, index, theta, w) {
                     assert forall|i: int| 0 <= i < actual.len()
-                        implies language::lang(model::gsem(theta), actual[i], w) by {
+                        implies language::numeric_lang(model::gsem(theta), actual[i], w) by {
                         assert(numeric::source_regex(p, cs@[i] as nat, theta, w));
                     }
                 }
@@ -211,7 +211,7 @@ pub(crate) proof fn lemma_source_model_at(p: FlatPair<u64>, index: nat, theta: S
                 if encoding::n_lang(theta, source_model(p, index), w) {
                     let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == actual.len() && parts.flatten() == w
                         && forall|i: int| 0 <= i < actual.len()
-                            ==> language::lang(model::gsem(theta), actual[i], parts[i]);
+                            ==> language::numeric_lang(model::gsem(theta), actual[i], parts[i]);
                     assert forall|i: int| 0 <= i < cs@.len()
                         implies cs@[i] < index && numeric::source_regex(p, cs@[i] as nat, theta, parts[i]) by {
                         assert(actual[i] == source_model(p, cs@[i] as nat));
@@ -224,11 +224,11 @@ pub(crate) proof fn lemma_source_model_at(p: FlatPair<u64>, index: nat, theta: S
                         && forall|i: int| 0 <= i < cs@.len()
                             ==> cs@[i] < index && numeric::source_regex(p, cs@[i] as nat, theta, parts[i]);
                     assert forall|i: int| 0 <= i < actual.len()
-                        implies language::lang(model::gsem(theta), actual[i], parts[i]) by {
+                        implies language::numeric_lang(model::gsem(theta), actual[i], parts[i]) by {
                         assert(actual[i] == source_model(p, cs@[i] as nat));
                         lemma_source_model_at(p, cs@[i] as nat, theta, parts[i]);
                     }
-                    assert(language::lang(model::gsem(theta), source_model(p, index), w));
+                    assert(language::numeric_lang(model::gsem(theta), source_model(p, index), w));
                 }
             },
             FlatRegex::Star(child) => {
@@ -241,7 +241,7 @@ pub(crate) proof fn lemma_source_model_at(p: FlatPair<u64>, index: nat, theta: S
                 if encoding::n_lang(theta, source_model(p, index), w) {
                     let parts = choose|parts: Seq<Seq<EventView>>| parts.flatten() == w
                         && forall|i: int| 0 <= i < parts.len()
-                            ==> language::lang(model::gsem(theta), source_model(p, child as nat), parts[i]);
+                            ==> language::numeric_lang(model::gsem(theta), source_model(p, child as nat), parts[i]);
                     assert forall|i: int| 0 <= i < parts.len()
                         implies numeric::source_regex(p, child as nat, theta, parts[i]) by {
                         lemma_source_model_at(p, child as nat, theta, parts[i]);
@@ -252,10 +252,10 @@ pub(crate) proof fn lemma_source_model_at(p: FlatPair<u64>, index: nat, theta: S
                         && forall|i: int| 0 <= i < parts.len()
                             ==> numeric::source_regex(p, child as nat, theta, parts[i]);
                     assert forall|i: int| 0 <= i < parts.len()
-                        implies language::lang(model::gsem(theta), source_model(p, child as nat), parts[i]) by {
+                        implies language::numeric_lang(model::gsem(theta), source_model(p, child as nat), parts[i]) by {
                         lemma_source_model_at(p, child as nat, theta, parts[i]);
                     }
-                    assert(language::lang(model::gsem(theta), source_model(p, index), w));
+                    assert(language::numeric_lang(model::gsem(theta), source_model(p, index), w));
                 }
             },
             FlatRegex::Complement(child) => {
