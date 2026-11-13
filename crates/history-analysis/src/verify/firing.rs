@@ -776,20 +776,6 @@ proof fn lemma_policy_vocabulary<E: Event>(a: PolicyAnalyzer<E>, ids: Seq<nat>, 
     }
 }
 
-/// `split_ok` for fewer pairs.
-proof fn lemma_split_ok_pairs(d: encoding::NDomains, g: inclusion::Constraint, small: inclusion::Pairs,
-    big: inclusion::Pairs, cases: Set<inclusion::Constraint>)
-    requires inclusion::split_ok(d, g, big, cases), small.subset_of(big),
-    ensures inclusion::split_ok(d, g, small, cases),
-{
-    assert forall|g1: inclusion::Constraint| #[trigger] cases.contains(g1) implies
-        forall|p: (Component, nat)| small.contains(p) ==> #[trigger] inclusion::decides(d, g1, p.0, p.1) by {
-        assert forall|p: (Component, nat)| small.contains(p) implies #[trigger] inclusion::decides(d, g1, p.0, p.1) by {
-            assert(big.contains(p));
-        }
-    }
-}
-
 /// The head constants of a policy are pairs of the split's atoms.
 proof fn lemma_head_pairs_atoms<E: Event>(a: PolicyAnalyzer<E>, ids: Seq<nat>)
     requires analyzer_state_wf(a), ids_valid(a, ids),
@@ -859,7 +845,7 @@ pub(crate) proof fn lemma_policy_split<E: Event>(a: PolicyAnalyzer<E>, rule: int
     lemma_split_contract(base, operands, a.universes, cases);
     assert(inclusion::split_ok(d, g, search::domain_pairs(d, atom_set(atoms)), case_set(cases)));
     lemma_head_pairs_atoms(a, ids);
-    lemma_split_ok_pairs(d, g, inclusion::head_pairs(numeric_policy(a, ids)), search::domain_pairs(d, atom_set(atoms)), case_set(cases));
+    inclusion::lemma_split_ok_mono(d, g, inclusion::head_pairs(numeric_policy(a, ids)), search::domain_pairs(d, atom_set(atoms)), case_set(cases));
     assert(exec::constraint_in_vocabulary(base@, v)) by {
         let constants = a.rules@[rule].constants;
         assert forall|k: int| 0 <= k < 3 implies exec::register_in_vocabulary(base.0[k]@, v[k]) by {
