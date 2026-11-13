@@ -392,7 +392,7 @@ Verus verifies `verus-bumpalo` and `hashconsius` as dependencies at the revision
 - The hash containers `NativeMap`/`NativeSet`/`NativeGroups` (`crates/history-store/src/typed/map.rs`,
   `crates/history-analysis/src/native.rs`): external_body wrappers over hashbrown whose
   contracts hold under `key_laws` (R4, `crates/junco-core/src/spec/hypotheses.rs`): the key's
-  `Hash`/`Eq` are faithful to `eq_spec` (vstd's `obeys_key_model`, the single trust token),
+  `Hash`/`Eq` are faithful to `eq_spec` (`hash_coherent`, the single hashing hypothesis),
   instantiated for the library's own key types by the `axiom` items above.
 - Identity of stores: `arc_identity`/`reference_identity` are functions of the pointee's spec
   value (Verus erases `Arc<T>` and `&T` to `T`). The wrappers that equate them with pointer
