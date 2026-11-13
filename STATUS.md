@@ -2,38 +2,44 @@
 
 ## Current wave
 
-The complete monitor/analyzer source, both reviewer clients, and the hash-only trust repair are
-integrated through `00fbeed`. The reviewer targets passed **4/0** (monitor) and **9/0** (analyzer),
-and their two real executable smoke cases passed. All five internal-key introductions now
-assert only `hash_coherent`; their remaining equality laws are verified, not assumed.
-The new thirteen-configuration full gate is running. The earlier eleven-config green result
-predates this repair and is not being substituted for the new gate. Exhausted blocks nothing.
+The complete monitor/analyzer source, both reviewer clients, and the hash-only trust repair
+are pushed through `8baaf29` (source `00fbeed`). **All thirteen Verus configurations passed,
+zero errors, in 770.50 seconds.** Workspace **201 tests**, fuzz **8 tests**, formatting,
+workspace/fuzz Clippy `-D warnings`, and **18 spec-check tests** also pass. Independent
+monitor/analyzer surface reviews found no blocking defect. Remaining work is optional internal
+numeric/finite-set hygiene and the final default sequential gate. Exhausted blocks nothing.
 
 ## Last checks actually run
 
 - Pinned Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0`, Rust `1.98.1` reused from the previously
   checksum-verified installation.
 - Completed Wave 0 full matrix: all eleven configurations passed, zero errors.
-- Complete atomic full-feature merge gate at `92f4e9d` / published `e525e20`: all six passed.
+- Complete hash-only source and reviewer-client gate at `00fbeed`: all thirteen passed.
 
   | Configuration | Verified functions | Errors |
   |---|---:|---:|
-  | syntax `serde,std` | 63 (cached; prior same-source count) | 0 |
-  | core `runtime,std,serde` | 323 | 0 |
+  | syntax no-default | 63 (cached; prior unchanged-source count) | 0 |
+  | syntax `serde,std` | 63 (cached; prior unchanged-source count) | 0 |
+  | core no-default | 239 | 0 |
+  | core `runtime,std,serde` | 332 | 0 |
+  | store `runtime` no-default | 306 | 0 |
   | store `runtime,std` | 306 | 0 |
+  | semantics `runtime` no-default | 1641 | 0 |
   | semantics `runtime,std,cache` | 1646 | 0 |
   | semantics `public_specs` | 21 | 0 |
-  | analyzer `runtime,std` | 626 | 0 |
-- The subsequent all-eleven-configuration wave gate passed, zero errors (**338.63 seconds**).
-  Those results predate the newly required hash-only trust narrowing; the repair gets a new
-  verification gate, rather than treating the old broader contracts as final evidence.
+  | analyzer `runtime` no-default | 627 | 0 |
+  | analyzer `runtime,std` no-default | 627 | 0 |
+  | monitor reviewer | 4 | 0 |
+  | analyzer reviewer | 9 | 0 |
+- Earlier atomic full-feature/all-eleven gates at `92f4e9d` / `e525e20` passed too;
+  the thirteen-configuration result above supersedes their pre-narrowing trust boundary.
 - Reviewer-client integration gate: monitor **4 verified / 0 errors**, analyzer **9 / 0**;
   both configurations passed in **311.43 seconds**. Parent also ran both executable reviewer
   smoke tests: monitor grant/denial and all four analyzer query families' verdict cases passed.
 - Hash-only repair worker focuses: Core observation/internal keys **9/0**, analyzer pruning
   **39/0**, store native **3/0**, constraint **73/0**. Native repair suites passed **99 tests**,
   with Clippy `-D warnings`; the worker applied three wrapping-only formatting corrections.
-  Parent's combined full verification/CI gate follows integration.
+  Parent's combined verification and native CI gates now pass as recorded above.
 
 - The first G/E gate found the removed finite-domain successor-theorem caller. Replacing it
   with the explicitly instantiated common theorem closed the downstream proof; no statement
@@ -42,10 +48,10 @@ predates this repair and is not being substituted for the new gate. Exhausted bl
   **1075.16 seconds**, matching the parallel run's counts exactly. Final confirmation remains.
 - Critical R6 correction: focused core questions/hypotheses **6/0**, analyzer spec **1/0**.
   A throwaway proof rejected a fabricated out-of-source known set (**1/0**); removed afterward.
-- Latest atomic integration native gate: **198 workspace tests across 25 suites**,
-  **2 explicit instrumentation tests**, **8 fuzz tests**; workspace and fuzz formatting,
-  default/instrumentation/replay-probe Clippy with `-D warnings` passed. Instrumentation
-  remains out of benchmarks.
+- Latest integrated native gate: **201 workspace tests across 27 suites**, **8 fuzz tests**;
+  workspace and fuzz formatting and Clippy `-D warnings` pass. The earlier explicit
+  **2 instrumentation tests** and replay-probe Clippy also passed; final confirmation follows
+  the internal hygiene merge. Instrumentation remains out of benchmarks.
 - `scripts/spec-check.sh`: **18 passed**, including the reduced assumed-spec boundary.
 - Staged foundation/monitor native package tests: **127 passed across 16 suites**.
   Both concrete public hypothesis clients passed (**2 verified, 0 errors**), taking only

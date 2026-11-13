@@ -42,9 +42,11 @@ Monitor hypotheses do not need surjectivity; analyzer hypotheses add it. Concret
 `lemma_u8_event_hypotheses` and `lemma_u32_event_hypotheses` discharge every other law assuming
 only component `hash_coherent`. Primitive/component-compositional axioms are not permitted;
 the five exact internal hashing introductions may assert **only `hash_coherent`**.
-Equality laws, `obeys_eq_spec`, and view/equality reflection must be proved separately,
-not asserted by those trusted introductions. The generated inventory is
-[TRUST.md](../../TRUST.md); the earlier green baseline predates this trust narrowing.
+Equality laws and `obeys_eq_spec` are verified separately, not asserted by those introductions.
+The ordered-parts key is the library-owned, SmallVec-backed `observation::PartsKey`, with verified
+equality/view reflection over borrowed slices. The pinned SmallVec model alone could not prove
+that reflection; no replacement equality/view axiom is added. [TRUST.md](../../TRUST.md) enumerates
+the five hashing-only introductions. The complete thirteen-configuration gate passes this boundary.
 No Event cardinality hook is used. An undeclared finite coordinate can produce Holds or a
 counterexample whose capacity fails there, never a capacity-satisfying real refutation of a
 true property. See VERIFY for counting methodology, paper differences and restricted Arc identity.

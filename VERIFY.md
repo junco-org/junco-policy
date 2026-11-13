@@ -225,7 +225,7 @@ discharge these for the executable search. No obsolete `infinite_type` premise i
 Each assumes **only `hash_coherent` for its tagged Component3 type**. No primitive-key or
 component-compositional hash axiom is claimed. The five approved internal hashing introductions
 are for Constraint, `(ConstraintId,RegexId)`, `(RegexId,RegexId)`, `(TestId,TestId)` and
-`SmallVec<[RegexId;4]>`. Each may assert **only `hash_coherent`**; equality laws,
+`observation::PartsKey` (SmallVec-backed ordered parts). Each asserts **only `hash_coherent`**; equality laws,
 `obeys_eq_spec`, and view/equality reflection are proved separately, not trusted axiom
 conclusions. These exact hashing assumptions are library facts, not user preconditions.
 
