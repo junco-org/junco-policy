@@ -118,6 +118,7 @@ impl StoredHistory {
         ensures verify::stored_append_result(*old(self), *final(self), events@, result),
             result != Err(HistoryError::WrongHistoryOwner),
             junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
     )]
     pub(crate) fn append_events<L: Limits>(
         &mut self,
@@ -350,6 +351,7 @@ impl<E: TypedEvent> History<E> {
     #[verus_spec(result =>
         requires history_wf(*old(self)),
         ensures history_wf(*final(self)), push_result(*old(self), *final(self), event, result),
+            result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
     )]
     pub fn push(&mut self, event: E) -> Result<(), HistoryError> {
         self.push_with(event, &mut Unmetered, &mut ObservationWorld)
@@ -358,6 +360,7 @@ impl<E: TypedEvent> History<E> {
     #[verus_spec(result =>
         requires history_wf(*old(self)),
         ensures history_wf(*final(self)), push_result(*old(self), *final(self), event, result),
+            result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
     )]
     pub fn push_with<L: Limits>(
         &mut self,
