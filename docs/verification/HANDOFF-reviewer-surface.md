@@ -137,6 +137,9 @@ Each track lists its plan items, the files it owns, and its output.
 
 ### Track 0 — Interface freeze (blocks everything; one agent)
 
+- First, before the interfaces: add `--jobs`, `--target-root` and `--only` to
+  `scripts/verify-all.sh` (see Verification), check it once against a full sequential run, and use
+  it for every gate.
 - Create R1–R6 as files containing only `spec` definitions with doc comments: event laws and
   surjectivity (R1); typed semantics over `E` (R2); policy questions, domains, counterexample
   instances, `fresh_capacity` (R3); hypothesis bundles and axioms as `uninterp`/`spec` (R4);
@@ -276,20 +279,48 @@ Files: `history-semantics/tests/reviewer.rs`, `history-analysis/tests/reviewer.r
   prescribes (semantics over events, capacity-conditional counterexamples, unconditional `Holds`,
   split errors).
 - Do not touch the minimality predicates or modules (see Coordination).
-- Keep each file's CRLF/LF line endings. Keep CI green at every merge: `cargo fmt --check`,
-  `cargo clippy ... --all-targets -- -D warnings` (both workspace and `fuzz/`), `cargo test
-  --locked --workspace`, `cargo test --locked --release --manifest-path fuzz/Cargo.toml --lib`,
-  `scripts/spec-check.sh`, `scripts/verify-all.sh` (see `.github/workflows/ci.yml`). Clippy runs on
+- Keep each file's CRLF/LF line endings. Every wave gate and the final commit must pass all of CI:
+  `cargo fmt --check`, `cargo clippy ... --all-targets -- -D warnings` (both workspace and
+  `fuzz/`), `cargo test --locked --workspace`, `cargo test --locked --release --manifest-path
+  fuzz/Cargo.toml --lib`, `scripts/spec-check.sh`, `scripts/verify-all.sh` (see
+  `.github/workflows/ci.yml`); merges in between use the merge gate below. Clippy runs on
   the ghost-erased build: a two-arm `match` that becomes single-arm after erasure fails
   `single_match` (this broke PR #9's CI once).
 - Benchmark numbers must not change except through D2's build change; report any change.
 
 ## Verification
 
-- Install the pinned toolchain with `scripts/verify-all.sh --download <dir>`. Use
-  `-- --num-threads <cores>`; lower it if Verus is killed for memory.
-- Iterate per crate and module (`cargo verus verify --locked -p <crate> ...`,
-  `--verify-module`/`--verify-function`); run the full `scripts/verify-all.sh` at every milestone.
+- Install the pinned toolchain with `scripts/verify-all.sh --download <dir>`; lower
+  `--num-threads` if Verus is killed for memory.
+- `scripts/verify-all.sh` runs its eleven configurations one after another, and each re-verifies
+  the package's verified dependencies unless they are cached. Track 0 first extends it with
+  `--jobs N` (run configurations concurrently, each with its own persistent `CARGO_TARGET_DIR`
+  under a `--target-root DIR`, so cargo locks don't serialize them and unchanged dependencies stay
+  cached between runs) and `--only PATTERN...` (run only the configurations whose argument string
+  contains one of the patterns, e.g. `--only 'history-semantics --features runtime,std,cache'`).
+  Keep the existing sequential behavior as the default so CI is unchanged. Give each concurrent
+  configuration `--num-threads` ≈ total threads / jobs; one configuration cannot use 144 threads
+  well because a few long proofs dominate its wall time.
+
+### Gates
+
+Three tiers; use the cheapest that covers the change.
+
+| Gate | When | What |
+|---|---|---|
+| Inner loop | inside a track | `cargo verus verify` on the changed crate with `--verify-module`/`--verify-function`; `cargo check` |
+| Merge gate | each merge (or batch of merges) into the integration branch | `verify-all.sh --jobs --only` the changed crates **and their downstream crates** (order: `history-syntax → junco-core → history-store → history-semantics → history-analysis`), using each package's full-feature configuration only, plus `public_specs` when `history-semantics` is included; in parallel with it, `cargo fmt --check`, `cargo clippy -D warnings` and `cargo test` for those packages, each with its own target directory |
+| Wave gate | once per wave, after its last merge | everything CI runs: all eleven configurations with `--jobs`, workspace and fuzz fmt/clippy/tests, `scripts/spec-check.sh` only if `history_assumptions.rs` changed |
+
+- Batch merges: when several tracks of a wave are ready together and own disjoint files, merge
+  them in one go and run one merge gate.
+- Do not wait for the wave gate before starting the next wave: start it from the merged commit as
+  soon as the merge gates have passed, and run the wave gate concurrently. If the wave gate fails,
+  the integration owner fixes forward on the integration branch and the running tracks rebase.
+- Before the first wave gate, run one full verification with Verus `--time` and record the ten
+  slowest functions; if a few dominate wall time, split or speed up those proofs as part of the
+  track that owns them (without weakening statements).
+- The final run before opening the PR is the full wave gate on the final commit.
 - Differential tests (`history-analysis/tests/differential.rs`) must keep passing; add cases for
   S1 (an undeclared finite-enum coordinate where real events are covered: must return `Holds`),
   S9 (empty declared domain rejected), S11 (foreign `RuleId` rejected), and S5 (an index overflow
