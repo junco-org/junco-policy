@@ -17,7 +17,6 @@ use crate::constraint::{Atom, Constraint, Operand, Universes, steps};
 use crate::{
     Components, Counterexample, DomainError, Domains, Inclusion, PolicyAnalyzer, RuleId, Value,
 };
-use junco_core::HistoryError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Action {
