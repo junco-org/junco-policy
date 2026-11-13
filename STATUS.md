@@ -7,8 +7,8 @@ Plan: `local://reviewer-surface-b-plan.md` (integration owner's copy). Deleted i
 
 | Track | State | Branch | Notes |
 |---|---|---|---|
-| 0 | in progress | integration | 0.0–0.4 and M4 done; M5 deferred to Track T (see decisions); 0.5 (timing run, worktrees, wave-1 spawn) in progress |
-| A, B, B2, C, D, E, G, F-prep | not started | `track/<x>-b` | wave 1 |
+| 0 | done except the timing table | integration | 0.0–0.4 and M4 done at `b18250c`; M5 deferred to Track T; worktrees created; `--time-expanded` run in progress |
+| A, B, C, D, E, G, F-prep | running since 2026-11-13 (7 agents) | `track/{a,b,c,d,e,g,f}-b` from `0f71984` | wave 1; briefs in the owner's `local://reviewer-surface-b-briefs-wave1.md` (B2's items are inside B's brief) |
 | F | not started | `track/f-b` | wave 2 |
 | T | not started | `track/t-b` | wave 3 |
 
