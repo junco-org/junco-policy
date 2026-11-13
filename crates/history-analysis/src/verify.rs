@@ -1,4 +1,6 @@
 //! Ghost views and contracts linking the executable analyzer to the frozen refinement layers.
+//! Analyzer views retain the exact declared domains and original rules; interned coordinate
+//! representatives are related to declarations only by modeled-equality membership.
 
 pub(crate) mod constraint_unique;
 pub(crate) mod policy_bridge;
@@ -2531,12 +2533,14 @@ pub(crate) mod table {
     }
 }
 
-pub use frontend::{analyzer_state_wf, constructor_capacity, query_capacity};
+pub use frontend::constructor_capacity;
 
 pub(crate) mod frontend {
     use super::*;
     use crate::analyzer::{Domains, PolicyAnalyzer, RuleId, StoredRule};
+    use crate::spec::analyzer as r6;
     use junco_core::flat::{FlatHead, FlatPair};
+    use junco_core::spec::{questions as q, semantics as s};
     use junco_core::verify::{encoding as enc, flatten as fl};
     use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -2544,7 +2548,7 @@ pub(crate) mod frontend {
         use super::*;
         verus! {
             impl<E: Event> View for Domains<E> {
-                type V = semantics::DomainsView<E::Component>;
+                type V = q::Domains<E::Component>;
                 closed spec fn view(&self) -> Self::V {
                     self.components@.map_values(|values: Option<Vec<E::Component>>| match values {
                         None => None, Some(vs) => Some(vs@.to_set()),
@@ -2560,11 +2564,42 @@ pub(crate) mod frontend {
             {
                 reveal(<Domains<_> as View>::view);
             }
+
+            impl<E: Event> View for PolicyAnalyzer<E> {
+                type V = r6::AnalyzerView<E>;
+                closed spec fn view(&self) -> Self::V {
+                    r6::AnalyzerView {
+                        domains: self.declared_domains@@,
+                        rules: self.rules@.map_values(|r: StoredRule<E>| r.original@),
+                    }
+                }
+            }
+
+            pub(crate) broadcast proof fn lemma_analyzer_view<E: Event>(a: PolicyAnalyzer<E>)
+                ensures #[trigger] a@ == (r6::AnalyzerView {
+                    domains: a.declared_domains@@,
+                    rules: a.rules@.map_values(|r: StoredRule<E>| r.original@),
+                }),
+            {
+                reveal(<PolicyAnalyzer<_> as View>::view);
+            }
+
+            impl View for RuleId {
+                type V = nat;
+                closed spec fn view(&self) -> nat { self.0 as nat }
+            }
+
+            pub(crate) broadcast proof fn lemma_rule_id_view(id: RuleId)
+                ensures #[trigger] id@ == id.0 as nat,
+            {
+                reveal(<RuleId as View>::view);
+            }
         }
     }
 
     verus! {
-        broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas, vstd::set::group_set_lemmas, domain_view::lemma_domains_view};
+        broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas, vstd::set::group_set_lemmas,
+            domain_view::lemma_domains_view, domain_view::lemma_analyzer_view, domain_view::lemma_rule_id_view};
 
         pub(crate) open spec fn value_field<E: Event>(v: E::Component) -> Component {
             Component(E::coordinate_spec(v) as u8)
@@ -2643,6 +2678,7 @@ pub(crate) mod frontend {
                     ==> !value.eq_spec(&representatives(before.ids@[field.0 as int])[i].0),
             ensures constants_wf(after), constants_frame(before, after), stored_code(after, value, id),
         {
+            q::lemma_native_eq_reflexive(value);
             let source = before.values@.map(|i: int, v: E::Component| (v, (i + 1) as u32));
             assert(after.values@.map(|i: int, v: E::Component| (v, (i + 1) as u32)) =~= source.push((value, id)));
             assert forall|i: int| 0 <= i < after.ids@.len() implies representatives(after.ids@[i])
@@ -2658,6 +2694,7 @@ pub(crate) mod frontend {
                     let k = choose|k: int| 0 <= k < native_entries::<E>(before.values@, field).len()
                         && native_entries::<E>(before.values@, field)[k] == source[i];
                     assert(!value.eq_spec(&before.values@[i]));
+                    q::lemma_native_eq_symmetric(value, before.values@[i]);
                     assert(!before.values@[i].eq_spec(&value));
                 }
             }
@@ -2700,6 +2737,8 @@ pub(crate) mod frontend {
                 lemma_field_entry_source::<E>(c.values@, field, i); lemma_field_entry_source::<E>(c.values@, field, k);
                 let j = choose|j: int| 0 <= j < c.values@.len() && constant_book(c)[f][i] == (c.values@[j], (j + 1) as u64);
                 let l = choose|l: int| 0 <= l < c.values@.len() && constant_book(c)[f][k] == (c.values@[l], (l + 1) as u64);
+                q::lemma_native_eq_symmetric(c.values@[j], c.values@[l]);
+                q::lemma_native_eq_reflexive(c.values@[j]);
                 if j < l { assert(!c.values@[j].eq_spec(&c.values@[l])); }
                 if l < j { assert(!c.values@[l].eq_spec(&c.values@[j])); }
             }
@@ -2921,14 +2960,6 @@ pub(crate) mod frontend {
             domain_values_count(domains.components@) <= u32::MAX
         }
 
-        pub(crate) open spec fn encode_capacity<E: Event>(a: PolicyAnalyzer<E>, source: FlatPair<E::Component>) -> bool {
-            a.constants.values@.len() + source.head@.len() + source.tests@.len() <= u32::MAX
-        }
-
-        pub open(crate) spec fn add_rule_capacity<E: Event>(a: PolicyAnalyzer<E>, rule: history_syntax::Rule<E>) -> bool {
-            a.constants.values@.len() + arity::<E>() + fl::regex_cost::<E>(rule.tail@) <= u32::MAX
-        }
-
         pub open(crate) spec fn rule_ids(ids: Seq<RuleId>) -> Seq<nat> {
             ids.map_values(|id: RuleId| id.0 as nat)
         }
@@ -2937,14 +2968,11 @@ pub(crate) mod frontend {
             forall|i: int| 0 <= i < ids.len() ==> ids[i].0 < a.rules@.len()
         }
 
-        impl View for RuleId {
-            type V = nat;
-            open(crate) spec fn view(&self) -> nat { self.0 as nat }
-        }
 
         pub(crate) open spec fn stored_rule_wf<E: Event>(c: Constants<E>, us: Universes, r: StoredRule<E>) -> bool {
             &&& fl::flattened(r.original@, r.flat@)
             &&& enc::constants_in_domain(r.flat@.source, fl::component_domain::<E>())
+            &&& s::rule_wf::<E>(r.original@)
             &&& enc::lowering(r.flat@.source, r.numeric, constant_book(c), fl::component_equality::<E>())
             &&& r.mode == r.original@.mode
             &&& junco_core::flat::verify::structural_wf(r.numeric)
@@ -2983,16 +3011,16 @@ pub(crate) mod frontend {
                         && register_codes(implementation::register_of(g@, field)).contains(v)
                         implies super::reconstruction::code_field(after, field, v) by {
                         let value = before.values@[v as int - 1];
+                        q::lemma_native_eq_reflexive(value);
+                        assert(super::reconstruction::code_field(before, field, v));
+                        assert(0 < v <= before.values@.len() <= u32::MAX);
+                        assert(v as u32 as nat == v);
+                        assert(stored_code(before, value, v as u32));
                         lemma_stored_encoded(before, value, v as u32);
                         super::verdict::lemma_encoded_payload(after, field, value, v as u64);
                     }
                 }
             }
-        }
-
-        /// Cartesian-product overflow is reported by the generators, never assumed away here.
-        pub open(crate) spec fn query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>) -> bool {
-            a.constants.values@.len() + 2 * arity::<E>() + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) <= u32::MAX
         }
 
         pub(crate) open spec fn pins(head: Seq<FlatHead<u64>>) -> encoding::NHead {
@@ -3040,16 +3068,6 @@ pub(crate) mod frontend {
 
 
 
-        impl<E: Event> View for PolicyAnalyzer<E> {
-            type V = analyzer::AnalyzerView<E::Component>;
-            open(crate) spec fn view(&self) -> Self::V {
-                analyzer::AnalyzerView {
-                    domains: self.universes@.map_values(|u: Universe| selected_values(self.constants, u)),
-                    rules: self.rules@.map_values(|r: StoredRule<E>| encoding::rule_view(r.original@)),
-                    known: Seq::new(arity::<E>(), |i: int| component_of::<E>(self.constants.values@.to_set(), i)),
-                }
-            }
-        }
 
         pub(crate) open spec fn universes_wf<E: Event>(c: Constants<E>, us: Universes) -> bool {
     us@.len() == arity::<E>() && forall|f: int| #![trigger us[f]] 0 <= f < us@.len() ==> match us[f] {
@@ -3061,8 +3079,26 @@ pub(crate) mod frontend {
         /// Constant books and declared coordinate domains remain well formed across queries.
         pub open(crate) spec fn analyzer_state_wf<E: Event>(a: PolicyAnalyzer<E>) -> bool {
             constants_wf(a.constants) && universes_wf(a.constants, a.universes)
+                && declared_domains_encoded(a, a.declared_domains@)
                 && (match a.owner { Some(owner) => owner.wf(), None => a.rules@.len() == 0 })
                 && forall|i: int| 0 <= i < a.rules@.len() ==> stored_rule_wf(a.constants, a.universes, a.rules@[i])
+        }
+
+        pub(crate) proof fn lemma_analyzer_semantic_wf<E: Event>(a: PolicyAnalyzer<E>)
+            requires analyzer_state_wf(a),
+            ensures q::domains_wf::<E>(a@.domains),
+                forall|i: int| 0 <= i < a@.rules.len() ==> s::rule_wf::<E>(a@.rules[i]),
+        {
+            let declared = a.declared_domains@;
+            assert(domains_wf(declared));
+            declared.lemma_native_wf();
+            declared.lemma_wf();
+            assert(a@.domains == declared@);
+            assert forall|i: int| 0 <= i < a@.rules.len()
+                implies s::rule_wf::<E>(a@.rules[i]) by {
+                assert(a@.rules[i] == a.rules@[i].original@);
+                assert(stored_rule_wf(a.constants, a.universes, a.rules@[i]));
+            }
         }
 
         pub(crate) proof fn lemma_universes_frame<E: Event>(a: Constants<E>, b: Constants<E>, us: Universes)
@@ -3076,16 +3112,9 @@ pub(crate) mod frontend {
             }
         }
 
-        pub closed spec fn constructor_result<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
-            constants_wf(a.constants) && a.constants.values@.len() <= domain_values_count(d.components@)
-                && declared_domains_encoded(a, d) && analyzer_state_wf(a) && analyzer::analyzer_wf(a@) && declared_domain_equivalence(a, d)
-        }
-
         pub(crate) proof fn lemma_constructor_contract<E: Event>()
-            ensures forall|d: Domains<E>| #[trigger] constructor_capacity(d) == (domain_values_count(d.components@) <= u32::MAX),
-                forall|a: PolicyAnalyzer<E>, d: Domains<E>| #[trigger] constructor_result(a, d)
-                    == (constants_wf(a.constants) && a.constants.values@.len() <= domain_values_count(d.components@)
-                        && declared_domains_encoded(a, d) && analyzer_state_wf(a) && analyzer::analyzer_wf(a@) && declared_domain_equivalence(a, d)),
+            ensures forall|d: Domains<E>| #[trigger] constructor_capacity(d)
+                == (domain_values_count(d.components@) <= u32::MAX),
         {}
 
         pub(crate) proof fn lemma_declared_frame<E: Event>(a: Constants<E>, b: Constants<E>, u: Universe, vs: Option<Vec<E::Component>>)
@@ -3095,9 +3124,37 @@ pub(crate) mod frontend {
             if let (Some(ids), Some(values)) = (u, vs) { lemma_universe_frame(a, b, (*ids)@, values@); }
         }
 
+        pub(crate) proof fn lemma_declared_domains_frame<E: Event>(
+            before: PolicyAnalyzer<E>, after: PolicyAnalyzer<E>, declared: Domains<E>)
+            requires constants_frame(before.constants, after.constants),
+                declared_domains_encoded(before, declared), after.universes == before.universes,
+            ensures declared_domains_encoded(after, declared),
+        {
+            assert forall|i: int| 0 <= i < arity::<E>() implies
+                declared_universe(after.constants, after.universes[i], declared.components@[i]) by {
+                lemma_declared_frame(before.constants, after.constants,
+                    before.universes[i], declared.components@[i]);
+            }
+        }
+
+        /// Extending the private codebook preserves the retained declaration and raw-rule state.
+        pub(crate) proof fn lemma_analyzer_state_frame<E: Event>(
+            before: PolicyAnalyzer<E>, after: PolicyAnalyzer<E>)
+            requires analyzer_state_wf(before), analyzer_hypotheses::<E>(),
+                constants_wf(after.constants), constants_frame(before.constants, after.constants),
+                after.universes == before.universes, after.rules == before.rules,
+                after.owner == before.owner, after.declared_domains == before.declared_domains,
+            ensures analyzer_state_wf(after),
+        {
+            lemma_constants_extend(before.constants, after.constants);
+            lemma_universes_frame(before.constants, after.constants, before.universes);
+            lemma_declared_domains_frame(before, after, before.declared_domains@);
+            lemma_store_extends(before.constants, after.constants, before.universes, before.rules@);
+        }
+
         pub(crate) proof fn lemma_declared_wf<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
             requires constants_wf(a.constants), declared_domains_encoded(a, d), a.rules@.len() == 0,
-            ensures universes_wf(a.constants, a.universes), analyzer::analyzer_wf(a@),
+            ensures universes_wf(a.constants, a.universes),
         {
             assert forall|f: int| 0 <= f < a.universes@.len() implies match #[trigger] a.universes[f] {
                 None => true, Some(ids) => (*ids)@.no_duplicates() && forall|j: int| 0 <= j < (*ids)@.len()
@@ -3192,23 +3249,26 @@ pub(crate) mod frontend {
             requires constants_wf(c), ensures book_entries_count(constant_book(c)) == c.values@.len(),
         { lemma_book_length::<E>(c.values@); }
 
-        pub(crate) open spec fn declared_domain_equivalence<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>) -> bool {
-            a@.domains.len() == d@.len() && forall|i: int, x: E::Component| 0 <= i < d@.len()
-                ==> semantics::in_domain(a@.domains[i], x) == semantics::in_domain(d@[i], x)
+        /// Membership in a declared coordinate, modulo the event type's modeled equality.
+        pub(crate) open spec fn domain_member<C: PartialEq>(domain: Option<Set<C>>, value: C) -> bool {
+            match domain {
+                None => true,
+                Some(values) => exists|member: C| values.contains(member) && value.eq_spec(&member),
+            }
         }
 
         proof fn lemma_declared_domain<E: Event>(c: Constants<E>, u: Universe, raw: Option<Vec<E::Component>>)
             requires analyzer_hypotheses::<E>(), declared_universe(c, u, raw),
-            ensures forall|x: E::Component| #[trigger] semantics::in_domain(selected_values(c, u), x)
-                == semantics::in_domain(match raw { None => None, Some(vs) => Some(vs@.to_set()) }, x),
+            ensures forall|x: E::Component| #[trigger] domain_member(selected_values(c, u), x)
+                == domain_member(match raw { None => None, Some(vs) => Some(vs@.to_set()) }, x),
         {
     if let (Some(ids), Some(vs)) = (u, raw) {
         assert(universe_encoded(c, (*ids)@, vs@));
         lemma_selected_members(c, (*ids)@);
         let values = selected_code_values(c, (*ids)@);
         assert(selected_values(c, u) == Some(values));
-        assert forall|x: E::Component| semantics::in_domain(Some(values), x)
-            implies semantics::in_domain(Some(vs@.to_set()), x) by {
+        assert forall|x: E::Component| domain_member(Some(values), x)
+            implies domain_member(Some(vs@.to_set()), x) by {
             let y = choose|y: E::Component| values.contains(y) && x.eq_spec(&y);
             assert(selected_code_values(c, (*ids)@).contains(y));
             let i = choose|i: int| 0 <= i < (*ids)@.len() && c.values@[(*ids)@[i] as int - 1] == y;
@@ -3216,12 +3276,14 @@ pub(crate) mod frontend {
             let j = choose|j: int| 0 <= j < vs@.len() && stored_code(c, vs@[j], (*ids)@[i]);
             assert(vs@[j].eq_spec(&c.values@[(*ids)@[i] as int - 1]));
             assert(vs@[j].eq_spec(&y));
+            q::lemma_native_eq_symmetric(vs@[j], y);
             assert(y.eq_spec(&vs@[j]));
+            q::lemma_native_eq_transitive(x, y, vs@[j]);
             assert(x.eq_spec(&vs@[j]));
             assert(vs@.to_set().contains(vs@[j]));
         }
-        assert forall|x: E::Component| semantics::in_domain(Some(vs@.to_set()), x)
-            implies semantics::in_domain(Some(values), x) by {
+        assert forall|x: E::Component| domain_member(Some(vs@.to_set()), x)
+            implies domain_member(Some(values), x) by {
             let y = choose|y: E::Component| vs@.to_set().contains(y) && x.eq_spec(&y);
             let j = choose|j: int| 0 <= j < vs@.len() && vs@[j] == y;
             assert(universe_value(c, (*ids)@, vs@[j]));
@@ -3231,19 +3293,26 @@ pub(crate) mod frontend {
             assert(selected_code_values(c, (*ids)@).contains(z));
             assert(values.contains(z));
             assert(y.eq_spec(&z));
+            q::lemma_native_eq_transitive(x, y, z);
             assert(x.eq_spec(&z));
         }
             }
         }
 
-        pub(crate) proof fn lemma_constructor_domains<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
-            requires analyzer_hypotheses::<E>(), declared_domains_encoded(a, d), universes_wf(a.constants, a.universes),
-            ensures declared_domain_equivalence(a, d),
+        pub(crate) proof fn lemma_declared_coordinate<E: Event>(a: PolicyAnalyzer<E>, coordinate: int)
+            requires analyzer_state_wf(a), analyzer_hypotheses::<E>(), 0 <= coordinate < arity::<E>(),
+            ensures (a@.domains[coordinate] is None) == (a.universes[coordinate] is None),
+                forall|value: E::Component| #[trigger] domain_member(a@.domains[coordinate], value)
+                    == domain_member(selected_values(a.constants, a.universes[coordinate]), value),
         {
-            assert forall|i: int, x: E::Component| 0 <= i < d@.len() implies
-                semantics::in_domain(a@.domains[i], x) == semantics::in_domain(d@[i], x) by {
-                lemma_declared_domain(a.constants, a.universes[i], d.components@[i]);
-            }
+            let declared = a.declared_domains@;
+            let raw = declared.components@[coordinate];
+            assert(declared_universe(a.constants, a.universes[coordinate], raw));
+            assert(a@.domains[coordinate] == match raw {
+                None => None, Some(vs) => Some(vs@.to_set()),
+            });
+            assert((raw is None) == (a.universes[coordinate] is None));
+            lemma_declared_domain(a.constants, a.universes[coordinate], raw);
         }
 
         pub(crate) proof fn lemma_empty_constructor_capacity<E: Event>(d: Domains<E>)
@@ -3259,14 +3328,5 @@ pub(crate) mod frontend {
             decreases domains.len(),
         { if domains.len() > 0 { lemma_empty_domains_count(domains.drop_last()); } }
 
-        pub(crate) proof fn lemma_query_capacity<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
-            requires query_capacity(a, left, right),
-            ensures a.constants.values@.len() + 2 * arity::<E>() + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) <= u32::MAX,
-        {}
-
-        pub(crate) proof fn lemma_query_capacity_nonvacuous<E: Event>(a: PolicyAnalyzer<E>, left: history_syntax::RegexExpr<E>, right: history_syntax::RegexExpr<E>)
-            requires a.constants.values@.len() + 2 * arity::<E>() + fl::regex_cost::<E>(left@) + fl::regex_cost::<E>(right@) <= 1000,
-            ensures query_capacity(a, left, right),
-        {}
         }
 }

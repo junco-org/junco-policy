@@ -23,8 +23,8 @@ pub enum QueryResult<C> {
 
 verus! {
 
-/// Maximum graph payload charged to one analyzer search: 16 MiB.
-pub const GRAPH_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum graph payload charged to one analyzer search, shared with the native implementation.
+pub const GRAPH_BYTES: usize = crate::analyzer::GRAPH_BYTES;
 
 /// Only declared domains and registered source rules are semantic analyzer state.
 pub struct AnalyzerView<E: Event> {
@@ -41,10 +41,72 @@ impl<E: Event> PolicyAnalyzer<E> {
     }
 
     /// Native proofs may reveal the implementation invariant without exposing its private fields.
-    pub(crate) proof fn lemma_native_wf(&self)
-        ensures self.wf() == crate::verify::frontend::analyzer_state_wf(*self),
+    pub(crate) broadcast proof fn lemma_native_wf(&self)
+        ensures #[trigger] self.wf() == crate::verify::frontend::analyzer_state_wf(*self),
     {
     }
+
+    /// Reveals the public semantic guarantees of the opaque native invariant.
+    pub proof fn lemma_wf(&self)
+        requires self.wf(),
+        ensures
+            q::domains_wf::<E>(self@.domains),
+            forall|i: int| 0 <= i < self@.rules.len() ==> s::rule_wf::<E>(self@.rules[i]),
+    {
+        self.lemma_native_wf();
+        crate::verify::frontend::lemma_analyzer_semantic_wf(*self);
+    }
+}
+
+/// Number of declared-domain values and registered source literals at one coordinate.
+/// This semantic observation says nothing about private codebook or allocator availability.
+pub open spec fn vocabulary_size<E: Event>(a: AnalyzerView<E>, coordinate: int) -> nat
+    recommends 0 <= coordinate < history_syntax::spec::events::arity::<E>(),
+{
+    q::knowable_constants::<E>(a.domains, a.rules)[coordinate].len()
+}
+
+/// Registration adds exactly the new rule's source literals to the semantic vocabulary.
+/// The cardinality bounds are semantic facts, not a promise of private allocation capacity.
+pub proof fn lemma_vocabulary_growth<E: Event>(
+    before: AnalyzerView<E>, after: AnalyzerView<E>, rule: Rule<E>, coordinate: int,
+)
+    requires
+        after.domains == before.domains,
+        after.rules == before.rules.push(rule),
+        s::rule_wf::<E>(rule),
+        0 <= coordinate < history_syntax::spec::events::arity::<E>(),
+    ensures
+        q::knowable_constants::<E>(after.domains, after.rules)[coordinate]
+            == q::knowable_constants::<E>(before.domains, before.rules)[coordinate]
+                .union(q::rule_constants(rule@)[coordinate]),
+        q::knowable_constants::<E>(before.domains, before.rules)[coordinate]
+            .subset_of(q::knowable_constants::<E>(after.domains, after.rules)[coordinate]),
+        vocabulary_size(before, coordinate) <= vocabulary_size(after, coordinate),
+        vocabulary_size(after, coordinate)
+            <= vocabulary_size(before, coordinate) + q::rule_constants(rule@)[coordinate].len(),
+{
+    broadcast use vstd::seq::group_seq_lemmas;
+    let literals = q::rule_constants(rule@);
+    let registered_before = before.rules.map_values(|source: Rule<E>| {
+        let values = q::rule_constants(source@);
+        if 0 <= coordinate < values.len() { values[coordinate] } else { Set::empty() }
+    });
+    let registered_after = after.rules.map_values(|source: Rule<E>| {
+        let values = q::rule_constants(source@);
+        if 0 <= coordinate < values.len() { values[coordinate] } else { Set::empty() }
+    });
+    assert(literals.len() == history_syntax::spec::events::arity::<E>());
+    assert(registered_after.drop_last() =~= registered_before);
+    assert(registered_after.last() == literals[coordinate]);
+    assert(q::constants_union(registered_after)
+        == q::constants_union(registered_before).union(literals[coordinate]));
+    let old_known = q::knowable_constants::<E>(before.domains, before.rules)[coordinate];
+    let new_known = q::knowable_constants::<E>(after.domains, after.rules)[coordinate];
+    assert(new_known =~= old_known.union(literals[coordinate]));
+    assert(old_known.subset_of(new_known));
+    vstd::set_lib::lemma_len_subset(old_known, new_known);
+    vstd::set_lib::lemma_len_union(old_known, literals[coordinate]);
 }
 
 
@@ -72,7 +134,7 @@ pub open spec fn escapes<C>(result: QueryResult<C>) -> bool {
     }
 }
 
-/// A1/A2/A5: Holds proves coverage without capacity; every instance refutes it, and capacity makes it nonvacuous.
+/// A1/A2/A5/A6: coverage, every real refutation, and PR10's exact minimum within its returned constant profile.
 pub open spec fn covered_spec<E: Event>(a: AnalyzerView<E>, rule: nat, by: Seq<nat>, result: QueryResult<E::Component>) -> bool {
     escapes(result) && match result {
         QueryResult::Holds => q::covers(a.domains, rules_of(a, by), a.rules[rule as int]),
@@ -81,6 +143,10 @@ pub open spec fn covered_spec<E: Event>(a: AnalyzerView<E>, rule: nat, by: Seq<n
             && q::every_instance::<E>(a.domains, cex, |candidate: E, history: Seq<E>|
                 s::rule_violated(a.rules[rule as int], candidate, history)
                     && !s::policy_denies(rules_of(a, by), candidate, history))
+            && q::every_instance::<E>(a.domains, cex, |candidate: E, _history: Seq<E>|
+                q::shortest_in_case::<E>(a.domains, cex.known, candidate, cex.history.len(),
+                    |other: E, history: Seq<E>| s::rule_violated(a.rules[rule as int], other, history)
+                        && !s::policy_denies(rules_of(a, by), other, history)))
             && (q::counterexample_capacity::<E>(a.domains, cex) ==> q::has_instance::<E>(a.domains, cex)
                 && !q::covers(a.domains, rules_of(a, by), a.rules[rule as int])),
         _ => true,
@@ -103,7 +169,7 @@ pub open spec fn redundant_spec<E: Event>(a: AnalyzerView<E>, rule: nat, policy:
     }
 }
 
-/// A3/A5: refinement is real-event permission implication, with every counterexample denied by the same selected Q rule.
+/// A3/A5/A6: refinement, with the same selected Q rule governing refutation and per-profile minimum.
 pub open spec fn at_least_as_strict_spec<E: Event>(a: AnalyzerView<E>, p: Seq<nat>, other: Seq<nat>, result: QueryResult<E::Component>) -> bool {
     escapes(result) && match result {
         QueryResult::Holds => q::refines(a.domains, rules_of(a, p), rules_of(a, other)),
@@ -113,17 +179,22 @@ pub open spec fn at_least_as_strict_spec<E: Event>(a: AnalyzerView<E>, p: Seq<na
                 && (#[trigger] other[j]) < a.rules.len()
                 && q::every_instance::<E>(a.domains, cex, |candidate: E, history: Seq<E>|
                     s::rule_violated(a.rules[other[j] as int], candidate, history)
-                        && !s::policy_denies(rules_of(a, p), candidate, history)))
+                        && !s::policy_denies(rules_of(a, p), candidate, history))
+                && q::every_instance::<E>(a.domains, cex, |candidate: E, _history: Seq<E>|
+                    q::shortest_in_case::<E>(a.domains, cex.known, candidate, cex.history.len(),
+                        |other_candidate: E, history: Seq<E>|
+                            s::rule_violated(a.rules[other[j] as int], other_candidate, history)
+                                && !s::policy_denies(rules_of(a, p), other_candidate, history))))
             && (q::counterexample_capacity::<E>(a.domains, cex) ==> q::has_instance::<E>(a.domains, cex)
                 && !q::refines(a.domains, rules_of(a, p), rules_of(a, other))),
         _ => true,
     }
 }
 
-/// A4/A5: real-event tail inclusion, nonvacuous capacity-qualified refutations, and the existing global length bound.
+/// A4/A5: scoped real-event tail inclusion, capacity-qualified refutations, and the existing global length bound.
 pub open spec fn tail_included_spec<E: Event>(before: AnalyzerView<E>, after: AnalyzerView<E>, head: HeadView<E::Component>,
     left: RegexView<E::Component>, right: RegexView<E::Component>, result: QueryResult<E::Component>) -> bool {
-    analyzer_frame(before, after) && escapes(result) && match result {
+    analyzer_frame(before, after) && s::head_tails_wf::<E>(head, left, right) && escapes(result) && match result {
         QueryResult::Holds => q::tails_included::<E>(after.domains, head, left, right),
         QueryResult::Counterexample(cex) => q::counterexample_wf::<E>(after.domains, cex)
             && q::known_within(cex, q::tail_knowable_constants::<E>(after.domains, head, left, right))
