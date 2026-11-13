@@ -7,7 +7,7 @@ Plan: `local://reviewer-surface-b-plan.md` (integration owner's copy). Deleted i
 
 | Track | State | Branch | Notes |
 |---|---|---|---|
-| 0 | in progress | integration | 0.0–0.4 done (PR #10, M1–M3, R1–R6 + INTERFACES.md); M4 gate running; M5 deferred to Track T (see decisions); 0.5 next |
+| 0 | in progress | integration | 0.0–0.4 and M4 done; M5 deferred to Track T (see decisions); 0.5 (timing run, worktrees, wave-1 spawn) in progress |
 | A, B, B2, C, D, E, G, F-prep | not started | `track/<x>-b` | wave 1 |
 | F | not started | `track/f-b` | wave 2 |
 | T | not started | `track/t-b` | wave 3 |
@@ -23,6 +23,7 @@ Each gate: the five full-feature `cargo verus verify` configurations of `scripts
 | M2 R1 move | `32a418b` | 55/0 | 248/0 | 287/0 | 1620/0 | 21/0 | 570/0 | ok / ok / 196 pass | 171 s |
 | M3 R2 move | `595708e` | cached | 249/0 | 287/0 | 1620/0 | 21/0 | 570/0 | ok / ok / 196 pass | 166 s |
 | 0.4 R1–R6 | `b981486` | 55/0 | 249/0 | 287/0 | 1620/0 | 21/0 | 571/0 | ok / ok / 196 pass | 172 s |
+| M4 R4 cutover | `b18250c` | 55/0 | 249/0 | 287/0 | 1620/0 | 21/0 | 571/0 | ok / ok / 196 pass | 170 s |
 
 M3 needed two proof repairs after the first gate: `lemma_trace_decision_result` (the Deny clause now states `least_violation` directly) and a broadcast lemma `junco_core::verify::dsl::lemma_rule_views_index` (`rule_views(rules)[i] == rules[i]@`) that `public_specs` uses.
 
