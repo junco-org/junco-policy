@@ -497,8 +497,7 @@ pub proof fn lemma_later_maps_preservation<C>(source: FlatPair<C>, target: FlatP
 }
 
 
-/// Composition leaves only native component equality/projection and codebook
-/// correspondence conditional; neither lowering's semantic equation is assumed.
+/// Compose source lowering and codebook encoding for real events and their projections.
 pub proof fn lemma_dsl_later_maps_preservation<E: history_syntax::Event>(
     rule: history_syntax::syntax::Rule<E>,
     flattened_rule: crate::flat::FlatRule<E::Component>,
@@ -506,34 +505,30 @@ pub proof fn lemma_dsl_later_maps_preservation<E: history_syntax::Event>(
     compiled_maps: Codebook<E::Component>,
     later_maps: Codebook<E::Component>,
     domain: Domain<E::Component>,
-    request: Seq<E::Component>,
-    history: Seq<Seq<E::Component>>,
+    request: E,
+    history: Seq<E>,
     numeric_request: Seq<u64>, numeric_history: Seq<Seq<u64>>,
 )
     requires crate::verify::flatten::flattened::<E>(rule, flattened_rule),
-        request.len() == rule.head@.len(),
         lowering(flattened_rule.source, numeric, compiled_maps, crate::verify::flatten::component_equality::<E>()),
         extends(compiled_maps, later_maps, crate::verify::flatten::component_equality::<E>()),
         maps_wf(later_maps, crate::verify::flatten::component_equality::<E>(), domain),
         constants_in_domain(flattened_rule.source, domain),
         event_encoded(later_maps, crate::verify::flatten::component_equality::<E>(), domain,
-            request, numeric_request),
+            history_syntax::spec::events::event_view(request), numeric_request),
         word_encoded(later_maps, crate::verify::flatten::component_equality::<E>(), domain,
-            history, numeric_history),
-    ensures crate::verify::dsl::head_matches(rule.head@, request)
+            history.map(|i: int, event: E| history_syntax::spec::events::event_view(event)), numeric_history),
+    ensures crate::spec::semantics::head_matches::<E>(rule.head@, request)
             == crate::flat::verify::head_matches(numeric.head@, numeric_request, numeric_equality()),
-        crate::verify::dsl::lang(rule.tail@, rule.head@, request, history)
+        crate::spec::semantics::lang::<E>(rule.tail@, rule.head@, request, history)
             == crate::flat::verify::lang(numeric.tests@, numeric.regexes@, numeric.root as nat,
                 numeric_request, numeric_history, numeric_equality()),
 {
-    assert forall|i: int| 0 <= i < history.len() implies history[i].len() == request.len() by {
-        assert(event_encoded(later_maps, crate::verify::flatten::component_equality::<E>(), domain,
-            history[i], numeric_history[i]));
-    }
+    let projected = history.map(|i: int, event: E| history_syntax::spec::events::event_view(event));
     crate::verify::flatten::flattening_preserves_semantics::<E>(rule, flattened_rule, request, history);
     lemma_later_maps_preservation(flattened_rule.source, numeric, compiled_maps, later_maps,
         crate::verify::flatten::component_equality::<E>(), domain,
-        request, numeric_request, history, numeric_history);
+        history_syntax::spec::events::event_view(request), numeric_request, projected, numeric_history);
 }
 
 }

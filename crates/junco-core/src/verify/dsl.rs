@@ -1,15 +1,11 @@
-//! Structural views and independent, concrete-component semantics for the owned DSL.
-//!
-//! Component equality is `PartialEqSpec::eq_spec`, not representation equality. Connecting
-//! native projections/equality to this model remains conditional on their respective contracts.
+//! Structural scoping for owned-source lowering, and real-event language facts.
 
 use alloc::boxed::Box;
+use crate::spec::semantics::{lang, test_sem};
 use history_syntax::Event;
-use history_syntax::event::specs::event_view;
-use history_syntax::verify::dsl::{AtomView, HeadView, PatternView, RegexView, TestView};
-use history_syntax::{Comparison, Component, Rule, RuleMode};
+use history_syntax::spec::events::{AtomView, HeadView, PatternView, RegexView, TestView};
+use history_syntax::Component;
 use vstd::prelude::*;
-use vstd::std_specs::cmp::PartialEqSpec;
 
 verus! {
 
@@ -33,31 +29,6 @@ pub open spec fn head_scoped<C>(head: HeadView<C>) -> bool {
         distinct_names(#[trigger] head[i], #[trigger] head[j])
 }
 
-pub open spec fn head_pattern_matches<T: PartialEq>(pattern: PatternView<T>, actual: T) -> bool {
-    match pattern {
-        PatternView::Constant(expected) => actual.eq_spec(&expected),
-        PatternView::Variable(_) => true,
-    }
-}
-
-pub open spec fn head_matches<C: PartialEq>(head: HeadView<C>, candidate: Seq<C>) -> bool {
-    head.len() == candidate.len()
-        && forall|i: int| 0 <= i < head.len() ==>
-            head_pattern_matches(#[trigger] head[i], candidate[i])
-}
-
-/// Substitution is coordinate-local: an identically spelled name in another coordinate is absent.
-pub open spec fn resolve_pattern<T>(
-    pattern: PatternView<T>, head: PatternView<T>, candidate: T,
-) -> Option<T> {
-    match pattern {
-        PatternView::Constant(value) => Some(value),
-        PatternView::Variable(name) => match head {
-            PatternView::Variable(bound) => if name == bound { Some(candidate) } else { None },
-            PatternView::Constant(_) => None,
-        },
-    }
-}
 
 pub open spec fn pattern_scoped<T>(pattern: PatternView<T>, head: PatternView<T>) -> bool {
     match pattern {
@@ -100,97 +71,10 @@ pub open spec fn regex_scoped<C>(regex: RegexView<C>, head: HeadView<C>) -> bool
     }
 }
 
-pub open spec fn comparison_sem<T: PartialEq>(comparison: Comparison, actual: T, expected: Option<T>) -> bool {
-    match expected {
-        None => false,
-        Some(value) => match comparison {
-            Comparison::Eq => actual.eq_spec(&value),
-            Comparison::Neq => !actual.eq_spec(&value),
-        },
-    }
-}
-
-pub open spec fn atom_sem<C: PartialEq>(
-    comparison: Comparison, atom: AtomView<C>, head: HeadView<C>,
-    candidate: Seq<C>, event: Seq<C>,
-) -> bool {
-    atom.component < head.len() && atom.component < candidate.len() && atom.component < event.len()
-        && comparison_sem(comparison, event[atom.component as int],
-            resolve_pattern(atom.pattern, head[atom.component as int], candidate[atom.component as int]))
-}
-
-pub open spec fn test_sem<C: PartialEq>(
-    test: TestView<C>, head: HeadView<C>,
-    candidate: Seq<C>, event: Seq<C>,
-) -> bool
-    decreases test,
-{
-    match test {
-        TestView::True => true,
-        TestView::False => false,
-        TestView::Atom { comparison, pattern } => atom_sem(comparison, pattern, head, candidate, event),
-        TestView::And(children) => forall|i: int| 0 <= i < children.len() ==>
-            test_sem(children[i], head, candidate, event),
-        TestView::Or(children) => exists|i: int| 0 <= i < children.len()
-            && test_sem(children[i], head, candidate, event),
-    }
-}
-
-/// Whole-word language semantics, in oldest-to-newest event order.
-pub open spec fn lang<C: PartialEq>(
-    regex: RegexView<C>, head: HeadView<C>, candidate: Seq<C>,
-    word: Seq<Seq<C>>,
-) -> bool
-    decreases regex,
-{
-    match regex {
-        RegexView::Empty => false,
-        RegexView::All => true,
-        RegexView::Epsilon => word.len() == 0,
-        RegexView::Test(test) => word.len() == 1 && test_sem(test, head, candidate, word[0]),
-        RegexView::Union(children) => exists|i: int| 0 <= i < children.len()
-            && lang(children[i], head, candidate, word),
-        RegexView::Intersect(children) => forall|i: int| 0 <= i < children.len() ==>
-            lang(children[i], head, candidate, word),
-        RegexView::Not(child) => !lang(*child, head, candidate, word),
-        RegexView::Concat(children) => exists|parts: Seq<Seq<Seq<C>>>|
-            parts.len() == children.len() && word == parts.flatten()
-            && forall|i: int| 0 <= i < children.len() ==> lang(children[i], head, candidate, parts[i]),
-        RegexView::Star(child) => exists|parts: Seq<Seq<Seq<C>>>|
-            word == parts.flatten()
-            && forall|i: int| 0 <= i < parts.len() ==> lang(*child, head, candidate, parts[i]),
-    }
-}
-
-/// Evaluates the tail over committed history, excluding the candidate; a head mismatch is `None`.
-pub open spec fn rule_evaluation<E: Event>(rule: Rule<E>, candidate: E, history: Seq<E>) -> Option<bool> {
-    if !head_matches(rule.head@, event_view(candidate)) {
-        None
-    } else {
-        Some(lang(rule.tail@, rule.head@, event_view(candidate),
-            history.map(|i: int, e: E| event_view(e))))
-    }
-}
-
-/// A mismatching rule never violates; Require negates the tail answer and Forbid retains it.
-pub open spec fn rule_violated<E: Event>(rule: Rule<E>, candidate: E, history: Seq<E>) -> bool {
-    match rule_evaluation(rule, candidate, history) {
-        None => false,
-        Some(accepted) => match rule.mode {
-            RuleMode::Require => !accepted,
-            RuleMode::Forbid => accepted,
-        },
-    }
-}
-
-/// Pair-language membership, independent of whether the rule requires or forbids its tail.
-pub open spec fn rule_accepts<E: Event>(rule: Rule<E>, candidate: E, history: Seq<E>) -> bool {
-    rule_evaluation(rule, candidate, history) == Some(true)
-}
 
 /// Empty operators retain their different Boolean and language identities.
-pub proof fn lemma_empty_operators<C: PartialEq>(
-    head: HeadView<C>, candidate: Seq<C>, word: Seq<Seq<C>>,
+pub proof fn lemma_empty_operators<E: Event>(
+    head: HeadView<E::Component>, candidate: E, word: Seq<E>,
 )
     ensures
         test_sem(TestView::And(Seq::empty()), head, candidate, candidate),
@@ -200,21 +84,21 @@ pub proof fn lemma_empty_operators<C: PartialEq>(
         lang(RegexView::Concat(Seq::empty()), head, candidate, word) <==> word.len() == 0,
 {
     if lang(RegexView::Concat(Seq::empty()), head, candidate, word) {
-        let parts = choose|parts: Seq<Seq<Seq<C>>>|
+        let parts = choose|parts: Seq<Seq<E>>|
             parts.len() == 0 && word == parts.flatten()
             && forall|i: int| 0 <= i < 0 ==> lang(RegexView::Empty, head, candidate, parts[i]);
         assert(parts =~= Seq::empty());
     }
     if word.len() == 0 {
-        let parts: Seq<Seq<Seq<C>>> = Seq::empty();
+        let parts: Seq<Seq<E>> = Seq::empty();
         assert(word =~= parts.flatten());
         assert(lang(RegexView::Concat(Seq::empty()), head, candidate, word));
     }
 }
 
-proof fn lemma_star_test_lang<C: PartialEq>(
-    test: TestView<C>, head: HeadView<C>, candidate: Seq<C>,
-    word: Seq<Seq<C>>,
+proof fn lemma_star_test_lang<E: Event>(
+    test: TestView<E::Component>, head: HeadView<E::Component>, candidate: E,
+    word: Seq<E>,
 )
     ensures
         lang(RegexView::Star(Box::new(RegexView::Test(test))), head, candidate, word)
@@ -224,7 +108,7 @@ proof fn lemma_star_test_lang<C: PartialEq>(
     reveal_with_fuel(lang, 2);
     let star = RegexView::Star(Box::new(RegexView::Test(test)));
     if word.len() == 0 {
-        let parts: Seq<Seq<Seq<C>>> = Seq::empty();
+        let parts: Seq<Seq<E>> = Seq::empty();
         assert(word =~= parts.flatten());
         assert(forall|i: int| 0 <= i < parts.len() ==>
             lang(RegexView::Test(test), head, candidate, parts[i]));
@@ -233,7 +117,7 @@ proof fn lemma_star_test_lang<C: PartialEq>(
         let rest = word.drop_first();
         lemma_star_test_lang(test, head, candidate, rest);
         if lang(star, head, candidate, word) {
-            let parts = choose|parts: Seq<Seq<Seq<C>>>|
+            let parts = choose|parts: Seq<Seq<E>>|
                 word == parts.flatten()
                 && forall|i: int| 0 <= i < parts.len() ==>
                     lang(RegexView::Test(test), head, candidate, parts[i]);
@@ -264,7 +148,7 @@ proof fn lemma_star_test_lang<C: PartialEq>(
                 assert(rest[i] == word[i + 1]);
             }
             assert(lang(star, head, candidate, rest));
-            let tail = choose|tail: Seq<Seq<Seq<C>>>|
+            let tail = choose|tail: Seq<Seq<E>>|
                 rest == tail.flatten()
                 && forall|i: int| 0 <= i < tail.len() ==>
                     lang(RegexView::Test(test), head, candidate, tail[i]);
@@ -287,9 +171,9 @@ proof fn lemma_star_test_lang<C: PartialEq>(
 
 /// A setter followed by a stable suffix; the setter need not be unique or disjoint from stable.
 /// The empty word cannot match because the setter consumes exactly one event.
-pub proof fn lemma_last_state_change_lang<C: PartialEq>(
-    setter: TestView<C>, stable: TestView<C>, head: HeadView<C>,
-    candidate: Seq<C>, word: Seq<Seq<C>>,
+pub proof fn lemma_last_state_change_lang<E: Event>(
+    setter: TestView<E::Component>, stable: TestView<E::Component>, head: HeadView<E::Component>,
+    candidate: E, word: Seq<E>,
 )
     ensures
         lang(RegexView::Concat(seq![RegexView::All, RegexView::Test(setter),
@@ -304,7 +188,7 @@ pub proof fn lemma_last_state_change_lang<C: PartialEq>(
         RegexView::Star(Box::new(RegexView::Test(stable)))];
     let regex = RegexView::Concat(children);
     if lang(regex, head, candidate, word) {
-        let parts = choose|parts: Seq<Seq<Seq<C>>>|
+        let parts = choose|parts: Seq<Seq<E>>|
             parts.len() == children.len() && word == parts.flatten()
             && forall|k: int| 0 <= k < children.len() ==>
                 lang(children[k], head, candidate, parts[k]);
@@ -366,9 +250,9 @@ pub proof fn lemma_last_state_change_lang<C: PartialEq>(
     }
 }
 
-pub proof fn lemma_complement_is_whole_word<C: PartialEq>(
-    regex: RegexView<C>, head: HeadView<C>, candidate: Seq<C>,
-    word: Seq<Seq<C>>,
+pub proof fn lemma_complement_is_whole_word<E: Event>(
+    regex: RegexView<E::Component>, head: HeadView<E::Component>, candidate: E,
+    word: Seq<E>,
 )
     ensures lang(RegexView::Not(Box::new(regex)), head, candidate, word)
         <==> !lang(regex, head, candidate, word),

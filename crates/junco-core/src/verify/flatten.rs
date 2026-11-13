@@ -9,11 +9,11 @@ use crate::observation::ObservationWorld;
 use crate::scope::VariableScope;
 use crate::verify::dsl;
 use history_syntax::Event;
-use history_syntax::event::specs::{EventSpec, arity};
+use history_syntax::spec::events::{EventSpec, arity};
 use history_syntax::syntax::{
     Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
-use history_syntax::verify::dsl::{AtomView, HeadView, PatternView, RegexView, TestView};
+use history_syntax::spec::events::{AtomView, HeadView, PatternView, RegexView, TestView};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -167,6 +167,148 @@ pub open spec fn flattened<E: Event>(rule: Rule<E>, flat_rule: FlatRule<E::Compo
         && regex_represents::<E>(flat_rule.source.tests@, flat_rule.source.regexes@,
             flat_rule.source.root as nat, rule.tail@, rule.head@)
 }
+/// The executable test table's coordinate validation transfers to its source tree.
+pub proof fn lemma_represented_test_wf<E: Event>(
+    tests: Seq<FlatTest<E::Component>>, id: nat, source: SourceTest<E>, head: SourceHead<E>,
+)
+    requires test_represents::<E>(tests, id, source, head),
+        head.len() == arity::<E>(),
+        forall|i: int| 0 <= i < tests.len() ==>
+            crate::verify::encoding::test_in_domain(tests[i], component_domain::<E>()),
+    ensures crate::spec::semantics::test_wf::<E>(source, head),
+    decreases source,
+{
+    reveal_with_fuel(test_represents, 2);
+    reveal_with_fuel(crate::spec::semantics::test_wf, 2);
+    match source {
+        TestView::Atom { pattern, .. } => {
+            if let FlatTest::Atom { field, term, .. } = tests[id as int] {
+                match (term, pattern.pattern) {
+                    (FlatTerm::Constant(_), PatternView::Constant(_)) => {},
+                    (FlatTerm::Variable(_), PatternView::Variable(_)) => {
+                        match head[pattern.component as int] {
+                            PatternView::Variable(_) => {},
+                            PatternView::Constant(_) => {},
+                        }
+                    },
+                    _ => {},
+                }
+            }
+        },
+        TestView::And(children) | TestView::Or(children) => {
+            let ids = test_operands(tests[id as int]);
+            assert forall|i: int| 0 <= i < children.len() implies
+                crate::spec::semantics::test_wf::<E>(children[i], head) by {
+                lemma_represented_test_wf::<E>(tests, ids[i] as nat, children[i], head);
+            }
+        },
+        _ => {},
+    }
+}
+
+/// Transfer coordinate validation and scope through the source-regex representation.
+pub proof fn lemma_represented_regex_wf<E: Event>(
+    tests: Seq<FlatTest<E::Component>>, regexes: Seq<FlatRegex>, id: nat,
+    source: SourceRegex<E>, head: SourceHead<E>,
+)
+    requires regex_represents::<E>(tests, regexes, id, source, head),
+        head.len() == arity::<E>(),
+        forall|i: int| 0 <= i < tests.len() ==>
+            crate::verify::encoding::test_in_domain(tests[i], component_domain::<E>()),
+    ensures crate::spec::semantics::regex_wf::<E>(source, head),
+    decreases source,
+{
+    reveal_with_fuel(regex_represents, 2);
+    reveal_with_fuel(crate::spec::semantics::regex_wf, 2);
+    match source {
+        RegexView::Test(test) => {
+            if let FlatRegex::Test(test_id) = regexes[id as int] {
+                lemma_represented_test_wf::<E>(tests, test_id as nat, test, head);
+            }
+        },
+        RegexView::Union(children) | RegexView::Concat(children) | RegexView::Intersect(children) => {
+            let ids = regex_operands(regexes[id as int]);
+            assert forall|i: int| 0 <= i < children.len() implies
+                crate::spec::semantics::regex_wf::<E>(children[i], head) by {
+                lemma_represented_regex_wf::<E>(tests, regexes, ids[i] as nat, children[i], head);
+            }
+        },
+        RegexView::Star(child) | RegexView::Not(child) => {
+            match regexes[id as int] {
+                FlatRegex::Star(child_id) | FlatRegex::Complement(child_id) =>
+                    lemma_represented_regex_wf::<E>(tests, regexes, child_id as nat, *child, head),
+                _ => {},
+            }
+        },
+        _ => {},
+    }
+}
+
+/// A successful structural lowering plus validated constants establishes the public rule invariant.
+pub proof fn lemma_flattened_rule_wf<E: Event>(rule: Rule<E>, lowered: FlatRule<E::Component>)
+    requires flattened::<E>(rule, lowered),
+        crate::verify::encoding::constants_in_domain(lowered.source, component_domain::<E>()),
+    ensures crate::spec::semantics::rule_wf::<E>(rule),
+{
+    let head = rule.head@;
+    assert forall|i: int| 0 <= i < head.len() implies match #[trigger] head[i] {
+        PatternView::Constant(value) => E::coordinate_spec(value) == i,
+        PatternView::Variable(_) => true,
+    } by {
+        assert(head_slot_represents(lowered.source.head@[i], head[i]));
+        assert(crate::verify::encoding::head_in_domain(lowered.source.head@[i],
+            crate::verify::encoding::field_at(i), component_domain::<E>()));
+        assert((i as u8) as nat == i);
+    }
+    assert forall|i: int, j: int| 0 <= i < j < head.len() implies
+        match (#[trigger] head[i], #[trigger] head[j]) {
+            (PatternView::Variable(a), PatternView::Variable(b)) => a != b,
+            _ => true,
+        } by {
+        assert(dsl::distinct_names(head[i], head[j]));
+    }
+    lemma_represented_regex_wf::<E>(lowered.source.tests@, lowered.source.regexes@,
+        lowered.source.root as nat, rule.tail@, head);
+}
+
+/// Canonical test well-formedness entails the scoping needed by the lowering worklist.
+pub proof fn lemma_test_wf_scoped<E: Event>(test: SourceTest<E>, head: SourceHead<E>)
+    requires crate::spec::semantics::test_wf::<E>(test, head),
+    ensures dsl::test_scoped(test, head),
+    decreases test,
+{
+    reveal_with_fuel(crate::spec::semantics::test_wf, 2);
+    reveal_with_fuel(dsl::test_scoped, 2);
+    match test {
+        TestView::And(children) | TestView::Or(children) => {
+            assert forall|i: int| 0 <= i < children.len() implies dsl::test_scoped(children[i], head) by {
+                lemma_test_wf_scoped::<E>(children[i], head);
+            }
+        },
+        _ => {},
+    }
+}
+
+/// Canonical regex well-formedness entails the worklist's structural scope predicate.
+pub proof fn lemma_regex_wf_scoped<E: Event>(regex: SourceRegex<E>, head: SourceHead<E>)
+    requires crate::spec::semantics::regex_wf::<E>(regex, head),
+    ensures dsl::regex_scoped(regex, head),
+    decreases regex,
+{
+    reveal_with_fuel(crate::spec::semantics::regex_wf, 2);
+    reveal_with_fuel(dsl::regex_scoped, 2);
+    match regex {
+        RegexView::Test(test) => lemma_test_wf_scoped::<E>(test, head),
+        RegexView::Union(children) | RegexView::Concat(children) | RegexView::Intersect(children) => {
+            assert forall|i: int| 0 <= i < children.len() implies dsl::regex_scoped(children[i], head) by {
+                lemma_regex_wf_scoped::<E>(children[i], head);
+            }
+        },
+        RegexView::Star(child) | RegexView::Not(child) => lemma_regex_wf_scoped::<E>(*child, head),
+        _ => {},
+    }
+}
+
 
 pub open spec fn test_views<E: Event>(children: Seq<TestExpr<E>>) -> Seq<SourceTest<E>> {
     children.map(|i: int, child: TestExpr<E>| child@)
@@ -538,90 +680,273 @@ pub proof fn lemma_stack_extension<E: Event>(tests: Seq<FlatTest<E::Component>>,
     }
 }
 
-pub proof fn lemma_head_semantics<E: Event>(head: Seq<FlatHead<E::Component>>, source: SourceHead<E>, candidate: SourceEvent<E>)
+/// The flat head compares the actual event's projections, not an arbitrary component tuple.
+pub proof fn lemma_event_head_semantics<E: Event>(
+    head: Seq<FlatHead<E::Component>>, source: SourceHead<E>, candidate: E,
+)
     requires head_represents::<E>(head, source),
-    ensures flat::head_matches(head, candidate, component_equality::<E>())
-        == dsl::head_matches(source, candidate),
+    ensures flat::head_matches(head, history_syntax::spec::events::event_view(candidate),
+        component_equality::<E>()) == crate::spec::semantics::head_matches::<E>(source, candidate),
 {
-    if head.len() == candidate.len() {
-        assert forall|i: int| 0 <= i < head.len() implies
-            (match head[i] {
-                FlatHead::Constant(expected) => component_equality::<E>()(Component(i as u8), candidate[i], expected),
-                _ => true,
-            }) == dsl::head_pattern_matches(source[i], candidate[i]) by {
-            assert(head_slot_represents(head[i], source[i]));
-            match source[i] { PatternView::Constant(_) => {}, PatternView::Variable(_) => {} }
-        }
+    let projected = history_syntax::spec::events::event_view(candidate);
+    assert(projected.len() == arity::<E>());
+    assert(head.len() == source.len());
+    assert(flat::event_wf(projected, head.len()));
+    assert forall|i: int| 0 <= i < head.len() implies
+        (match #[trigger] head[i] {
+            FlatHead::Constant(expected) =>
+                component_equality::<E>()(Component(i as u8), projected[i], expected),
+            _ => true,
+        }) == (match source[i] {
+            PatternView::Constant(expected) => projected[i].eq_spec(&expected),
+            PatternView::Variable(_) => true,
+        }) by {
+        assert(head_slot_represents(head[i], source[i]));
+    }
+    assert forall|i: int| 0 <= i < source.len() implies match #[trigger] source[i] {
+        PatternView::Constant(expected) => projected[i].eq_spec(&expected),
+        PatternView::Variable(_) => true,
+    } == (match head[i] {
+        FlatHead::Constant(expected) => component_equality::<E>()(Component(i as u8), projected[i], expected),
+        _ => true,
+    }) by {
+        assert(head_slot_represents(head[i], source[i]));
     }
 }
 
-pub proof fn lemma_test_semantics<E: Event>(tests: Seq<FlatTest<E::Component>>, id: nat, source: SourceTest<E>,
-    head: SourceHead<E>, candidate: SourceEvent<E>, event: SourceEvent<E>)
-    requires test_represents::<E>(tests, id, source, head),
-        candidate.len() == head.len(), event.len() == candidate.len(),
-    ensures flat::test_sem(tests, id, candidate, event, component_equality::<E>())
-        == dsl::test_sem(source, head, candidate, event),
+/// Flat tests evaluate R2's tests on real events under their structural representation.
+pub proof fn lemma_event_test_semantics<E: Event>(
+    tests: Seq<FlatTest<E::Component>>, id: nat, source: SourceTest<E>,
+    head: SourceHead<E>, candidate: E, event: E,
+)
+    requires test_represents::<E>(tests, id, source, head), head.len() == arity::<E>(),
+    ensures flat::test_sem(tests, id, history_syntax::spec::events::event_view(candidate),
+        history_syntax::spec::events::event_view(event), component_equality::<E>())
+        == crate::spec::semantics::test_sem::<E>(source, head, candidate, event),
     decreases source,
 {
+    let c = history_syntax::spec::events::event_view(candidate);
+    let e = history_syntax::spec::events::event_view(event);
+    assert(c.len() == head.len() && e.len() == head.len());
     reveal_with_fuel(flat::test_sem, 2);
-    reveal_with_fuel(dsl::test_sem, 2);
-    lemma_test_operands(tests[id as int]);
+    reveal_with_fuel(crate::spec::semantics::test_sem, 2);
     reveal_with_fuel(test_represents, 2);
+    lemma_test_operands(tests[id as int]);
     match source {
-        TestView::Atom { comparison, pattern } => {
-            match tests[id as int] {
-                FlatTest::Atom { field, term, positive } => {
-                    match pattern.pattern {
-                        PatternView::Constant(_) => {},
-                        PatternView::Variable(_) => {
-                            match head[pattern.component as int] {
-                                PatternView::Constant(_) => {}, PatternView::Variable(_) => {},
-                            }
-                        },
+        TestView::Atom { pattern, .. } => {
+            if let FlatTest::Atom { term, .. } = tests[id as int] {
+                if let FlatTerm::Variable(_) = term {
+                    match head[pattern.component as int] {
+                        PatternView::Constant(_) => {}, PatternView::Variable(_) => {},
                     }
-                },
-                _ => {},
-            }
-            assert(flat::test_sem(tests, id, candidate, event, component_equality::<E>())
-                == dsl::test_sem(source, head, candidate, event));
-        },
-        TestView::And(children) => {
-            let ids = test_operands(tests[id as int]);
-            if dsl::test_sem(source, head, candidate, event) {
-                assert forall|i: int| 0 <= i < ids.len() implies
-                    flat::test_sem(tests, ids[i] as nat, candidate, event, component_equality::<E>()) by {
-                    assert(dsl::test_sem(children[i], head, candidate, event));
-                    lemma_test_semantics::<E>(tests, ids[i] as nat, children[i], head, candidate, event);
                 }
-                assert(flat::test_sem(tests, id, candidate, event, component_equality::<E>()));
             }
-            if flat::test_sem(tests, id, candidate, event, component_equality::<E>()) {
-                assert forall|i: int| 0 <= i < children.len() implies dsl::test_sem(children[i], head, candidate, event) by {
-                    assert(flat::test_sem(tests, ids[i] as nat, candidate, event, component_equality::<E>()));
-                    lemma_test_semantics::<E>(tests, ids[i] as nat, children[i], head, candidate, event);
+            assert(flat::test_sem(tests, id, c, e, component_equality::<E>())
+                == crate::spec::semantics::test_sem::<E>(source, head, candidate, event));
+        },
+        TestView::And(children) | TestView::Or(children) => {
+            let ids = test_operands(tests[id as int]);
+            assert forall|i: int| 0 <= i < children.len() implies
+                flat::test_sem(tests, ids[i] as nat, c, e, component_equality::<E>())
+                    == crate::spec::semantics::test_sem::<E>(children[i], head, candidate, event) by {
+                lemma_event_test_semantics::<E>(tests, ids[i] as nat, children[i], head, candidate, event);
+            }
+            if source is And {
+                if crate::spec::semantics::test_sem::<E>(source, head, candidate, event) {
+                    assert forall|i: int| 0 <= i < ids.len() implies
+                        flat::test_sem(tests, ids[i] as nat, c, e, component_equality::<E>()) by {
+                        lemma_event_test_semantics::<E>(tests, ids[i] as nat, children[i], head, candidate, event);
+                    }
                 }
-                assert(dsl::test_sem(source, head, candidate, event));
+                if flat::test_sem(tests, id, c, e, component_equality::<E>()) {
+                    assert forall|i: int| 0 <= i < children.len() implies
+                        crate::spec::semantics::test_sem::<E>(children[i], head, candidate, event) by {
+                        lemma_event_test_semantics::<E>(tests, ids[i] as nat, children[i], head, candidate, event);
+                    }
+                }
+            } else {
+                if crate::spec::semantics::test_sem::<E>(source, head, candidate, event) {
+                    let i = choose|i: int| 0 <= i < children.len()
+                        && crate::spec::semantics::test_sem::<E>(children[i], head, candidate, event);
+                    lemma_event_test_semantics::<E>(tests, ids[i] as nat, children[i], head, candidate, event);
+                }
+                if flat::test_sem(tests, id, c, e, component_equality::<E>()) {
+                    let i = choose|i: int| 0 <= i < ids.len()
+                        && flat::test_sem(tests, ids[i] as nat, c, e, component_equality::<E>());
+                    lemma_event_test_semantics::<E>(tests, ids[i] as nat, children[i], head, candidate, event);
+                }
+            }
+            assert(flat::test_sem(tests, id, c, e, component_equality::<E>())
+                == crate::spec::semantics::test_sem::<E>(source, head, candidate, event));
+        },
+        _ => {},
+    }
+}
+/// Relates a history of real events to the component words consumed by the flat machine.
+pub open spec fn projected_history<E: Event>(history: Seq<E>, word: Seq<SourceEvent<E>>) -> bool {
+    crate::verify::encoding::pointwise(history, word,
+        |event: E, projected: SourceEvent<E>|
+            history_syntax::spec::events::event_view(event) == projected)
+}
+
+/// Structural regex lowering preserves R2 membership on real histories.
+pub proof fn lemma_event_regex_semantics<E: Event>(
+    tests: Seq<FlatTest<E::Component>>, regexes: Seq<FlatRegex>, id: nat,
+    source: SourceRegex<E>, head: SourceHead<E>, candidate: E,
+    history: Seq<E>, word: Seq<SourceEvent<E>>,
+)
+    requires regex_represents::<E>(tests, regexes, id, source, head),
+        head.len() == arity::<E>(), projected_history::<E>(history, word),
+    ensures flat::lang(tests, regexes, id, history_syntax::spec::events::event_view(candidate),
+        word, component_equality::<E>())
+        == crate::spec::semantics::lang::<E>(source, head, candidate, history),
+    decreases source,
+{
+    let c = history_syntax::spec::events::event_view(candidate);
+    assert forall|i: int| 0 <= i < word.len() implies flat::event_wf(#[trigger] word[i], c.len()) by {
+        assert(word[i] == history_syntax::spec::events::event_view(history[i]));
+    }
+    reveal_with_fuel(flat::lang, 2);
+    reveal_with_fuel(crate::spec::semantics::lang, 2);
+    reveal_with_fuel(regex_represents, 2);
+    lemma_regex_operands(regexes[id as int]);
+    match source {
+        RegexView::Test(test) => {
+            if let FlatRegex::Test(test_id) = regexes[id as int] {
+                if history.len() == 1 {
+                    lemma_event_test_semantics::<E>(tests, test_id as nat, test, head, candidate, history[0]);
+                }
+            }
+            assert(flat::lang(tests, regexes, id, c, word, component_equality::<E>())
+                == crate::spec::semantics::lang::<E>(source, head, candidate, history));
+        },
+        RegexView::Union(children) | RegexView::Intersect(children) => {
+            let ids = regex_operands(regexes[id as int]);
+            assert forall|i: int| 0 <= i < children.len() implies
+                flat::lang(tests, regexes, ids[i] as nat, c, word, component_equality::<E>())
+                    == crate::spec::semantics::lang::<E>(children[i], head, candidate, history) by {
+                lemma_event_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i],
+                    head, candidate, history, word);
+            }
+            if source is Intersect {
+                if crate::spec::semantics::lang::<E>(source, head, candidate, history) {
+                    assert forall|i: int| 0 <= i < ids.len() implies
+                        flat::lang(tests, regexes, ids[i] as nat, c, word, component_equality::<E>()) by {
+                        lemma_event_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i],
+                            head, candidate, history, word);
+                    }
+                }
+                if flat::lang(tests, regexes, id, c, word, component_equality::<E>()) {
+                    assert forall|i: int| 0 <= i < children.len() implies
+                        crate::spec::semantics::lang::<E>(children[i], head, candidate, history) by {
+                        lemma_event_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i],
+                            head, candidate, history, word);
+                    }
+                }
+            } else {
+                if crate::spec::semantics::lang::<E>(source, head, candidate, history) {
+                    let i = choose|i: int| 0 <= i < children.len()
+                        && crate::spec::semantics::lang::<E>(children[i], head, candidate, history);
+                    lemma_event_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i],
+                        head, candidate, history, word);
+                }
+                if flat::lang(tests, regexes, id, c, word, component_equality::<E>()) {
+                    let i = choose|i: int| 0 <= i < ids.len()
+                        && flat::lang(tests, regexes, ids[i] as nat, c, word, component_equality::<E>());
+                    lemma_event_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i],
+                        head, candidate, history, word);
+                }
+            }
+            assert(flat::lang(tests, regexes, id, c, word, component_equality::<E>())
+                == crate::spec::semantics::lang::<E>(source, head, candidate, history));
+        },
+        RegexView::Not(child) => {
+            if let FlatRegex::Complement(child_id) = regexes[id as int] {
+                lemma_event_regex_semantics::<E>(tests, regexes, child_id as nat, *child,
+                    head, candidate, history, word);
+            }
+            assert(flat::lang(tests, regexes, id, c, word, component_equality::<E>())
+                == crate::spec::semantics::lang::<E>(source, head, candidate, history));
+        },
+        RegexView::Concat(children) => {
+            let ids = regex_operands(regexes[id as int]);
+            if crate::spec::semantics::lang::<E>(source, head, candidate, history) {
+                let parts = choose|parts: Seq<Seq<E>>| parts.len() == children.len()
+                    && history == parts.flatten() && forall|i: int| 0 <= i < children.len() ==>
+                        crate::spec::semantics::lang::<E>(children[i], head, candidate, parts[i]);
+                let relation = |p: SourceEvent<E>, event: E| history_syntax::spec::events::event_view(event) == p;
+                assert(crate::verify::encoding::pointwise(word, history, relation));
+                crate::verify::encoding::lemma_partition_lift(word, history, parts, relation);
+                let lifted = choose|lifted: Seq<Seq<SourceEvent<E>>>| lifted.len() == parts.len()
+                    && word == lifted.flatten() && forall|i: int| 0 <= i < parts.len() ==>
+                        crate::verify::encoding::pointwise(lifted[i], parts[i], relation);
+                assert forall|i: int| 0 <= i < children.len() implies
+                    flat::lang(tests, regexes, ids[i] as nat, c, lifted[i], component_equality::<E>()) by {
+                    assert(projected_history::<E>(parts[i], lifted[i]));
+                    lemma_event_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i],
+                        head, candidate, parts[i], lifted[i]);
+                }
+                assert(flat::lang(tests, regexes, id, c, word, component_equality::<E>()));
+            }
+            if flat::lang(tests, regexes, id, c, word, component_equality::<E>()) {
+                let parts = choose|parts: Seq<Seq<SourceEvent<E>>>| parts.len() == ids.len()
+                    && word == parts.flatten() && forall|i: int| 0 <= i < ids.len() ==>
+                        flat::lang(tests, regexes, ids[i] as nat, c, parts[i], component_equality::<E>());
+                let relation = |event: E, p: SourceEvent<E>| history_syntax::spec::events::event_view(event) == p;
+                crate::verify::encoding::lemma_partition_lift(history, word, parts, relation);
+                let lifted = choose|lifted: Seq<Seq<E>>| lifted.len() == parts.len()
+                    && history == lifted.flatten() && forall|i: int| 0 <= i < parts.len() ==>
+                        crate::verify::encoding::pointwise(lifted[i], parts[i], relation);
+                assert forall|i: int| 0 <= i < children.len() implies
+                    crate::spec::semantics::lang::<E>(children[i], head, candidate, lifted[i]) by {
+                    lemma_event_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i],
+                        head, candidate, lifted[i], parts[i]);
+                }
+                assert(crate::spec::semantics::lang::<E>(source, head, candidate, history));
             }
         },
-        TestView::Or(children) => {
-            let ids = test_operands(tests[id as int]);
-            if dsl::test_sem(source, head, candidate, event) {
-                let i = choose|i: int| 0 <= i < children.len() && dsl::test_sem(children[i], head, candidate, event);
-                lemma_test_semantics::<E>(tests, ids[i] as nat, children[i], head, candidate, event);
-                assert(flat::test_sem(tests, ids[i] as nat, candidate, event, component_equality::<E>()));
-                assert(flat::test_sem(tests, id, candidate, event, component_equality::<E>()));
-            }
-            if flat::test_sem(tests, id, candidate, event, component_equality::<E>()) {
-                let i = choose|i: int| 0 <= i < ids.len()
-                    && flat::test_sem(tests, ids[i] as nat, candidate, event, component_equality::<E>());
-                lemma_test_semantics::<E>(tests, ids[i] as nat, children[i], head, candidate, event);
-                assert(dsl::test_sem(children[i], head, candidate, event));
-                assert(dsl::test_sem(source, head, candidate, event));
+        RegexView::Star(child) => {
+            if let FlatRegex::Star(child_id) = regexes[id as int] {
+                if crate::spec::semantics::lang::<E>(source, head, candidate, history) {
+                    let parts = choose|parts: Seq<Seq<E>>| history == parts.flatten()
+                        && forall|i: int| 0 <= i < parts.len() ==>
+                            crate::spec::semantics::lang::<E>(*child, head, candidate, parts[i]);
+                    let relation = |p: SourceEvent<E>, event: E| history_syntax::spec::events::event_view(event) == p;
+                    assert(crate::verify::encoding::pointwise(word, history, relation));
+                    crate::verify::encoding::lemma_partition_lift(word, history, parts, relation);
+                    let lifted = choose|lifted: Seq<Seq<SourceEvent<E>>>| lifted.len() == parts.len()
+                        && word == lifted.flatten() && forall|i: int| 0 <= i < parts.len() ==>
+                            crate::verify::encoding::pointwise(lifted[i], parts[i], relation);
+                    assert forall|i: int| 0 <= i < parts.len() implies
+                        flat::lang(tests, regexes, child_id as nat, c, lifted[i], component_equality::<E>()) by {
+                        assert(projected_history::<E>(parts[i], lifted[i]));
+                        lemma_event_regex_semantics::<E>(tests, regexes, child_id as nat, *child,
+                            head, candidate, parts[i], lifted[i]);
+                    }
+                    assert(flat::lang(tests, regexes, id, c, word, component_equality::<E>()));
+                }
+                if flat::lang(tests, regexes, id, c, word, component_equality::<E>()) {
+                    let parts = choose|parts: Seq<Seq<SourceEvent<E>>>| word == parts.flatten()
+                        && forall|i: int| 0 <= i < parts.len() ==>
+                            flat::lang(tests, regexes, child_id as nat, c, parts[i], component_equality::<E>());
+                    let relation = |event: E, p: SourceEvent<E>| history_syntax::spec::events::event_view(event) == p;
+                    crate::verify::encoding::lemma_partition_lift(history, word, parts, relation);
+                    let lifted = choose|lifted: Seq<Seq<E>>| lifted.len() == parts.len()
+                        && history == lifted.flatten() && forall|i: int| 0 <= i < parts.len() ==>
+                            crate::verify::encoding::pointwise(lifted[i], parts[i], relation);
+                    assert forall|i: int| 0 <= i < parts.len() implies
+                        crate::spec::semantics::lang::<E>(*child, head, candidate, lifted[i]) by {
+                        lemma_event_regex_semantics::<E>(tests, regexes, child_id as nat, *child,
+                            head, candidate, lifted[i], parts[i]);
+                    }
+                    assert(crate::spec::semantics::lang::<E>(source, head, candidate, history));
+                }
             }
         },
         _ => {},
     }
 }
+
 
 /// Every event in a partition retains the original word's coordinate count.
 pub proof fn lemma_partition_arity<C>(parts: Seq<Seq<Seq<C>>>, arity: nat)
@@ -649,148 +974,42 @@ pub proof fn lemma_partition_arity<C>(parts: Seq<Seq<Seq<C>>>, arity: nat)
     }
 }
 
-pub proof fn lemma_regex_semantics<E: Event>(tests: Seq<FlatTest<E::Component>>, regexes: Seq<FlatRegex>, id: nat,
-    source: SourceRegex<E>, head: SourceHead<E>, candidate: SourceEvent<E>, word: Seq<SourceEvent<E>>)
-    requires regex_represents::<E>(tests, regexes, id, source, head),
-        candidate.len() == head.len(),
-        forall|i: int| 0 <= i < word.len() ==> word[i].len() == candidate.len(),
-    ensures flat::lang(tests, regexes, id, candidate, word, component_equality::<E>())
-        == dsl::lang(source, head, candidate, word),
-    decreases source,
-{
-    reveal_with_fuel(flat::lang, 2);
-    reveal_with_fuel(dsl::lang, 2);
-    lemma_regex_operands(regexes[id as int]);
-    reveal_with_fuel(regex_represents, 2);
-    match source {
-        RegexView::Test(test) => match regexes[id as int] {
-            FlatRegex::Test(test_id) => { if word.len() == 1 {
-                lemma_test_semantics::<E>(tests, test_id as nat, test, head, candidate, word[0]);
-            } },
-            _ => {},
-        },
-        RegexView::Union(children) => {
-            let ids = regex_operands(regexes[id as int]);
-            if dsl::lang(source, head, candidate, word) {
-                let i = choose|i: int| 0 <= i < children.len() && dsl::lang(children[i], head, candidate, word);
-                lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, word);
-                assert(flat::lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>()));
-                assert(flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()));
-            }
-            if flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
-                let i = choose|i: int| 0 <= i < ids.len()
-                    && flat::lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>());
-                lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, word);
-                assert(dsl::lang(children[i], head, candidate, word));
-                assert(dsl::lang(source, head, candidate, word));
-            }
-        },
-        RegexView::Intersect(children) => {
-            let ids = regex_operands(regexes[id as int]);
-            if dsl::lang(source, head, candidate, word) {
-                assert forall|i: int| 0 <= i < ids.len() implies
-                    flat::lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>()) by {
-                    assert(dsl::lang(children[i], head, candidate, word));
-                    lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, word);
-                }
-                assert(flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()));
-            }
-            if flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
-                assert forall|i: int| 0 <= i < children.len() implies dsl::lang(children[i], head, candidate, word) by {
-                    assert(flat::lang(tests, regexes, ids[i] as nat, candidate, word, component_equality::<E>()));
-                    lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, word);
-                }
-                assert(dsl::lang(source, head, candidate, word));
-            }
-        },
-        RegexView::Not(child) => match regexes[id as int] {
-            FlatRegex::Complement(child_id) => lemma_regex_semantics::<E>(tests, regexes, child_id as nat, *child, head, candidate, word),
-            _ => {},
-        },
-        RegexView::Concat(children) => {
-            let ids = regex_operands(regexes[id as int]);
-            if dsl::lang(source, head, candidate, word) {
-                let parts = choose|parts: Seq<Seq<SourceEvent<E>>>| parts.len() == children.len()
-                    && word == parts.flatten() && forall|i: int| 0 <= i < children.len() ==> dsl::lang(children[i], head, candidate, parts[i]);
-                lemma_partition_arity(parts, candidate.len());
-                assert forall|i: int| 0 <= i < children.len() implies
-                    flat::lang(tests, regexes, ids[i] as nat, candidate, parts[i], component_equality::<E>()) by {
-                    lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, parts[i]);
-                }
-                assert(flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()));
-            }
-            if flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
-                let parts = choose|parts: Seq<Seq<Seq<E::Component>>>| parts.len() == ids.len()
-                    && word == parts.flatten() && forall|i: int| 0 <= i < ids.len() ==>
-                        flat::lang(tests, regexes, ids[i] as nat, candidate, parts[i], component_equality::<E>());
-                lemma_partition_arity(parts, candidate.len());
-                assert forall|i: int| 0 <= i < children.len() implies dsl::lang(children[i], head, candidate, parts[i]) by {
-                    lemma_regex_semantics::<E>(tests, regexes, ids[i] as nat, children[i], head, candidate, parts[i]);
-                }
-                assert(dsl::lang(source, head, candidate, word));
-            }
-        },
-        RegexView::Star(child) => {
-            let child_id = match regexes[id as int] { FlatRegex::Star(child_id) => child_id, _ => arbitrary() };
-            if dsl::lang(source, head, candidate, word) {
-                let parts = choose|parts: Seq<Seq<SourceEvent<E>>>| word == parts.flatten()
-                    && forall|i: int| 0 <= i < parts.len() ==> dsl::lang(*child, head, candidate, parts[i]);
-                lemma_partition_arity(parts, candidate.len());
-                assert forall|i: int| 0 <= i < parts.len() implies
-                    flat::lang(tests, regexes, child_id as nat, candidate, parts[i], component_equality::<E>()) by {
-                    lemma_regex_semantics::<E>(tests, regexes, child_id as nat, *child, head, candidate, parts[i]);
-                }
-                assert(flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()));
-            }
-            if flat::lang(tests, regexes, id, candidate, word, component_equality::<E>()) {
-                let parts = choose|parts: Seq<Seq<Seq<E::Component>>>| word == parts.flatten()
-                    && forall|i: int| 0 <= i < parts.len() ==>
-                        flat::lang(tests, regexes, child_id as nat, candidate, parts[i], component_equality::<E>());
-                lemma_partition_arity(parts, candidate.len());
-                assert forall|i: int| 0 <= i < parts.len() implies dsl::lang(*child, head, candidate, parts[i]) by {
-                    lemma_regex_semantics::<E>(tests, regexes, child_id as nat, *child, head, candidate, parts[i]);
-                }
-                assert(dsl::lang(source, head, candidate, word));
-            }
-        },
-        _ => {},
-    }
-}
 
-/// The structural result of the executable compiler implies both independent semantic equations.
+/// Executable flattening preserves the canonical real-event semantics.
 pub proof fn flattening_preserves_semantics<E: Event>(rule: Rule<E>, lowered: FlatRule<E::Component>,
-    candidate: SourceEvent<E>, history: Seq<SourceEvent<E>>)
-    requires flattened::<E>(rule, lowered), candidate.len() == rule.head@.len(),
-        forall|i: int| 0 <= i < history.len() ==> history[i].len() == candidate.len(),
+    candidate: E, history: Seq<E>)
+    requires flattened::<E>(rule, lowered),
     ensures
-        flat::head_matches(lowered.source.head@, candidate, component_equality::<E>())
-            == dsl::head_matches(rule.head@, candidate),
+        flat::head_matches(lowered.source.head@, history_syntax::spec::events::event_view(candidate),
+            component_equality::<E>()) == crate::spec::semantics::head_matches::<E>(rule.head@, candidate),
         flat::lang(lowered.source.tests@, lowered.source.regexes@, lowered.source.root as nat,
-            candidate, history, component_equality::<E>())
-            == dsl::lang(rule.tail@, rule.head@, candidate, history),
+            history_syntax::spec::events::event_view(candidate),
+            history.map(|i: int, event: E| history_syntax::spec::events::event_view(event)),
+            component_equality::<E>()) == crate::spec::semantics::lang::<E>(rule.tail@, rule.head@, candidate, history),
 {
-    lemma_head_semantics::<E>(lowered.source.head@, rule.head@, candidate);
-    lemma_regex_semantics::<E>(lowered.source.tests@, lowered.source.regexes@, lowered.source.root as nat,
-        rule.tail@, rule.head@, candidate, history);
+    let word = history.map(|i: int, event: E| history_syntax::spec::events::event_view(event));
+    assert(projected_history::<E>(history, word));
+    lemma_event_head_semantics::<E>(lowered.source.head@, rule.head@, candidate);
+    lemma_event_regex_semantics::<E>(lowered.source.tests@, lowered.source.regexes@,
+        lowered.source.root as nat, rule.tail@, rule.head@, candidate, history, word);
 }
 
 /// A client of the executable body obtains the semantic bridge without a correctness precondition.
 pub fn flattening_client<E: Event, L: Limits>(rule: &Rule<E>, limits: &mut L, world: &mut ObservationWorld,
-    Ghost(candidate): Ghost<SourceEvent<E>>, Ghost(history): Ghost<Seq<SourceEvent<E>>>)
+    Ghost(candidate): Ghost<E>, Ghost(history): Ghost<Seq<E>>)
     -> (result: Result<FlatRule<E::Component>, CompileError>)
-    requires candidate.len() == rule.head@.len(),
-        forall|i: int| 0 <= i < history.len() ==> history[i].len() == candidate.len(),
     ensures crate::verify::history_specs::no_internal_compile_error(result),
         dsl::head_scoped(rule.head@) && dsl::regex_scoped(rule.tail@, rule.head@)
             ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
                 && !(result matches Err(CompileError::UnboundVariable { .. })),
         result matches Ok(lowered) ==>
         dsl::head_scoped(rule.head@) && dsl::regex_scoped(rule.tail@, rule.head@)
-        && flat::head_matches(lowered.source.head@, candidate, component_equality::<E>())
-            == dsl::head_matches(rule.head@, candidate)
+        && flat::head_matches(lowered.source.head@, history_syntax::spec::events::event_view(candidate),
+            component_equality::<E>()) == crate::spec::semantics::head_matches::<E>(rule.head@, candidate)
         && flat::lang(lowered.source.tests@, lowered.source.regexes@, lowered.source.root as nat,
-            candidate, history, component_equality::<E>())
-            == dsl::lang(rule.tail@, rule.head@, candidate, history),
+            history_syntax::spec::events::event_view(candidate),
+            history.map(|i: int, event: E| history_syntax::spec::events::event_view(event)),
+            component_equality::<E>()) == crate::spec::semantics::lang::<E>(rule.tail@, rule.head@, candidate, history),
 {
     let result = crate::flatten::flatten_rule(rule, limits, world);
     proof {

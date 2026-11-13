@@ -2,7 +2,7 @@
 //! A candidate supplies the head variables; the candidate is not part of the history.
 
 use history_syntax::Event;
-use history_syntax::event::specs::EventSpec;
+use history_syntax::spec::events::EventSpec;
 use history_syntax::spec::events::{HeadView, PatternView, RegexView, TestView, arity, event_view};
 use history_syntax::{Comparison, Rule, RuleMode};
 use vstd::prelude::*;
@@ -91,8 +91,8 @@ pub open spec fn policy_denies<E: Event>(rules: Seq<Rule<E>>, candidate: E, hist
 
 /// The index identifies the first violated rule in source order (monitor theorem).
 pub open spec fn least_violation<E: Event>(rules: Seq<Rule<E>>, history: Seq<E>, candidate: E, index: int) -> bool {
-    0 <= index < rules.len() && crate::verify::dsl::rule_violated(rules[index], candidate, history)
-        && forall|j: int| 0 <= j < index ==> !crate::verify::dsl::rule_violated(rules[j], candidate, history)
+    0 <= index < rules.len() && rule_violated(rules[index], candidate, history)
+        && forall|j: int| 0 <= j < index ==> !rule_violated(rules[j], candidate, history)
 }
 
 /// A head has the event arity, correctly tagged literals, and distinct bound variable names.

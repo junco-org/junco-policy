@@ -11,7 +11,7 @@ use crate::verify::history_specs::no_invariant_failure;
 use alloc::vec::Vec;
 use history_syntax::Event;
 #[cfg(verus_keep_ghost)]
-use history_syntax::event::specs::EventSpec;
+use history_syntax::spec::events::EventSpec;
 use history_syntax::syntax::Component;
 use vstd::prelude::*;
 
@@ -81,7 +81,7 @@ pub fn validate_component<E: Event>(field: Component, value: &E::Component)
     ensures E::obeys_projection_spec() ==>
         result.is_ok() == (E::coordinate_spec(*value) == field.0 as nat),
     E::obeys_projection_spec() && result.is_ok() ==>
-        field.0 < history_syntax::event::specs::arity::<E>(),
+        field.0 < history_syntax::spec::events::arity::<E>(),
     result matches Err(error) ==> match error {
         HistoryError::InvalidPolicy { path, message } => path@ == "$"@
             && message == "constant belongs to another component",
