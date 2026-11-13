@@ -4,6 +4,12 @@
 //! and the constants it distinguishes per coordinate. The `*_spec` predicates are the postconditions
 //! of `covered`, `redundant`, `at_least_as_strict` and `tail_included` on an `Ok` answer.
 //!
+//! `known` is determined by the contracts, never chosen by the implementation: `new` establishes
+//! `known == declared_sets(domains)`; `add_rule` ensures `after.known == known_with(before.known,
+//! rule_constants(rule))`; `tail_included` ensures `after.known == known_with(before.known,
+//! tail_constants(head, left, right))`; `covered`, `redundant` and `at_least_as_strict` leave the
+//! view unchanged. So capacity (`capacity_for`) is relative to exactly the constants of the inputs.
+//!
 //! A5 (escapes), in prose: `Exhausted` is returned only when a search's `charge` returned
 //! `HistoryError::GraphBudget` (whose contract is `charged + bytes > budget`, with the budget
 //! `GRAPH_BYTES`); `Err` is never an invariant failure (`no_invariant_failure`); every call
@@ -12,9 +18,6 @@
 //! pairs inside the declared domains (S9).
 
 use crate::analyzer::RuleId;
-use history_semantics::verify::refinement::semantics::{
-    head_constants, regex_constants, rule_constants,
-};
 use history_syntax::Event;
 use history_syntax::event::specs::EventSpec;
 use history_syntax::spec::events::{HeadView, RegexView, RuleView, arity, event_view};
@@ -60,10 +63,9 @@ pub open spec fn known_count<C>(known: Seq<Set<C>>) -> nat
     if known.len() == 0 { 0 } else { known_count(known.drop_last()) + known.last().len() }
 }
 
-/// `known` grows by at most `added`, per coordinate.
-pub open spec fn known_grows<C>(before: Seq<Set<C>>, after: Seq<Set<C>>, added: Seq<Set<C>>) -> bool {
-    after.len() == before.len() && forall|i: int| 0 <= i < before.len()
-        ==> before[i].subset_of(#[trigger] after[i]) && after[i].subset_of(before[i].union(added[i]))
+/// `known` after interning exactly `added`, per coordinate.
+pub open spec fn known_with<C>(known: Seq<Set<C>>, added: Seq<Set<C>>) -> Seq<Set<C>> {
+    Seq::new(known.len(), |i: int| known[i].union(added[i]))
 }
 
 /// The constants of a `tail_included` query per coordinate: head constants and both tails'.

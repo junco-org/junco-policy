@@ -5,7 +5,9 @@
 
 use crate::spec::semantics::*;
 use history_syntax::event::specs::EventSpec;
-use history_syntax::spec::events::{HeadView, RegexView, RuleView, arity, event_view};
+use history_syntax::spec::events::{
+    AtomView, HeadView, PatternView, RegexView, RuleView, TestView, arity, event_view,
+};
 use history_syntax::{Event, MAX_ARITY, RuleMode};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
@@ -265,6 +267,80 @@ pub open spec fn minimal_in_case<E: Event>(
     forall|f: FreshChoice<E::Component>, c: E, h: Seq<E>|
         admissible::<E>(domains, known, cex, f) && #[trigger] instantiates::<E>(cex, f, c, h)
         ==> shortest_in_case::<E>(domains, known, c, cex.history.len(), fails)
+}
+
+// ----- the constants a rule mentions (what `known` and freshness are relative to) -----
+
+/// The constant of a head or atom pattern, if any.
+pub open spec fn pattern_constant<C>(pattern: PatternView<C>) -> Set<C> {
+    match pattern { PatternView::Constant(c) => Set::empty().insert(c), PatternView::Variable(_) => Set::empty() }
+}
+
+/// A finite union, built from finite sets rather than an unrestricted comprehension.
+pub open spec fn constants_union<C>(sets: Seq<Set<C>>) -> Set<C>
+    decreases sets.len(),
+{
+    if sets.len() == 0 { Set::empty() }
+    else { constants_union(sets.drop_last()).union(sets.last()) }
+}
+
+/// The constants a test compares coordinate `coordinate` against.
+pub open spec fn test_constant_at<C>(test: TestView<C>, coordinate: int) -> Set<C>
+    decreases test,
+{
+    match test {
+        TestView::True | TestView::False => Set::empty(),
+        TestView::Atom { pattern, .. } =>
+            if coordinate == pattern.component { pattern_constant(pattern.pattern) } else { Set::empty() },
+        TestView::And(cs) | TestView::Or(cs) => test_constant_forest(cs, coordinate),
+    }
+}
+
+pub open spec fn test_constant_forest<C>(tests: Seq<TestView<C>>, coordinate: int) -> Set<C>
+    decreases tests,
+{
+    if tests.len() == 0 { Set::empty() }
+    else { test_constant_forest(tests.drop_last(), coordinate).union(test_constant_at(tests.last(), coordinate)) }
+}
+
+/// The constants a test mentions, per coordinate.
+pub open spec fn test_constants<C>(test: TestView<C>, arity: nat) -> Seq<Set<C>> {
+    Seq::new(arity, |j: int| test_constant_at(test, j))
+}
+
+/// The constants a tail compares coordinate `coordinate` against.
+pub open spec fn regex_constant_at<C>(regex: RegexView<C>, coordinate: int) -> Set<C>
+    decreases regex,
+{
+    match regex {
+        RegexView::Empty | RegexView::All | RegexView::Epsilon => Set::empty(),
+        RegexView::Test(test) => test_constant_at(test, coordinate),
+        RegexView::Union(cs) | RegexView::Concat(cs) | RegexView::Intersect(cs) => regex_constant_forest(cs, coordinate),
+        RegexView::Star(child) | RegexView::Not(child) => regex_constant_at(*child, coordinate),
+    }
+}
+
+pub open spec fn regex_constant_forest<C>(regexes: Seq<RegexView<C>>, coordinate: int) -> Set<C>
+    decreases regexes,
+{
+    if regexes.len() == 0 { Set::empty() }
+    else { regex_constant_forest(regexes.drop_last(), coordinate).union(regex_constant_at(regexes.last(), coordinate)) }
+}
+
+/// The constants a tail mentions, per coordinate.
+pub open spec fn regex_constants<C>(regex: RegexView<C>, arity: nat) -> Seq<Set<C>> {
+    Seq::new(arity, |j: int| regex_constant_at(regex, j))
+}
+
+/// The constants of a head, per coordinate.
+pub open spec fn head_constants<C>(head: HeadView<C>) -> Seq<Set<C>> {
+    head.map(|i: int, pattern: PatternView<C>| pattern_constant(pattern))
+}
+
+/// Exact finite constants of the head and tail, separately at every coordinate.
+pub open spec fn rule_constants<C>(rule: RuleView<C>) -> Seq<Set<C>> {
+    Seq::new(rule.head.len(), |i: int|
+        regex_constants(rule.tail, rule.head.len())[i].union(head_constants(rule.head)[i]))
 }
 
 } // verus!
