@@ -49,9 +49,13 @@ jobs:
         run: |
           cargo clippy --locked --no-deps -p junco-policy -p junco-core -p history-syntax -p history-store -p history-semantics -p history-analysis --all-targets -- -D warnings
           cargo clippy --locked --no-deps --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked --no-deps -p junco-policy --features test-util --test progress -- -D warnings
+          cargo clippy --locked --no-deps --manifest-path fuzz/Cargo.toml --features work-probe --example replay_curve -- -D warnings
 
       - name: Unit tests
-        run: cargo test --locked --workspace
+        run: |
+          cargo test --locked --workspace
+          cargo test --locked -p junco-policy --features test-util --test progress counters::
 
       - name: No-surprise oracle
         # Release: generation re-checks the whole history at every step (166s debug vs 23s release).

@@ -5,7 +5,9 @@ use super::semantics::{head_matches, lang, policy_denies, rule_violated};
 use history_syntax::Event;
 use history_syntax::Rule;
 use history_syntax::event::specs::EventSpec;
-use history_syntax::spec::events::{HeadView, PatternView, RegexView, RuleView, TestView, arity, event_view};
+use history_syntax::spec::events::{
+    HeadView, PatternView, RegexView, RuleView, TestView, arity, event_view,
+};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
