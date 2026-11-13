@@ -10,7 +10,7 @@ use junco_core::HistoryError;
 use junco_core::flat::verify as flat;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{EventView, Subst};
+use junco_core::verify::history_specs::{EventView, Subst, no_internal_error};
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
@@ -47,6 +47,7 @@ impl Tables {
             forall|index: nat, theta: Subst, word: Seq<EventView>| index < old(self).regexes@.len()
                 ==> numeric::source_regex(old(self)@, index, theta, word)
                     == numeric::source_regex(final(self)@, index, theta, word),
+            no_internal_error(result),
             result matches Ok(root) ==> root < final(self).regexes@.len()
                 && root as nat == source.root as nat + old(self).regexes@.len()
                 && final(self).tests@.len() == old(self).tests@.len() + source.tests@.len()
@@ -158,7 +159,8 @@ impl Tables {
             frame(old(self)@, final(self)@),
             result matches Ok(id) ==> id as nat == old(self).regexes@.len()
                 && final(self).regexes@ == old(self).regexes@.push(regex),
-            result is Err ==> final(self).regexes@ == old(self).regexes@)]
+            result is Err ==> final(self).regexes@ == old(self).regexes@,
+            no_internal_error(result))]
     pub(crate) fn push(&mut self, regex: FlatRegex) -> Result<u32, HistoryError> {
         proof! {
             reveal(<Tables as View>::view); reveal(dag); reveal(frame);
@@ -201,7 +203,8 @@ impl Tables {
     /// structurally well formed (`table::lemma_bind_structural`).
     #[verus_spec(result => requires dag(self@), left < self.regexes@.len(),
         right < self.regexes@.len(),
-        ensures result matches Ok(pair) ==> dag(pair) && pair.root < pair.regexes@.len()
+        ensures no_internal_error(result),
+            result matches Ok(pair) ==> dag(pair) && pair.root < pair.regexes@.len()
             && frame(self@, pair)
             && pair.tests@ == self.tests@
             && pair.head@ == seq![FlatHead::<u64>::Bind, FlatHead::<u64>::Bind, FlatHead::<u64>::Bind]
@@ -257,7 +260,7 @@ impl Tables {
 
 #[verus_verify]
 #[verus_spec(result => ensures result matches Ok(id) ==> id as nat == length as nat,
-    result is Err ==> length > u32::MAX)]
+    result is Err ==> length > u32::MAX, no_internal_error(result))]
 fn index(length: usize) -> Result<u32, HistoryError> {
     match u32::try_from(length) {
         Ok(id) => Ok(id),
@@ -267,7 +270,7 @@ fn index(length: usize) -> Result<u32, HistoryError> {
 
 #[verus_verify]
 #[verus_spec(result => ensures result matches Ok(value) ==> value as nat == id as nat + by as nat,
-    result is Err ==> id as nat + by as nat > u32::MAX)]
+    result is Err ==> id as nat + by as nat > u32::MAX, no_internal_error(result))]
 fn offset(id: u32, by: u32) -> Result<u32, HistoryError> {
     match id.checked_add(by) {
         Some(value) => Ok(value),
@@ -276,7 +279,8 @@ fn offset(id: u32, by: u32) -> Result<u32, HistoryError> {
 }
 
 #[verus_verify]
-#[verus_spec(result => ensures result matches Ok(values) ==> shifted(ids@, values@, by as nat))]
+#[verus_spec(result => ensures result matches Ok(values) ==> shifted(ids@, values@, by as nat),
+    no_internal_error(result))]
 fn shift(ids: &[u32], by: u32) -> Result<Vec<u32>, HistoryError> {
     let mut values = Vec::new();
     let mut i = 0;
@@ -293,7 +297,8 @@ fn shift(ids: &[u32], by: u32) -> Result<Vec<u32>, HistoryError> {
 }
 
 #[verus_verify]
-#[verus_spec(result => ensures result matches Ok(copied) ==> test_shift(*test, copied, by as nat))]
+#[verus_spec(result => ensures result matches Ok(copied) ==> test_shift(*test, copied, by as nat),
+    no_internal_error(result))]
 fn copy_test(test: &FlatTest<u64>, by: u32) -> Result<FlatTest<u64>, HistoryError> {
     Ok(match test {
         FlatTest::And(children) => FlatTest::And(shift(children, by)?),
@@ -316,7 +321,7 @@ fn copy_test(test: &FlatTest<u64>, by: u32) -> Result<FlatTest<u64>, HistoryErro
 
 #[verus_verify]
 #[verus_spec(result => ensures result matches Ok(copied) ==>
-    regex_shift(*regex, copied, tests as nat, regexes as nat))]
+    regex_shift(*regex, copied, tests as nat, regexes as nat), no_internal_error(result))]
 fn copy_regex(regex: &FlatRegex, tests: u32, regexes: u32) -> Result<FlatRegex, HistoryError> {
     Ok(match regex {
         FlatRegex::Test(test) => FlatRegex::Test(offset(*test, tests)?),

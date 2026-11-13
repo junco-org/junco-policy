@@ -300,6 +300,7 @@ impl ConstraintTable {
     #[verus_spec(result => requires table_wf(*old(self)), constraint_wf(constraint),
         crate::native::key_obligations::<Constraint>(),
         ensures table_wf(*final(self)),
+            junco_core::verify::history_specs::no_internal_error(result),
             result matches Ok(id) ==> id < final(self).constraints@.len()
                 && constraint_key(final(self).constraints@[id as int]) == constraint_key(constraint),
             old(self)@.is_prefix_of(final(self)@),
