@@ -41,6 +41,12 @@ import from them. The flow is strictly downward: R1 → R2 → R3/R4 → R5/R6 �
 - A monitor denial carries `Denial::index`, the zero-based source-order index of its first
   violated rule. `check_step` states `least_violation` at this exact index and gives its mode;
   `stmt_monitor_check`, `stmt_matcher` and the public executable clients expose the same clause.
+- `resource_error` (`crates/junco-core/src/spec/semantics.rs`) admits graph budget, graph-index
+  overflow, allocation, arena, identifier, revision and configured-time-limit exhaustion only.
+  Under the event laws, monitor `check`/`permits` return only these errors. Analyzer queries
+  provide the same classification for owned ids and well-formed inputs under their capacity
+  preconditions; valid, correctly tagged rules of the event arity have no input-error exit from
+  registration or tail inclusion. Invalid ids and invalid source rules retain their input errors.
 
 ## Reading order for a reviewer
 

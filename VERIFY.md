@@ -65,10 +65,10 @@ implementations with the `verus-spec-check` tool (network access on first use).
 | `-p history-semantics --no-default-features --features runtime` | 1619 verified, 0 errors |
 | `-p history-semantics --features runtime,std,cache` | 1624 verified, 0 errors |
 | `-p history-semantics --features runtime,std,cache --test public_specs` | 19 verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache --test reviewer` | 7 verified, 0 errors |
+| `-p history-semantics --features runtime,std,cache --test reviewer` | 9 verified, 0 errors |
 | `-p history-analysis --no-default-features --features runtime` | 603 verified, 0 errors |
 | `-p history-analysis --no-default-features --features runtime,std` | 603 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime,std --test reviewer` | 17 verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime,std --test reviewer` | 19 verified, 0 errors |
 
 The counts are from the pinned toolchain (`-- --num-threads N` only changes wall time). The
 `--test` rows count the theorems and clients of the test target itself; the library they build
@@ -97,7 +97,7 @@ The theorems a reviewer reads:
 
 - `crates/history-semantics/tests/reviewer.rs`: `theorem_monitor_check` (the three cases of
   `check_step` spelled out with `rule_violated`: grant ⇔ no rule violated, denial names the
-  first violated rule by zero-based source-order index and mode, errors are never invariant failures), `theorem_monitor_permits`,
+  first violated rule by zero-based source-order index and mode, errors are operational resource failures), `theorem_monitor_permits`,
   `theorem_trace_safe` (every state of a run of `check`/`rollback` from a fresh validator is
   `trace_safe`, by induction over the run), `theorem_analyzer_to_monitor` (if `P ⊑ Q` on the
   declared domains, a validator over `Q` permits what a validator over `P` grants inside them),
@@ -189,12 +189,12 @@ in `crates/history-semantics/src/verify/refinement/`: $\mathcal{L}_\theta(r)$ is
 6. **`GRAPH_BYTES` and `Exhausted`.** The paper's search always answers. Each query's search
    may charge at most `MAX_GRAPH_BYTES` of graph; when a charge fails with
    `HistoryError::GraphBudget` (whose contract is `charged + bytes > budget`) the query returns
-   `Inclusion::Exhausted`, about which every R6 `*_spec` claims nothing. Every other error,
-   including index overflow (`GraphIndex`), propagates as `Err`, never an invariant failure
-   (`no_invariant_failure`). When `Exhausted` is returned is prose in R6's header, not a theorem
-   (deviation from the handoff's A5 statement: a ghost token threaded from the failing charge
-   into `Exhausted` was judged not worth touching the store, the search and the analyzer at
-   once).
+   `Inclusion::Exhausted`, whose semantic specification makes no verdict claim. Under the event
+   hypotheses, owned ids, well-formed inputs and the existing capacity preconditions, propagated
+   errors satisfy `resource_error`: graph budget/index overflow, allocation, arena, identifier,
+   revision or configured-time-limit exhaustion. Monitor `check`/`permits` have the same
+   resource-only error guarantee. Valid source rules of the event arity with correctly tagged
+   constants cannot fail registration or tail inclusion with arity, coordinate or scope errors.
 7. **`RulePolicy` is unverified glue.** The root crate's `RulePolicy::check` (`src/policy/rules.rs`)
    adds a `could_fire` head filter, one `TracePolicy` per distinct event, decide-then-append,
    audit mode and error-to-deny around the verified `TracePolicy`/`History`; `check_step` covers
