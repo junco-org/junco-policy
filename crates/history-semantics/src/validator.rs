@@ -73,7 +73,7 @@ impl<E: Event> ValidatorBuilder<E> {
         ensures result.wf(), result.store_spec() == store,
             result@ == Seq::<Rule<E>>::empty())]
     pub fn new(store: Arc<Store<E>>) -> Self {
-        proof! { reveal(ValidatorBuilder::wf); reveal(ValidatorBuilder::store_spec); reveal(builder_error_frame); reveal(finish_storage); }
+
         Self {
             store,
             rules: Vec::new(),
@@ -99,7 +99,7 @@ impl<E: Event> ValidatorBuilder<E> {
                 && mut_ref_future(borrow) == *final(self),
         })]
     pub fn add_rule(&mut self, source: Rule<E>) -> Result<&mut Self, CompileError> {
-        proof! { reveal(ValidatorBuilder::wf); reveal(ValidatorBuilder::store_spec); reveal(builder_error_frame); reveal(finish_storage); }
+
         proof_decl! { let ghost before = *self; let ghost supplied = source; }
         if ObservationWorld
             .try_reserve_vec(&mut self.rules, 1)
@@ -129,13 +129,15 @@ impl<E: Event> ValidatorBuilder<E> {
                 && finish_spec(self@, validator@)
                 && finish_storage(self, validator))]
     pub fn finish(self) -> Result<Validator<E>, HistoryError> {
-        proof! { reveal(ValidatorBuilder::wf); reveal(ValidatorBuilder::store_spec); reveal(builder_error_frame); reveal(finish_storage);  reveal(storage_frame); reveal(history_state_frame); reveal(check_storage); reveal(rollback_storage); }
+        proof! { self.lemma_wf(); }
         let history = History::new(self.store)?;
-        proof! { history_store::history::verify::lemma_empty_history(history, self.store); }
-        Ok(Validator {
+        proof! { raw::lemma_empty_history(history, self.store); }
+        let validator = Validator {
             rules: self.rules,
             history,
-        })
+        };
+        proof! { monitor::lemma_validator_representation(validator); }
+        Ok(validator)
     }
 }
 
@@ -180,7 +182,7 @@ impl<E: Event> Validator<E> {
         limits: &mut L,
         world: &mut ObservationWorld,
     ) -> Result<Decision<E, M>, HistoryError> {
-        proof! { monitor::lemma_validator_representation(*self);  reveal(storage_frame); reveal(history_state_frame); reveal(check_storage); reveal(rollback_storage); }
+        proof! { monitor::lemma_validator_representation(*self);     }
         proof_decl! { let ghost entry = *self; }
         proof! { history_store::history::verify::lemma_history_frame_facts(entry.history, entry.history); }
         if let Some(index) = self.first_violation_with(&request.event, limits, world)? {
@@ -211,8 +213,10 @@ impl<E: Event> Validator<E> {
             }
             return Ok(Decision::Denied(denial));
         }
+        proof! { monitor::lemma_validator_representation(*self); }
         let appended = self.history.push_with(request.event, limits, world);
         proof! {
+            monitor::lemma_validator_representation(*self);
             history_store::history::verify::lemma_push_result(entry.history, self.history, request.event, appended);
             if monitor_hypotheses::<E>() && appended is Ok {
                 monitor::lemma_trace_safe_append(entry@, request.event);
@@ -237,7 +241,7 @@ impl<E: Event> Validator<E> {
             history_state_frame(*old(self), *final(self)),
             monitor_hypotheses::<E>() ==> permits_spec(old(self)@, final(self)@, *candidate, result))]
     pub fn permits(&mut self, candidate: &E) -> Result<bool, HistoryError> {
-        proof! { monitor::lemma_validator_representation(*self);  reveal(storage_frame); reveal(history_state_frame); reveal(check_storage); reveal(rollback_storage); }
+        proof! { monitor::lemma_validator_representation(*self);     }
         proof! { history_store::history::verify::lemma_history_frame_facts(self.history, self.history); }
         Ok(self.first_violation(candidate)?.is_none())
     }
@@ -245,6 +249,8 @@ impl<E: Event> Validator<E> {
     #[verus_spec(result => requires old(self).wf(),
         ensures no_invariant_failure(result), final(self).wf(),
             storage_frame(*old(self), *final(self)), final(self).history == old(self).history,
+            monitor::validator_frame(old(self)@, final(self)@),
+            final(self)@.history == old(self)@.history, history_state_frame(*old(self), *final(self)),
             result matches Ok(Some(index)) ==> index < final(self).rules@.len(),
             monitor_hypotheses::<E>() ==> monitor::selection_spec(old(self)@.rules, old(self)@.history, *candidate, result))]
     fn first_violation(&mut self, candidate: &E) -> Result<Option<usize>, HistoryError> {
@@ -254,6 +260,8 @@ impl<E: Event> Validator<E> {
     #[verus_spec(result => requires old(self).wf(),
         ensures no_invariant_failure(result), final(self).wf(),
             storage_frame(*old(self), *final(self)), final(self).history == old(self).history,
+            monitor::validator_frame(old(self)@, final(self)@),
+            final(self)@.history == old(self)@.history, history_state_frame(*old(self), *final(self)),
             result matches Ok(Some(index)) ==> index < final(self).rules@.len(),
             monitor_hypotheses::<E>() ==> monitor::selection_spec(old(self)@.rules, old(self)@.history, *candidate, result))]
     fn first_violation_with<L: Limits>(
@@ -262,9 +270,12 @@ impl<E: Event> Validator<E> {
         limits: &mut L,
         world: &mut ObservationWorld,
     ) -> Result<Option<usize>, HistoryError> {
-        proof! { monitor::lemma_validator_representation(*self);  reveal(storage_frame); reveal(history_state_frame); reveal(check_storage); reveal(rollback_storage); }
+        proof! { monitor::lemma_validator_representation(*self);     }
         proof_decl! { let ghost entry = *self; }
-        proof! { history_store::history::verify::lemma_history_frame_facts(entry.history, entry.history); }
+        proof! {
+            raw::lemma_history_frame_facts(entry.history, entry.history);
+            compiled::lemma_compiled_table_reflexive(entry.rules@, raw::store_of(entry.history));
+        }
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
             index <= self.rules@.len(), self.wf(), storage_frame(entry, *self),
@@ -274,19 +285,31 @@ impl<E: Event> Validator<E> {
                     entry@.rules[j], *candidate, entry@.history),
             decreases self.rules@.len() - index))]
         while index < self.rules.len() {
+            proof! {
+                monitor::lemma_validator_representation(entry);
+                monitor::lemma_validator_representation(*self);
+                compiled::lemma_decision_requires(self.rules@[index as int], self.history);
+            }
             proof_decl! { let ghost before = *self; }
             let rule = &mut self.rules[index];
             let answer = rule.accepts_history_with_limits(&self.history, candidate, limits, world);
             let mode = rule.mode();
             proof! {
+                compiled::lemma_decision_result_facts(before.rules@[index as int], *rule,
+                    self.history, *candidate, answer);
                 if monitor_hypotheses::<E>() {
                     crate::compiled_rule::verify::lemma_dsl_violation(*rule, self.history, *candidate, answer, mode);
                 }
                 assert forall|j: int| 0 <= j < entry.rules@.len() implies
                     crate::compiled_rule::compiled_structure_frame(entry.rules@[j], self.rules@[j]) by {
-                    if j != index as int { assert(self.rules@[j] == before.rules@[j]); }
+                    if j != index as int {
+                        assert(self.rules@[j] == before.rules@[j]);
+                    } else {
+                        compiled::lemma_compiled_frame_transitive(entry.rules@[j], before.rules@[j], self.rules@[j]);
+                    }
                 }
-                crate::compiled_rule::verify::lemma_compiled_sources_frame(entry.rules@, self.rules@);
+                compiled::lemma_compiled_table_frame_facts(entry.rules@, self.rules@, raw::store_of(entry.history));
+                monitor::lemma_validator_representation(*self);
                 assert(self.wf());
                 assert(storage_frame(entry, *self));
             }
@@ -308,7 +331,7 @@ impl<E: Event> Validator<E> {
     /// Returns committed grants' events in exact acceptance order.
     #[verus_spec(result => ensures result@ == self@.history)]
     pub fn history(&self) -> &[E] {
-        proof! { monitor::lemma_validator_representation(*self);  reveal(storage_frame); reveal(history_state_frame); reveal(check_storage); reveal(rollback_storage); }
+        proof! { monitor::lemma_validator_representation(*self);     }
         self.history.as_slice()
     }
 
@@ -316,8 +339,10 @@ impl<E: Event> Validator<E> {
     #[verus_spec(result => ensures self.checkpoint_owned(result),
         history_store::history::verify::checkpoint_len(result) == self@.history.len())]
     pub fn checkpoint(&self) -> Checkpoint {
-        proof! { monitor::lemma_validator_representation(*self);  reveal(storage_frame); reveal(history_state_frame); reveal(check_storage); reveal(rollback_storage); reveal(Validator::checkpoint_owned); }
-        self.history.checkpoint()
+        proof! { monitor::lemma_validator_representation(*self);      }
+        let checkpoint = self.history.checkpoint();
+        proof! { raw::lemma_checkpoint_matches(self.history, checkpoint); }
+        checkpoint
     }
 
     /// Rolls back a checkpoint belonging to this validator's history.
@@ -325,16 +350,18 @@ impl<E: Event> Validator<E> {
         ensures final(self).wf(), storage_frame(*old(self), *final(self)),
             monitor::validator_frame(old(self)@, final(self)@),
             rollback_spec(old(self)@, final(self)@,
-                old(self)@.history.take(history_store::history::verify::checkpoint_len(checkpoint) as int), result),
+                monitor::rollback_prefix(old(self)@.history, raw::checkpoint_len(checkpoint)), result),
             rollback_storage(*old(self), *final(self), checkpoint, result))]
     pub fn rollback(&mut self, checkpoint: Checkpoint) -> Result<(), HistoryError> {
-        proof! { monitor::lemma_validator_representation(*self);  reveal(storage_frame); reveal(history_state_frame); reveal(check_storage); reveal(rollback_storage); }
+        proof! { monitor::lemma_validator_representation(*self);     }
         proof_decl! { let ghost entry = *self; }
         let result = self.history.rollback(checkpoint);
         proof! {
             history_store::history::verify::lemma_rollback_result(entry.history, self.history, checkpoint, result);
-            crate::compiled_rule::verify::lemma_compiled_sources_frame(entry.rules@, self.rules@);
-            let prefix = entry@.history.take(history_store::history::verify::checkpoint_len(checkpoint) as int);
+            compiled::lemma_compiled_table_reflexive(entry.rules@, raw::store_of(entry.history));
+            compiled::lemma_compiled_sources_frame(entry.rules@, self.rules@);
+            monitor::lemma_validator_representation(*self);
+            let prefix = monitor::rollback_prefix(entry@.history, raw::checkpoint_len(checkpoint));
             if result is Ok {
                 assert(prefix.is_prefix_of(entry@.history));
                 if monitor_hypotheses::<E>() { monitor::lemma_trace_safe_prefix(entry@, prefix); }
@@ -482,7 +509,7 @@ pub mod verify {
                 && after@.history == before@.history.push(request.event),
         },
     {
-        monitor::lemma_validator_representation(before); monitor::lemma_validator_representation(after);  reveal(storage_frame); reveal(history_state_frame); reveal(check_storage); reveal(rollback_storage);
+        monitor::lemma_validator_representation(before); monitor::lemma_validator_representation(after);     
         raw::lemma_history_frame_facts(before.history, after.history);
         if let Ok(Decision::Grant(_)) = result {
             raw::lemma_push_result(before.history, after.history, request.event, Ok(()));
@@ -494,7 +521,7 @@ pub mod verify {
         requires builder_error_frame(before, after),
         ensures after@ == before@, after.store_spec() == before.store_spec(),
     {
-        reveal(ValidatorBuilder::wf); reveal(ValidatorBuilder::store_spec); reveal(builder_error_frame); reveal(finish_storage);
+           
     }
 
     /// Storage preservation exposes the semantic rule frame, but not compiled representations.
@@ -502,7 +529,7 @@ pub mod verify {
         requires storage_frame(before, after),
         ensures monitor::validator_frame(before@, after@),
     {
-        monitor::lemma_validator_representation(before); monitor::lemma_validator_representation(after);  reveal(storage_frame); reveal(history_state_frame); reveal(check_storage); reveal(rollback_storage);
+        monitor::lemma_validator_representation(before); monitor::lemma_validator_representation(after);     
         compiled::lemma_compiled_sources_frame(before.rules@, after.rules@);
     }
     }

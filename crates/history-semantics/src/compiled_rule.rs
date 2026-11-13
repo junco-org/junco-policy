@@ -248,6 +248,26 @@ pub mod verify {
         ensures compiled_structure_frame(before, after),
     {}
 
+    pub(crate) proof fn lemma_compiled_table_reflexive<E: Event>(rules: Seq<CompiledRule<E>>, store: Arc<Store<E>>)
+        requires compiled_table_wf(rules, store),
+        ensures compiled_table_frame(rules, rules),
+    {
+        assert forall|i: int| 0 <= i < rules.len() implies
+            compiled_structure_frame(rules[i], rules[i]) by {
+            lemma_compiled_frame_reflexive(rules[i]);
+        }
+    }
+
+    pub(crate) proof fn lemma_compiled_table_frame_facts<E: Event>(
+        before: Seq<CompiledRule<E>>, after: Seq<CompiledRule<E>>, store: Arc<Store<E>>)
+        requires compiled_table_wf(before, store), compiled_table_frame(before, after),
+        ensures compiled_table_wf(after, store), compiled_sources(after) == compiled_sources(before),
+    {
+        assert(compiled_sources(after) =~= compiled_sources(before));
+        assert forall|i: int| 0 <= i < after.len() implies
+            compiled_wf(after[i]) && compiled_store(after[i]) == store by {}
+    }
+
     pub(crate) proof fn lemma_compiled_sources_frame<E: Event>(before: Seq<CompiledRule<E>>, after: Seq<CompiledRule<E>>)
         requires compiled_table_frame(before, after),
         ensures compiled_sources(before) == compiled_sources(after),

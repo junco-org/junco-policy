@@ -133,6 +133,11 @@ pub open spec fn rollback_spec<E: Event>(before: ValidatorView<E>, after: Valida
     }
 }
 
+/// Total prefix observation: future markers are rejected, so their unused prefix is the full trace.
+pub open spec fn rollback_prefix<E: Event>(history: Seq<E>, length: usize) -> Seq<E> {
+    if length <= history.len() { history.take(length as int) } else { history }
+}
+
 /// A completed builder starts the monitor with its ordered rules and an empty history.
 pub open spec fn finish_spec<E: Event>(rules: Seq<Rule<E>>, state: ValidatorView<E>) -> bool {
     state.rules == rules && state.history == Seq::<E>::empty()
