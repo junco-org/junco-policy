@@ -196,12 +196,15 @@ impl Tables {
         Ok(id)
     }
 
-    /// `left ∩ ¬right` as the root of these tables. Heads play no part in a tail's language.
+    /// `left ∩ ¬right` as the root of these tables. Heads play no part in a tail's language; the
+    /// pair's head binds every component, so a table whose variable atoms are component-local is
+    /// structurally well formed (`table::lemma_bind_structural`).
     #[verus_spec(result => requires dag(self@), left < self.regexes@.len(),
         right < self.regexes@.len(),
         ensures result matches Ok(pair) ==> dag(pair) && pair.root < pair.regexes@.len()
             && frame(self@, pair)
             && pair.tests@ == self.tests@
+            && pair.head@ == seq![FlatHead::<u64>::Bind, FlatHead::<u64>::Bind, FlatHead::<u64>::Bind]
             && forall|theta: Subst, word: Seq<EventView>|
                 numeric::source_regex(pair, pair.root as nat, theta, word)
                     == (numeric::source_regex(self@, left as nat, theta, word)
@@ -221,7 +224,7 @@ impl Tables {
         children.push(excluded);
         let root = tables.push(FlatRegex::Intersect(children))?;
         let pair = FlatPair {
-            head: [FlatHead::Any, FlatHead::Any, FlatHead::Any],
+            head: [FlatHead::Bind, FlatHead::Bind, FlatHead::Bind],
             tests: tables.tests,
             regexes: tables.regexes,
             root,

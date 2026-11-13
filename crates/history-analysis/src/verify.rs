@@ -1,6 +1,10 @@
 //! Ghost views and contracts linking the executable analyzer to the frozen refinement layers.
 
 pub(crate) mod constraint_unique;
+pub(crate) mod firing;
+pub(crate) mod minimality;
+pub(crate) mod policy;
+pub(crate) mod policy_bridge;
 pub(crate) mod prune_exec;
 pub(crate) mod reconstruction;
 pub(crate) mod search_exec;
@@ -2244,7 +2248,7 @@ pub(crate) mod table {
     use crate::tables::Tables;
     use history_semantics::compile_verify as numeric;
     use junco_core::flat::verify as flat;
-    use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTest};
+    use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
 
     verus! {
     broadcast use {vstd::seq::group_seq_lemmas, vstd::std_specs::vec::group_vec_axioms};
@@ -2288,6 +2292,74 @@ pub(crate) mod table {
             test_dag(pair.tests@[i], i as nat) by {
             assert(flat::test_wf(pair.head@, pair.tests@[i], i as nat));
             reveal(flat::test_wf);
+        }
+    }
+
+    /// Every variable atom compares a component with the candidate's same component, as
+    /// `flat::test_wf` requires of a structurally well-formed template.
+    pub(crate) open spec fn local_vars(pair: FlatPair<u64>) -> bool {
+        forall|i: int| #![trigger pair.tests@[i]] 0 <= i < pair.tests@.len() ==> match pair.tests@[i] {
+            FlatTest::Atom { field, term: FlatTerm::Variable(variable), .. } => field == variable,
+            _ => true,
+        }
+    }
+
+    pub(crate) proof fn lemma_structural_local(pair: FlatPair<u64>)
+        requires flat::structural_wf(pair),
+        ensures local_vars(pair),
+    {
+        reveal(flat::structural_wf);
+        reveal(flat::prefix_wf);
+        assert forall|i: int| #![trigger pair.tests@[i]] 0 <= i < pair.tests@.len() implies match pair.tests@[i] {
+            FlatTest::Atom { field, term: FlatTerm::Variable(variable), .. } => field == variable,
+            _ => true,
+        } by {
+            assert(flat::test_wf(pair.head@, pair.tests@[i], i as nat));
+            reveal(flat::test_wf);
+        }
+    }
+
+    /// A table with backward references and local variables is structurally well formed under
+    /// the head that binds every component.
+    pub(crate) proof fn lemma_bind_structural(pair: FlatPair<u64>)
+        requires dag(pair), local_vars(pair), pair.root < pair.regexes@.len(),
+            pair.head@ == seq![FlatHead::<u64>::Bind, FlatHead::<u64>::Bind, FlatHead::<u64>::Bind],
+        ensures flat::structural_wf(pair),
+    {
+        reveal(flat::structural_wf);
+        reveal(flat::prefix_wf);
+        reveal(flat::test_wf);
+        assert forall|i: int| 0 <= i < pair.tests@.len() implies
+            flat::test_wf(pair.head@, #[trigger] pair.tests@[i], i as nat) by {
+            assert(test_dag(pair.tests@[i], i as nat));
+            match pair.tests@[i] {
+                FlatTest::Atom { field, term: FlatTerm::Variable(variable), .. } => {
+                    assert(field == variable);
+                    match field { Component::Principal => {}, Component::Action => {}, Component::Resource => {} }
+                },
+                _ => {},
+            }
+        }
+    }
+
+    /// Appending a table with local variables to one keeps every variable local.
+    pub(crate) proof fn lemma_append_local(before: FlatPair<u64>, source: FlatPair<u64>, after: FlatPair<u64>)
+        requires local_vars(before), local_vars(source), frame(before, after),
+            tests_copied(source, after, before.tests@.len(), source.tests@.len()),
+            after.tests@.len() == before.tests@.len() + source.tests@.len(),
+        ensures local_vars(after),
+    {
+        assert forall|i: int| #![trigger after.tests@[i]] 0 <= i < after.tests@.len() implies match after.tests@[i] {
+            FlatTest::Atom { field, term: FlatTerm::Variable(variable), .. } => field == variable,
+            _ => true,
+        } by {
+            if i < before.tests@.len() {
+                assert(after.tests@[i] == before.tests@[i]);
+            } else {
+                let j = i - before.tests@.len();
+                assert(test_shift(source.tests@[j], after.tests@[(before.tests@.len() + j) as int], before.tests@.len()));
+                assert(source.tests@[j] == source.tests@[j]);
+            }
         }
     }
 
@@ -2520,7 +2592,7 @@ pub use frontend::{analyzer_state_wf, constructor_capacity, query_capacity};
 
 pub(crate) mod frontend {
     use super::*;
-    use crate::analyzer::{Domains, PolicyAnalyzer};
+    use crate::analyzer::{AnalyzedRule, Domains, PolicyAnalyzer, RuleId};
     use junco_core::flat::{FlatHead, FlatPair};
     use junco_core::verify::{encoding as enc, flatten as fl};
     use vstd::std_specs::cmp::PartialEqSpec;
@@ -2817,7 +2889,7 @@ pub(crate) mod frontend {
                     action: match selected_values(self.constants, self.universes[1]) { None => None, Some(vs) => Some(action_values::<E>(vs)) },
                     resource: match selected_values(self.constants, self.universes[2]) { None => None, Some(vs) => Some(resource_values::<E>(vs)) },
                 },
-                rules: Seq::empty(),
+                rules: self.rules@.map_values(|r: AnalyzedRule<E>| r.source@.0@),
                 known_principals: principal_values::<E>(self.constants.values@.to_set()),
                 known_actions: action_values::<E>(self.constants.values@.to_set()),
                 known_resources: resource_values::<E>(self.constants.values@.to_set()),
@@ -2831,9 +2903,52 @@ pub(crate) mod frontend {
                 && value_field(c.values@[(*ids)@[j] as int - 1]) == enc::field_at(f) }
     }
 
-    /// Constant-book and declared-universe invariants preserved by analyzer queries.
+    impl View for RuleId {
+        type V = nat;
+        open(crate) spec fn view(&self) -> nat { self.0 as nat }
+    }
+
+    /// The ids of a slice of rule handles.
+    pub open(crate) spec fn rule_ids(ids: Seq<RuleId>) -> Seq<nat> {
+        ids.map_values(|id: RuleId| id@)
+    }
+
+    /// A stored rule is the verified front end's output for its source rule, lowered against the
+    /// constant book `c`: `source` flattens to `flat` (`fl::flattened`), whose constants are in the
+    /// component domains and are encoded as `tail` (`enc::lowering`); `constants` are the head
+    /// constants of `tail`.
+    pub(crate) open spec fn stored_rule_wf<E: Event>(c: Constants<E>, r: AnalyzedRule<E>) -> bool {
+        let rule = r.source@.0;
+        let flat = r.source@.1;
+        &&& fl::flattened(rule, flat)
+        &&& enc::constants_in_domain(flat.source, fl::component_domain::<E>())
+        &&& enc::lowering(flat.source, r.tail, constant_book(c), fl::component_equality::<E>())
+        &&& junco_core::flat::verify::structural_wf(r.tail)
+        &&& numeric_head_wf(r.tail.head@)
+        &&& head_view(r.constants) == pins(r.tail.head@)
+        &&& r.mode == rule.mode
+    }
+
+    pub(crate) open spec fn rules_wf<E: Event>(c: Constants<E>, rules: Seq<AnalyzedRule<E>>) -> bool {
+        forall|i: int| 0 <= i < rules.len() ==> #[trigger] stored_rule_wf(c, rules[i])
+    }
+
+    /// Constant-book, declared-universe and rule-store invariants preserved by analyzer queries.
     pub open(crate) spec fn analyzer_state_wf<E: Event>(a: PolicyAnalyzer<E>) -> bool {
-        constants_wf(a.constants) && universes_wf(a.constants, a.universes)
+        constants_wf(a.constants) && universes_wf(a.constants, a.universes) && rules_wf(a.constants, a.rules@)
+    }
+
+    /// Stored rules stay lowered as the constant book grows (`enc::lemma_lowering_extends`).
+    pub(crate) proof fn lemma_rules_extend<E: Event>(before: Constants<E>, after: Constants<E>, rules: Seq<AnalyzedRule<E>>)
+        requires rules_wf(before, rules),
+            enc::extends(constant_book(before), constant_book(after), fl::component_equality::<E>()),
+        ensures rules_wf(after, rules),
+    {
+        assert forall|i: int| 0 <= i < rules.len() implies #[trigger] stored_rule_wf(after, rules[i]) by {
+            assert(stored_rule_wf(before, rules[i]));
+            enc::lemma_lowering_extends(rules[i].source@.1.source, rules[i].tail, constant_book(before),
+                constant_book(after), fl::component_equality::<E>());
+        }
     }
 
     pub(crate) proof fn lemma_universes_frame<E: Event>(a: Constants<E>, b: Constants<E>, us: Universes)
@@ -2872,8 +2987,8 @@ pub(crate) mod frontend {
     }
 
     pub(crate) proof fn lemma_declared_wf<E: Event>(a: PolicyAnalyzer<E>, d: Domains<E>)
-        requires declared_domains_encoded(a, d),
-        ensures universes_wf(a.constants, a.universes), analyzer::analyzer_wf(a@),
+        requires declared_domains_encoded(a, d), a.rules@.len() == 0,
+        ensures universes_wf(a.constants, a.universes), analyzer::analyzer_wf(a@), rules_wf(a.constants, a.rules@),
     {
         assert forall|f: int| #![trigger a.universes[f]] 0 <= f < 3 implies match a.universes[f] {
             None => true, Some(ids) => (*ids)@.no_duplicates() && forall|j: int| 0 <= j < (*ids)@.len()

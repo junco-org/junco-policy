@@ -168,9 +168,20 @@ pub open spec fn uncovered<P: PartialEq, A: PartialEq, R: PartialEq>(
     |c: TEvent<P, A, R>, h: Seq<TEvent<P, A, R>>| rule_denies(rule, c, h) && !policy_denies(p, c, h)
 }
 
-/// `covered(rule, by)`: Holds iff covered; a counterexample is denied by `rule` and by no rule of
-/// `by`, shortest within its candidate case.
-pub open spec fn covered_ok<P: PartialEq, A: PartialEq, R: PartialEq>(
+/// Every component without a declared domain has infinitely many `eq_spec`-distinct values. A
+/// declared finite component never receives a fresh value, so under this hypothesis every
+/// counterexample has an admissible instance (`stmt_choice_exists_declared`) and the negations
+/// stated by the `*_correct` predicates are witnessed, not vacuous.
+pub open spec fn unrestricted_infinite<P: PartialEq, A: PartialEq, R: PartialEq>(d: DomainsView<P, A, R>) -> bool {
+    &&& d.principal is None ==> infinite_type::<P>()
+    &&& d.action is None ==> infinite_type::<A>()
+    &&& d.resource is None ==> infinite_type::<R>()
+}
+
+/// `covered(rule, by)`, soundness and completeness: `Holds` means `by` covers `rule`; a
+/// counterexample is, in every admissible instance, denied by `rule` and by no rule of `by`, so
+/// `by` does not cover `rule`.
+pub open spec fn covered_correct<P: PartialEq, A: PartialEq, R: PartialEq>(
     a: AnalyzerView<P, A, R>, rule: nat, by: Seq<nat>, v: InclusionView<P, A, R>,
 ) -> bool {
     let p = rules_of(a, by);
@@ -178,17 +189,90 @@ pub open spec fn covered_ok<P: PartialEq, A: PartialEq, R: PartialEq>(
     match v {
         InclusionView::Holds => covers(a.domains, p, r),
         InclusionView::Counterexample(cex) => every_instance(a, cex, uncovered(p, r))
-            && forall|f: FreshChoice<P, A, R>| #[trigger] admissible(a, cex, f)
-                ==> shortest_in_case(a, event_of(cex.candidate, f), cex.history.len(), uncovered(p, r)),
+            && (unrestricted_infinite(a.domains) ==> !covers(a.domains, p, r)),
         InclusionView::Exhausted => true,
     }
+}
+
+/// `covered(rule, by)`, minimality: a counterexample is shortest within its candidate case.
+pub open spec fn covered_minimal<P: PartialEq, A: PartialEq, R: PartialEq>(
+    a: AnalyzerView<P, A, R>, rule: nat, by: Seq<nat>, v: InclusionView<P, A, R>,
+) -> bool {
+    let p = rules_of(a, by);
+    let r = a.rules[rule as int];
+    match v {
+        InclusionView::Counterexample(cex) => forall|f: FreshChoice<P, A, R>| #[trigger] admissible(a, cex, f)
+            ==> shortest_in_case(a, event_of(cex.candidate, f), cex.history.len(), uncovered(p, r)),
+        _ => true,
+    }
+}
+
+/// `covered(rule, by)`: Holds iff covered; a counterexample is denied by `rule` and by no rule of
+/// `by`, shortest within its candidate case.
+pub open spec fn covered_ok<P: PartialEq, A: PartialEq, R: PartialEq>(
+    a: AnalyzerView<P, A, R>, rule: nat, by: Seq<nat>, v: InclusionView<P, A, R>,
+) -> bool {
+    covered_correct(a, rule, by, v) && covered_minimal(a, rule, by, v)
+}
+
+/// `policy` without every occurrence of `rule`.
+pub open spec fn others(policy: Seq<nat>, rule: nat) -> Seq<nat> {
+    policy.filter(|id: nat| id != rule)
+}
+
+/// `redundant(rule, policy)`, soundness and completeness: `covered(rule, policy without every
+/// occurrence of rule)`, which `semantics::stmt_redundant_iff_covered` relates to decisions.
+pub open spec fn redundant_correct<P: PartialEq, A: PartialEq, R: PartialEq>(
+    a: AnalyzerView<P, A, R>, rule: nat, policy: Seq<nat>, v: InclusionView<P, A, R>,
+) -> bool {
+    covered_correct(a, rule, others(policy, rule), v)
+}
+
+/// `redundant(rule, policy)`, minimality.
+pub open spec fn redundant_minimal<P: PartialEq, A: PartialEq, R: PartialEq>(
+    a: AnalyzerView<P, A, R>, rule: nat, policy: Seq<nat>, v: InclusionView<P, A, R>,
+) -> bool {
+    covered_minimal(a, rule, others(policy, rule), v)
 }
 
 /// `redundant(rule, policy)`: `covered(rule, policy without every occurrence of rule)`.
 pub open spec fn redundant_ok<P: PartialEq, A: PartialEq, R: PartialEq>(
     a: AnalyzerView<P, A, R>, rule: nat, policy: Seq<nat>, v: InclusionView<P, A, R>,
 ) -> bool {
-    covered_ok(a, rule, policy.filter(|id: nat| id != rule), v)
+    redundant_correct(a, rule, policy, v) && redundant_minimal(a, rule, policy, v)
+}
+
+/// `at_least_as_strict(p, q)`, soundness and completeness: `Holds` means `p ⊑ q`; a counterexample
+/// is, in every admissible instance, permitted by `p` and denied by some rule of `q`, so `p` does
+/// not refine `q`.
+pub open spec fn at_least_as_strict_correct<P: PartialEq, A: PartialEq, R: PartialEq>(
+    a: AnalyzerView<P, A, R>, p: Seq<nat>, q: Seq<nat>, v: InclusionView<P, A, R>,
+) -> bool {
+    let pp = rules_of(a, p);
+    let qq = rules_of(a, q);
+    match v {
+        InclusionView::Holds => refines(a.domains, pp, qq),
+        InclusionView::Counterexample(cex) => (exists|j: int| 0 <= j < qq.len()
+                && every_instance(a, cex, #[trigger] uncovered(pp, qq[j])))
+            && (unrestricted_infinite(a.domains) ==> !refines(a.domains, pp, qq)),
+        InclusionView::Exhausted => true,
+    }
+}
+
+/// `at_least_as_strict(p, q)`, minimality: the counterexample is shortest within its candidate
+/// case for a rule of `q` that every instance shows uncovered.
+pub open spec fn at_least_as_strict_minimal<P: PartialEq, A: PartialEq, R: PartialEq>(
+    a: AnalyzerView<P, A, R>, p: Seq<nat>, q: Seq<nat>, v: InclusionView<P, A, R>,
+) -> bool {
+    let pp = rules_of(a, p);
+    let qq = rules_of(a, q);
+    match v {
+        InclusionView::Counterexample(cex) => exists|j: int| 0 <= j < qq.len()
+            && every_instance(a, cex, #[trigger] uncovered(pp, qq[j]))
+            && forall|f: FreshChoice<P, A, R>| #[trigger] admissible(a, cex, f)
+                ==> shortest_in_case(a, event_of(cex.candidate, f), cex.history.len(), uncovered(pp, qq[j])),
+        _ => true,
+    }
 }
 
 /// `at_least_as_strict(p, q)`: Holds iff `p ⊑ q`; a counterexample is permitted by `p` and
@@ -196,16 +280,7 @@ pub open spec fn redundant_ok<P: PartialEq, A: PartialEq, R: PartialEq>(
 pub open spec fn at_least_as_strict_ok<P: PartialEq, A: PartialEq, R: PartialEq>(
     a: AnalyzerView<P, A, R>, p: Seq<nat>, q: Seq<nat>, v: InclusionView<P, A, R>,
 ) -> bool {
-    let pp = rules_of(a, p);
-    let qq = rules_of(a, q);
-    match v {
-        InclusionView::Holds => refines(a.domains, pp, qq),
-        InclusionView::Counterexample(cex) => exists|j: int| 0 <= j < qq.len()
-            && every_instance(a, cex, #[trigger] uncovered(pp, qq[j]))
-            && forall|f: FreshChoice<P, A, R>| #[trigger] admissible(a, cex, f)
-                ==> shortest_in_case(a, event_of(cex.candidate, f), cex.history.len(), uncovered(pp, qq[j])),
-        InclusionView::Exhausted => true,
-    }
+    at_least_as_strict_correct(a, p, q, v) && at_least_as_strict_minimal(a, p, q, v)
 }
 
 pub open spec fn denies_fn<P: PartialEq, A: PartialEq, R: PartialEq>(
@@ -286,6 +361,25 @@ pub open spec fn fresh_finite<P, A, R>(cex: CexView<P, A, R>) -> bool {
     fresh_used(cex, |c: ComponentsView<P, A, R>| c.principal).finite()
         && fresh_used(cex, |c: ComponentsView<P, A, R>| c.action).finite()
         && fresh_used(cex, |c: ComponentsView<P, A, R>| c.resource).finite()
+}
+
+/// Fresh numbers occur only at components without a declared domain.
+pub open spec fn fresh_unrestricted<P, A, R>(d: DomainsView<P, A, R>, cex: CexView<P, A, R>) -> bool {
+    &&& d.principal is Some ==> fresh_used(cex, |c: ComponentsView<P, A, R>| c.principal) == ISet::<nat>::empty()
+    &&& d.action is Some ==> fresh_used(cex, |c: ComponentsView<P, A, R>| c.action) == ISet::<nat>::empty()
+    &&& d.resource is Some ==> fresh_used(cex, |c: ComponentsView<P, A, R>| c.resource) == ISet::<nat>::empty()
+}
+
+/// Existence of admissible choices with declared finite domains: if every unrestricted component
+/// has an infinite type and fresh numbers occur only at unrestricted components, every
+/// counterexample has an admissible instantiation. Extends `stmt_choice_exists`, whose
+/// `infinite_domains` declares no domain at all.
+pub open spec fn stmt_choice_exists_declared<P: PartialEq, A: PartialEq, R: PartialEq>() -> bool {
+    forall|a: AnalyzerView<P, A, R>, cex: CexView<P, A, R>|
+        #![trigger unrestricted_infinite(a.domains), fresh_unrestricted(a.domains, cex)]
+        eq_equivalence::<P>() && eq_equivalence::<A>() && eq_equivalence::<R>()
+            && unrestricted_infinite(a.domains) && fresh_unrestricted(a.domains, cex)
+            ==> exists|f: FreshChoice<P, A, R>| #[trigger] admissible(a, cex, f)
 }
 
 

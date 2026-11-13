@@ -1071,6 +1071,15 @@ pub(crate) open spec fn search_fits(l: SymbolicLanguage,u: Universes,g: implemen
     resource_capacity(root_vocabulary(l,u,g))
 }
 
+/// Primitives the search turns into atoms without an internal error (`validate_atom`): constants
+/// are constant ids and variables are component-local.
+pub(crate) open spec fn primitives_safe(ps: Set<model::Primitive>) -> bool {
+    forall|p: model::Primitive| #[trigger] ps.contains(p) ==> match p {
+        model::Primitive::Eq(c, model::GTerm::Constant(v)) => v <= u32::MAX,
+        model::Primitive::Eq(c, model::GTerm::Variable(c2)) => c2 == c,
+    }
+}
+
 pub(crate) open spec fn queue_order(s: Search<'_>) -> bool {
     &&& forall|i: int,j: int| #![trigger s.items@[i],s.items@[j]] 0 <= i < j < s.items@.len()
         ==> depth(s.items@,i) <= depth(s.items@,j)

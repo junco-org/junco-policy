@@ -16,11 +16,9 @@ use history_semantics::verify::refinement::{
 };
 #[cfg(verus_keep_ghost)]
 use history_semantics::{compile_verify as numeric, symbolic_language_verify as facade};
-#[cfg(verus_keep_ghost)]
-use history_syntax::Rule;
-use history_syntax::{Component, Event, Head, RegexExpr, RuleMode};
+use history_syntax::{Component, Event, Head, RegexExpr, Rule, RuleMode};
 use junco_core::compile::validate_component;
-use junco_core::flat::{FlatHead, FlatPair};
+use junco_core::flat::{FlatHead, FlatPair, FlatRule};
 use junco_core::flatten::flatten_rule_parts;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
@@ -328,12 +326,30 @@ pub(crate) enum Slot {
     Fresh(usize),
 }
 
+/// Handle of a rule added to a [`PolicyAnalyzer`].
+#[verus_verify]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuleId(pub(crate) usize);
+
+verus! {
+/// A rule added to the analyzer: its head constants (as constant ids), its mode, and its tail
+/// with every constant encoded as its constant id. `source` keeps the rule as added and its
+/// flattening, from which the analyzer's view reads the rule.
+pub(crate) struct AnalyzedRule<E: Event> {
+    pub(crate) constants: [Option<ConstId>; COMPONENTS],
+    pub(crate) mode: RuleMode,
+    pub(crate) tail: FlatPair<u64>,
+    pub(crate) source: Ghost<(Rule<E>, FlatRule<ComponentValue<E>>)>,
+}
+}
+
 /// Static analysis of tail inclusion: for every candidate a head matches, whether every history
 /// in one tail is in another.
 #[verus_verify]
 pub struct PolicyAnalyzer<E: Event> {
     pub(crate) constants: Constants<E>,
     pub(crate) universes: Universes,
+    pub(crate) rules: Vec<AnalyzedRule<E>>,
 }
 
 verus! {
@@ -376,7 +392,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             lemma_declared_frame(second, constants, principals, input.principals, |v: E::Principal| ComponentValue::<E>::Principal(v));
             lemma_declared_frame(second, constants, actions, input.actions, |v: E::Action| ComponentValue::<E>::Action(v));
         }
-        let result = Self { constants, universes: [principals, actions, resources] };
+        let result = Self { constants, universes: [principals, actions, resources], rules: Vec::new() };
         proof { lemma_declared_wf(result, input); lemma_constructor_domains(result, input); }
         result
     }
@@ -392,7 +408,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// a history in `left` but not in `right`.
     #[verus_spec(result => requires views::analyzer_obligations::<E>(),
         analyzer_state_wf(*old(self)), query_capacity(*old(self), *left, *right),
-        ensures analyzer_state_wf(*final(self)),
+        ensures analyzer_state_wf(*final(self)), final(self)@.rules == old(self)@.rules,
             result matches Ok(v) ==> verdict::tail_included_ok(final(self)@, head@, left@, right@, v@))]
     pub fn tail_included(
         &mut self,
@@ -415,12 +431,18 @@ impl<E: Event> PolicyAnalyzer<E> {
             assert(encode_capacity(*self, left_flat.source));
         }
         let left_result = self.encode(&left_flat.source);
-        proof { lemma_universes_extended(before.constants, self.constants, self.universes); }
+        proof {
+            lemma_universes_extended(before.constants, self.constants, self.universes);
+            lemma_rules_extend(before.constants, self.constants, self.rules@);
+        }
         let left_numeric = left_result?;
         let ghost first = *self;
         proof { assert(encode_capacity(*self, right_flat.source)); }
         let right_result = self.encode(&right_flat.source);
-        proof { lemma_universes_extended(first.constants, self.constants, self.universes); }
+        proof {
+            lemma_universes_extended(first.constants, self.constants, self.universes);
+            lemma_rules_extend(first.constants, self.constants, self.rules@);
+        }
         let right_numeric = right_result?;
         let ghost input = TailInput { left: left_rule, right: right_rule, left_flat, right_flat,
             left_numeric, right_numeric };
@@ -504,7 +526,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     fn encode(&mut self, source: &FlatPair<ComponentValue<E>>) -> (result: Result<FlatPair<u64>, HistoryError>)
         requires constants_wf(old(self).constants), crate::verify::analyzer_obligations::<E>(), encode_capacity(*old(self), *source),
         ensures constants_wf(final(self).constants), enc::extends(crate::verify::constant_book(old(self).constants), crate::verify::constant_book(final(self).constants), fl::component_equality::<E>()),
-            final(self).universes == old(self).universes,
+            final(self).universes == old(self).universes, final(self).rules == old(self).rules,
             final(self).constants.values@.len() <= old(self).constants.values@.len() + 3 + source.tests@.len(),
             result matches Ok(target) ==> enc::lowering(*source, target, crate::verify::constant_book(final(self).constants), fl::component_equality::<E>())
                 && junco_core::flat::verify::structural_wf(target) && numeric_head_wf(target.head@),

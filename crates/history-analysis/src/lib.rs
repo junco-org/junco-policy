@@ -72,4 +72,4 @@ pub use native::{
 };
 
 #[cfg(feature = "runtime")]
-pub use analyzer::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, Value};
+pub use analyzer::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, RuleId, Value};
