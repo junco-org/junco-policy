@@ -2999,8 +2999,9 @@ pub(crate) mod frontend {
             }
         }
 
+        /// R6 `ids_of`, under the name the internal lemmas use.
         pub open(crate) spec fn rule_ids(ids: Seq<RuleId>) -> Seq<nat> {
-            ids.map_values(|id: RuleId| id.0 as nat)
+            crate::spec::analyzer::ids_of(ids)
         }
 
         pub open(crate) spec fn valid_ids<E: Event>(a: PolicyAnalyzer<E>, ids: Seq<RuleId>) -> bool {
