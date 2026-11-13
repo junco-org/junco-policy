@@ -1774,7 +1774,7 @@ pub(crate) mod verify {
             }
         }
 
-        pub(super) proof fn lemma_atom_count_bound(g: model::Graph, ids: Seq<TestId>)
+        pub(crate) proof fn lemma_atom_count_bound(g: model::Graph, ids: Seq<TestId>)
             requires model::atom_ids_wf(g, ids),
             ensures ids.len() <= u32::MAX as nat + 1, ids.len() <= g.tests.len(),
         {
