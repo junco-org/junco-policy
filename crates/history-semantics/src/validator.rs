@@ -15,7 +15,7 @@ use junco_core::event::{Grant, Request};
 use junco_core::limits::{Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{no_internal_compile_error, no_internal_error};
+use junco_core::verify::history_specs::{no_invariant_compile_failure, no_invariant_failure};
 use vstd::prelude::*;
 
 /// Diagnostic returned when the first matching rule is violated.
@@ -74,7 +74,7 @@ impl<E: Event> ValidatorBuilder<E> {
     /// Compiles and appends one complete source rule.
     /// Native event laws exclude internal invariant failures, not resource errors.
     #[verus_spec(result => requires verify::builder_wf(*old(self)),
-        ensures history_store::typed::verify::native_obligations::<E>() ==> no_internal_compile_error(result),
+        ensures history_store::typed::verify::native_obligations::<E>() ==> no_invariant_compile_failure(result),
             match result {
             Err(_) => verify::builder_wf(*final(self))
                 && verify::builder_store(*final(self)) == verify::builder_store(*old(self))
@@ -107,7 +107,7 @@ impl<E: Event> ValidatorBuilder<E> {
 
     /// Creates the empty committed history in the rules' store.
     #[verus_spec(result => requires verify::builder_wf(self),
-        ensures history_store::typed::verify::native_obligations::<E>() ==> no_internal_error(result),
+        ensures history_store::typed::verify::native_obligations::<E>() ==> no_invariant_failure(result),
             result matches Ok(validator) ==> verify::validator_wf(validator)
             && verify::validator_sources(validator) == verify::builder_sources(self)
             && history_store::history::verify::empty_history(verify::validator_history(validator), verify::builder_store(self)))]
@@ -142,14 +142,14 @@ impl<E: Event> Validator<E> {
     /// Native event laws exclude internal invariant failures while retaining resource errors.
     #[verus_spec(result => requires verify::validator_wf(*old(self)),
         ensures verify::check_result(*old(self), *final(self), request, result),
-            history_store::typed::verify::native_obligations::<E>() ==> no_internal_error(result))]
+            history_store::typed::verify::native_obligations::<E>() ==> no_invariant_failure(result))]
     pub fn check<M>(&mut self, request: Request<E, M>) -> Result<Decision<E, M>, HistoryError> {
         self.check_with(request, &mut Unmetered, &mut ObservationWorld)
     }
 
     #[verus_spec(result => requires verify::validator_wf(*old(self)),
         ensures verify::check_result(*old(self), *final(self), request, result),
-            history_store::typed::verify::native_obligations::<E>() ==> no_internal_error(result))]
+            history_store::typed::verify::native_obligations::<E>() ==> no_invariant_failure(result))]
     fn check_with<M, L: Limits>(
         &mut self,
         request: Request<E, M>,
@@ -199,7 +199,7 @@ impl<E: Event> Validator<E> {
     /// Evaluates without appending; retained residuals fold only newly committed events.
     /// Operational errors cannot be internal invariant failures.
     #[verus_spec(result => requires verify::validator_wf(*old(self)),
-        ensures no_internal_error(result),
+        ensures no_invariant_failure(result),
             verify::validator_frame(*old(self), *final(self)),
             history_store::history::verify::state_frame(verify::validator_history(*old(self)), verify::validator_history(*final(self))),
             result matches Ok(permitted) ==> (history_store::typed::verify::native_obligations::<E>() ==>
@@ -212,7 +212,7 @@ impl<E: Event> Validator<E> {
     }
 
     #[verus_spec(result => requires verify::validator_wf(*old(self)),
-        ensures no_internal_error(result),
+        ensures no_invariant_failure(result),
             verify::validator_frame(*old(self), *final(self)), final(self).history == old(self).history,
             result matches Ok(Some(index)) ==> index < final(self).rules@.len(),
             crate::compiled_rule::verify::ordered_result(verify::validator_sources(*old(self)), old(self).history, *candidate, result))]
@@ -221,7 +221,7 @@ impl<E: Event> Validator<E> {
     }
 
     #[verus_spec(result => requires verify::validator_wf(*old(self)),
-        ensures no_internal_error(result),
+        ensures no_invariant_failure(result),
             verify::validator_frame(*old(self), *final(self)), final(self).history == old(self).history,
             result matches Ok(Some(index)) ==> index < final(self).rules@.len(),
             crate::compiled_rule::verify::ordered_result(verify::validator_sources(*old(self)), old(self).history, *candidate, result))]
@@ -371,7 +371,7 @@ pub mod verify {
     pub open(crate) spec fn check_result<E: Event, M>(before: Validator<E>, after: Validator<E>,
         request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>) -> bool {
         validator_frame(before, after)
-            && (books::native_obligations::<E>() ==> no_internal_error(result))
+            && (books::native_obligations::<E>() ==> no_invariant_failure(result))
             && match result {
             Err(_) => raw::state_frame(before.history, after.history),
             Ok(Decision::Denied(denial)) => denial.event == request.event
@@ -395,7 +395,7 @@ pub mod verify {
             raw::history_wf(validator_history(after)),
             raw::owner_frame(validator_history(before), validator_history(after)),
             raw::store_of(validator_history(after)) == raw::store_of(validator_history(before)),
-            books::native_obligations::<E>() ==> no_internal_error(result),
+            books::native_obligations::<E>() ==> no_invariant_failure(result),
             match result {
                 Err(_) => raw::state_frame(validator_history(before), validator_history(after))
                     && raw::raw_events(validator_history(after)) == raw::raw_events(validator_history(before)),

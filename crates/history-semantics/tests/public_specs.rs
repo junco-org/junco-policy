@@ -58,7 +58,7 @@ fn scoped_production_compile<E: Event>(source: Rule<E>)
     -> (result: Result<CompiledRule<E>, CompileError>)
     requires books::native_obligations::<E>(), dsl::head_scoped(source.head@),
         dsl::regex_scoped(source.tail@, source.head@),
-    ensures history_specs::no_internal_compile_error(result),
+    ensures history_specs::no_invariant_compile_failure(result),
         !(result matches Err(CompileError::VariableComponentConflict { .. })),
         !(result matches Err(CompileError::UnboundVariable { .. })),
         !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
@@ -77,7 +77,7 @@ fn compiled_truth_table<E: Event>(
         && compiled::source_rule(rule) == (Rule { mode, head,
             tail: if universal { RegexExpr::All } else { RegexExpr::Empty } })
         && answer != Err(HistoryError::WrongHistoryOwner)
-        && history_specs::no_internal_error(answer)
+        && history_specs::no_invariant_failure(answer)
         && (answer matches Ok(option) ==>
             option == (if dsl::head_matches(head@, event_view(*candidate)) {
                 Some(universal)

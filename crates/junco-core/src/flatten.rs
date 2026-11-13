@@ -15,7 +15,7 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::flatten::*;
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_specs::{no_internal_compile_error, no_internal_error};
+use crate::verify::history_specs::{no_invariant_compile_failure, no_invariant_failure};
 #[cfg(verus_keep_ghost)]
 use history_syntax::event::specs::{EventSpec, arity};
 
@@ -37,7 +37,7 @@ pub(crate) enum Work<'a, E: Event> {
 #[verus_spec(result => ensures
     result is Ok ==> final(values)@ == old(values)@.push(value),
     result is Err ==> final(values)@ == old(values)@,
-    no_internal_error(result),
+    no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
 )]
 fn push<T, L: Limits>(
@@ -57,7 +57,7 @@ fn push<T, L: Limits>(
 
 #[verus_verify]
 #[verus_spec(result => ensures
-    start <= old(values)@.len() ==> no_internal_error(result),
+    start <= old(values)@.len() ==> no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
     match result {
         Ok(children) => start <= old(values)@.len()
@@ -110,7 +110,7 @@ fn take_children<L: Limits>(
     !(result matches Err(CompileError::UnboundVariable { .. })),
     E::obeys_projection_spec() && head_coordinates_wf::<E>(head@)
         && crate::verify::dsl::head_scoped(head@) ==> result is Ok || result matches Err(CompileError::Runtime(_)),
-    no_internal_compile_error(result),
+    no_invariant_compile_failure(result),
     !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
 )]
 fn flatten_head<'a, E: Event, L: Limits>(
@@ -211,7 +211,7 @@ fn flatten_head<'a, E: Event, L: Limits>(
     ensures result matches Ok((field, term)) ==>
         (forall|head| scope_matches::<E>(*scope, head) ==> atom_term_represents::<E>(field, term, atom@, head))
         && (E::obeys_projection_spec() ==> atom_coordinates_wf::<E>(atom@)),
-    no_internal_compile_error(result),
+    no_invariant_compile_failure(result),
     atom@.component < scope.arity_spec() ==>
         !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
     forall|head| scope_matches::<E>(*scope, head) && crate::verify::dsl::atom_scoped(atom@, head) ==>
@@ -258,7 +258,7 @@ fn flatten_atom<E: Event>(
         rs + regex_views::<E>(children@)),
     result is Ok ==> work_cost::<E>(final(work)@) == work_cost::<E>(old(work)@)
         + regex_forest_cost::<E>(regex_views::<E>(children@)),
-    no_internal_error(result),
+    no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
     result is Ok ==> forall|head| work_scoped::<E>(old(work)@, head)
         && (forall|i: int| 0 <= i < children@.len()
@@ -326,7 +326,7 @@ fn schedule_regexes<'a, E: Event, L: Limits>(
         ts + test_views::<E>(children@), rs),
     result is Ok ==> work_cost::<E>(final(work)@) == work_cost::<E>(old(work)@)
         + test_forest_cost::<E>(test_views::<E>(children@)),
-    no_internal_error(result),
+    no_invariant_failure(result),
     !(result matches Err(HistoryError::InvalidPolicy { .. })),
     result is Ok ==> forall|head| work_scoped::<E>(old(work)@, head)
         && (forall|i: int| 0 <= i < children@.len()
@@ -391,7 +391,7 @@ fn schedule_tests<'a, E: Event, L: Limits>(
 /// Lowers a rule through the borrowed-source flattener.
 #[verus_verify]
 #[verus_spec(result => ensures
-    no_internal_compile_error(result),
+    no_invariant_compile_failure(result),
     crate::verify::dsl::regex_scoped(rule.tail@, rule.head@) ==>
         !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
     crate::verify::dsl::head_scoped(rule.head@)
@@ -418,7 +418,7 @@ pub fn flatten_rule<E: Event, L: Limits>(
 #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
 #[cfg_attr(verus_keep_ghost, verifier::rlimit(30))]
 #[verus_spec(result => ensures
-    no_internal_compile_error(result),
+    no_invariant_compile_failure(result),
     crate::verify::dsl::regex_scoped(source_tail@, source_head@) ==>
         !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
     crate::verify::dsl::head_scoped(source_head@)

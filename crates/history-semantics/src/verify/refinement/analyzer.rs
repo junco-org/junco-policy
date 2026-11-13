@@ -21,7 +21,7 @@
 //! ```
 //!
 //! The three policy queries also require `unrestricted_components_infinite(self@.domains)` and
-//! ensure `no_internal_error`; `tail_included` ensures `no_internal_compile_error`. `tail_included`
+//! ensure `no_invariant_failure`; `tail_included` ensures `no_invariant_compile_failure`. `tail_included`
 //! does not ensure `cex_has_instance`, so its counterexample clause holds vacuously when no
 //! admissible instance exists.
 //!

@@ -4,7 +4,7 @@ use crate::error::HistoryError;
 use crate::limits::Limits;
 use crate::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_specs::no_internal_error;
+use crate::verify::history_specs::no_invariant_failure;
 use alloc::string::String;
 use alloc::vec::Vec;
 use history_syntax::{
@@ -535,7 +535,7 @@ impl<C> FlatBuilder<C> {
     #[verus_spec(result => requires old(self).wf(), ensures
         final(self).wf(), final(self).head_view() == old(self).head_view(),
         final(self).regexes_view() == old(self).regexes_view(),
-        no_internal_error(result),
+        no_invariant_failure(result),
         verify::test_wf(old(self).head_view(), node, old(self).tests_view().len())
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         match result {
@@ -582,7 +582,7 @@ impl<C> FlatBuilder<C> {
     #[verus_spec(result => requires old(self).wf(), ensures
         final(self).wf(), final(self).head_view() == old(self).head_view(),
         final(self).tests_view() == old(self).tests_view(),
-        no_internal_error(result),
+        no_invariant_failure(result),
         verify::regex_wf(node, old(self).regexes_view().len(), old(self).tests_view().len())
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         match result {
@@ -624,7 +624,7 @@ impl<C> FlatBuilder<C> {
 
     #[verus_spec(result => requires self.wf(), ensures
         (result is Ok) <==> root < self.regexes_view().len(),
-        no_internal_error(result),
+        no_invariant_failure(result),
         root < self.regexes_view().len()
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         match result {

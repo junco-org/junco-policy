@@ -450,7 +450,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                 && id@ == old(self)@.rules.len()
                 && history_semantics::verify::refinement::semantics::rule_wf(encoding::rule_view(*rule)),
             result is Err ==> final(self)@.rules == old(self)@.rules,
-            junco_core::verify::history_specs::no_internal_compile_error(result),
+            junco_core::verify::history_specs::no_invariant_compile_failure(result),
     {
         let ghost before = *self;
         let flat = flatten_rule_parts(rule.mode, &rule.head, &rule.tail, &mut Unmetered, &mut ObservationWorld)?;
@@ -481,7 +481,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
             rule@ < self@.rules.len(), valid_ids(*self, by@),
             verdict::unrestricted_components_infinite(self@.domains),
-        ensures junco_core::verify::history_specs::no_internal_error(result),
+        ensures junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(v) ==> verdict::covered_ok(self@, rule@, rule_ids(by@), v@),
             result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
                 && !semantics::covers(self@.domains, verdict::rules_of(self@, rule_ids(by@)), self@.rules[rule@ as int]),
@@ -498,7 +498,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
             rule@ < self@.rules.len(), valid_ids(*self, policy@),
             verdict::unrestricted_components_infinite(self@.domains),
-        ensures junco_core::verify::history_specs::no_internal_error(result),
+        ensures junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(v) ==> verdict::redundant_ok(self@, rule@, rule_ids(policy@), v@),
             result matches Ok(v) ==> removal::redundant_decisions_ok(self@, rule@, rule_ids(policy@), v@),
             result matches Ok(Inclusion::Holds) ==> removal::removal_preserves_decisions(self@, rule@, rule_ids(policy@)),
@@ -534,7 +534,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
             valid_ids(*self, stricter@), valid_ids(*self, than@),
             verdict::unrestricted_components_infinite(self@.domains),
-        ensures junco_core::verify::history_specs::no_internal_error(result),
+        ensures junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(v) ==> verdict::at_least_as_strict_ok(self@, rule_ids(stricter@), rule_ids(than@), v@),
             result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
                 && !semantics::refines(self@.domains, verdict::rules_of(self@, rule_ids(stricter@)),
@@ -568,7 +568,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         requires analyzer_state_wf(*self), views::analyzer_obligations::<E>(),
             rule.0 < self.rules@.len(), valid_ids(*self, by@),
             verdict::unrestricted_components_infinite(self@.domains),
-        ensures junco_core::verify::history_specs::no_internal_error(result),
+        ensures junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(v) ==> verdict::covered_ok(self@, rule@, queries::selected_rule_ids(by@, exclude), v@),
             result matches Ok(Inclusion::Counterexample(c)) ==> verdict::cex_has_instance(self@, c@)
                 && !semantics::covers(self@.domains, verdict::rules_of(self@, queries::selected_rule_ids(by@, exclude)),
@@ -766,7 +766,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             forall|k: int, v: nat| 0 <= k < operands.constants@.len()
                 && views::codes(operands.constants@[k].view()).contains(v)
                 ==> views::reconstruction::code_field(self.constants, Component(k as u8), v),
-        ensures junco_core::verify::history_specs::no_internal_error(result),
+        ensures junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(difference) ==> decision_ready(*self, NumericInput {
                 left: inclusion::denial(queries::stored_numeric(self.rules@[rule.0 as int])),
                 right: inclusion::firing_denials(views::ndomains(self.universes),
@@ -920,7 +920,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     #[verus_spec(result => requires views::analyzer_obligations::<E>(),
         analyzer_state_wf(*old(self)), query_capacity(*old(self), *left, *right),
         ensures analyzer_state_wf(*final(self)),
-            junco_core::verify::history_specs::no_internal_compile_error(result),
+            junco_core::verify::history_specs::no_invariant_compile_failure(result),
             result matches Ok(v) ==> verdict::tail_included_ok(final(self)@, head@, left@, right@, v@))]
     pub fn tail_included(
         &mut self,
@@ -1045,7 +1045,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             final(self).universes == old(self).universes,
             final(self).rules == old(self).rules,
             analyzer_state_wf(*old(self)) ==> analyzer_state_wf(*final(self)),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
             final(self).constants.values@.len() <= old(self).constants.values@.len() + source.head@.len() + source.tests@.len(),
             result matches Ok(target) ==> enc::lowering(*source, target, crate::verify::constant_book(final(self).constants), fl::component_equality::<E>())
                 && junco_core::flat::verify::structural_wf(target) && numeric_head_wf(target.head@),
@@ -1106,7 +1106,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     ) -> (result: Result<NumericDecision<E>, HistoryError>)
         requires decision_ready(*self, input, constraint, difference),
         ensures result matches Ok(v) ==> numeric_decision_ok(*self, input, constraint@, v),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
     {
         proof {
             assert(numeric::source_dag_wf(difference)) by { reveal(views::table::dag); }
@@ -1191,7 +1191,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             self.universes, *constraint, letters@, alphabets@),
         ensures result matches Ok(c) ==> crate::verify::reconstruction::reconstructed(self.constants,
             self.universes, *constraint, letters@, alphabets@, c),
-            junco_core::verify::history_specs::no_internal_error(result))]
+            junco_core::verify::history_specs::no_invariant_failure(result))]
     fn counterexample(
         &self,
         constraint: &Constraint,

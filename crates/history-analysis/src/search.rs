@@ -84,7 +84,7 @@ pub(crate) struct Refutation {
     paper_search::atoms_bounded(symbolic::regex_primitives(model::lift_regex(facade::graph(*old(language)),facade::root(*old(language)))),universes@.len()),
     ensures facade::primitives_search_safe(symbolic::regex_primitives(
             model::lift_regex(facade::graph(*old(language)),facade::root(*old(language)))))
-            ==> junco_core::verify::history_specs::no_internal_error(result),
+            ==> junco_core::verify::history_specs::no_invariant_failure(result),
         result matches Ok(outcome) ==> search_result(crate::verify::ndomains(*universes),
         paper_search::Item { constraint:implementation::constraint_of(constraint@),
             state:model::lift_regex(facade::graph(*old(language)),facade::root(*old(language))) },outcome_view(outcome))
@@ -183,7 +183,7 @@ impl Search<'_> {
     fn run(&mut self) -> (result: Result<SearchOutcome, HistoryError>)
         requires running(*old(self),0,old(self).start@,old(self).vocabulary@),search_obligations(),
         ensures facade::primitives_search_safe(symbolic::regex_primitives(old(self).start@.state))
-                ==> junco_core::verify::history_specs::no_internal_error(result),
+                ==> junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(outcome) ==> search_result(crate::verify::ndomains(*old(self).universes),old(self).start@,outcome_view(outcome))
             && refutation_ready(outcome,*old(self).universes,old(self).vocabulary@),
     {
@@ -272,7 +272,7 @@ impl Search<'_> {
             search_obligations(),index < old(self).items@.len(),
             !paper_search::nullable_state(trace(*old(self),index as nat).nodes[index as int].item.state),
         ensures facade::primitives_search_safe(symbolic::regex_primitives(old(self).start@.state))
-                ==> junco_core::verify::history_specs::no_internal_error(result),
+                ==> junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(_) ==> running(*final(self),index as nat+1,old(self).start@,old(self).vocabulary@)
             && final(self).start@ == old(self).start@ && final(self).vocabulary@ == old(self).vocabulary@
             && *final(self).universes == *old(self).universes,
@@ -557,7 +557,7 @@ impl Search<'_> {
         edges_wf(*old(self)),edge_ready(*old(self),constraint,parent),
         forall|j: int| 0 <= j < old(self).items@.len()
             ==> depth(old(self).items@,j) <= insertion_depth(old(self).items@,parent),
-        ensures junco_core::verify::history_specs::no_internal_error(result),
+        ensures junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(_) ==> state_wf(*final(self))
             && queue_order(*final(self))
             && edges_wf(*final(self))
@@ -791,7 +791,7 @@ impl Search<'_> {
     ensures facade::language_wf(*final(language)), facade::frame(*old(language), *final(language)),
         residual@ < facade::graph(*old(language)).regexes.len()
             && facade::residual_search_safe(*old(language),residual)
-            ==> junco_core::verify::history_specs::no_internal_error(result),
+            ==> junco_core::verify::history_specs::no_invariant_failure(result),
         result matches Ok((t, atoms)) ==> (forall|arity: nat|
             1 <= arity <= history_syntax::MAX_ARITY
                 && paper_search::atoms_bounded(facade::residual_primitives(*final(language),residual),arity)
@@ -883,7 +883,7 @@ fn derive_atoms(
 
 #[verus_verify]
 #[verus_spec(result => ensures result.is_ok() == atom_valid(primitive),
-    atom_valid(primitive) ==> junco_core::verify::history_specs::no_internal_error(result))]
+    atom_valid(primitive) ==> junco_core::verify::history_specs::no_invariant_failure(result))]
 fn validate_atom(primitive: Primitive) -> Result<(), HistoryError> {
     let Primitive::Eq { field, term } = primitive;
     match term {

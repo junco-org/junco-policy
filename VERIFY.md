@@ -187,8 +187,8 @@ All names are in `crates/history-semantics/src/verify/refinement/`.
    implementation may stop with `Exhausted` under a resource budget (the analyzer charges each
    search at most 16 MiB of graph), and the implementation may return an error (`Err`, e.g. on
    an id overflow). `*_correct`, `tail_included_ok`, and `outcome_ok` claim nothing about
-   `Exhausted`. Policy queries ensure `no_internal_error`; `tail_included` and `add_rule` ensure
-   `no_internal_compile_error`. Invalid-input and resource errors remain possible. The search's
+   `Exhausted`. Policy queries ensure `no_invariant_failure`; `tail_included` and `add_rule` ensure
+   `no_invariant_compile_failure`. Invalid-input and resource errors remain possible. The search's
    existing success contract is unchanged; its additional error guarantee is conditional on
    component-local primitives with constant codes fitting `u32`, proved for analyzer inputs.
 4. **Simulation rules.** The implemented syntactic simulation has more rules than the paper's

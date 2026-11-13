@@ -19,7 +19,7 @@ use history_syntax::{Event, Rule, RuleMode};
 use junco_core::limits::{Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{no_internal_compile_error, no_internal_error};
+use junco_core::verify::history_specs::{no_invariant_compile_failure, no_invariant_failure};
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
@@ -97,7 +97,7 @@ verus! {
 pub open(crate) spec fn policy_decision_result<E: Event, C>(before: CompiledPolicy<E, C>, after: CompiledPolicy<E, C>,
     history: History<E>, candidate: E, result: Result<PolicyDecision, HistoryError>) -> bool {
     verify::policy_wf(after) && verify::policy_frame(before, after)
-        && no_internal_error(result)
+        && no_invariant_failure(result)
         && ((result == Err(HistoryError::WrongHistoryOwner))
             == !books::same_store_owner(before.store, history_store::history::verify::store_of(history)))
         && match result {
@@ -255,7 +255,7 @@ pub mod verify {
             policy_store(after) == policy_store(before),
             policy_sources(after) == policy_sources(before),
             policy_diagnostic_ids(after) == policy_diagnostic_ids(before),
-            no_internal_error(result),
+            no_invariant_failure(result),
             (result == Err(HistoryError::WrongHistoryOwner))
                 == !books::same_store_owner(policy_store(before), history_store::history::verify::store_of(history)),
             match result {
@@ -325,7 +325,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     /// Keeps arbitrary conversions streaming; exact input facts require their conversion law.
     /// Native event laws exclude internal invariant failures while preserving resource errors.
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures books::native_obligations::<E>() ==> no_internal_compile_error(result),
+        ensures books::native_obligations::<E>() ==> no_invariant_compile_failure(result),
             result matches Ok(policy) ==> policy_wf(policy) && policy_store(policy) == store
             && policy_trace_empty(policy)
             && forall|items: Seq<PolicyRule<E, C>>|
@@ -367,7 +367,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     /// Compiles every source rule in order and preserves its paired diagnostic.
     #[verus_verify]
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures books::native_obligations::<E>() ==> no_internal_compile_error(result),
+        ensures books::native_obligations::<E>() ==> no_invariant_compile_failure(result),
             result matches Ok(policy) ==> policy_wf(policy) && policy_store(policy) == store
             && policy_sources(policy) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
             && policy_diagnostic_ids(policy) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
@@ -380,7 +380,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     #[verus_verify]
     #[cfg_attr(verus_keep_ghost, verifier::exec_allows_no_decreases_clause)]
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures books::native_obligations::<E>() ==> no_internal_compile_error(result),
+        ensures books::native_obligations::<E>() ==> no_invariant_compile_failure(result),
             result matches Ok(policy) ==> policy_wf(policy) && policy.store == store
             && policy.callback_trace@.calls == Seq::<DiagnosticCall<E>>::empty()
             && (iterator.obeys_prophetic_iter_laws() ==>
@@ -446,7 +446,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                 Err(error) =>
                 {
                     #[cfg_attr(verus_keep_ghost, verus_spec(invariant books::store_wf(*store),
-                        books::native_obligations::<E>() ==> no_internal_compile_error::<CompiledRule<E>>(Err(error))))]
+                        books::native_obligations::<E>() ==> no_invariant_compile_failure::<CompiledRule<E>>(Err(error))))]
                     loop {
                         match remaining.next() {
                             Some(pending) => {
@@ -497,7 +497,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         call_requires(context, ()),
         ensures policy_decision_result(*old(self), *final(self), *history, *probe, result),
             policy_context_result(*final(self), context, result),
-            no_internal_error(result))]
+            no_invariant_failure(result))]
     pub fn decide(
         &mut self,
         history: &History<E>,
@@ -518,7 +518,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         call_requires(context, ()),
         ensures policy_decision_result(*old(self), *final(self), *history, *probe, result),
             policy_context_result(*final(self), context, result),
-            no_internal_error(result))]
+            no_invariant_failure(result))]
     pub(super) fn decide_with_limits<L: Limits>(
         &mut self,
         history: &History<E>,
@@ -579,7 +579,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
 
     #[verus_verify]
     #[verus_spec(result => requires verify::policy_wf(*old(self)), history_store::history::verify::history_wf(*history),
-        ensures no_internal_error(result),
+        ensures no_invariant_failure(result),
             verify::policy_wf(*final(self)), verify::policy_frame(*old(self), *final(self)),
             final(self).callback_trace@ == old(self).callback_trace@,
             (result == Err(HistoryError::WrongHistoryOwner))

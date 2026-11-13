@@ -85,7 +85,7 @@ impl SymbolicLanguage {
     #[verus_verify]
     #[verus_spec(result => ensures
         numeric::source_dag_wf(*template) && compile_budget_valid(budget)
-            ==> language::no_internal_error(result),
+            ==> language::no_invariant_failure(result),
         result matches Ok(l) ==> language_wf(l)
         && finite_impl::regex_nf(model::lift_regex(graph(l), root(l)))
         && symbolic::regex_primitives(model::lift_regex(graph(l), root(l))).subset_of(numeric::source_primitives(*template))
@@ -121,7 +121,7 @@ impl SymbolicLanguage {
     #[verus_verify]
     #[verus_spec(result => requires language_wf(*old(self)),
         ensures *final(self) == *old(self),
-            residual@ < graph(*old(self)).regexes.len() ==> language::no_internal_error(result),
+            residual@ < graph(*old(self)).regexes.len() ==> language::no_invariant_failure(result),
             result matches Ok(value) ==> residual@ < graph(*final(self)).regexes.len()
                 && value == language::nullable(abs(*final(self), residual)))]
     pub fn nullable(&mut self, residual: RegexId) -> Result<bool, HistoryError> {
@@ -143,7 +143,7 @@ impl SymbolicLanguage {
             && view@ == graph(*old(self)).regexes[residual@ as int]
             ==> call_requires(read, (view,)),
         ensures *final(self) == *old(self),
-            residual@ < graph(*old(self)).regexes.len() ==> language::no_internal_error(result),
+            residual@ < graph(*old(self)).regexes.len() ==> language::no_invariant_failure(result),
             result matches Ok(value) ==> exists|view: RegexView<'_>|
                 residual@ < graph(*final(self)).regexes.len()
                 && view@ == graph(*final(self)).regexes[residual@ as int]
@@ -174,7 +174,7 @@ impl SymbolicLanguage {
         forall|view: TestView<'_>| test@ < graph(*old(self)).tests.len()
             && view@ == graph(*old(self)).tests[test@ as int] ==> call_requires(read, (view,)),
         ensures *final(self) == *old(self),
-            test@ < graph(*old(self)).tests.len() ==> language::no_internal_error(result),
+            test@ < graph(*old(self)).tests.len() ==> language::no_invariant_failure(result),
             result matches Ok(value) ==> exists|view: TestView<'_>|
                 test@ < graph(*final(self)).tests.len()
                 && view@ == graph(*final(self)).tests[test@ as int]
@@ -199,7 +199,7 @@ impl SymbolicLanguage {
     #[verus_verify]
     #[verus_spec(result => requires language_wf(*old(self)),
         ensures language_wf(*final(self)), frame(*old(self), *final(self)),
-            residual@ < graph(*old(self)).regexes.len() ==> language::no_internal_error(result),
+            residual@ < graph(*old(self)).regexes.len() ==> language::no_invariant_failure(result),
             forall|i: int| 0 <= i < derivatives(*old(self)).len() && derivatives(*old(self))[i] is Some
                 ==> i < derivatives(*final(self)).len() && derivatives(*final(self))[i] == derivatives(*old(self))[i],
             forall|t: TransitionId| has_atoms(*old(self), t) ==> has_atoms(*final(self), t)
@@ -316,7 +316,7 @@ impl SymbolicLanguage {
         ensures language_wf(*final(self)), frame(*old(self), *final(self)),
             has_atoms(*old(self), transition)
                 && symbolic::assignment_valid(atom_ids(*old(self), transition).len(), truth@)
-                ==> language::no_internal_error(result),
+                ==> language::no_invariant_failure(result),
             derivatives(*final(self)) == derivatives(*old(self)),
             forall|t: TransitionId| has_atoms(*old(self), t) ==> has_atoms(*final(self), t)
                 && atom_ids(*final(self), t) == atom_ids(*old(self), t),

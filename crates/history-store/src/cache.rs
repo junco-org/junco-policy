@@ -152,7 +152,7 @@ impl CursorCache {
     /// publishing cursors uses the reserved storage and has no fallible result.
     #[verus_spec(result => ensures
         result != Err(HistoryError::WrongHistoryOwner),
-        junco_core::verify::history_specs::no_internal_error(result),
+        junco_core::verify::history_specs::no_invariant_failure(result),
         result matches Err(error) ==> error is AllocationFailed || error is Limit,
         result matches Ok(cache) ==> cache@ == Seq::<HistoryCursor>::empty() && cursor_cache_wf(cache@))]
     pub fn new<L: Limits>(

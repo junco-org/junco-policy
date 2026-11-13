@@ -117,7 +117,7 @@ impl StoredHistory {
     #[verus_spec(result =>
         ensures verify::stored_append_result(*old(self), *final(self), events@, result),
             result != Err(HistoryError::WrongHistoryOwner),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
     )]
     pub(crate) fn append_events<L: Limits>(
         &mut self,
@@ -235,7 +235,7 @@ impl<E: TypedEvent> History<E> {
     #[verus_spec(result =>
         requires books::store_wf(*store),
         ensures result matches Ok(history) ==> history_wf(history) && empty_history(history, store),
-            junco_core::verify::history_specs::no_internal_error(result),
+            junco_core::verify::history_specs::no_invariant_failure(result),
     )]
     pub fn new(store: Arc<Store<E>>) -> Result<Self, HistoryError> {
         proof! { books::lemma_empty_snapshot(&*store); }
@@ -925,7 +925,7 @@ pub mod verify {
         before: History<E>, after: History<E>, event: E, result: Result<(), HistoryError>,
     ) -> bool {
         history_wf(after) && owner_frame(before, after)
-        && (books::native_obligations::<E>() ==> junco_core::verify::history_specs::no_internal_error(result))
+        && (books::native_obligations::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(result))
         && after.numeric.revision == before.numeric.revision
         && junco_core::verify::history_specs::history_mutation(before.numeric@, after.numeric@)
         && (books::native_obligations::<E>() ==> books::maps_extend::<E>(before.maps@, after.maps@))
@@ -995,7 +995,7 @@ pub mod verify {
         requires push_result(before, after, event, result),
         ensures history_wf(after), owner_frame(before, after), store_of(after) == store_of(before),
             after.spec_numeric().spec_revision() == before.spec_numeric().spec_revision(),
-            books::native_obligations::<E>() ==> junco_core::verify::history_specs::no_internal_error(result),
+            books::native_obligations::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(result),
             result is Err ==> state_frame(before, after),
             result is Ok ==> raw_events(after) == raw_events(before).push(event),
     {}

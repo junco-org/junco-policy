@@ -51,8 +51,8 @@ denial semantics. With target membership, counterexamples explicitly refute deci
 preservation and every admissible instance changes denial to permission. Without membership,
 the existing coverage semantics remain unchanged; no removal failure is claimed.
 
-All policy queries ensure `no_internal_error`. `tail_included` retains `tail_included_ok` and
-additionally ensures `no_internal_compile_error`; `add_rule` also excludes internal compile
+All policy queries ensure `no_invariant_failure`. `tail_included` retains `tail_included_ok` and
+additionally ensures `no_invariant_compile_failure`; `add_rule` also excludes internal compile
 errors. `Exhausted` carries no property claim. Resource and invalid-input errors remain explicit.
 Registration and tail encoding retain sufficient constant-id capacity preconditions;
 per-state product overflows use the rebased implementation's checked runtime errors.
