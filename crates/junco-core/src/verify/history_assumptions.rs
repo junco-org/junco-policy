@@ -212,8 +212,4 @@ pub trait KernelStoreSpec {
     spec fn restoration(&self) -> (Graph, bool);
 }
 
-// Moving an owned key out of an indexed vector does not clone or allocate.
-pub assume_specification<T>[ core::mem::replace ](destination: &mut T, replacement: T) -> (previous: T)
-    ensures previous == *old(destination), *final(destination) == replacement;
-
 } // verus!
