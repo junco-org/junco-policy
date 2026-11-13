@@ -1,10 +1,10 @@
 //! Structural scoping for owned-source lowering, and real-event language facts.
 
-use alloc::boxed::Box;
 use crate::spec::semantics::{lang, test_sem};
+use alloc::boxed::Box;
+use history_syntax::Component;
 use history_syntax::Event;
 use history_syntax::spec::events::{AtomView, HeadView, PatternView, RegexView, TestView};
-use history_syntax::Component;
 use vstd::prelude::*;
 
 verus! {

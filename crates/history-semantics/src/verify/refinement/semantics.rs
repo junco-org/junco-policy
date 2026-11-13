@@ -3,19 +3,19 @@
 //! Denotation, policy questions, and finite structural constants are canonical R2/R3
 //! definitions, privately imported here rather than exposed through compatibility paths.
 use alloc::boxed::Box;
-use history_syntax::{Event, Rule};
-use history_syntax::syntax::RuleMode;
 use history_syntax::spec::events::{
-    EventSpec, HeadView, PatternView, RegexView, TestView,
-    arity, event_view, projection_laws, surjectivity, well_tagged,
+    EventSpec, HeadView, PatternView, RegexView, TestView, arity, event_view, projection_laws,
+    surjectivity, well_tagged,
+};
+use history_syntax::syntax::RuleMode;
+use history_syntax::{Event, Rule};
+use junco_core::spec::questions::{
+    Domains, constants_union, covers, in_domains, lemma_constants_union,
+    lemma_regex_constants_index, lemma_test_constants_index, pattern_constant, refines,
+    regex_constants, rule_constants, test_constants,
 };
 use junco_core::spec::semantics::{
     head_matches, lang, policy_denies, rule_violated, rule_wf, test_sem,
-};
-use junco_core::spec::questions::{
-    Domains, covers, in_domains, refines, constants_union, lemma_constants_union,
-    lemma_regex_constants_index, lemma_test_constants_index, pattern_constant,
-    regex_constants, rule_constants, test_constants,
 };
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;

@@ -9,11 +9,11 @@ use crate::observation::ObservationWorld;
 use crate::scope::VariableScope;
 use crate::verify::dsl;
 use history_syntax::Event;
+use history_syntax::spec::events::{AtomView, HeadView, PatternView, RegexView, TestView};
 use history_syntax::spec::events::{EventSpec, arity};
 use history_syntax::syntax::{
     Component, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
-use history_syntax::spec::events::{AtomView, HeadView, PatternView, RegexView, TestView};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 

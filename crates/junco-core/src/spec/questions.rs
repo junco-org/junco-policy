@@ -1,12 +1,11 @@
 //! R3: policy questions and symbolic counterexamples interpreted as real events.
 //! Declared domains restrict both the candidate and every event in the history.
 
-use super::semantics::{head_matches, lang, policy_denies, rule_violated};
 use super::hypotheses::eq_equivalence;
+use super::semantics::{head_matches, lang, policy_denies, rule_violated};
 use core::fmt::Debug;
 use core::hash::Hash;
 use history_syntax::Event;
-use history_syntax::{RegexExpr, Rule, RuleMode};
 use history_syntax::event::Component3;
 use history_syntax::spec::equality::lemma_component3_equality;
 use history_syntax::spec::events::EventSpec;
@@ -14,6 +13,7 @@ use history_syntax::spec::events::{
     HeadView, PatternView, RegexView, RuleView, TestView, arity, event_view,
 };
 use history_syntax::spec::events::{surjectivity, well_tagged};
+use history_syntax::{RegexExpr, Rule, RuleMode};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 
