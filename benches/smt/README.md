@@ -4,8 +4,9 @@
 `history_analysis::PolicyAnalyzer::tail_included(head, left, right)` for each RegExLib Subset
 inclusion instance. These tails have no candidate variables, so an inhabited constant head
 preserves ordinary language inclusion. Criterion IDs are
-`regexlib_subset/{sat,unsat}/notsubset_i_j`; head, regex and analyzer construction and verdict
-preflight checks are outside the timed call. No memory measurement is performed.
+`regexlib_subset/{sat,unsat}/notsubset_i_j`. Construction and concrete validation of every
+returned counterexample are outside the timed intervals; query execution and result destruction
+are timed. No memory measurement is performed.
 
 ## Credits
 
@@ -50,10 +51,46 @@ the SMT query asks for a string in the left language but not the right language.
 
 The dataset's 29 distinct ranges partition all 256 bytes into 47 classes that no range splits.
 `ALPHABET` contains one representative byte per class and is declared as the entire action
-universe with `Domains::infinite().with_domain(Component(1), &ALPHABET.map(Component3::C1))`. No fresh action characters exist.
-Every character test is a union of whole classes, so inclusion over the representatives is
-identical to inclusion over the full 8-bit alphabet. The dataset has no complement,
+universe. The principal and resource coordinates both declare the singleton domain `{()}`.
+Every returned counterexample must contain only correctly tagged constants at all three
+declared coordinates, and every action must belong to `ALPHABET`. Its decoded candidate must
+match the head; the existing concrete regex matcher must accept its history on the left and
+reject it on the right. Matchers and a resettable history are reused outside the timed query.
+`Exhausted` is rejected rather than counted as non-inclusion.
+
+Every character test is a union of whole alphabet classes, so inclusion over the representatives
+is identical to inclusion over the full 8-bit alphabet. The dataset has no complement,
 intersection, `re.allchar`, or `re.all`; loop upper bounds are at most 67.
+
+## Concrete-witness validation and timing comparison
+
+The complete smoke run (`cargo bench --bench smt -- --test`) passes all 100 instances and
+validates 180 returned counterexamples. The measured run validated 84,234 counterexamples;
+none contained a fresh value at a declared coordinate. A separate unit-coordinate probe
+decoded `[a]` as a real witness of `a+ ⊄ ε` and reported no fresh unit coordinate.
+
+Local measurements on 2026-11-13 used Rust 1.98.1, Linux x86_64, Intel Xeon E7-8867 v4,
+50 flat samples, 500 ms warm-up and 2 s measurement targets per instance. Before used commit
+`bedc0c9` with only the action domain declared. After uses all three declared domains and
+checks every returned counterexample. The new per-iteration timer excludes concrete validation
+and includes query execution and result destruction; the original timer measured the aggregate
+query loop. Per-iteration clock overhead and validation-induced cache effects are not removed.
+These measurements are not a replacement for measurements on the paper's machine.
+
+Geometric means of Criterion's per-instance mean estimates, in microseconds:
+
+| Instances | Count | Before (µs) | After (µs) | Change |
+|---|---:|---:|---:|---:|
+| Non-inclusions (`sat`) | 90 | 3921.646 | 3934.784 | +0.34% |
+| Inclusions (`unsat`) | 10 | 888.158 | 813.993 | −8.35% |
+| All | 100 | 3380.419 | 3361.173 | −0.57% |
+
+[`counterexample-timings.csv`](counterexample-timings.csv) records every instance's before/after
+mean, median, mean confidence interval and percentage change in nanoseconds. No statistical
+attribution to the domain change is claimed. The named Criterion baselines were produced with
+`--save-baseline before-declared-units` on the old source and
+`--save-baseline after-declared-units` on the corrected source.
+
 
 ## Regenerate
 
