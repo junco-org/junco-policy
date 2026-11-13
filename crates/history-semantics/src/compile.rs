@@ -163,7 +163,8 @@ impl CompiledPair {
     }
     /// Build a fresh graph that may be charged `budget` bytes from immutable numeric source,
     /// including after exhaustion. The runtime passes [`junco_core::limits::MAX_GRAPH_BYTES`].
-    /// Only the runtime budget guarantees construction without internal layout errors.
+    /// Budgets that are multiples of 16, the runtime's included, guarantee construction without
+    /// internal layout errors.
     #[allow(
         clippy::shadow_unrelated,
         reason = "Separate lowering loops retain their proof-local index bindings"
@@ -173,6 +174,8 @@ impl CompiledPair {
         result != Err(HistoryError::WrongHistoryOwner),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
         flat::structural_wf(*template) && budget == junco_core::limits::MAX_GRAPH_BYTES
+            ==> language::no_internal_error(result),
+        flat::structural_wf(*template) && budget as int % 16 == 0
             ==> language::no_internal_error(result),
         result matches Ok(pair) ==> {
         crate::progress::verify::pair_wf(pair)

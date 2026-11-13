@@ -84,7 +84,9 @@ impl SymbolicLanguage {
         && symbolic::regex_primitives(model::lift_regex(graph(l), root(l))).subset_of(numeric::source_primitives(*template))
         && forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta)
             ==> model::regex_lang(graph(l), theta, root(l), word)
-                == numeric::source_regex(*template, template.root as nat, theta, word))]
+                == numeric::source_regex(*template, template.root as nat, theta, word),
+        junco_core::flat::verify::structural_wf(*template) && budget as int % 16 == 0
+            ==> language::no_internal_error(result))]
     pub fn compile(template: &FlatPair<u64>, budget: usize) -> Result<Self, HistoryError> {
         proof! { reveal(language_wf); reveal(graph); reveal(root); }
         let pair = CompiledPair::compile(template, budget, &mut Unmetered, &mut ObservationWorld)?;
@@ -115,7 +117,8 @@ impl SymbolicLanguage {
     #[verus_spec(result => requires language_wf(*old(self)),
         ensures *final(self) == *old(self),
             result matches Ok(value) ==> residual@ < graph(*final(self)).regexes.len()
-                && value == language::nullable(abs(*final(self), residual)))]
+                && value == language::nullable(abs(*final(self), residual)),
+            residual@ < graph(*old(self)).regexes.len() ==> language::no_internal_error(result))]
     pub fn nullable(&mut self, residual: RegexId) -> Result<bool, HistoryError> {
         self.read_regex(
             residual,
@@ -140,7 +143,8 @@ impl SymbolicLanguage {
                 && view@ == graph(*final(self)).regexes[residual@ as int]
                 && abs(*final(self), residual) == model::lift_regex_kind(graph(*final(self)), view@.kind)
                 && view.nullable == language::nullable(abs(*final(self), residual))
-                && call_ensures(read, (view,), value))]
+                && call_ensures(read, (view,), value),
+            residual@ < graph(*old(self)).regexes.len() ==> language::no_internal_error(result))]
     pub fn read_regex<R>(
         &mut self,
         residual: RegexId,
@@ -168,7 +172,8 @@ impl SymbolicLanguage {
             result matches Ok(value) ==> exists|view: TestView<'_>|
                 test@ < graph(*final(self)).tests.len()
                 && view@ == graph(*final(self)).tests[test@ as int]
-                && call_ensures(read, (view,), value))]
+                && call_ensures(read, (view,), value),
+            test@ < graph(*old(self)).tests.len() ==> language::no_internal_error(result))]
     pub fn read_test<R>(
         &mut self,
         test: TestId,
@@ -189,6 +194,7 @@ impl SymbolicLanguage {
     #[verus_verify]
     #[verus_spec(result => requires language_wf(*old(self)),
         ensures language_wf(*final(self)), frame(*old(self), *final(self)),
+            residual@ < graph(*old(self)).regexes.len() ==> language::no_internal_error(result),
             forall|i: int| 0 <= i < derivatives(*old(self)).len() && derivatives(*old(self))[i] is Some
                 ==> i < derivatives(*final(self)).len() && derivatives(*final(self))[i] == derivatives(*old(self))[i],
             forall|t: TransitionId| has_atoms(*old(self), t) ==> has_atoms(*final(self), t)
@@ -210,7 +216,7 @@ impl SymbolicLanguage {
         &mut self,
         residual: RegexId,
     ) -> Result<(TransitionId, Vec<Primitive>), HistoryError> {
-        proof! { reveal(language_wf); reveal(graph); reveal(root); reveal(has_atoms); reveal(atom_ids); reveal(derivatives); }
+        proof! { reveal(language_wf); reveal(graph); reveal(root); reveal(has_atoms); reveal(atom_ids); reveal(derivatives); self.pair.store.lemma_node_count_bounds(); }
         proof_decl! { let ghost entry = self.pair; }
         let (mut limits, mut world) = (Unmetered, ObservationWorld);
         let transition = {
@@ -267,6 +273,7 @@ impl SymbolicLanguage {
         ))]
         while index < ids.len() {
             let id = ids[index];
+            proof! { assert(kernel.graph().tests[ids@[index as int]@ as int] matches model::TestNode::Atom(_, true)); }
             match kernel.test(id)? {
                 TestView::Atom {
                     primitive,
@@ -296,6 +303,9 @@ impl SymbolicLanguage {
     #[verus_verify]
     #[verus_spec(result => requires language_wf(*old(self)),
         ensures language_wf(*final(self)), frame(*old(self), *final(self)),
+            has_atoms(*old(self), transition)
+                && symbolic::assignment_valid(atom_ids(*old(self), transition).len(), truth@)
+                ==> language::no_internal_error(result),
             derivatives(*final(self)) == derivatives(*old(self)),
             forall|t: TransitionId| has_atoms(*old(self), t) ==> has_atoms(*final(self), t)
                 && atom_ids(*final(self), t) == atom_ids(*old(self), t),
@@ -315,7 +325,7 @@ impl SymbolicLanguage {
         transition: TransitionId,
         truth: &[u64],
     ) -> Result<RegexId, HistoryError> {
-        proof! { reveal(language_wf); reveal(graph); reveal(root); reveal(has_atoms); reveal(atom_ids); reveal(successors); reveal(derivatives); }
+        proof! { reveal(language_wf); reveal(graph); reveal(root); reveal(has_atoms); reveal(atom_ids); reveal(successors); reveal(derivatives); lemma_language_wf(*self); }
         proof_decl! { let ghost entry = self.pair; }
         let (mut limits, mut world) = (Unmetered, ObservationWorld);
         {
@@ -468,9 +478,19 @@ pub mod verify {
     pub proof fn lemma_language_wf(l: SymbolicLanguage)
         requires language_wf(l),
         ensures model::graph_wf(graph(l)), root(l) < graph(l).regexes.len(),
+            graph(l).tests.len() + 64 <= usize::MAX,
+            graph(l).regexes.len() < usize::MAX,
+            graph(l).transitions.len() < usize::MAX,
             forall|t: TransitionId| has_atoms(l, t) ==> t@ < graph(l).transitions.len()
-                && reach::atoms_wf(graph(l), t@, atom_ids(l, t)),
-    {}
+                && reach::atoms_wf(graph(l), t@, atom_ids(l, t))
+                && atom_ids(l, t).len() <= graph(l).tests.len()
+                && atom_ids(l, t).len() + 63 <= usize::MAX,
+    {
+        l.pair.store.lemma_node_count_bounds();
+        assert forall|t: TransitionId| has_atoms(l, t) implies atom_ids(l, t).len() <= graph(l).tests.len() by {
+            reach::lemma_atom_count_bound(graph(l), atom_ids(l, t));
+        }
+    }
 
     proof fn lemma_test_holds_atoms(g: model::Graph, id: nat, theta: Subst, e1: EventView, e2: EventView)
         requires model::graph_wf(g), id < g.tests.len(),
