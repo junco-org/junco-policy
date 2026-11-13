@@ -9,8 +9,8 @@ use history_semantics::policy::rule::verify::diagnostic_output;
 use history_semantics::policy::trace::verify as trace;
 use history_semantics::policy::{CompiledPolicy, PolicyDecision, TracePolicy, TraceRule};
 use history_semantics::runtime::{RuleRuntime, verify as runtime};
-use history_semantics::validator::{Decision, Validator, verify as validator};
 use history_semantics::spec::monitor;
+use history_semantics::validator::{Decision, Validator, verify as validator};
 use history_store::history::{History, verify as history};
 use history_store::store::{HistoryStore, verify as records};
 use history_store::typed::{Store, share_store, verify as books};
@@ -21,8 +21,8 @@ use junco_core::event::Request;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex};
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
-use junco_core::verify::{dsl, history_specs};
 use junco_core::spec::semantics;
+use junco_core::verify::{dsl, history_specs};
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 use vstd::view::DeepView;
@@ -37,6 +37,7 @@ fn indexed_projection<E: Event>(event: E, index: usize) -> (result: (E::Componen
     let component = event.component(index);
     let coordinate = E::coordinate(component);
     proof {
+        assert(history_syntax::spec::events::well_tagged::<E>(event_view(event)));
         assert(E::coordinate_spec(event.component_spec(index as int)) == index);
     }
     (component, coordinate)

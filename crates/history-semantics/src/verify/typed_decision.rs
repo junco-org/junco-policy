@@ -13,6 +13,7 @@ use crate::policy::evaluate::{policy_storage_result, verify as policy};
 use crate::policy::rule::verify::{policy_rule_diagnostic, policy_rule_source};
 use crate::policy::{CompiledPolicy, PolicyDecision, PolicyRule};
 use crate::runtime::{RuleRuntime, verify as cache};
+use crate::spec::monitor;
 use crate::validator::{Decision, Validator, verify as validator};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -28,7 +29,6 @@ use junco_core::kernel::verify as graph;
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
 use junco_core::spec::semantics;
-use crate::spec::monitor;
 use vstd::prelude::*;
 use vstd::std_specs::iter::IteratorSpec;
 
@@ -80,7 +80,13 @@ pub(crate) fn shared_store_owner_decision_client<E: Event>(
         typed::lemma_constructed_decision(compiled, source, store, history);
         books::lemma_same_store_owner_identity(compiled.store, raw::store_of(history));
     }
+    let ghost before = compiled;
     let answer = compiled.accepts_history(&history, candidate);
+    proof { typed::lemma_decision_result_facts(before, compiled, history, *candidate, answer); }
+    proof {
+        typed::lemma_compiled_store_representation(before);
+        typed::lemma_compiled_store_representation(compiled);
+    }
     Ok((compiled, history, answer))
 }
 
@@ -113,7 +119,13 @@ pub(crate) fn independent_store_owner_decision_client<E: Event>(
         raw::lemma_empty_history(history, right);
         typed::lemma_constructed_decision(compiled, source, left, history);
     }
+    let ghost before = compiled;
     let answer = compiled.accepts_history(&history, candidate);
+    proof { typed::lemma_decision_result_facts(before, compiled, history, *candidate, answer); }
+    proof {
+        typed::lemma_compiled_store_representation(before);
+        typed::lemma_compiled_store_representation(compiled);
+    }
     Ok((compiled, history, answer))
 }
 
@@ -129,7 +141,10 @@ pub(crate) fn public_compiled_decision<E: Event>(
     let ghost source = rule;
     let mut compiled = CompiledRule::new(store, rule)?;
     proof { typed::lemma_constructed_decision(compiled, source, store, *history); }
-    let accepted = compiled.accepts_history(history, candidate)?;
+    let ghost before = compiled;
+    let answer = compiled.accepts_history(history, candidate);
+    proof { typed::lemma_decision_result_facts(before, compiled, *history, *candidate, answer); }
+    let accepted = answer?;
     Ok(accepted)
 }
 
@@ -148,23 +163,38 @@ pub(crate) fn retained_history_lifecycle<E: Event>(
     let mut compiled = CompiledRule::new(store, rule)?;
     proof { typed::lemma_constructed_decision(compiled, source, store, *history); }
     let checkpoint = history.checkpoint();
-    let _ = compiled.accepts_history(history, candidate)?;
+    let ghost before = compiled;
+    let answer = compiled.accepts_history(history, candidate);
+    proof { typed::lemma_decision_result_facts(before, compiled, *history, *candidate, answer); }
+    let _ = answer?;
     history.push(appended)?;
-    let _ = compiled.accepts_history(history, candidate)?;
+    proof { typed::lemma_decision_requires(compiled, *history); }
+    let ghost before = compiled;
+    let answer = compiled.accepts_history(history, candidate);
+    proof { typed::lemma_decision_result_facts(before, compiled, *history, *candidate, answer); }
+    let _ = answer?;
     history.rollback(checkpoint)?;
-    let _ = compiled.accepts_history(history, candidate)?;
+    proof { typed::lemma_decision_requires(compiled, *history); }
+    let ghost before = compiled;
+    let answer = compiled.accepts_history(history, candidate);
+    proof { typed::lemma_decision_result_facts(before, compiled, *history, *candidate, answer); }
+    let _ = answer?;
     history.push(replacement)?;
     history.truncate(truncate_to)?;
-    let _ = compiled.accepts_history(history, candidate)?;
+    proof { typed::lemma_decision_requires(compiled, *history); }
+    let ghost before = compiled;
+    let answer = compiled.accepts_history(history, candidate);
+    proof { typed::lemma_decision_result_facts(before, compiled, *history, *candidate, answer); }
+    let _ = answer?;
     let fork = history.try_clone()?;
-    proof { raw::lemma_clone_raw_word(*history, fork); }
-    let accepted = compiled.accepts_history(&fork, candidate)?;
     proof {
-        assert(raw::raw_word(*history) =~= raw::raw_events(*history).map(
-            |i: int, event: E| history_syntax::spec::events::event_view(event)));
-        assert(raw::raw_word(fork) =~= raw::raw_events(fork).map(
-            |i: int, event: E| history_syntax::spec::events::event_view(event)));
+        raw::lemma_clone_raw_word(*history, fork);
+        typed::lemma_decision_requires(compiled, fork);
     }
+    let ghost before = compiled;
+    let answer = compiled.accepts_history(&fork, candidate);
+    proof { typed::lemma_decision_result_facts(before, compiled, fork, *candidate, answer); }
+    let accepted = answer?;
     Ok(accepted)
 }
 
@@ -180,7 +210,10 @@ pub(crate) fn compiled_cached_decision<E: Event, L: Limits>(
         junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
             typed::dsl_result(crate::compiled_rule::source_rule(*old(compiled)), *history, *candidate, result),
 {
-    compiled.accepts_history_with_limits(history, candidate, limits, world)
+    let ghost before = *compiled;
+    let result = compiled.accepts_history_with_limits(history, candidate, limits, world);
+    proof { typed::lemma_decision_result_facts(before, *compiled, *history, *candidate, result); }
+    result
 }
 
 // These clients exercise construction and transactions, rather than assuming a verdict.
@@ -213,6 +246,7 @@ pub(crate) fn validator_from_rules_client<E: Event>(
 ) -> (result: Result<Validator<E>, CompileError>)
     requires books::store_wf(*store),
     ensures result matches Ok(state) ==> (state).wf()
+        && raw::history_wf(state.history) && state@.history == Seq::<E>::empty()
         && (state)@.rules == rules@
         && raw::empty_history((state).history, store),
 {
@@ -237,8 +271,10 @@ pub(crate) fn validator_from_rules_client<E: Event>(
         index += 1;
         proof { assert((builder)@ =~= original.take(index as int)); }
     }
+    let ghost finished_builder = builder;
     let state = builder.finish()?;
     proof { assert(original.take(original.len() as int) =~= original); }
+    proof { validator::lemma_finish_storage(finished_builder, state); }
     Ok(state)
 }
 
@@ -323,11 +359,7 @@ pub(crate) fn validator_require_all_and_forbid_empty_client<E: Event, M>(
             !semantics::rule_violated((state)@.rules[i], request.event, (state)@.history) by {}
     }
     let decision = validator_check_client(&mut state, request)?;
-    proof {
-        if decision is Grant {
-            raw::lemma_push_result((before).history, (state).history, request.event, Ok(()));
-        }
-    }
+    proof { validator::lemma_check_storage(before, state, request, Ok(decision)); }
     Ok((state, decision))
 }
 
@@ -350,11 +382,7 @@ pub(crate) fn validator_head_mismatch_client<E: Event, M>(
             !semantics::rule_violated((state)@.rules[i], request.event, (state)@.history) by {}
     }
     let decision = validator_check_client(&mut state, request)?;
-    proof {
-        if decision is Grant {
-            raw::lemma_push_result((before).history, (state).history, request.event, Ok(()));
-        }
-    }
+    proof { validator::lemma_check_storage(before, state, request, Ok(decision)); }
     Ok((state, decision))
 }
 
@@ -376,11 +404,7 @@ pub(crate) fn validator_empty_table_client<E: Event, M>(
             !semantics::rule_violated((state)@.rules[i], request.event, (state)@.history) by {}
     }
     let decision = validator_check_client(&mut state, request)?;
-    proof {
-        if decision is Grant {
-            raw::lemma_push_result((before).history, (state).history, request.event, Ok(()));
-        }
-    }
+    proof { validator::lemma_check_storage(before, state, request, Ok(decision)); }
     Ok((state, decision))
 }
 
@@ -401,10 +425,14 @@ pub(crate) fn compiled_policy_require_empty_then_forbid_all_client<E: Event, C, 
     let mut state = compiled_policy_from_vec_client(store, rules)?;
     let ghost before = state;
     proof {
+        policy::lemma_policy_wf(state);
+        policy::lemma_policy_trace_observations(state);
         assert(junco_core::spec::semantics::least_violation(crate::policy::evaluate::policy_sources(state), raw::raw_events(*history), *candidate, 0));
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
     proof {
+        policy::lemma_policy_decision_result_facts(before, state, *history, *candidate, Ok(decision));
+        policy::lemma_policy_trace_observations(state);
         if decision is Deny {
             let index = policy::policy_trace(state).calls.last().index;
             assert(index == 0) by {
@@ -432,10 +460,14 @@ pub(crate) fn compiled_policy_forbid_all_then_require_empty_client<E: Event, C, 
     let mut state = compiled_policy_from_vec_client(store, rules)?;
     let ghost before = state;
     proof {
+        policy::lemma_policy_wf(state);
+        policy::lemma_policy_trace_observations(state);
         assert(junco_core::spec::semantics::least_violation(crate::policy::evaluate::policy_sources(state), raw::raw_events(*history), *candidate, 0));
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
     proof {
+        policy::lemma_policy_decision_result_facts(before, state, *history, *candidate, Ok(decision));
+        policy::lemma_policy_trace_observations(state);
         if decision is Deny {
             let index = policy::policy_trace(state).calls.last().index;
             assert(index == 0) by {
@@ -458,11 +490,20 @@ pub(crate) fn compiled_policy_require_all_and_forbid_empty_client<E: Event, C, F
         && policy::policy_trace(state).context_calls == 0 && policy::policy_trace(state).diagnostic_calls == 0,
 {
     let mut state = compiled_policy_from_vec_client(store, rules)?;
+    let ghost before = state;
     proof {
+        policy::lemma_policy_wf(state);
+        policy::lemma_policy_trace_observations(state);
         assert forall|i: int| 0 <= i < crate::policy::evaluate::policy_sources(state).len() implies
             !semantics::rule_violated(crate::policy::evaluate::policy_sources(state)[i], *candidate, raw::raw_events(*history)) by {}
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
+    proof {
+        policy::lemma_policy_decision_result_facts(before, state, *history, *candidate, Ok(decision));
+        policy::lemma_policy_trace_observations(state);
+        assert(decision is Grant);
+        assert(policy::policy_trace(state).calls =~= Seq::empty());
+    }
     Ok((state, decision))
 }
 
@@ -478,11 +519,20 @@ pub(crate) fn compiled_policy_head_mismatch_client<E: Event, C, F: FnOnce() -> C
         && policy::policy_trace(state).context_calls == 0 && policy::policy_trace(state).diagnostic_calls == 0,
 {
     let mut state = compiled_policy_from_vec_client(store, rules)?;
+    let ghost before = state;
     proof {
+        policy::lemma_policy_wf(state);
+        policy::lemma_policy_trace_observations(state);
         assert forall|i: int| 0 <= i < crate::policy::evaluate::policy_sources(state).len() implies
             !semantics::rule_violated(crate::policy::evaluate::policy_sources(state)[i], *candidate, raw::raw_events(*history)) by {}
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
+    proof {
+        policy::lemma_policy_decision_result_facts(before, state, *history, *candidate, Ok(decision));
+        policy::lemma_policy_trace_observations(state);
+        assert(decision is Grant);
+        assert(policy::policy_trace(state).calls =~= Seq::empty());
+    }
     Ok((state, decision))
 }
 
@@ -498,11 +548,20 @@ pub(crate) fn compiled_policy_empty_table_client<E: Event, C, F: FnOnce() -> C>(
         && policy::policy_trace(state).context_calls == 0 && policy::policy_trace(state).diagnostic_calls == 0,
 {
     let mut state = compiled_policy_from_vec_client(store, rules)?;
+    let ghost before = state;
     proof {
+        policy::lemma_policy_wf(state);
+        policy::lemma_policy_trace_observations(state);
         assert forall|i: int| 0 <= i < crate::policy::evaluate::policy_sources(state).len() implies
             !semantics::rule_violated(crate::policy::evaluate::policy_sources(state)[i], *candidate, raw::raw_events(*history)) by {}
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
+    proof {
+        policy::lemma_policy_decision_result_facts(before, state, *history, *candidate, Ok(decision));
+        policy::lemma_policy_trace_observations(state);
+        assert(decision is Grant);
+        assert(policy::policy_trace(state).calls =~= Seq::empty());
+    }
     Ok((state, decision))
 }
 

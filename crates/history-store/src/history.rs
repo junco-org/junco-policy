@@ -1113,7 +1113,8 @@ pub mod verify {
 
     pub proof fn lemma_clone_raw_word<E: TypedEvent>(before: History<E>, after: History<E>)
         requires clone_result(before, after),
-        ensures raw_word(after) == raw_word(before), after.spec_id() != before.spec_id(),
+        ensures raw_word(after) == raw_word(before), raw_events(after) == raw_events(before),
+            after.spec_id() != before.spec_id(),
     {}
 
     pub(crate) proof fn lemma_foreign_store_checkpoint<E: TypedEvent, F: TypedEvent>(

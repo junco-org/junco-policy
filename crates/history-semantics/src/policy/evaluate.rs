@@ -11,9 +11,9 @@ use super::rule::verify::{diagnostic_output, policy_rule_diagnostic, policy_rule
 use super::rule::{NativeDiagnostic, PolicyRule};
 use crate::CompiledRule;
 #[cfg(verus_keep_ghost)]
-use crate::spec::monitor;
-#[cfg(verus_keep_ghost)]
 use crate::compiled_rule::verify as compiled;
+#[cfg(verus_keep_ghost)]
+use crate::spec::monitor;
 #[cfg(verus_keep_ghost)]
 use history_store::typed::verify as books;
 use history_store::{History, Store};
@@ -232,6 +232,11 @@ pub mod verify {
         ensures entry_sources(before) == entry_sources(after),
             entry_diagnostic_ids(before) == entry_diagnostic_ids(after),
     {
+        assert forall|i: int| 0 <= i < before.len() implies
+            crate::compiled_rule::source_rule(before[i].runtime)
+                == crate::compiled_rule::source_rule(after[i].runtime) by {
+            compiled::lemma_compiled_frame_facts(before[i].runtime, after[i].runtime);
+        }
         assert(entry_sources(before) =~= entry_sources(after));
     }
     pub(crate) open spec fn policy_trace<E: Event, C>(policy: CompiledPolicy<E, C>) -> DiagnosticTrace<E> { policy.callback_trace@ }
@@ -244,6 +249,21 @@ pub mod verify {
             policy_sources(policy).len() == policy_diagnostic_ids(policy).len(),
             policy_context_calls(policy) == policy_diagnostic_calls(policy),
             policy_trace_empty(policy) ==> policy_context_calls(policy) == 0 && policy_diagnostic_calls(policy) == 0,
+    {}
+
+    /// Connects the private invocation log to its public observations for native clients.
+    pub(crate) proof fn lemma_policy_trace_observations<E: Event, C>(policy: CompiledPolicy<E, C>)
+        requires policy_wf(policy),
+        ensures policy_trace(policy).context_calls == policy_context_calls(policy),
+            policy_trace(policy).diagnostic_calls == policy_diagnostic_calls(policy),
+            policy_trace(policy).calls.len() == policy_context_calls(policy),
+            policy_trace_empty(policy) <==> policy_trace(policy).calls == Seq::<DiagnosticCall<E>>::empty(),
+            policy_context_calls(policy) > 0 ==> {
+                let call = policy_trace(policy).calls.last();
+                call.index == policy_selected_index(policy)
+                    && call.source == policy_selected_source(policy)
+                    && call.diagnostic_id == policy_selected_diagnostic_id(policy)
+            },
     {}
 
     /// Eliminates ordered decisions while keeping compiled entries and callback logs private.
@@ -547,6 +567,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         proof_decl! { let ghost original_context = context; }
         let index = self.first_violation_with(history, probe, limits, world)?;
         proof! {
+            verify::lemma_policy_entries_frame_facts(entry.rules@, self.rules@);
             assert(policy_sources(*self) =~= policy_sources(entry));
             assert(policy_diagnostic_ids(*self) == policy_diagnostic_ids(entry));
         }
@@ -613,6 +634,12 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         world: &mut ObservationWorld,
     ) -> Result<Option<usize>, HistoryError> {
         proof_decl! { let ghost entry = *self; }
+        proof! {
+            assert forall|i: int| 0 <= i < self.rules@.len() implies
+                crate::compiled_rule::compiled_structure_frame(self.rules@[i].runtime, self.rules@[i].runtime) by {
+                compiled::lemma_compiled_frame_reflexive(self.rules@[i].runtime);
+            }
+        }
         if !CompiledRule::same_owner(&self.store, history.store()) {
             return Err(HistoryError::WrongHistoryOwner);
         }
@@ -620,6 +647,8 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
             index <= self.rules@.len(), policy_wf(*self), policy_frame(entry, *self),
             entry == *old(self),
+            policy_wf(entry), policy_sources(*self) == policy_sources(entry),
+            policy_diagnostic_ids(*self) == policy_diagnostic_ids(entry),
             self.callback_trace@ == entry.callback_trace@,
             history_store::history::verify::history_wf(*history),
             books::same_store_owner(entry.store, history_store::history::verify::store_of(*history)),
@@ -628,6 +657,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                     policy_sources(entry)[j], *probe, history_store::history::verify::raw_events(*history)),
             decreases self.rules@.len() - index))]
         while index < self.rules.len() {
+            proof! { compiled::lemma_decision_requires(self.rules@[index as int].runtime, *history); }
             proof_decl! { let ghost before = *self; }
             let rule = &mut self.rules[index];
             let answer = rule
@@ -635,6 +665,8 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                 .accepts_history_with_limits(history, probe, limits, world);
             let mode = rule.runtime.mode();
             proof! {
+                compiled::lemma_decision_result_facts(before.rules@[index as int].runtime,
+                    rule.runtime, *history, *probe, answer);
                 if junco_core::spec::hypotheses::monitor_hypotheses::<E>() {
                     crate::compiled_rule::verify::lemma_dsl_violation(rule.runtime, *history, *probe, answer, mode);
                 }
@@ -643,10 +675,19 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                     crate::compiled_rule::compiled_structure_frame(entry.rules@[j].runtime, self.rules@[j].runtime)
                         && self.rules@[j].diagnostic.id() == entry.rules@[j].diagnostic.id() by {
                     if j != index as int { assert(self.rules@[j] == before.rules@[j]); }
+                    else {
+                        compiled::lemma_compiled_frame_transitive(entry.rules@[j].runtime,
+                            before.rules@[j].runtime, self.rules@[j].runtime);
+                    }
                     assert(verify::entry_diagnostic_ids(before.rules@)[j] == verify::entry_diagnostic_ids(entry.rules@)[j]);
                 }
                 assert(verify::entry_diagnostic_ids(self.rules@) =~= verify::entry_diagnostic_ids(entry.rules@));
                 verify::lemma_policy_entries_frame_facts(entry.rules@, self.rules@);
+                assert forall|j: int| 0 <= j < self.rules@.len() implies
+                    crate::compiled_rule::compiled_wf(self.rules@[j].runtime)
+                        && crate::compiled_rule::compiled_store(self.rules@[j].runtime) == self.store by {
+                    compiled::lemma_compiled_frame_facts(entry.rules@[j].runtime, self.rules@[j].runtime);
+                }
                 assert(policy_wf(*self));
                 assert(policy_frame(entry, *self));
             }

@@ -159,6 +159,10 @@ pub mod verify {
         reveal(CompiledRule::mode_spec);
     }
 
+    pub(crate) proof fn lemma_compiled_store_representation<E: Event>(compiled: CompiledRule<E>)
+        ensures compiled_store(compiled) == compiled.store,
+    {}
+
     /// Successful construction publishes the exact source, store, and compiled readiness.
     pub proof fn lemma_constructed_facts<E: Event>(compiled: CompiledRule<E>, rule: Rule<E>, store: Arc<Store<E>>)
         requires constructed(compiled, rule, store),
@@ -247,6 +251,15 @@ pub mod verify {
         requires compiled_structure_frame(before, middle), compiled_structure_frame(middle, after),
         ensures compiled_structure_frame(before, after),
     {}
+
+    /// Reveals only the retained source, store, mode, and readiness of a native frame.
+    pub proof fn lemma_compiled_frame_facts<E: Event>(
+        before: CompiledRule<E>, after: CompiledRule<E>)
+        requires compiled_structure_frame(before, after),
+        ensures compiled_wf(after), source_rule(after) == source_rule(before),
+            compiled_store(after) == compiled_store(before),
+            after.mode_spec() == before.mode_spec(),
+    { reveal(CompiledRule::mode_spec); }
 
     pub(crate) proof fn lemma_compiled_table_reflexive<E: Event>(rules: Seq<CompiledRule<E>>, store: Arc<Store<E>>)
         requires compiled_table_wf(rules, store),

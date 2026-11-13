@@ -477,6 +477,8 @@ fn trace_policy_uses_the_same_store_without_mutating_external_history() {
         (event.principal.to_string(), vec![])
     });
     let cloned = rule.clone();
+    assert_eq!(cloned.rule, rule.rule);
+    assert!(Arc::ptr_eq(&cloned.diagnostic, &rule.diagnostic));
     assert!(format!("{cloned:?}").starts_with("TraceRule"));
     let mut policy = TracePolicy::new(store, [cloned]).unwrap();
     assert_eq!(

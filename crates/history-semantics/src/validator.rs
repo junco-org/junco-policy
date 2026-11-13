@@ -9,6 +9,8 @@ use crate::compiled_rule::CompiledRule;
 #[cfg(verus_keep_ghost)]
 use crate::compiled_rule::verify as compiled;
 #[cfg(verus_keep_ghost)]
+use crate::spec::monitor::{self, check_step, finish_spec, permits_spec, rollback_spec};
+#[cfg(verus_keep_ghost)]
 use history_store::history::verify as raw;
 use history_store::history::{Checkpoint, History};
 use history_store::typed::Store;
@@ -19,11 +21,9 @@ use junco_core::event::{Grant, Request};
 use junco_core::limits::{Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{no_internal_compile_error, no_invariant_failure};
-#[cfg(verus_keep_ghost)]
-use crate::spec::monitor::{self, check_step, finish_spec, permits_spec, rollback_spec};
-#[cfg(verus_keep_ghost)]
 use junco_core::spec::{hypotheses::monitor_hypotheses, semantics};
+#[cfg(verus_keep_ghost)]
+use junco_core::verify::history_specs::{no_internal_compile_error, no_invariant_failure};
 use vstd::prelude::*;
 
 /// Diagnostic returned when the first matching rule is violated.
@@ -73,7 +73,6 @@ impl<E: Event> ValidatorBuilder<E> {
         ensures result.wf(), result.store_spec() == store,
             result@ == Seq::<Rule<E>>::empty())]
     pub fn new(store: Arc<Store<E>>) -> Self {
-
         Self {
             store,
             rules: Vec::new(),
@@ -99,7 +98,6 @@ impl<E: Event> ValidatorBuilder<E> {
                 && mut_ref_future(borrow) == *final(self),
         })]
     pub fn add_rule(&mut self, source: Rule<E>) -> Result<&mut Self, CompileError> {
-
         proof_decl! { let ghost before = *self; let ghost supplied = source; }
         if ObservationWorld
             .try_reserve_vec(&mut self.rules, 1)
@@ -130,13 +128,18 @@ impl<E: Event> ValidatorBuilder<E> {
                 && finish_storage(self, validator))]
     pub fn finish(self) -> Result<Validator<E>, HistoryError> {
         proof! { self.lemma_wf(); }
+        proof_decl! { let ghost builder = self; }
         let history = History::new(self.store)?;
         proof! { raw::lemma_empty_history(history, self.store); }
         let validator = Validator {
             rules: self.rules,
             history,
         };
-        proof! { monitor::lemma_validator_representation(validator); }
+        proof! {
+            monitor::lemma_validator_representation(validator);
+            assert(validator@.rules == builder@);
+            monitor::lemma_validator_wf_intro(validator);
+        }
         Ok(validator)
     }
 }
@@ -196,6 +199,7 @@ impl<E: Event> Validator<E> {
                 }
             };
             proof! {
+                monitor::lemma_validator_representation(*self);
                 crate::compiled_rule::verify::lemma_compiled_sources_frame(entry.rules@, self.rules@);
                 crate::compiled_rule::verify::lemma_compiled_mode_frame(entry.rules@, self.rules@, index as int);
                 if monitor_hypotheses::<E>() {
@@ -218,10 +222,11 @@ impl<E: Event> Validator<E> {
         proof! {
             monitor::lemma_validator_representation(*self);
             history_store::history::verify::lemma_push_result(entry.history, self.history, request.event, appended);
+            raw::lemma_history_frame_facts(entry.history, self.history);
             if monitor_hypotheses::<E>() && appended is Ok {
                 monitor::lemma_trace_safe_append(entry@, request.event);
             }
-            assert(self.wf());
+            monitor::lemma_validator_wf_intro(*self);
             assert(storage_frame(entry, *self));
         }
         appended?;
@@ -233,6 +238,8 @@ impl<E: Event> Validator<E> {
 
     /// Evaluates without appending; retained residuals fold only newly committed events.
     /// Operational errors cannot be internal invariant failures.
+    /// Structural compiled readiness excludes invariant failures without native event laws;
+    /// those laws are needed only to identify this read-only answer with source semantics.
     #[verus_spec(result => requires old(self).wf(),
         ensures no_invariant_failure(result), final(self).wf(),
             storage_frame(*old(self), *final(self)),
@@ -279,6 +286,10 @@ impl<E: Event> Validator<E> {
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
             index <= self.rules@.len(), self.wf(), storage_frame(entry, *self),
+            entry.wf(), history_state_frame(entry, *self),
+            monitor::validator_frame(entry@, self@), self@.history == entry@.history,
+            entry@.rules == compiled::compiled_sources(entry.rules@),
+            entry@.history == raw::raw_events(entry.history),
             entry == *old(self), self.history == entry.history,
             monitor_hypotheses::<E>() ==>
                 forall|j: int| 0 <= j < index ==> !semantics::rule_violated(
@@ -310,7 +321,8 @@ impl<E: Event> Validator<E> {
                 }
                 compiled::lemma_compiled_table_frame_facts(entry.rules@, self.rules@, raw::store_of(entry.history));
                 monitor::lemma_validator_representation(*self);
-                assert(self.wf());
+                raw::lemma_history_frame_facts(self.history, self.history);
+                monitor::lemma_validator_wf_intro(*self);
                 assert(storage_frame(entry, *self));
             }
             let violated = match answer? {
@@ -324,6 +336,10 @@ impl<E: Event> Validator<E> {
                 return Ok(Some(index));
             }
             index += 1;
+        }
+        proof! {
+            monitor::lemma_validator_representation(entry);
+            monitor::lemma_validator_representation(*self);
         }
         Ok(None)
     }
@@ -358,16 +374,26 @@ impl<E: Event> Validator<E> {
         let result = self.history.rollback(checkpoint);
         proof! {
             history_store::history::verify::lemma_rollback_result(entry.history, self.history, checkpoint, result);
+            raw::lemma_history_frame_facts(entry.history, self.history);
+            if raw::checkpoint_owned(entry.history, checkpoint)
+                && raw::checkpoint_len(checkpoint) <= entry@.history.len() {
+                raw::lemma_truncate_result(entry.history, self.history, raw::checkpoint_len(checkpoint), result);
+            } else {
+                assert(result is Err);
+            }
+            assert(no_invariant_failure(result));
             compiled::lemma_compiled_table_reflexive(entry.rules@, raw::store_of(entry.history));
             compiled::lemma_compiled_sources_frame(entry.rules@, self.rules@);
             monitor::lemma_validator_representation(*self);
             let prefix = monitor::rollback_prefix(entry@.history, raw::checkpoint_len(checkpoint));
             if result is Ok {
+                assert(self@.history =~= prefix);
                 assert(prefix.is_prefix_of(entry@.history));
                 if monitor_hypotheses::<E>() { monitor::lemma_trace_safe_prefix(entry@, prefix); }
             }
-            assert(self.wf());
+            monitor::lemma_validator_wf_intro(*self);
             assert(storage_frame(entry, *self));
+            assert(rollback_spec(entry@, self@, prefix, result));
         }
         result
     }
@@ -475,7 +501,6 @@ pub closed spec fn rollback_storage<E: Event>(before: Validator<E>, after: Valid
 }
 }
 
-
 /// Storage-only facts are opaque; source decisions live exclusively in R5.
 #[cfg(verus_keep_ghost)]
 pub mod verify {
@@ -493,6 +518,17 @@ pub mod verify {
 
 
 
+    /// Native initialization facts for internal constructor clients.
+    pub(crate) proof fn lemma_finish_storage<E: Event>(builder: ValidatorBuilder<E>, state: Validator<E>)
+        requires state.wf(), finish_storage(builder, state),
+        ensures raw::history_wf(state.history),
+            raw::empty_history(state.history, builder.store_spec()),
+            state@.history == Seq::<E>::empty(),
+    {
+        monitor::lemma_validator_representation(state);
+        raw::lemma_empty_history(state.history, builder.store_spec());
+    }
+
     /// Public elimination of atomicity and diagnostics without exposing history storage.
     pub proof fn lemma_check_storage<E: Event, M>(before: Validator<E>, after: Validator<E>,
         request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>)
@@ -509,7 +545,7 @@ pub mod verify {
                 && after@.history == before@.history.push(request.event),
         },
     {
-        monitor::lemma_validator_representation(before); monitor::lemma_validator_representation(after);     
+        monitor::lemma_validator_representation(before); monitor::lemma_validator_representation(after);
         raw::lemma_history_frame_facts(before.history, after.history);
         if let Ok(Decision::Grant(_)) = result {
             raw::lemma_push_result(before.history, after.history, request.event, Ok(()));
@@ -521,7 +557,7 @@ pub mod verify {
         requires builder_error_frame(before, after),
         ensures after@ == before@, after.store_spec() == before.store_spec(),
     {
-           
+
     }
 
     /// Storage preservation exposes the semantic rule frame, but not compiled representations.
@@ -529,7 +565,7 @@ pub mod verify {
         requires storage_frame(before, after),
         ensures monitor::validator_frame(before@, after@),
     {
-        monitor::lemma_validator_representation(before); monitor::lemma_validator_representation(after);     
+        monitor::lemma_validator_representation(before); monitor::lemma_validator_representation(after);
         compiled::lemma_compiled_sources_frame(before.rules@, after.rules@);
     }
     }

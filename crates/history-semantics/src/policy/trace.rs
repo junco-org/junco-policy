@@ -8,12 +8,12 @@ use self::verify::*;
 use super::decision::PolicyDecision;
 use super::evaluate::CompiledPolicy;
 #[cfg(verus_keep_ghost)]
-use crate::spec::monitor;
-#[cfg(verus_keep_ghost)]
 use super::rule::verify::{
     diagnostic_identity, diagnostic_output, policy_rule_diagnostic, policy_rule_source,
 };
 use super::rule::{Diagnostic, PolicyRule, pack_policy_rule};
+#[cfg(verus_keep_ghost)]
+use crate::spec::monitor;
 use history_store::{History, Store};
 use history_syntax::{Event, Rule};
 #[cfg(verus_keep_ghost)]
@@ -108,12 +108,11 @@ pub closed spec fn trace_storage_result<E: Event>(
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before) + 1
                     && trace_selected_index(after) < trace_sources(before).len()
                     && trace_selected_diagnostic_id(after) == trace_diagnostic_ids(before)[trace_selected_index(after) as int]
-                    && diagnostic_output(super::evaluate::verify::policy_trace(after.compiled).calls.last().diagnostic_id,
+                    && diagnostic_output(trace_selected_diagnostic_id(after),
                         candidate, failed_precondition@, allowed_fixes.deep_view()),
         }
 }
 }
-
 
 #[cfg(verus_keep_ghost)]
 pub mod verify {
@@ -156,7 +155,7 @@ pub mod verify {
                     history_store::history::verify::raw_events(history), candidate,
                     trace_selected_index(after) as int, result),
             result matches Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) ==>
-                diagnostic_output(super::super::evaluate::verify::policy_trace(after.compiled).calls.last().diagnostic_id,
+                diagnostic_output(super::super::evaluate::policy_selected_diagnostic_id(after.compiled),
                     candidate, failed_precondition@, allowed_fixes.deep_view()),
         ensures trace_storage_result(before, after, history, candidate, result),
     {
@@ -318,6 +317,9 @@ impl<E: Event> TraceRule<E> {
 
 #[verus_verify]
 impl<E: Event> Clone for TraceRule<E> {
+    // Source preservation uses the existing derived-Clone contracts for Rule/Head/RegexExpr,
+    // including their component and owned-string clones. Callback identity follows Arc::clone.
+    // This inherited native leaf neither recompiles nor rewrites the source.
     #[verus_verify(external_body)]
     #[verus_spec(result => ensures trace_rule_source(result) == trace_rule_source(*self),
         trace_rule_diagnostic_id(result) == trace_rule_diagnostic_id(*self))]
@@ -382,6 +384,7 @@ impl<E: Event + 'static> TracePolicy<E> {
         }
         let compiled = CompiledPolicy::from_rules(store, mapped)?;
         proof! {
+            super::evaluate::verify::lemma_policy_wf(compiled);
             assert forall|items: Seq<TraceRule<E>>|
                 junco_core::verify::history_specs::into_iter_yields(input, items) implies
                     super::evaluate::policy_sources(compiled)
@@ -432,12 +435,13 @@ impl<E: Event + 'static> TracePolicy<E> {
         proof! { assert(call_requires(context, ())); }
         let result = self.compiled.decide(history, candidate, context);
         proof! {
+            super::evaluate::verify::lemma_policy_context_result_facts(self.compiled, actual_context, result);
             if let Ok(PolicyDecision::Deny { ref failed_precondition, ref allowed_fixes }) = result {
                 let value = choose|value: E| call_ensures(actual_context, (), value)
-                    && diagnostic_output(super::evaluate::verify::policy_trace(self.compiled).calls.last().diagnostic_id,
+                    && diagnostic_output(super::evaluate::policy_selected_diagnostic_id(self.compiled),
                         value, failed_precondition@, allowed_fixes.deep_view());
                 assert(value == *candidate);
-                assert(diagnostic_output(super::evaluate::verify::policy_trace(self.compiled).calls.last().diagnostic_id,
+                assert(diagnostic_output(super::evaluate::policy_selected_diagnostic_id(self.compiled),
                     *candidate, failed_precondition@, allowed_fixes.deep_view()));
             }
             lemma_trace_decision_result(before, *self, *history, *candidate, result);

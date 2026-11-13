@@ -1,8 +1,8 @@
 //! R5: the monitor's semantic state, atomic decisions, and committed-trace safety.
 //! Resource ownership, compiled caches, revisions, and stores remain behind Validator::wf.
 
-use crate::validator::{Decision, Validator};
 use crate::policy::PolicyDecision;
+use crate::validator::{Decision, Validator};
 use history_syntax::{Event, Rule};
 use junco_core::error::HistoryError;
 use junco_core::event::Request;
@@ -64,6 +64,16 @@ pub(crate) proof fn lemma_validator_representation<E: Event>(validator: Validato
             && (monitor_hypotheses::<E>() ==> trace_safe(validator@)
                 && forall|i: int| 0 <= i < validator@.rules.len()
                     ==> rule_wf(#[trigger] validator@.rules[i])),
+{}
+
+pub(crate) proof fn lemma_validator_wf_intro<E: Event>(validator: Validator<E>)
+    requires history_store::history::verify::history_wf(validator.history),
+        crate::compiled_rule::verify::compiled_table_wf(validator.rules@,
+            history_store::history::verify::store_of(validator.history)),
+        monitor_hypotheses::<E>() ==> trace_safe(validator@),
+        monitor_hypotheses::<E>() ==> forall|i: int| 0 <= i < validator@.rules.len()
+            ==> rule_wf(#[trigger] validator@.rules[i]),
+    ensures validator.wf(),
 {}
 
 /// Ordered selection shared by the monitor and both read-only policy facades.
