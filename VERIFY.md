@@ -71,8 +71,9 @@ with `at_least_as_strict` (`theorem_vacuity_corollaries`). If `at_least_as_stric
 `Holds`, a monitor for `q` permits every request inside the domains that a monitor for `p`
 grants (`theorem_analyzer_to_monitor`).
 
-**The paper's theorems.** `crates/history-semantics/src/verify/paper.rs` maps each result of the
-paper to its mechanized statement and proof; `theorem_paper_index` proves all of them. The
+**The paper's theorems.** `crates/history-semantics/src/verify/paper.rs` maps each result of
+Sections 4 and 5 to its mechanized statement and proof, and `theorem_paper_index` proves them; the
+analyzer's guarantees above are proved in `history-analysis`. The
 executable code is verified against these statements: the derivative (`derivative_correct`) and
 history fold (`residual_folds`) of the monitor, and the analyzer's search (`Search::run` ensures
 `search_result`, which states Theorem `thm:search` for every answer other than `Exhausted`).
@@ -87,8 +88,8 @@ history fold (`residual_folds`) of the monitor, and the analyzer's search (`Sear
   of the root crate and the benchmarks implement `Event` by hand in unverified code, so these
   laws are assumed for them.
 - **Hashing.** `hash_coherent` (hashing respects equality) is an uninterpreted hypothesis. Five
-  axioms state it for the analyzer's internal key types; the successor cache's trusted contract
-  assumes it for its key type.
+  axioms state it for the analyzer's internal key types. The successor cache's trusted contract
+  separately assumes that the derived hashing of its key type agrees with its equality.
 - **Declared domains.** Analyzer results hold for requests and histories inside the declared
   domains; the monitor does not check membership. A declared domain must be nonempty.
 - **Capacity.** Creating an analyzer, adding a rule and `tail_included` require that the
