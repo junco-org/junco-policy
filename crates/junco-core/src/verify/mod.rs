@@ -1,3 +1,4 @@
+pub mod capacity;
 pub mod dsl;
 pub mod encoding;
 pub mod flatten;

@@ -7,12 +7,13 @@
 use crate::analyzer::{Constants, PolicyAnalyzer};
 use crate::verify::{self as views, frontend::*};
 use history_semantics::compile_verify as numeric;
-use history_semantics::verify::refinement::{analyzer, encoding, implementation, semantics};
+use history_semantics::verify::refinement::{encoding, implementation};
 use history_syntax::event::specs::EventSpec;
 use history_syntax::spec::events::arity;
 use history_syntax::{Component, Event, Rule};
 use junco_core::flat::verify as portable;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatRule, FlatTerm, FlatTest};
+use junco_core::spec::questions;
 use junco_core::spec::semantics as tdsl;
 use junco_core::verify::history_specs::{self as language, EventView, Subst};
 use junco_core::verify::{encoding as enc, flatten as fl};
@@ -687,7 +688,7 @@ proof fn lemma_domain_coordinate<E: Event>(a: PolicyAnalyzer<E>, coding: NatCodi
     requires analyzer_state_wf(a), views::analyzer_obligations::<E>(),
         fixes_book::<E>(a.constants, coding), covered_event::<E>(coding, event),
         0 <= k < event.len(),
-    ensures semantics::in_domain(a@.domains[k], event[k]) == match views::domain_view(a.universes[k]) {
+    ensures questions::in_domain(a@.domains[k], event[k]) == match views::domain_view(a.universes[k]) {
         None => true, Some(ids) => ids.contains(numeric_event::<E>(coding, event)[k]),
     },
 {
@@ -700,8 +701,9 @@ proof fn lemma_domain_coordinate<E: Event>(a: PolicyAnalyzer<E>, coding: NatCodi
         views::lemma_codes((*raw)@);
         let selected = (*raw)@.to_set().map(|id: u32| c.values@[id as int - 1]);
         let domain = selected;
-        assert(a@.domains[k] == Some(domain));
-        if semantics::in_domain(a@.domains[k], event[k]) {
+        assert(selected_values(c, a.universes[k]) == Some(domain));
+        assert(questions::in_domain(a@.domains[k], event[k]) == questions::in_domain(Some(domain), event[k]));
+        if questions::in_domain(Some(domain), event[k]) {
             let rep = choose|rep: E::Component| domain.contains(rep) && event[k].eq_spec(&rep);
             let id = choose|id: u32| (*raw)@.to_set().contains(id) && c.values@[id as int - 1] == rep;
             let j = choose|j: int| 0 <= j < (*raw)@.len() && (*raw)@[j] == id;
@@ -730,7 +732,7 @@ proof fn lemma_domain_coordinate<E: Event>(a: PolicyAnalyzer<E>, coding: NatCodi
 
 pub(crate) proof fn lemma_domain_event<E: Event>(a: PolicyAnalyzer<E>, coding: NatCoding<E>, event: Seq<E::Component>)
     requires analyzer_state_wf(a), views::analyzer_obligations::<E>(), fixes_book::<E>(a.constants, coding), covered_event::<E>(coding, event),
-    ensures semantics::event_in(a@.domains, event)
+    ensures questions::event_in(a@.domains, event)
         == encoding::n_event_in(views::ndomains(a.universes), numeric_event::<E>(coding, event)),
 {
     let domains = a@.domains;
@@ -742,28 +744,28 @@ pub(crate) proof fn lemma_domain_event<E: Event>(a: PolicyAnalyzer<E>, coding: N
     assert(1 <= event.len() <= history_syntax::MAX_ARITY);
     assert forall|k: int| #![trigger domains[k]] #![trigger numeric_domains[k]]
         0 <= k < event.len() implies
-        semantics::in_domain(domains[k], event[k]) == match numeric_domains[k] {
+        questions::in_domain(domains[k], event[k]) == match numeric_domains[k] {
             None => true, Some(ids) => ids.contains(n[k]),
         } by {
         assert(numeric_domains[k] == views::domain_view(a.universes[k]));
         lemma_domain_coordinate::<E>(a, coding, event, k);
     }
-    if semantics::event_in(domains, event) {
+    if questions::event_in(domains, event) {
         assert forall|k: int| #![trigger numeric_domains[k]] 0 <= k < numeric_domains.len() implies
             (numeric_domains[k] matches Some(values) ==> values.contains(n[k])) by {
-            assert(semantics::in_domain(domains[k], event[k]));
+            assert(questions::in_domain(domains[k], event[k]));
         }
         assert(encoding::n_event_in(numeric_domains, n));
     }
     if encoding::n_event_in(numeric_domains, n) {
         assert forall|k: int| #![trigger domains[k]] 0 <= k < domains.len() implies
-            semantics::in_domain(domains[k], event[k]) by {
+            questions::in_domain(domains[k], event[k]) by {
             match numeric_domains[k] {
                 None => {},
                 Some(values) => { assert(values.contains(n[k])); },
             }
         }
-        assert(semantics::event_in(domains, event));
+        assert(questions::event_in(domains, event));
     }
 }
 
@@ -771,7 +773,7 @@ pub(crate) proof fn lemma_analyzer_domain_embedding<E: Event>(a: PolicyAnalyzer<
     requires analyzer_state_wf(a), views::analyzer_obligations::<E>(), fixes_book::<E>(a.constants, coding),
         covered_event::<E>(coding, candidate), language::event_wf(numeric_event::<E>(coding, candidate), arity::<E>()),
         forall|i: int| 0 <= i < history.len() ==> covered_event::<E>(coding, history[i]),
-        semantics::event_in(a@.domains, candidate), semantics::history_in(a@.domains, history),
+        questions::event_in(a@.domains, candidate), questions::history_in(a@.domains, history),
     ensures encoding::n_theta_ok(views::ndomains(a.universes), numeric_event::<E>(coding, candidate)),
         encoding::n_history_in(views::ndomains(a.universes), numeric_history::<E>(coding, history)),
 {
@@ -854,11 +856,11 @@ proof fn lemma_fresh_numbers(slots: Seq<implementation::SlotView>)
 
 
 proof fn lemma_fresh_admissible<E: Event>(a: PolicyAnalyzer<E>, candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>,
-    f: analyzer::FreshChoice<E::Component>, k: int)
-    requires constants_wf(a.constants), views::analyzer_obligations::<E>(), 0 <= k < arity::<E>(),
+    f: questions::FreshChoice<E::Component>, k: int)
+    requires constants_wf(a.constants), views::analyzer_obligations::<E>(), stored_known(a), 0 <= k < arity::<E>(),
         views::reconstruction::slot_wf(a.constants, candidate),
         forall|i: int| 0 <= i < history.len() ==> views::reconstruction::slot_wf(a.constants, history[i]),
-        analyzer::admissible(a@, views::reconstruction::cex_of_slots(a.constants, candidate, history), f),
+        questions::admissible::<E>(a@.domains, a@.known, views::reconstruction::cex_of_slots(a.constants, candidate, history), f),
     ensures coding_wf(known_seed::<E>(a.constants, k) + fresh_numbers(field_slots(candidate, history, k)).map(
         |i: int, n: nat| (f[k](n), numeric_fresh::<E>(a.constants)(n))), native_eq::<E>()),
 {
@@ -885,35 +887,39 @@ proof fn lemma_fresh_admissible<E: Event>(a: PolicyAnalyzer<E>, candidate: Seq<i
         lemma_field_book(c, field);
         lemma_field_entry_source::<E>(c.values@, field, j);
         let rep = known_seed::<E>(c, k)[j].0;
-        assert(c.values@.to_set().contains(rep));
+        let p = choose|p: int| 0 <= p < c.values@.len() && field_entries::<E>(c.values@, field)[j] == (c.values@[p], (p + 1) as u64);
+        assert(rep == c.values@[p]);
         assert(E::coordinate_spec(rep) == k);
-        vstd::set::lemma_set_filter(c.values@.to_set(), |v: E::Component| E::coordinate_spec(v) == k, rep);
-        assert(a@.known[k].contains(rep));
+        let w = choose|w: E::Component| #[trigger] a@.known[k].contains(w) && rep.eq_spec(&w);
+        assert(!f[k](numbers[i]).eq_spec(&w));
+        assert(!f[k](numbers[i]).eq_spec(&rep)) by {
+            if f[k](numbers[i]).eq_spec(&rep) { assert(f[k](numbers[i]).eq_spec(&w)); }
+        }
     }
     assert forall|i: int, j: int| #![trigger numbers[i], numbers[j]]
         0 <= i < numbers.len() && 0 <= j < numbers.len() && numbers[i] != numbers[j]
         implies !native_eq::<E>()(f[k](numbers[i]), f[k](numbers[j])) by {
-        assert(analyzer::choice_ok(f[k], analyzer::fresh_used(
-            views::reconstruction::cex_of_slots(c, candidate, history), k), a@.known[k], a@.domains[k]));
+        assert(questions::choice_ok::<E>(f[k], questions::fresh_used(
+            views::reconstruction::cex_of_slots(c, candidate, history), k), a@.known[k], a@.domains[k], k));
     }
     lemma_fresh_coding(known_seed::<E>(c, k), numbers, native_eq::<E>(), f[k], c.values@.len());
 }
 
 proof fn lemma_slot_event<E: Event>(c: Constants<E>, coding: NatCoding<E>, slots: Seq<implementation::SlotView>,
-    f: analyzer::FreshChoice<E::Component>, candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>)
+    f: questions::FreshChoice<E::Component>, candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>)
     requires constants_wf(c), views::analyzer_obligations::<E>(), fixes_book::<E>(c, coding), views::reconstruction::slot_wf(c, slots),
         f.len() == slots.len(),
         forall|k: int| #![trigger slots[k]] 0 <= k < arity::<E>() ==> (slots[k] matches implementation::SlotView::Fresh(n)
             ==> fresh_numbers(field_slots(candidate, history, k)).contains(n)),
         forall|k: int| #![trigger coding[k]] 0 <= k < arity::<E>() ==> coding[k] == known_seed::<E>(c, k)
             + fresh_numbers(field_slots(candidate, history, k)).map(|i: int, n: nat| (f[k](n), numeric_fresh::<E>(c)(n))),
-    ensures covered_event::<E>(coding, analyzer::event_of(views::reconstruction::components_of_slots(c, slots), f)),
-        numeric_event::<E>(coding, analyzer::event_of(views::reconstruction::components_of_slots(c, slots), f))
+    ensures covered_event::<E>(coding, questions::event_of(views::reconstruction::components_of_slots(c, slots), f)),
+        numeric_event::<E>(coding, questions::event_of(views::reconstruction::components_of_slots(c, slots), f))
             == implementation::slots_event(slots, numeric_fresh::<E>(c)),
 {
     lemma_constants_maps(c);
     lemma_native_equivalence::<E>();
-    let event = analyzer::event_of(views::reconstruction::components_of_slots(c, slots), f);
+    let event = questions::event_of(views::reconstruction::components_of_slots(c, slots), f);
     assert forall|k: int| #![trigger coding[k]] 0 <= k < arity::<E>() implies has_code(coding[k], native_eq::<E>(), event[k])
         && language::field_value(numeric_event::<E>(coding, event), enc::field_at(k)) == implementation::slot_value(slots[k], numeric_fresh::<E>(c)) by {
         lemma_numeric_field::<E>(coding, event, enc::field_at(k));
@@ -939,18 +945,18 @@ proof fn lemma_slot_event<E: Event>(c: Constants<E>, coding: NatCoding<E>, slots
 }
 
 pub(crate) proof fn lemma_slot_embedding<E: Event>(a: PolicyAnalyzer<E>, candidate: Seq<implementation::SlotView>, history: Seq<Seq<implementation::SlotView>>,
-    f: analyzer::FreshChoice<E::Component>) -> (coding: NatCoding<E>)
-    requires constants_wf(a.constants), views::analyzer_obligations::<E>(), views::reconstruction::slot_wf(a.constants, candidate),
+    f: questions::FreshChoice<E::Component>) -> (coding: NatCoding<E>)
+    requires constants_wf(a.constants), views::analyzer_obligations::<E>(), stored_known(a), views::reconstruction::slot_wf(a.constants, candidate),
         forall|i: int| 0 <= i < history.len() ==> views::reconstruction::slot_wf(a.constants, history[i]),
         forall|k: int| #![trigger candidate[k]] 0 <= k < arity::<E>() ==> (candidate[k] matches implementation::SlotView::Fresh(n) ==> n < arity::<E>()),
-        analyzer::admissible(a@, views::reconstruction::cex_of_slots(a.constants, candidate, history), f),
+        questions::admissible::<E>(a@.domains, a@.known, views::reconstruction::cex_of_slots(a.constants, candidate, history), f),
     ensures fixes_book::<E>(a.constants, coding),
-        covered_event::<E>(coding, analyzer::event_of(views::reconstruction::cex_of_slots(a.constants, candidate, history).candidate, f)),
-        numeric_event::<E>(coding, analyzer::event_of(views::reconstruction::cex_of_slots(a.constants, candidate, history).candidate, f))
+        covered_event::<E>(coding, questions::event_of(views::reconstruction::cex_of_slots(a.constants, candidate, history).candidate, f)),
+        numeric_event::<E>(coding, questions::event_of(views::reconstruction::cex_of_slots(a.constants, candidate, history).candidate, f))
             == implementation::slots_event(candidate, numeric_fresh::<E>(a.constants)),
         language::event_wf(implementation::slots_event(candidate, numeric_fresh::<E>(a.constants)), arity::<E>()),
-        forall|i: int| 0 <= i < history.len() ==> covered_event::<E>(coding, analyzer::history_of(views::reconstruction::cex_of_slots(a.constants, candidate, history), f)[i]),
-        numeric_history::<E>(coding, analyzer::history_of(views::reconstruction::cex_of_slots(a.constants, candidate, history), f))
+        forall|i: int| 0 <= i < history.len() ==> covered_event::<E>(coding, questions::history_of(views::reconstruction::cex_of_slots(a.constants, candidate, history), f)[i]),
+        numeric_history::<E>(coding, questions::history_of(views::reconstruction::cex_of_slots(a.constants, candidate, history), f))
             == history.map(|i: int, slots: Seq<implementation::SlotView>| implementation::slots_event(slots, numeric_fresh::<E>(a.constants))),
         implementation::fresh_codes_ok(numeric_fresh::<E>(a.constants), views::reconstruction::known_codes(a.constants)),
 {
@@ -982,12 +988,12 @@ pub(crate) proof fn lemma_slot_embedding<E: Event>(a: PolicyAnalyzer<E>, candida
         }
     }
     lemma_slot_event::<E>(c, result, candidate, f, candidate, history);
-    assert forall|i: int| 0 <= i < history.len() implies covered_event::<E>(result, analyzer::history_of(views::reconstruction::cex_of_slots(c, candidate, history), f)[i])
-        && numeric_event::<E>(result, analyzer::history_of(views::reconstruction::cex_of_slots(c, candidate, history), f)[i])
+    assert forall|i: int| 0 <= i < history.len() implies covered_event::<E>(result, questions::history_of(views::reconstruction::cex_of_slots(c, candidate, history), f)[i])
+        && numeric_event::<E>(result, questions::history_of(views::reconstruction::cex_of_slots(c, candidate, history), f)[i])
             == implementation::slots_event(history[i], numeric_fresh::<E>(c)) by {
         lemma_slot_event::<E>(c, result, history[i], f, candidate, history);
     }
-    assert(numeric_history::<E>(result, analyzer::history_of(views::reconstruction::cex_of_slots(c, candidate, history), f))
+    assert(numeric_history::<E>(result, questions::history_of(views::reconstruction::cex_of_slots(c, candidate, history), f))
         =~= history.map(|i: int, slots: Seq<implementation::SlotView>| implementation::slots_event(slots, numeric_fresh::<E>(c))));
     assert forall|k: int| 0 <= k < arity::<E>() implies implementation::slot_value(candidate[k], numeric_fresh::<E>(c)) <= u64::MAX by {
         match candidate[k] { implementation::SlotView::Fresh(n) => {}, implementation::SlotView::Code(v) => {} }
@@ -1009,7 +1015,7 @@ pub(crate) proof fn lemma_source_failure<E: Event>(left: Rule<E>, right: Rule<E>
         constants_wf(c), views::analyzer_obligations::<E>(), fixes_book::<E>(c, coding), covered_event::<E>(coding, candidate),
         candidate.len() == left.head@.len(),
         forall|i: int| 0 <= i < history.len() ==> covered_event::<E>(coding, history[i]),
-    ensures analyzer::tail_fails(left.head@, left.tail@, right.tail@)(candidate, history) == (
+    ensures (tdsl::head_matches(left.head@, candidate) && tdsl::lang(left.tail@, left.head@, candidate, history) && !tdsl::lang(right.tail@, left.head@, candidate, history)) == (
         encoding::n_head_matches(template_head(left_template), numeric_event::<E>(coding, candidate))
         && numeric::source_regex(left_template, left_template.root as nat, numeric_event::<E>(coding, candidate), numeric_history::<E>(coding, history))
         && !numeric::source_regex(right_template, right_template.root as nat, numeric_event::<E>(coding, candidate), numeric_history::<E>(coding, history))),

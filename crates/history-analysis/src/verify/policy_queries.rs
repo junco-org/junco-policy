@@ -6,12 +6,13 @@ use super::{
 };
 use crate::analyzer::{Inclusion, NumericDecision, PolicyAnalyzer, RuleId, StoredRule};
 use crate::constraint::{Constraint, Letter};
-use history_semantics::verify::refinement::{
-    analyzer, encoding, implementation, inclusion, search, semantics,
-};
+use crate::spec::analyzer::{counterexample_spec, rules_of, uncovered};
+use history_semantics::verify::refinement::{encoding, implementation, inclusion, search};
+use history_syntax::spec::events::arity;
 use history_syntax::{Event, Rule};
 use junco_core::flat::{FlatPair, FlatRule};
 use junco_core::kernel::verify as model;
+use junco_core::spec::questions::{capacity_for, cex_arity, cex_has_instance, covers};
 use junco_core::verify::history_specs::{EventView, Subst};
 use vstd::prelude::*;
 
@@ -139,7 +140,7 @@ pub(crate) proof fn lemma_stored_policy<E: Event>(a: PolicyAnalyzer<E>, ids: Seq
     ensures bridge::policy_bridge_wf(a.constants, originals(a, ids, exclude), flats(a, ids, exclude),
             templates(a, ids, exclude), numeric_policy(a, ids, exclude)),
         bridge::rule_views(originals(a, ids, exclude))
-            == analyzer::rules_of(a@, selected_rule_ids(ids, exclude)),
+            == rules_of(a@, selected_rule_ids(ids, exclude)),
         forall|i: int| 0 <= i < numeric_policy(a, ids, exclude).len()
             ==> #[trigger] numeric_policy(a, ids, exclude)[i].head.len() == views::ndomains(a.universes).len(),
 {
@@ -153,7 +154,7 @@ pub(crate) proof fn lemma_stored_policy<E: Event>(a: PolicyAnalyzer<E>, ids: Seq
         implies numeric_policy(a, ids, exclude)[i].head.len() == views::ndomains(a.universes).len() by {
         lemma_stored_rule(a, selected_ids(ids, exclude)[i]);
     }
-    assert(bridge::rule_views(originals(a, ids, exclude)) =~= analyzer::rules_of(a@, selected_rule_ids(ids, exclude)));
+    assert(bridge::rule_views(originals(a, ids, exclude)) =~= rules_of(a@, selected_rule_ids(ids, exclude)));
 }
 
 pub(crate) proof fn lemma_covered_holds<E: Event>(a: PolicyAnalyzer<E>, rule: RuleId,
@@ -162,7 +163,7 @@ pub(crate) proof fn lemma_covered_holds<E: Event>(a: PolicyAnalyzer<E>, rule: Ru
         rule.0 < a.rules@.len(), valid_ids(a, ids),
         inclusion::n_covers(views::ndomains(a.universes), numeric_policy(a, ids, exclude),
             stored_numeric(a.rules@[rule.0 as int])),
-    ensures analyzer::covered_correct(a@, rule@, selected_rule_ids(ids, exclude), analyzer::InclusionView::Holds),
+    ensures covers::<E>(a@.domains, rules_of(a@, selected_rule_ids(ids, exclude)), a@.rules[rule@ as int]),
 {
     lemma_stored_rule(a, rule);
     lemma_stored_policy(a, ids, exclude);
@@ -172,7 +173,9 @@ pub(crate) proof fn lemma_covered_holds<E: Event>(a: PolicyAnalyzer<E>, rule: Ru
 }
 
 /// One case's Holds answer establishes inclusion only; the caller accumulates these facts over
-/// the split. Refuted and Exhausted answers already establish the final query correctness.
+/// the split. A refuted case has the arity and a real instance under capacity (wave 1);
+/// `lemma_covered_decision_full` adds A1/A2 under `stored_known`, and minimality (A6) is
+/// `policy_minimality::lemma_covered_decision_minimal`'s.
 pub(crate) proof fn lemma_covered_decision<E: Event>(a: PolicyAnalyzer<E>, rule: RuleId,
     ids: Seq<RuleId>, exclude: Option<RuleId>, input: verdict::NumericInput,
     g: implementation::ConstraintView, decision: NumericDecision<E>)
@@ -189,12 +192,8 @@ pub(crate) proof fn lemma_covered_decision<E: Event>(a: PolicyAnalyzer<E>, rule:
     ensures
         decision.inclusion is Holds ==> inclusion::included_under(views::ndomains(a.universes),
             implementation::constraint_of(g), input.left, input.right),
-        !(decision.inclusion is Holds) ==> analyzer::covered_correct(a@, rule@,
-            selected_rule_ids(ids, exclude), decision.inclusion@),
-        decision.inclusion matches Inclusion::Counterexample(c) ==> (
-            analyzer::unrestricted_components_infinite(a@.domains) ==> (
-                analyzer::cex_has_instance(a@, c@)
-                && !semantics::covers(a@.domains, analyzer::rules_of(a@, selected_rule_ids(ids, exclude)), a@.rules[rule@ as int]))),
+        decision.inclusion matches Inclusion::Counterexample(c) ==> cex_arity(c@, arity::<E>())
+            && (capacity_for::<E>(a@.domains, a@.known, c@) ==> cex_has_instance::<E>(a@.domains, a@.known, c@)),
 {
     lemma_stored_rule(a, rule);
     lemma_stored_policy(a, ids, exclude);
@@ -202,22 +201,52 @@ pub(crate) proof fn lemma_covered_decision<E: Event>(a: PolicyAnalyzer<E>, rule:
     let by = numeric_policy(a, ids, exclude);
     let d = views::ndomains(a.universes);
     inclusion::lemma_policy_case_outcome(d, by, stored_numeric(left), implementation::constraint_of(g), decision.outcome@);
-    match decision.inclusion {
-        Inclusion::Holds => {},
-        Inclusion::Exhausted => {},
-        Inclusion::Counterexample(c) => {
-            let (refutation, letters, alphabets) = choose|refutation: Constraint, letters: Seq<Letter>,
-                alphabets: Seq<Set<model::Primitive>>|
-                decision.outcome@ == search::Outcome::Refuted(implementation::constraint_of(refutation@),
-                    exec::chain_assignments(letters, alphabets))
-                && slots::reconstructed(a.constants, a.universes, refutation, letters, alphabets, c);
-            bridge::lemma_policy_counterexample(a, left.original@, left.flat@, left.numeric, stored_numeric(left),
-                originals(a, ids, exclude), flats(a, ids, exclude), templates(a, ids, exclude), by,
-                refutation, letters, alphabets, c);
-            if analyzer::cex_has_instance(a@, c@) {
-                bridge::lemma_not_covers(a@, bridge::rule_views(originals(a, ids, exclude)), encoding::rule_view(left.original@), c@);
-            }
-        },
+    if let Inclusion::Counterexample(c) = decision.inclusion {
+        let (refutation, letters, alphabets) = choose|refutation: Constraint, letters: Seq<Letter>,
+            alphabets: Seq<Set<model::Primitive>>|
+            decision.outcome@ == search::Outcome::Refuted(implementation::constraint_of(refutation@),
+                exec::chain_assignments(letters, alphabets))
+            && slots::reconstructed(a.constants, a.universes, refutation, letters, alphabets, c);
+        bridge::lemma_reconstructed_has_instance(a, refutation, letters, alphabets, c);
+    }
+}
+
+/// A1/A2 for a refuted case: every real instance is uncovered, and an instance refutes coverage
+/// (needs every interned constant known, `stored_known`).
+pub(crate) proof fn lemma_covered_decision_full<E: Event>(a: PolicyAnalyzer<E>, rule: RuleId,
+    ids: Seq<RuleId>, exclude: Option<RuleId>, input: verdict::NumericInput,
+    g: implementation::ConstraintView, decision: NumericDecision<E>)
+    requires analyzer_state_wf(a), views::analyzer_obligations::<E>(), stored_known(a),
+        rule.0 < a.rules@.len(), valid_ids(a, ids),
+        input.left == inclusion::denial(stored_numeric(a.rules@[rule.0 as int])),
+        input.right == inclusion::firing_denials(views::ndomains(a.universes), numeric_policy(a, ids, exclude),
+            implementation::constraint_of(g)),
+        inclusion::entails(views::ndomains(a.universes), implementation::constraint_of(g),
+            inclusion::head_constraint(stored_numeric(a.rules@[rule.0 as int]).head)),
+        forall|pair: (history_syntax::Component, nat)| inclusion::head_pairs(numeric_policy(a, ids, exclude)).contains(pair)
+            ==> #[trigger] inclusion::decides(views::ndomains(a.universes), implementation::constraint_of(g), pair.0, pair.1),
+        verdict::numeric_decision_ok(a, input, g, decision),
+    ensures
+        decision.inclusion matches Inclusion::Counterexample(c) ==> (
+            counterexample_spec::<E>(a@, c@, uncovered::<E>(rules_of(a@, selected_rule_ids(ids, exclude)), a@.rules[rule@ as int]))
+            && (cex_has_instance::<E>(a@.domains, a@.known, c@)
+                ==> !covers::<E>(a@.domains, rules_of(a@, selected_rule_ids(ids, exclude)), a@.rules[rule@ as int]))),
+{
+    lemma_stored_rule(a, rule);
+    lemma_stored_policy(a, ids, exclude);
+    let left = a.rules@[rule.0 as int];
+    let by = numeric_policy(a, ids, exclude);
+    let d = views::ndomains(a.universes);
+    inclusion::lemma_policy_case_outcome(d, by, stored_numeric(left), implementation::constraint_of(g), decision.outcome@);
+    if let Inclusion::Counterexample(c) = decision.inclusion {
+        let (refutation, letters, alphabets) = choose|refutation: Constraint, letters: Seq<Letter>,
+            alphabets: Seq<Set<model::Primitive>>|
+            decision.outcome@ == search::Outcome::Refuted(implementation::constraint_of(refutation@),
+                exec::chain_assignments(letters, alphabets))
+            && slots::reconstructed(a.constants, a.universes, refutation, letters, alphabets, c);
+        bridge::lemma_policy_counterexample(a, left.original@, left.flat@, left.numeric, stored_numeric(left),
+            originals(a, ids, exclude), flats(a, ids, exclude), templates(a, ids, exclude), by,
+            refutation, letters, alphabets, c);
     }
 }
 }

@@ -13,7 +13,7 @@ use crate::compile::verify as numeric;
 use history_syntax::Event;
 use history_syntax::spec::events::RuleView;
 use history_syntax::syntax::{Component, Rule, RuleMode};
-use junco_core::spec::semantics::violated_by;
+use junco_core::spec::semantics::{rule_violated_view, violated_by};
 
 use junco_core::flat::verify as portable;
 use junco_core::flat::{FlatHead, FlatPair, FlatRule};
@@ -156,7 +156,7 @@ pub open spec fn stmt_front_end_denies<E: Event>() -> bool {
             && enc::event_encoded(later, fl::component_equality::<E>(), domain, candidate, request)
             && enc::word_encoded(later, fl::component_equality::<E>(), domain, history, word)
             && enc::event_representation(request, theta) && enc::word_representation(word, w)
-            ==> (rule_denies(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w))
+            ==> (rule_violated_view(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w))
 }
 
 // ----- fresh values -----
@@ -399,7 +399,7 @@ pub proof fn lemma_front_end_denies<E: Event>(
         enc::event_encoded(later, fl::component_equality::<E>(), domain, candidate, request),
         enc::word_encoded(later, fl::component_equality::<E>(), domain, history, word),
         enc::event_representation(request, theta), enc::word_representation(word, w),
-    ensures rule_denies(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w),
+    ensures rule_violated_view(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w),
 {
     enc::lemma_dsl_later_maps_preservation::<E>(rule, flat, template, maps, later, domain,
         candidate, history, request, word);
@@ -461,7 +461,7 @@ pub proof fn theorem_front_end_denies<E: Event>()
             && enc::event_encoded(later, fl::component_equality::<E>(), domain, candidate, request)
             && enc::word_encoded(later, fl::component_equality::<E>(), domain, history, word)
             && enc::event_representation(request, theta) && enc::word_representation(word, w)
-        implies (rule_denies(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w)) by {
+        implies (rule_violated_view(rule_view(rule), candidate, history) == n_rule_denies(n, theta, w)) by {
         lemma_front_end_denies::<E>(rule, flat, template, maps, later, domain, n, candidate, history,
             request, word, theta, w);
     }

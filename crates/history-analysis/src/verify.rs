@@ -8,6 +8,7 @@ pub(crate) mod policy_firing;
 pub(crate) mod policy_minimality;
 pub(crate) mod policy_operands;
 pub(crate) mod policy_queries;
+pub(crate) mod policy_removal;
 pub(crate) mod policy_source;
 pub(crate) mod prune_exec;
 pub(crate) mod reconstruction;
@@ -2544,7 +2545,7 @@ pub(crate) mod frontend {
     use crate::spec::analyzer::{AnalyzerView, declared_sets, known_count};
     use history_syntax::spec::events::RuleView;
     use junco_core::flat::{FlatHead, FlatPair};
-    use junco_core::spec::questions::in_domain;
+    use junco_core::spec::questions::{DomainsView, in_domain};
     use junco_core::verify::{encoding as enc, flatten as fl};
     use vstd::std_specs::cmp::PartialEqSpec;
 
@@ -3102,21 +3103,52 @@ pub(crate) mod frontend {
         }
 
         impl<E: Event> View for Domains<E> {
-            type V = semantics::DomainsView<E::Component>;
+            type V = DomainsView<E::Component>;
             open(crate) spec fn view(&self) -> Self::V {
                 self.components@.map_values(|values: Option<Vec<E::Component>>| match values { None => None, Some(vs) => Some(vs@.to_set()) })
             }
         }
 
-        impl<E: Event> View for PolicyAnalyzer<E> {
-            type V = analyzer::AnalyzerView<E::Component>;
-            open(crate) spec fn view(&self) -> Self::V {
-                analyzer::AnalyzerView {
-                    domains: self.universes@.map_values(|u: Universe| selected_values(self.constants, u)),
-                    rules: self.rules@.map_values(|r: StoredRule<E>| encoding::rule_view(r.original@)),
-                    known: Seq::new(arity::<E>(), |i: int| component_of::<E>(self.constants.values@.to_set(), i)),
-                }
+        /// The reviewer's view of an analyzer (R6 `AnalyzerView`): the ghost declared domains and
+        /// known constants (set by the contracts), and the rule views by index.
+        pub open(crate) spec fn analyzer_view<E: Event>(a: PolicyAnalyzer<E>) -> AnalyzerView<E::Component> {
+            AnalyzerView {
+                domains: a.declared@,
+                rules: a.rules@.map_values(|r: StoredRule<E>| encoding::rule_view(r.original@)),
+                known: a.known@,
             }
+        }
+
+        impl<E: Event> View for PolicyAnalyzer<E> {
+            type V = AnalyzerView<E::Component>;
+            open(crate) spec fn view(&self) -> Self::V { analyzer_view(*self) }
+        }
+
+        /// What the bridge proofs read of the view: arity-many domains and books, and declared
+        /// domains that agree with the stored universes up to `eq_spec`.
+        pub(crate) open spec fn view_links<E: Event>(a: PolicyAnalyzer<E>) -> bool {
+            &&& a@.domains.len() == arity::<E>() && a@.known.len() == arity::<E>()
+            &&& forall|k: int, x: E::Component| 0 <= k < arity::<E>()
+                ==> #[trigger] in_domain(a@.domains[k], x) == in_domain(selected_values(a.constants, a.universes[k]), x)
+        }
+
+        /// Every interned constant is known at its coordinate up to `eq_spec`. The counterexample
+        /// bridges (`every_instance`, `minimal_in_case`, the refutation clauses) take it as a
+        /// hypothesis; Track F establishes it from `known`'s contracts (wave 2).
+        pub(crate) open spec fn stored_known<E: Event>(a: PolicyAnalyzer<E>) -> bool {
+            forall|k: int, j: int| #![trigger a@.known[k], a.constants.values@[j]]
+                0 <= k < arity::<E>() && 0 <= j < a.constants.values@.len() && E::coordinate_spec(a.constants.values@[j]) == k
+                ==> exists|w: E::Component| #[trigger] a@.known[k].contains(w) && a.constants.values@[j].eq_spec(&w)
+        }
+
+        /// Interning constants keeps the view links: the ghost fields and the universes are unchanged.
+        pub(crate) proof fn lemma_view_links_frame<E: Event>(before: PolicyAnalyzer<E>, after: PolicyAnalyzer<E>)
+            requires view_links(before),
+                constants_frame(before.constants, after.constants), universes_wf(before.constants, before.universes),
+                after.universes == before.universes, after.declared == before.declared, after.known == before.known,
+            ensures view_links(after),
+        {
+            lemma_universes_frame(before.constants, after.constants, before.universes);
         }
 
         pub(crate) open spec fn universes_wf<E: Event>(c: Constants<E>, us: Universes) -> bool {
@@ -3145,16 +3177,12 @@ pub(crate) mod frontend {
             }
         }
 
-        /// R6's view of the analyzer: the declared domains, the stored rules' views, and the
-        /// contract-tracked constants.
-        pub open(crate) spec fn analyzer_view<E: Event>(a: PolicyAnalyzer<E>) -> AnalyzerView<E::Component> {
-            AnalyzerView {
-                domains: a.declared@,
-                rules: a.rules@.map_values(|r: StoredRule<E>| encoding::rule_view(r.original@)),
-                known: a.known@,
-            }
+        /// `domains_linked` gives the bridge proofs' `view_links` (the view reads the same ghost fields).
+        pub(crate) proof fn lemma_view_links<E: Event>(a: PolicyAnalyzer<E>)
+            requires domains_linked(a),
+            ensures view_links(a),
+        {
         }
-
         pub(crate) proof fn lemma_declared_frame<E: Event>(a: Constants<E>, b: Constants<E>, u: Universe, vs: Option<Vec<E::Component>>)
             requires constants_frame(a, b), declared_universe(a, u, vs),
             ensures declared_universe(b, u, vs),
@@ -3327,6 +3355,7 @@ pub(crate) mod frontend {
         }
             }
         }
+
 
 
         }
