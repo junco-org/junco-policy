@@ -16,7 +16,7 @@ use history_syntax::event::specs::EventSpec;
 use history_syntax::spec::events::{
     HeadView, RegexView, TestView, arity, event_view, projection_laws,
 };
-use history_syntax::{Component, Event, Head, RegexExpr, Rule, RuleMode};
+use history_syntax::{Component, Event, Head, MAX_ARITY, RegexExpr, Rule, RuleMode};
 use junco_core::event::Request;
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
@@ -313,6 +313,8 @@ fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: R
         match answer {
             Ok(Decision::Grant(_)) => {
                 if !universal {
+                    assert(before@.rules[0] == source@);
+                    assert(dsl::rule_violated(before@.rules[0], request.event, before@.history));
                     assert(dsl::policy_denies(before@.rules, request.event, before@.history));
                 }
                 assert(state@.history =~= seq![request.event]);
