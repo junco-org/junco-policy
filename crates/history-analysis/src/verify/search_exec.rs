@@ -25,6 +25,16 @@ pub(crate) open spec fn search_obligations() -> bool {
         && crate::verify::prune_exec::parts_key_obligations()
 }
 
+/// Every internal hash key of the search satisfies `key_laws` (equality is structural; the hash
+/// model is the key axioms).
+pub(crate) proof fn lemma_search_obligations()
+    ensures search_obligations(),
+{
+    broadcast use crate::verify::key_axioms::group_internal_key_axioms;
+    crate::verify::simulation_exec::lemma_memo_obligations();
+    crate::verify::prune_exec::lemma_parts_key_obligations();
+}
+
 pub(crate) open spec fn truth_bits(atoms: Seq<Atom>, letter: Letter, words: Seq<u64>) -> bool {
     words.len() == (atoms.len() + 63) / 64
         && forall|i: int| 0 <= i < atoms.len() ==> symbolic::truth_word_bit(words, i as nat)

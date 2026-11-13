@@ -27,6 +27,13 @@ pub open spec fn parts_key_obligations() -> bool {
             #[trigger] a.eq_spec(&b) ==> a.view() == b.view()
 }
 
+/// `SmallVec` keys: equality is view equality by `axiom_regex_id_smallvec_key_model`.
+pub(crate) proof fn lemma_parts_key_obligations()
+    ensures parts_key_obligations(),
+{
+    broadcast use crate::verify::key_axioms::group_internal_key_axioms;
+}
+
 pub(crate) open spec fn valid(g: model::Graph, ids: Seq<RegexId>) -> bool {
     forall|i: int| 0 <= i < ids.len() ==> ids[i]@ < g.regexes.len()
 }
