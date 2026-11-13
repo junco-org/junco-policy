@@ -41,6 +41,9 @@ import from them. The flow is strictly downward: R1 → R2 → R3/R4 → R5/R6 �
 - A monitor denial carries `Denial::index`, the zero-based source-order index of its first
   violated rule. `check_step` states `least_violation` at this exact index and gives its mode;
   `stmt_monitor_check`, `stmt_matcher` and the public executable clients expose the same clause.
+- `stmt_search_correct` requires `trace_steps_ok`: complete successor cases for expanded
+  trace nodes only. This is the premise `lemma_trace_query_ok` discharges for the executable;
+  `stmt_thm_search` and `theorem_paper_index` use this same non-global search statement.
 
 ## Reading order for a reviewer
 
