@@ -1877,9 +1877,10 @@ pub(crate) proof fn implemented_steps_ok(g: Constraint, atoms: Seq<Atom>, univer
                 && groups[i].1@[j]@.classes.len() == universes@.len();
     lemma_operand_atoms(operands, atoms); lemma_split_views_ok(g, operands, universes, atoms);
     lemma_steps_are_paper_steps(g, atoms, universes, groups, state, next);
-    search::theorem_successor_cases_finite_domains();
     let splits = constraint_views(group_constraints(groups)).map(|v: implementation::ConstraintView| implementation::constraint_of(v));
     let item = search::Item { constraint: implementation::constraint_of(g@), state };
+    search::lemma_successor_cases_common(ndomains(universes), item, atom_set(atoms),
+        search::domain_pairs(ndomains(universes), atom_set(atoms)), splits, next);
     let paper = search::paper_steps(ndomains(universes), item, atom_set(atoms), splits, next);
     assert(paper.finite());
     broadcast use vstd::set::lemma_set_new_from_iset;
