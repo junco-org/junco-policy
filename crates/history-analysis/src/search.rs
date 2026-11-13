@@ -75,7 +75,7 @@ pub(crate) struct Refutation {
 /// excluded when the initial language's primitives use representable constant IDs and compare
 /// variables only with their own coordinate; the same property is preserved for queued residuals.
 #[verus_verify]
-#[verus_spec(result => requires facade::language_wf(*old(language)),search_obligations(),
+#[verus_spec(result => requires facade::language_wf(*old(language)),
     crate::verify::constraint_wf(constraint),
     history_semantics::verify::refinement::inclusion::satisfiable(crate::verify::ndomains(*universes),implementation::constraint_of(constraint@)),
     history_semantics::verify::finite_impl::regex_nf(model::lift_regex(facade::graph(*old(language)),facade::root(*old(language)))),
@@ -101,6 +101,7 @@ pub(crate) fn search(
             state:model::lift_regex(facade::graph(*language),facade::root(*language)) };
         let ghost vocabulary = root_vocabulary(*language,*universes,constraint@);
     }
+    proof! { crate::verify::search_exec::lemma_search_obligations(); }
     let mut search = Search {
         language,
         universes,

@@ -115,6 +115,7 @@ proof fn lemma_star_test_lang<C: PartialEq>(
 
 /// A setter followed by a stable suffix; the setter need not be unique or disjoint from stable.
 /// The empty word cannot match because the setter consumes exactly one event.
+#[verifier::spinoff_prover]
 pub proof fn lemma_last_state_change_lang<C: PartialEq>(
     setter: TestView<C>, stable: TestView<C>, head: HeadView<C>,
     candidate: Seq<C>, word: Seq<Seq<C>>,

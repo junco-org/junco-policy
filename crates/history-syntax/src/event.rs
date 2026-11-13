@@ -248,6 +248,7 @@ where
 #[cfg(verus_keep_ghost)]
 pub mod specs {
     use super::*;
+    use vstd::std_specs::cmp::{PartialEqSpec, PartialEqSpecImpl};
     verus! {
 
     #[verifier::external_trait_specification]
@@ -335,12 +336,59 @@ pub mod specs {
         }
     }
 
+    /// `eq_spec` of a tagged component: same coordinate and payloads `eq_spec`-equal; the derived
+    /// `PartialEq` compares the variant and then the payload, so it is faithful when the payloads' are.
+    impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec> PartialEqSpecImpl for Component2<A, B> {
+        open spec fn obeys_eq_spec() -> bool { A::obeys_eq_spec() && B::obeys_eq_spec() }
+        open spec fn eq_spec(&self, other: &Self) -> bool {
+            match (self, other) {
+                (Component2::C0(a), Component2::C0(b)) => a.eq_spec(b),
+                (Component2::C1(a), Component2::C1(b)) => a.eq_spec(b),
+                _ => false,
+            }
+        }
+    }
+
+    impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec, C: PartialEq + PartialEqSpec>
+        PartialEqSpecImpl for Component3<A, B, C>
+    {
+        open spec fn obeys_eq_spec() -> bool {
+            A::obeys_eq_spec() && B::obeys_eq_spec() && C::obeys_eq_spec()
+        }
+        open spec fn eq_spec(&self, other: &Self) -> bool {
+            match (self, other) {
+                (Component3::C0(a), Component3::C0(b)) => a.eq_spec(b),
+                (Component3::C1(a), Component3::C1(b)) => a.eq_spec(b),
+                (Component3::C2(a), Component3::C2(b)) => a.eq_spec(b),
+                _ => false,
+            }
+        }
+    }
+
+    impl<A: PartialEq + PartialEqSpec, B: PartialEq + PartialEqSpec,
+        C: PartialEq + PartialEqSpec, D: PartialEq + PartialEqSpec> PartialEqSpecImpl for Component4<A, B, C, D>
+    {
+        open spec fn obeys_eq_spec() -> bool {
+            A::obeys_eq_spec() && B::obeys_eq_spec() && C::obeys_eq_spec() && D::obeys_eq_spec()
+        }
+        open spec fn eq_spec(&self, other: &Self) -> bool {
+            match (self, other) {
+                (Component4::C0(a), Component4::C0(b)) => a.eq_spec(b),
+                (Component4::C1(a), Component4::C1(b)) => a.eq_spec(b),
+                (Component4::C2(a), Component4::C2(b)) => a.eq_spec(b),
+                (Component4::C3(a), Component4::C3(b)) => a.eq_spec(b),
+                _ => false,
+            }
+        }
+    }
+
     impl<H: Event> EventSpecImpl for Coproduct<H, CNil> {
         open spec fn obeys_projection_spec() -> bool { H::obeys_projection_spec() }
-        // CNil has no native values; its opaque logical extension is deliberately unconstrained.
+        // CNil has no values; projecting through an arbitrary `H` keeps `H`'s projection laws.
         open spec fn component_spec(self, index: int) -> Self::Component {
             match self {
-                Coproduct::Inl(head) => head.component_spec(index), Coproduct::Inr(_) => arbitrary(),
+                Coproduct::Inl(head) => head.component_spec(index),
+                Coproduct::Inr(_) => arbitrary::<H>().component_spec(index),
             }
         }
         open spec fn coordinate_spec(component: Self::Component) -> nat {
