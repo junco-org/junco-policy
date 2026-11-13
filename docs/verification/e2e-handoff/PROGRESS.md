@@ -158,8 +158,9 @@ No trusted items have been added (`admit`, `assume`, `external_body`, `#[verifie
    policies; `covered`, `redundant` vs brute force and the runtime `TracePolicy`;
    `at_least_as_strict`; per-case minimality checked on a finer partition) and the paper's
    Alice/Bob regression `covered_refutes_for_agents_other_than_alice` (`inclusion.tex`
-   l.129-142). `src/tests.rs` already has `add_rule` unit tests (from `wip/core`). Nobody has run
-   `cargo test` on the consolidated tree yet: `cargo verus` builds no test targets.
+   l.129-142). `src/tests.rs` already has `add_rule` unit tests (from `wip/core`):
+   `cargo test -p history-analysis --lib` passes on `324aa18` (13 tests). The workspace tests and
+   `tests/differential.rs` were not run on the consolidated tree.
 4. **M5**: add `*_minimal` to the three entry points' `ensures` (making `*_ok` hold):
    `lemma_covered_minimal` (discharge `denials_agree` with `lemma_stored_denies` /
    `lemma_policy_denies`), `lemma_redundant_minimal`, `lemma_strict_minimal`. Optional: ship
