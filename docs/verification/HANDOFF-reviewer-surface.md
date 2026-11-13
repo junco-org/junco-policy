@@ -91,8 +91,8 @@ arbitrary order and duplicate ids handled). It does **not** touch `tail_included
 | Monitor step relation | `history-semantics/src/validator.rs`: `check_result`, `lemma_check_result_facts` |
 | Monitor client proofs | `history-semantics/tests/public_specs.rs` |
 
-Reuse these. Most of the work is restating them over the new surface and re-pointing bridges, not
-new search or reduction proofs.
+Reuse these. Most of the work is restating them over the new surface and re-proving the
+implementation-to-model links against it, not new search or reduction proofs.
 
 ## Decisions (defaults; report any you had to change)
 
@@ -128,8 +128,16 @@ new search or reduction proofs.
 9. **Evaluation path (D1).** Do not change benchmark behavior. Document `RulePolicy` (root crate)
    as unverified glue in `VERIFY.md` and `TRUST.md`, listing exactly what it adds (`could_fire`
    filter, per-event `TracePolicy`, decide-then-append, audit-mode append, error-to-deny).
-10. **Clean cutover.** Old definitions are deleted once migrated; no aliases or re-exports of the
-    old names.
+10. **Clean cutover, no proof debt.** Old definitions are deleted once migrated; no aliases or
+    re-exports of the old names. Do not add compatibility lemmas that relate a new definition to
+    an old one so that old statements or old proofs keep working (e.g. "`new_covers` ⇔ old
+    `covers`", or re-deriving an old `*_correct` from the new one). Restate each theorem over the
+    new definition and update its callers. An old↔new equivalence may be used only as a transient
+    step inside a track and must be deleted, together with the old definition, before that track
+    merges. Lemmas that connect the abstract model to the implementation (views of executable
+    state, the numeric encoding, the search and normalizer instantiations, `typed_numeric`,
+    `policy_bridge`, `reconstruction`) are not debt: keep and re-prove them against the new
+    definitions.
 
 ## Required work
 
@@ -171,13 +179,15 @@ Files: `history-syntax/src/spec/events.rs`, `junco-core/src/spec/{semantics,ques
 instance half of `refinement/analyzer.rs` (`choice_ok`, `admissible`, `every_instance`,
 `cex_has_instance`, `stmt_choice_exists`), `history-analysis/src/verify/{policy_bridge,typed_numeric,reconstruction,verdict}.rs`.
 
-- Prove the new R2 equal to the existing typed DSL on events (it is the same definition applied
-  to `event_view`), then switch the analyzer's semantics to R3 and delete `rule_status`/`rule_denies`.
+- Switch the analyzer's semantics to R2/R3 directly and delete `rule_status`/`rule_denies` and
+  the other definitions R2/R3 replace (decision 10: no lemma relating old and new may remain).
 - Re-prove `stmt_genericity` for tag-preserving renamings; add the tag clause to `choice_ok`;
   replace `stmt_choice_exists` by a `fresh_capacity` version; prove the capacity lemmas.
 - Make scoping and arity (`rule_wf`) part of every rule in the views; propagate
   "well-formed ⇒ no `HeadArity`/`ComponentCoordinate`" from `flatten.rs` (S12).
-- Re-point the bridge lemmas so that today's `*_correct` follow for the new semantics.
+- Re-prove the implementation-to-model lemmas (`policy_bridge`, `typed_numeric`,
+  `reconstruction`, `verdict`) against the new semantics so that the entry points ensure the new
+  R6 predicates; the old `*_correct` predicates are deleted, not re-derived.
 
 ### Track C — Exhausted and errors (S5; part of S13)
 
