@@ -7,9 +7,9 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 | Item | State | Evidence / public statements |
 |---|---|---|
 | H1 | merged | [PR #13](https://github.com/junco-org/junco-policy/pull/13), merge commit `bce1df8511fc56919724e18bdbf5e610c8252bdb`; every CI check passed. Public statements detailed below. |
-| H3 | in progress | Branch fix/audit-h3 from main while H1/H6 await CI; Denial.index added, check_step/paper index/reviewer/public_specs strengthened. Full monitor/downstream proof gates running. |
-| H4 | not started | |
-| H6 | in progress | Local gates passed; [PR #14](https://github.com/junco-org/junco-policy/pull/14), head `0e3c087`, awaits CI. Changed `PolicyAnalyzer::add_rule` (`crates/history-analysis/src/analyzer.rs`) and `ValidatorBuilder::add_rule` (`crates/history-semantics/src/validator.rs`): Ok implies rule_wf, exact event arity and correctly tagged head constants. Reviewer clients consume the clauses. Unused analyzer_wf/rule_constants_tagged removed. |
+| H3 | in progress | Local gates passed; [PR #15](https://github.com/junco-org/junco-policy/pull/15), rebased head `68743aa`, awaits CI. `Denial::index` and exact-index `check_step` added; paper/reviewer/public clients and root observations updated. |
+| H4 | in progress | Branch fix/audit-h4 from current main; `stmt_search_correct` and its theorem now require trace_steps_ok only for expanded nodes. Proof/native gates running. |
+| H6 | in progress | Local gates passed; [PR #14](https://github.com/junco-org/junco-policy/pull/14), rebased head `c6b5503`, awaits CI. Changed `PolicyAnalyzer::add_rule` (`crates/history-analysis/src/analyzer.rs`) and `ValidatorBuilder::add_rule` (`crates/history-semantics/src/validator.rs`): Ok implies rule_wf, exact event arity and correctly tagged head constants. Reviewer clients consume the clauses. Unused analyzer_wf/rule_constants_tagged removed. |
 | H5 | not started | Monitor first, analyzer second. |
 | H2 | not started | |
 | H7 | not started | |
@@ -34,6 +34,8 @@ H1 public statements:
 Verification: H1 library merge gate `history-analysis --no-default-features --features runtime,std`: **603 verified, 0 errors**; reviewer: **17 verified, 0 errors**. Ghost-erased clippy passed (`--all-targets -- -D warnings`); package tests **27 passed**. Final package fmt passed after removing the throwaway smoke example. Runtime smoke observed counterexample candidate `[Constant(C0(3)), Constant(C1(7))]`, empty history, both coordinates declared; concrete `(3,7), []` refutes All ⊆ Empty. No ensures weakened; no trusted items added; no paper or benchmark edits.
 
 H6 gates: monitor **1624**, public_specs **19**, monitor reviewer **7**, analyzer **603**, analyzer reviewer **14** verified, all **0 errors**. Ghost-erased clippy passed; package tests **73 passed**; fmt passed. Runtime smoke exercised both analyzer and builder: lawful pair rule accepted; wrong head arity and mistagged head constants rejected with corresponding errors.
+
+H3 gates before rebase: monitor **1624**, public_specs **19**, monitor reviewer **7**, analyzer **603**, analyzer reviewer **14** verified, all **0 errors**; ghost-erased clippy/fmt passed, **123 native tests passed**. Runtime smoke observed index=1 for the first of two same-mode violations after a nonviolating rule, committed history unchanged. Rebase resolved only additive interface-documentation conflict with H1; CI initially had no checks because of that conflict, now resolved.
 
 Toolchain: downloaded pinned Z3 cannot execute on host glibc 2.31. Existing `/ssd0/zkent/junco-proof-tools/compat-verus` and `z3-compat` pass the script's pinned version checks; these are used for verification.
 
