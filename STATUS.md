@@ -15,10 +15,12 @@ Plan: `local://reviewer-surface-b-plan.md` (integration owner's copy). Deleted i
 | A | merged `d5762ce` (squashed onto `cc53150`; R files = integration's) | `track/a-b` | `PartialEqSpecImpl` for `Component2/3/4`; `event_laws` witnesses; `junco_core::verify::hypotheses` lemmas (`hash_coherent::<C>()` the only premise); internal-key `*_obligations()` discharged by the five axioms; `analyzer_obligations == event_obligations` |
 | F-prep | merged `8ede44d` (first gate failed only on a duplicate import in `tests.rs` from C's merge) | `track/f-b` | closed `wf`, ghost `declared`/`known` set by contract, verified `Domains::{infinite,with_domain}` with `DomainError`, R6 capacities in `requires`, `RuleId` owner tags + `UnknownId`, vacuity via refinement |
 | B | merged `35e817c`; reconciled onto F as `1d05e99` (15 conflict hunks: F's `wf`/owner/capacities/ghost fields + B's semantic `ensures`; duplicate `analyzer_view` removed, `lemma_view_links` from `domains_linked`; `paper.rs` retyped `::<C>` → `::<E>` with `stmt_vacuity_via_refinement`) | `track/b-b` | typed semantics over events (R2/R3/R6), `junco_core::verify::capacity`, bridges re-proved, `refinement/analyzer.rs` deleted; wave-1 query `ensures` = Holds clauses + `cex_arity` + (capacity ⇒ instance) + tail `shortest`; refutation/`every_instance`/`minimal_in_case` are bridge lemmas with clause 3 as `requires` (wave 2) |
-| F | not started | `track/f-b` | wave 2 |
+| F (final) | running since wave-1 gate `56726bd` | `track/f2-b` | wave 2: junco-core encode/flatten facts, clause 3 into `wf`, full R6 `*_spec` ensures, `Exhausted` on `GraphBudget`, differential tests |
 | T | not started | `track/t-b` | wave 3 |
 
 ## Last gate results
+
+Wave-1 gate at `56726bd`: all eleven configurations (cached from the B merge: 191/275/288/1618/1623/19/593), fmt, clippy (workspace + fuzz), `cargo test --workspace --features junco-policy/test-util` 198 passed, fuzz oracle 8 passed, spec-check, TRUST.md reproducible (regenerated: 5 axioms, totals 181). PASSED.
 
 Each gate: the five full-feature `cargo verus verify` configurations of `scripts/verify-all.sh --list` plus `--test public_specs`, concurrently through the personal runner (6 jobs x 42 threads); then `cargo fmt --check`, `cargo clippy --locked --no-deps --all-targets -D warnings`, `cargo test --locked` for the six packages.
 
