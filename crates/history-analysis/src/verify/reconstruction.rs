@@ -98,32 +98,36 @@ impl View for Slot {
     }
 }
 
+/// R3 `ValueView`: a constant, or a fresh number.
 impl<T> View for Value<T> {
     type V = analyzer::ValueView<T>;
-    open(crate) spec fn view(&self) -> Self::V {
+    open spec fn view(&self) -> Self::V {
         match self { Value::Constant(v) => analyzer::ValueView::Constant(*v),
             Value::Fresh(n) => analyzer::ValueView::Fresh(*n as nat) }
     }
 }
 
+/// R3 `ComponentsView`: the values in coordinate order.
 impl<E: Event> View for Components<E> {
     type V = analyzer::ComponentsView<E::Component>;
-    open(crate) spec fn view(&self) -> Self::V {
+    open spec fn view(&self) -> Self::V {
         self.values@.map(|i: int, v: Value<E::Component>| v@)
     }
 }
 
+/// R3 `CexView`: the symbolic candidate and history.
 impl<E: Event> View for Counterexample<E> {
     type V = analyzer::CexView<E::Component>;
-    open(crate) spec fn view(&self) -> Self::V {
+    open spec fn view(&self) -> Self::V {
         analyzer::CexView { candidate: self.candidate@,
             history: self.history@.map(|i: int, c: Components<E>| c@) }
     }
 }
 
+/// R3 `InclusionView`: the verdict the `*_spec` predicates are stated over.
 impl<E: Event> View for Inclusion<E> {
     type V = analyzer::InclusionView<E::Component>;
-    open(crate) spec fn view(&self) -> Self::V {
+    open spec fn view(&self) -> Self::V {
         match self { Inclusion::Holds => analyzer::InclusionView::Holds,
             Inclusion::Exhausted => analyzer::InclusionView::Exhausted,
             Inclusion::Counterexample(c) => analyzer::InclusionView::Counterexample(c@) }
