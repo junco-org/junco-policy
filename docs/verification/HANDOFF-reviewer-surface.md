@@ -50,9 +50,17 @@ decisions below.
 
 ## Repository
 
-`git@github.com:junco-org/junco-policy.git`, branch `handoff/reviewer-surface`: `main` at `1efa267`
-(merge of PR #9) plus the plan and this file. Work on a new branch from it. Read first: the plan,
-`VERIFY.md`, `TRUST.md`, and `crates/history-semantics/src/verify/refinement/mod.rs`.
+`git@github.com:junco-org/junco-policy.git`, branch `handoff/reviewer-surface-b`: `main` at `1efa267`
+(merge of PR #9) plus the plan and this file. Work on a new branch from it whose name ends in
+`-b` (e.g. `refactor/reviewer-surface-b`). Read first: the plan, `VERIFY.md`, `TRUST.md`, and
+`crates/history-semantics/src/verify/refinement/mod.rs`.
+
+**Independent attempt.** Another agent is solving the same handoff from
+`handoff/reviewer-surface`. Ignore that branch and every branch or PR derived from it
+(`refactor/reviewer-surface`, anything without the `-b` suffix that cites it): do not read,
+merge, cherry-pick, rebase onto, push to, or comment on them. Work as if they did not exist.
+PR #10 and `main` are not part of the other attempt; follow the coordination section below for
+them.
 
 ## Coordination with PR #10 (minimality and removal semantics)
 
