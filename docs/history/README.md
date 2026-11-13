@@ -1,4 +1,8 @@
-# Verus verification of the policy-refinement analysis
+# Verus verification of the policy-refinement analysis (historical notes)
+
+Working notes from the wave-1/wave-2 development, kept for provenance; the current reviewer
+documents are `VERIFY.md`, `TRUST.md` and `docs/verification/INTERFACES.md`. Paths below that
+say `docs/verification/` for a note now mean `docs/history/`.
 
 The analyzer exposes stored-rule coverage, redundancy, and refinement queries, alongside
 `PolicyAnalyzer::tail_included`. This work is rebased onto `main`'s policy-defined arity
@@ -14,8 +18,8 @@ exact pre-port state is the local branch `wip/verus-refinement-snapshot` (1315 /
 | `crates/history-semantics/src/verify/refinement/` | The frozen specification: one `stmt_*` spec fn per theorem, plus the proofs done so far (`theorem_*`). Layers: `semantics`, `encoding`, `inclusion`, `search`, `pruning`, `finiteness`, `implementation`, `analyzer`. |
 | `crates/history-semantics/src/verify/finite_*.rs` | Finiteness of normalized derivatives (paper Lemma 4.2 and Appendix A): the abstract theorem (`finite_states.rs`) and its link to the implemented normalizer and successor computation. |
 | `crates/history-semantics/src/{normalize,symbolic,compile,progress}.rs` | Proof-only annotations for the link, plus one approved executable fix (below). |
-| `docs/verification/SPEC.md` | The specification document: top-level statement (§0), each layer (§1–§7), proof plan (§8), paper ↔ code differences (§9), the author's frozen decisions (§10), trust base (§11). |
-| `docs/verification/finiteness-notes.md` | Working notes of the finiteness mechanization: design of the machine-typing invariant, lemma inventory, pitfalls. |
+| `docs/history/SPEC.md` | The specification document: top-level statement (§0), each layer (§1–§7), proof plan (§8), paper ↔ code differences (§9), the author's frozen decisions (§10), trust base (§11). |
+| `docs/history/finiteness-notes.md` | Working notes of the finiteness mechanization: design of the machine-typing invariant, lemma inventory, pitfalls. |
 
 `SPEC.md` and the notes were written on the author's machine: absolute paths (`/tmp/...`,
 `/home/...`) and agent names in them are historical. In `SPEC.md` §10, Q2 was resolved by
