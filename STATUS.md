@@ -10,9 +10,9 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 | H3 | merged | [PR #15](https://github.com/junco-org/junco-policy/pull/15), merge commit `bedc0c955dd9eb24e224126a456d6c84a6092d55`; all seven CI checks passed on exact head `2a6f942428173122cb0e546a62182ea219e28747`. Public statements detailed below. |
 | H4 | merged | [PR #17](https://github.com/junco-org/junco-policy/pull/17), merge commit `184383710b2b0918b3567869d998185940a3454d`; all seven CI checks passed on exact head `55282cb79f2b4472ee5e1da37c0aa5b4e220bbd9`. Public statement detailed below. |
 | H6 | merged | [PR #14](https://github.com/junco-org/junco-policy/pull/14), merge commit `4151cb0a66058e9ecbc7e787b23438b40f319192`; all CI passed. Public statements detailed below. |
-| H5 | in progress | Local merge gate passed; [PR #19](https://github.com/junco-org/junco-policy/pull/19), rebased head `54fcf2f6bde42cd27046e09a9bab1133832f3732` atop merged H4, awaits CI. Core **288**, store **289**, monitor cache/no-cache **1624/1619**, monitor reviewer **9**, public_specs **19**, analyzer **603**, analyzer reviewer **19** verified, **0 errors**. Full workspace ghost-erased fmt/clippy passed; **200 tests passed**. Runtime and negative-probe evidence below. |
-| H2 | in progress | On isolated `fix/audit-h2`; complete unchanged baseline timing saved for all **100 instances**. Added unit domains and concrete validation of every returned counterexample outside measured intervals. Actual benchmark smoke passed all **100 instances**, validating **180 counterexamples**. Adapted unit probe passed: `fresh at a unit-typed coordinate: false`, concrete history `[a]` witnesses `a+ ⊄ epsilon`. Probe removed. After timing running; before/after values pending. |
-| H7 | not started | |
+| H5 | in progress | Local merge gate passed; [PR #19](https://github.com/junco-org/junco-policy/pull/19), head `a11905aaf633f72c0ad37700c8fb3e5c377d4afc` atop merged H4, awaits CI. Latest change only corrects docs to enumerate all Limit variants (time, memory, regex-size). Core **288**, store **289**, monitor cache/no-cache **1624/1619**, monitor reviewer **9**, public_specs **19**, analyzer **603**, analyzer reviewer **19** verified, **0 errors**. Workspace ghost-erased fmt/clippy passed; **200 tests passed**. |
+| H2 | in progress | Local merge gate passed; [PR #21](https://github.com/junco-org/junco-policy/pull/21), head `6562d54`, awaits CI. Full benchmark smoke passed **100 instances**, validating **180 counterexamples**; measured after-run validated **84,234**, no fresh declared-coordinate values. Unit probe reported `fresh at a unit-typed coordinate: false`; removed. Analyzer provider **603**, reviewer **17** verified, **0 errors**; workspace fmt/clippy passed, **200 tests passed**. Complete before/after data committed; summary below. |
+| H7 | in progress | Started from main `1843837` on isolated `fix/audit-h7`; scoping verified decide/commit cutover and AgentDojo enforcement/reproduction paths. |
 | H8 | not started | |
 | H9 | not started | |
 | H10 | not started | |
@@ -68,6 +68,16 @@ H5 public statements for citation (local gate passed; not merged):
 - `PolicyAnalyzer::tail_included` (same file): under existing capacity/wf/event requires, head_tails_wf + exact arity + rule_constants_tagged for both source rules imply Ok or Runtime(resource_error). Success additionally implies head_coordinates_wf(head), retaining head_tails_wf and exact arity.
 - `theorem_monitor_resource_errors` (`crates/history-semantics/tests/reviewer.rs`): check_step/permits_result imply resource-only errors and exclude UnknownId. Executable `valid_rule_registration` consumes the builder guarantee.
 - Executable `resource_checked_registration` and `resource_checked_tail_inclusion` (`crates/history-analysis/tests/reviewer.rs`) consume valid-input classification; `analyzer_client` now consumes resource classification of the three owned-id queries.
+
+H2 measurements: geometric means of per-instance Criterion mean estimates, microseconds, on the same local Xeon E7-8867 v4 host and Rust 1.98.1. Both runs used 50 flat samples, 500 ms warm-up, 2 s measurement targets. After-run validation is excluded from measured intervals; per-iteration clock/cache effects are explicitly disclosed, no statistical attribution claimed.
+
+| Instances | Count | Before (µs) | After (µs) | Change |
+|---|---:|---:|---:|---:|
+| sat | 90 | 3921.646 | 3934.784 | +0.34% |
+| unsat | 10 | 888.158 | 813.993 | −8.35% |
+| all | 100 | 3380.419 | 3361.173 | −0.57% |
+
+All per-instance mean/median/95%-CI values: `benches/smt/counterexample-timings.csv` on `fix/audit-h2`; baseline JSONs: `/tmp/junco-audit-bench/criterion/regexlib_subset/*/*/{before-declared-units,after-declared-units}/estimates.json`. No paper files or pre-existing figure data changed. No new public Verus statement in H2: benchmark configuration/validation only.
 
 Toolchain: downloaded pinned Z3 cannot execute on host glibc 2.31. Existing `/ssd0/zkent/junco-proof-tools/compat-verus` and `z3-compat` pass the script's pinned version checks; these are used for verification.
 
