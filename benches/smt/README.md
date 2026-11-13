@@ -62,6 +62,36 @@ Every character test is a union of whole alphabet classes, so inclusion over the
 is identical to inclusion over the full 8-bit alphabet. The dataset has no complement,
 intersection, `re.allchar`, or `re.all`; loop upper bounds are at most 67.
 
+## Concrete-witness validation and timing comparison
+
+The complete smoke run (`cargo bench --bench smt -- --test`) passes all 100 instances and
+validates 180 returned counterexamples. The measured run validated 84,234 counterexamples;
+none contained a fresh value at a declared coordinate. A separate unit-coordinate probe
+decoded `[a]` as a real witness of `a+ ⊄ ε` and reported no fresh unit coordinate.
+
+Local measurements on 2026-11-13 used Rust 1.98.1, Linux x86_64, Intel Xeon E7-8867 v4,
+50 flat samples, 500 ms warm-up and 2 s measurement targets per instance. Before used commit
+`bedc0c9` with only the action domain declared. After uses all three declared domains and
+checks every returned counterexample. The new per-iteration timer excludes concrete validation
+and includes query execution and result destruction; the original timer measured the aggregate
+query loop. Per-iteration clock overhead and validation-induced cache effects are not removed.
+These measurements are not a replacement for measurements on the paper's machine.
+
+Geometric means of Criterion's per-instance mean estimates, in microseconds:
+
+| Instances | Count | Before (µs) | After (µs) | Change |
+|---|---:|---:|---:|---:|
+| Non-inclusions (`sat`) | 90 | 3921.646 | 3934.784 | +0.34% |
+| Inclusions (`unsat`) | 10 | 888.158 | 813.993 | −8.35% |
+| All | 100 | 3380.419 | 3361.173 | −0.57% |
+
+[`counterexample-timings.csv`](counterexample-timings.csv) records every instance's before/after
+mean, median, mean confidence interval and percentage change in nanoseconds. No statistical
+attribution to the domain change is claimed. The named Criterion baselines were produced with
+`--save-baseline before-declared-units` on the old source and
+`--save-baseline after-declared-units` on the corrected source.
+
+
 ## Regenerate
 
 Run from the repository root with Python 3 (standard library only) and Rust 1.98.1:
