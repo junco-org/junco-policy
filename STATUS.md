@@ -7,7 +7,7 @@ Plan: `local://reviewer-surface-b-plan.md` (integration owner's copy). Deleted i
 
 | Track | State | Branch | Notes |
 |---|---|---|---|
-| 0 | done except the timing table | integration | 0.0–0.4 and M4 done at `b18250c`; M5 deferred to Track T; worktrees created; `--time-expanded` run in progress |
+| 0 | done | integration | 0.0–0.4 and M4 done at `b18250c`; M5 deferred to Track T; timing table below |
 | A, B, C, D, E, G, F-prep | running since 2026-11-13 (7 agents) | `track/{a,b,c,d,e,g,f}-b` from `0f71984` | wave 1; briefs in the owner's `local://reviewer-surface-b-briefs-wave1.md` (B2's items are inside B's brief) |
 | F | not started | `track/f-b` | wave 2 |
 | T | not started | `track/t-b` | wave 3 |
@@ -53,4 +53,10 @@ PR #10 commit integrated: `52118c4`.
 
 ## Slowest-proof assignments
 
-(after Track 0's `--time-expanded` run)
+`cargo verus verify … -- --num-threads 32 --time-expanded` at `0f71984` (Verus reports the top-3 modules per phase, not per-function times):
+
+| crate | wall (verification) | smt-run total (32 threads) | slowest modules (smt-run) | owner |
+|---|---:|---:|---|---|
+| history-semantics (runtime,std,cache) | 84.5 s | 262 s | `normalize` 84.0 s; `symbolic` 80.0 s; `normalize::verify` 36.3 s (air: `normalize::verify` 18.7 s) | not edited by any wave-1 track (B/F touch `refinement/*`, `verify/*`); Track T's `numeric_lang` rename touches them textually only |
+| history-store (runtime,std) | 10.1 s | 10.8 s | `graph` 7.9 s; `store` 1.5 s; `typed` 1.4 s | G (`store.rs`), C (`graph.rs`) |
+| history-analysis (runtime,std) | 32.3 s | 61.5 s | `search` 24.1 s; `verify::search_exec` 15.6 s; `analyzer` 4.1 s | F (`analyzer.rs`), C (`search.rs` error contract), A (`search_exec` obligations) |
