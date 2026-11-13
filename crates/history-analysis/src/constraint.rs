@@ -8,7 +8,6 @@
 
 #[cfg(verus_keep_ghost)]
 use self::equality::{constraint_key, register_key};
-use history_store::native::NativeMap;
 #[cfg(verus_keep_ghost)]
 use crate::verify::constraint_unique::*;
 #[cfg(verus_keep_ghost)]
@@ -17,6 +16,7 @@ use alloc::rc::Rc;
 use alloc::vec::Vec;
 #[cfg(verus_keep_ghost)]
 use history_semantics::verify::refinement::{encoding, implementation, inclusion};
+use history_store::native::NativeMap;
 use junco_core::HistoryError;
 #[cfg(verus_keep_ghost)]
 use junco_core::observation::SmallVecSpecFns;

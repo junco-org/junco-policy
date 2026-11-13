@@ -648,7 +648,7 @@ impl Antichain {
                         assert(nodes.push(node)[k] == nodes[k]);
                     } else {
                         assert(key.view() == old_state.parts.view());
-                        assert(crate::native::groups(self.groups)[key][i] == stored);
+                        assert(history_store::native::groups(self.groups)[key][i] == stored);
                         assert(entry_matches(g,table,key,stored,node.item));
                         assert(nodes.push(node)[nodes.len() as int] == node);
                     }

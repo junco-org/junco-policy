@@ -67,6 +67,5 @@ pub mod verify;
 #[cfg(all(verus_keep_ghost, feature = "runtime"))]
 pub mod spec;
 
-
 #[cfg(feature = "runtime")]
 pub use analyzer::{Components, Counterexample, Domains, Inclusion, PolicyAnalyzer, RuleId, Value};

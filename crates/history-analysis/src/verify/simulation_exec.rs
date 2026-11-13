@@ -1,11 +1,11 @@
 //! Semantic invariants for the executable simulation memo.
 
-use history_store::native::representatives;
 use crate::simulation::{Node, Simulation, TestNode};
 use history_semantics::verify::refinement::pruning as paper;
 use history_semantics::{
     SymbolicLanguage, normalize_verify as norm, symbolic_language_verify as facade,
 };
+use history_store::native::representatives;
 use junco_core::kernel::verify as model;
 use junco_core::kernel::{RegexId, TestId};
 use junco_core::observation::SmallVecSpecFns;

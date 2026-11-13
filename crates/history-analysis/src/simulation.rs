@@ -23,14 +23,14 @@ use history_store::native::NativeMap;
 #[cfg(verus_keep_ghost)]
 verus! { broadcast use junco_core::spec::hypotheses::internal_keys::group_internal_key_laws; }
 #[cfg(verus_keep_ghost)]
-use history_store::native::representatives;
-#[cfg(verus_keep_ghost)]
 use crate::verify::simulation_exec::*;
 use history_semantics::SymbolicLanguage;
 #[cfg(verus_keep_ghost)]
 use history_semantics::symbolic_language_verify as facade;
 #[cfg(verus_keep_ghost)]
 use history_semantics::verify::refinement::pruning as paper;
+#[cfg(verus_keep_ghost)]
+use history_store::native::representatives;
 use junco_core::HistoryError;
 #[cfg(verus_keep_ghost)]
 use junco_core::kernel::verify as model;
