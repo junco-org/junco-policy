@@ -1111,14 +1111,14 @@ pub mod verify {
         let lifted = model::lift_regexes(g, model::regex_ids(selected));
         assert(lifted.len() == children.len());
         assert forall|i: int, piece: Seq<EventView>| 0 <= i < children.len() implies
-            language::lang(model::gsem(theta), lifted[i], piece)
+            language::numeric_lang(model::gsem(theta), lifted[i], piece)
                 == source_regex(template, children[i] as nat, theta, piece) by {
             assert(regex_correct(g, template, children[i] as nat, ids[children[i] as int]));
         }
         if norm::concat_combo(g, theta, selected, word) {
             let parts = choose|parts: Seq<Seq<EventView>>| parts.len() == lifted.len() && word == parts.flatten()
                 && forall|i: int| 0 <= i < lifted.len()
-                    ==> language::lang(model::gsem(theta), lifted[i], parts[i]);
+                    ==> language::numeric_lang(model::gsem(theta), lifted[i], parts[i]);
             assert forall|i: int| 0 <= i < children.len() implies children[i] < index
                 && source_regex(template, children[i] as nat, theta, parts[i]) by {}
             assert(exists|parts: Seq<Seq<EventView>>| parts.len() == children.len() && parts.flatten() == word
@@ -1132,7 +1132,7 @@ pub mod verify {
                 && forall|i: int| 0 <= i < children.len()
                     ==> children[i] < index && source_regex(template, children[i] as nat, theta, parts[i]);
             assert forall|i: int| 0 <= i < lifted.len() implies
-                language::lang(model::gsem(theta), lifted[i], parts[i]) by {}
+                language::numeric_lang(model::gsem(theta), lifted[i], parts[i]) by {}
             assert(norm::concat_combo(g, theta, selected, word));
         }
     }
@@ -1140,16 +1140,16 @@ pub mod verify {
     pub(crate) proof fn regex_star_transfer(g: model::Graph, template: FlatPair<u64>,
         ids: Seq<RegexId>, child: nat, theta: Subst, word: Seq<EventView>)
         requires regex_maps(g, template, ids), child < ids.len(), language::event_wf(theta, theta.len()),
-        ensures language::lang(model::gsem(theta), language::Regex::Star(
+        ensures language::numeric_lang(model::gsem(theta), language::Regex::Star(
             alloc::boxed::Box::new(model::lift_regex(g, ids[child as int]@))), word)
             == (exists|parts: Seq<Seq<EventView>>| parts.flatten() == word
                 && forall|i: int| 0 <= i < parts.len() ==> source_regex(template, child, theta, parts[i])),
     {
         let regex = model::lift_regex(g, ids[child as int]@);
         assert(regex_correct(g, template, child, ids[child as int]));
-        if language::lang(model::gsem(theta), language::Regex::Star(alloc::boxed::Box::new(regex)), word) {
+        if language::numeric_lang(model::gsem(theta), language::Regex::Star(alloc::boxed::Box::new(regex)), word) {
             let parts = choose|parts: Seq<Seq<EventView>>| word == parts.flatten()
-                && forall|i: int| 0 <= i < parts.len() ==> language::lang(model::gsem(theta), regex, parts[i]);
+                && forall|i: int| 0 <= i < parts.len() ==> language::numeric_lang(model::gsem(theta), regex, parts[i]);
             assert forall|i: int| 0 <= i < parts.len() implies source_regex(template, child, theta, parts[i]) by {}
             assert(exists|parts: Seq<Seq<EventView>>| parts.flatten() == word
                 && forall|i: int| 0 <= i < parts.len() ==> source_regex(template, child, theta, parts[i]));
@@ -1158,8 +1158,8 @@ pub mod verify {
             && forall|i: int| 0 <= i < parts.len() ==> source_regex(template, child, theta, parts[i]) {
             let parts = choose|parts: Seq<Seq<EventView>>| parts.flatten() == word
                 && forall|i: int| 0 <= i < parts.len() ==> source_regex(template, child, theta, parts[i]);
-            assert forall|i: int| 0 <= i < parts.len() implies language::lang(model::gsem(theta), regex, parts[i]) by {}
-            assert(language::lang(model::gsem(theta), language::Regex::Star(alloc::boxed::Box::new(regex)), word));
+            assert forall|i: int| 0 <= i < parts.len() implies language::numeric_lang(model::gsem(theta), regex, parts[i]) by {}
+            assert(language::numeric_lang(model::gsem(theta), language::Regex::Star(alloc::boxed::Box::new(regex)), word));
         }
     }
 

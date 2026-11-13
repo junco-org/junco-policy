@@ -1867,7 +1867,7 @@ pub(crate) proof fn implemented_steps_ok(g: Constraint, atoms: Seq<Atom>, univer
     hide(search::atoms_complete);
     hide(search::paper_steps);
     hide(encoding::n_lang);
-    hide(language::lang);
+    hide(language::numeric_lang);
     hide(class_options);
     hide(register_options);
     let operands = choose|operands: Operands| operands_of(operands, atoms) && operands.register@.len() == universes@.len()

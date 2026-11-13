@@ -2015,7 +2015,7 @@ pub(crate) trait RegexNormalize: Sized {
                         ==> fimpl::regex_nf(model::lift_regex(final(store).graph(), id@)))
                     && forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta, theta.len())
                         ==> model::regex_lang(final(store).graph(), theta, id@, word)
-                            == language::lang(model::gsem(theta), language::Regex::Star(Box::new(
+                            == language::numeric_lang(model::gsem(theta), language::Regex::Star(Box::new(
                                 model::lift_regex(final(store).graph(), this@))), word),
                 Err(_) => true,
             },
@@ -3595,7 +3595,7 @@ impl TransitionNormalize for TransitionId {
         children: &[Self],
         intersect: bool,
     ) -> KernelResult<Self> {
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(language::interp_transition);
         hide(model::test_holds);
         hide(model::lift_transition);
@@ -5326,7 +5326,7 @@ impl Action {
         hide(guarded_apply);
         hide(transition_effect);
         hide(machine_run);
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(model::test_holds);
         hide(model::lift_transition);
         proof_decl! { let ghost p0 = transition_action_views(tasks.view()); let ghost v0 = values.view();
@@ -6131,13 +6131,13 @@ pub mod verify {
             pub open spec fn concat_combo(
                 g: model::Graph, theta: Subst, ids: Seq<RegexId>, w: Seq<EventView>,
             ) -> bool {
-                language::lang(model::gsem(theta),
+                language::numeric_lang(model::gsem(theta),
                     language::Regex::Concat(model::lift_regexes(g, model::regex_ids(ids))), w)
             }
             pub open spec fn transition_lang(
                 g: model::Graph, theta: Subst, id: TransitionId, e: EventView, w: Seq<EventView>,
             ) -> bool {
-                language::lang(model::gsem(theta), language::interp_transition(
+                language::numeric_lang(model::gsem(theta), language::interp_transition(
                     model::gsem(theta), e, model::lift_transition(g, id@)), w)
             }
             pub open spec fn transition_combo(
@@ -7822,52 +7822,52 @@ pub mod verify {
     }
 
     pub proof fn regex_star_nil<L>(sem: spec_fn(L, EventView) -> bool, r: language::Regex<L>)
-        ensures language::lang(sem, language::Regex::Star(Box::new(r)), Seq::empty()),
+        ensures language::numeric_lang(sem, language::Regex::Star(Box::new(r)), Seq::empty()),
     {
         let parts = Seq::<Seq<EventView>>::empty();
         assert(parts.flatten() == Seq::<EventView>::empty());
-        assert(forall|i: int| 0 <= i < parts.len() ==> language::lang(sem, r, parts[i]));
+        assert(forall|i: int| 0 <= i < parts.len() ==> language::numeric_lang(sem, r, parts[i]));
     }
 
     pub proof fn regex_star_single<L>(sem: spec_fn(L, EventView) -> bool, r: language::Regex<L>, word: Seq<EventView>)
-        requires language::lang(sem, r, word),
-        ensures language::lang(sem, language::Regex::Star(Box::new(r)), word),
+        requires language::numeric_lang(sem, r, word),
+        ensures language::numeric_lang(sem, language::Regex::Star(Box::new(r)), word),
     {
         let parts = seq![word];
         parts.lemma_flatten_one_element();
-        assert forall|i: int| 0 <= i < parts.len() implies language::lang(sem, r, parts[i]) by {
+        assert forall|i: int| 0 <= i < parts.len() implies language::numeric_lang(sem, r, parts[i]) by {
             assert(i == 0);
         }
     }
 
     pub proof fn regex_star_join<L>(sem: spec_fn(L, EventView) -> bool, r: language::Regex<L>, a: Seq<EventView>, b: Seq<EventView>)
-        requires language::lang(sem, language::Regex::Star(Box::new(r)), a),
-            language::lang(sem, language::Regex::Star(Box::new(r)), b),
-        ensures language::lang(sem, language::Regex::Star(Box::new(r)), a + b),
+        requires language::numeric_lang(sem, language::Regex::Star(Box::new(r)), a),
+            language::numeric_lang(sem, language::Regex::Star(Box::new(r)), b),
+        ensures language::numeric_lang(sem, language::Regex::Star(Box::new(r)), a + b),
     {
         let ap = choose|p: Seq<Seq<EventView>>| a == p.flatten()
-            && forall|i: int| 0 <= i < p.len() ==> language::lang(sem, r, p[i]);
+            && forall|i: int| 0 <= i < p.len() ==> language::numeric_lang(sem, r, p[i]);
         let bp = choose|p: Seq<Seq<EventView>>| b == p.flatten()
-            && forall|i: int| 0 <= i < p.len() ==> language::lang(sem, r, p[i]);
+            && forall|i: int| 0 <= i < p.len() ==> language::numeric_lang(sem, r, p[i]);
         let parts = ap + bp;
         vstd::seq_lib::lemma_flatten_concat(ap, bp);
         assert(parts.flatten() == a + b);
-        assert forall|i: int| 0 <= i < parts.len() implies language::lang(sem, r, parts[i]) by {
+        assert forall|i: int| 0 <= i < parts.len() implies language::numeric_lang(sem, r, parts[i]) by {
             if i < ap.len() { assert(parts[i] == ap[i]); }
             else { assert(parts[i] == bp[i - ap.len()]); }
         }
     }
 
     pub proof fn regex_star_parts<L>(sem: spec_fn(L, EventView) -> bool, r: language::Regex<L>, parts: Seq<Seq<EventView>>)
-        requires forall|i: int| 0 <= i < parts.len() ==> language::lang(sem, language::Regex::Star(Box::new(r)), parts[i]),
-        ensures language::lang(sem, language::Regex::Star(Box::new(r)), parts.flatten()),
+        requires forall|i: int| 0 <= i < parts.len() ==> language::numeric_lang(sem, language::Regex::Star(Box::new(r)), parts[i]),
+        ensures language::numeric_lang(sem, language::Regex::Star(Box::new(r)), parts.flatten()),
         decreases parts.len(),
     {
         if parts.len() == 0 {
             regex_star_nil(sem, r);
         } else {
             assert forall|i: int| 0 <= i < parts.drop_first().len()
-                implies language::lang(sem, language::Regex::Star(Box::new(r)), parts.drop_first()[i]) by {
+                implies language::numeric_lang(sem, language::Regex::Star(Box::new(r)), parts.drop_first()[i]) by {
                 assert(parts.drop_first()[i] == parts[i + 1]);
             }
             regex_star_parts(sem, r, parts.drop_first());
@@ -7876,32 +7876,32 @@ pub mod verify {
     }
 
     pub proof fn regex_star_collapse<L>(sem: spec_fn(L, EventView) -> bool, r: language::Regex<L>, word: Seq<EventView>)
-        ensures language::lang(sem, language::Regex::Star(Box::new(language::Regex::Star(Box::new(r)))), word)
-            == language::lang(sem, language::Regex::Star(Box::new(r)), word),
+        ensures language::numeric_lang(sem, language::Regex::Star(Box::new(language::Regex::Star(Box::new(r)))), word)
+            == language::numeric_lang(sem, language::Regex::Star(Box::new(r)), word),
     {
-        if language::lang(sem, language::Regex::Star(Box::new(language::Regex::Star(Box::new(r)))), word) {
+        if language::numeric_lang(sem, language::Regex::Star(Box::new(language::Regex::Star(Box::new(r)))), word) {
             let parts = choose|p: Seq<Seq<EventView>>| word == p.flatten()
-                && forall|i: int| 0 <= i < p.len() ==> language::lang(sem, language::Regex::Star(Box::new(r)), p[i]);
+                && forall|i: int| 0 <= i < p.len() ==> language::numeric_lang(sem, language::Regex::Star(Box::new(r)), p[i]);
             regex_star_parts(sem, r, parts);
         }
-        if language::lang(sem, language::Regex::Star(Box::new(r)), word) {
+        if language::numeric_lang(sem, language::Regex::Star(Box::new(r)), word) {
             regex_star_single(sem, language::Regex::Star(Box::new(r)), word);
         }
     }
 
     pub proof fn regex_star_constants<L>(sem: spec_fn(L, EventView) -> bool, word: Seq<EventView>)
-        ensures language::lang(sem, language::Regex::Star(Box::new(language::Regex::<L>::Empty)), word) == (word.len() == 0),
-            language::lang(sem, language::Regex::Star(Box::new(language::Regex::<L>::Epsilon)), word) == (word.len() == 0),
-            language::lang(sem, language::Regex::Star(Box::new(language::Regex::<L>::All)), word),
+        ensures language::numeric_lang(sem, language::Regex::Star(Box::new(language::Regex::<L>::Empty)), word) == (word.len() == 0),
+            language::numeric_lang(sem, language::Regex::Star(Box::new(language::Regex::<L>::Epsilon)), word) == (word.len() == 0),
+            language::numeric_lang(sem, language::Regex::Star(Box::new(language::Regex::<L>::All)), word),
     {
-        if language::lang(sem, language::Regex::Star(Box::new(language::Regex::<L>::Empty)), word) {
+        if language::numeric_lang(sem, language::Regex::Star(Box::new(language::Regex::<L>::Empty)), word) {
             let parts = choose|p: Seq<Seq<EventView>>| word == p.flatten()
-                && forall|i: int| 0 <= i < p.len() ==> language::lang(sem, language::Regex::<L>::Empty, p[i]);
-            assert(parts.len() == 0) by { if parts.len() > 0 { assert(language::lang(sem, language::Regex::<L>::Empty, parts[0])); } }
+                && forall|i: int| 0 <= i < p.len() ==> language::numeric_lang(sem, language::Regex::<L>::Empty, p[i]);
+            assert(parts.len() == 0) by { if parts.len() > 0 { assert(language::numeric_lang(sem, language::Regex::<L>::Empty, parts[0])); } }
         }
-        if language::lang(sem, language::Regex::Star(Box::new(language::Regex::<L>::Epsilon)), word) {
+        if language::numeric_lang(sem, language::Regex::Star(Box::new(language::Regex::<L>::Epsilon)), word) {
             let parts = choose|p: Seq<Seq<EventView>>| word == p.flatten()
-                && forall|i: int| 0 <= i < p.len() ==> language::lang(sem, language::Regex::<L>::Epsilon, p[i]);
+                && forall|i: int| 0 <= i < p.len() ==> language::numeric_lang(sem, language::Regex::<L>::Epsilon, p[i]);
             language::lemma_flatten_empty(parts);
         }
         if word.len() == 0 {
@@ -7914,7 +7914,7 @@ pub mod verify {
 
     pub proof fn regex_star_test_true<L>(sem: spec_fn(L, EventView) -> bool, leaf: L, word: Seq<EventView>)
         requires forall|event: EventView| #[trigger] sem(leaf, event),
-        ensures language::lang(sem, language::Regex::Star(Box::new(language::Regex::Test(leaf))), word),
+        ensures language::numeric_lang(sem, language::Regex::Star(Box::new(language::Regex::Test(leaf))), word),
         decreases word.len(),
     {
         if word.len() == 0 {
@@ -7923,7 +7923,7 @@ pub mod verify {
         } else {
             let tail = word.drop_first();
             regex_star_test_true(sem, leaf, tail);
-            assert(language::lang(sem, language::Regex::Test(leaf), seq![word[0]]));
+            assert(language::numeric_lang(sem, language::Regex::Test(leaf), seq![word[0]]));
             regex_star_single(sem, language::Regex::Test(leaf), seq![word[0]]);
             regex_star_join(sem, language::Regex::Test(leaf), seq![word[0]], tail);
             assert(word =~= seq![word[0]] + tail);
@@ -7933,17 +7933,17 @@ pub mod verify {
     pub proof fn regex_star_laws(g: model::Graph, id: nat)
         requires model::graph_wf(g), id < g.regexes.len(),
         ensures forall|theta: Subst, word: Seq<EventView>|
-            #![trigger language::lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)]
+            #![trigger language::numeric_lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)]
             match g.regexes[id as int].kind {
                 model::RegexKindNode::Empty | model::RegexKindNode::Epsilon =>
-                    language::lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)
+                    language::numeric_lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)
                         == (word.len() == 0),
                 model::RegexKindNode::All =>
-                    language::lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word),
+                    language::numeric_lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word),
                 model::RegexKindNode::Test(t) => t == g.constants.test_true ==>
-                    language::lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word),
+                    language::numeric_lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word),
                 model::RegexKindNode::Star(_) =>
-                    language::lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)
+                    language::numeric_lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)
                         == model::regex_lang(g, theta, id, word),
                 _ => true,
             },
@@ -7951,17 +7951,17 @@ pub mod verify {
         regex_unfold(g, id);
         regex_constants(g);
         assert forall|theta: Subst, word: Seq<EventView>|
-            #![trigger language::lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)]
+            #![trigger language::numeric_lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)]
             match g.regexes[id as int].kind {
                 model::RegexKindNode::Empty | model::RegexKindNode::Epsilon =>
-                    language::lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)
+                    language::numeric_lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)
                         == (word.len() == 0),
                 model::RegexKindNode::All =>
-                    language::lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word),
+                    language::numeric_lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word),
                 model::RegexKindNode::Test(t) => t == g.constants.test_true ==>
-                    language::lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word),
+                    language::numeric_lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word),
                 model::RegexKindNode::Star(_) =>
-                    language::lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)
+                    language::numeric_lang(model::gsem(theta), language::Regex::Star(Box::new(model::lift_regex(g, id))), word)
                         == model::regex_lang(g, theta, id, word),
                 _ => true,
             } by {
@@ -7989,47 +7989,47 @@ pub mod verify {
     }
 
     pub open spec fn regex_concat_nats(g: model::Graph, theta: Subst, ids: Seq<nat>, word: Seq<EventView>) -> bool {
-        language::lang(model::gsem(theta), language::Regex::Concat(model::lift_regexes(g, ids)), word)
+        language::numeric_lang(model::gsem(theta), language::Regex::Concat(model::lift_regexes(g, ids)), word)
     }
 
     pub proof fn regex_concat_append<L>(sem: spec_fn(L, EventView) -> bool, a: Seq<language::Regex<L>>, b: Seq<language::Regex<L>>, word: Seq<EventView>)
-        ensures language::lang(sem, language::Regex::Concat(a + b), word)
+        ensures language::numeric_lang(sem, language::Regex::Concat(a + b), word)
             == (exists|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-                && language::lang(sem, language::Regex::Concat(a), u)
-                && language::lang(sem, language::Regex::Concat(b), v)),
+                && language::numeric_lang(sem, language::Regex::Concat(a), u)
+                && language::numeric_lang(sem, language::Regex::Concat(b), v)),
     {
-        if language::lang(sem, language::Regex::Concat(a + b), word) {
+        if language::numeric_lang(sem, language::Regex::Concat(a + b), word) {
             let parts = choose|p: Seq<Seq<EventView>>| p.len() == (a + b).len() && word == p.flatten()
-                && forall|i: int| 0 <= i < (a + b).len() ==> language::lang(sem, (a + b)[i], p[i]);
+                && forall|i: int| 0 <= i < (a + b).len() ==> language::numeric_lang(sem, (a + b)[i], p[i]);
             let ap = parts.subrange(0, a.len() as int);
             let bp = parts.subrange(a.len() as int, parts.len() as int);
             assert(parts =~= ap + bp);
             vstd::seq_lib::lemma_flatten_concat(ap, bp);
             assert(parts.flatten() == ap.flatten() + bp.flatten());
-            assert forall|i: int| 0 <= i < a.len() implies language::lang(sem, a[i], ap[i]) by {
+            assert forall|i: int| 0 <= i < a.len() implies language::numeric_lang(sem, a[i], ap[i]) by {
                 assert(a[i] == (a + b)[i]);
             }
-            assert forall|i: int| 0 <= i < b.len() implies language::lang(sem, b[i], bp[i]) by {
+            assert forall|i: int| 0 <= i < b.len() implies language::numeric_lang(sem, b[i], bp[i]) by {
                 assert(b[i] == (a + b)[a.len() + i]);
                 assert(bp[i] == parts[a.len() + i]);
             }
-            assert(language::lang(sem, language::Regex::Concat(a), ap.flatten()));
-            assert(language::lang(sem, language::Regex::Concat(b), bp.flatten()));
+            assert(language::numeric_lang(sem, language::Regex::Concat(a), ap.flatten()));
+            assert(language::numeric_lang(sem, language::Regex::Concat(b), bp.flatten()));
         }
         if exists|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-            && language::lang(sem, language::Regex::Concat(a), u)
-            && language::lang(sem, language::Regex::Concat(b), v) {
+            && language::numeric_lang(sem, language::Regex::Concat(a), u)
+            && language::numeric_lang(sem, language::Regex::Concat(b), v) {
             let (u, v) = choose|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-                && language::lang(sem, language::Regex::Concat(a), u)
-                && language::lang(sem, language::Regex::Concat(b), v);
+                && language::numeric_lang(sem, language::Regex::Concat(a), u)
+                && language::numeric_lang(sem, language::Regex::Concat(b), v);
             let ap = choose|p: Seq<Seq<EventView>>| p.len() == a.len() && u == p.flatten()
-                && forall|i: int| 0 <= i < a.len() ==> language::lang(sem, a[i], p[i]);
+                && forall|i: int| 0 <= i < a.len() ==> language::numeric_lang(sem, a[i], p[i]);
             let bp = choose|p: Seq<Seq<EventView>>| p.len() == b.len() && v == p.flatten()
-                && forall|i: int| 0 <= i < b.len() ==> language::lang(sem, b[i], p[i]);
+                && forall|i: int| 0 <= i < b.len() ==> language::numeric_lang(sem, b[i], p[i]);
             let parts = ap + bp;
             vstd::seq_lib::lemma_flatten_concat(ap, bp);
             assert(parts.flatten() == word);
-            assert forall|i: int| 0 <= i < (a + b).len() implies language::lang(sem, (a + b)[i], parts[i]) by {
+            assert forall|i: int| 0 <= i < (a + b).len() implies language::numeric_lang(sem, (a + b)[i], parts[i]) by {
                 if i < a.len() { assert((a + b)[i] == a[i]); assert(parts[i] == ap[i]); }
                 else { assert((a + b)[i] == b[i - a.len()]); assert(parts[i] == bp[i - a.len()]); }
             }
@@ -8037,61 +8037,61 @@ pub mod verify {
     }
 
     pub proof fn regex_concat_empty<L>(sem: spec_fn(L, EventView) -> bool, word: Seq<EventView>)
-        ensures language::lang(sem, language::Regex::Concat(Seq::<language::Regex<L>>::empty()), word) == (word.len() == 0),
+        ensures language::numeric_lang(sem, language::Regex::Concat(Seq::<language::Regex<L>>::empty()), word) == (word.len() == 0),
     {
-        if language::lang(sem, language::Regex::Concat(Seq::<language::Regex<L>>::empty()), word) {
+        if language::numeric_lang(sem, language::Regex::Concat(Seq::<language::Regex<L>>::empty()), word) {
             let parts = choose|p: Seq<Seq<EventView>>| p.len() == 0 && word == p.flatten()
-                && forall|i: int| 0 <= i < 0 ==> language::lang(sem, Seq::<language::Regex<L>>::empty()[i], p[i]);
+                && forall|i: int| 0 <= i < 0 ==> language::numeric_lang(sem, Seq::<language::Regex<L>>::empty()[i], p[i]);
             assert(parts =~= Seq::<Seq<EventView>>::empty());
         }
         if word.len() == 0 {
             let parts = Seq::<Seq<EventView>>::empty();
             assert(word =~= parts.flatten());
-            assert(forall|i: int| 0 <= i < 0 ==> language::lang(sem, Seq::<language::Regex<L>>::empty()[i], parts[i]));
+            assert(forall|i: int| 0 <= i < 0 ==> language::numeric_lang(sem, Seq::<language::Regex<L>>::empty()[i], parts[i]));
         }
     }
 
     pub proof fn regex_concat_replace<L>(sem: spec_fn(L, EventView) -> bool, prefix: Seq<language::Regex<L>>, tail: Seq<language::Regex<L>>, r: language::Regex<L>)
-        requires forall|word: Seq<EventView>| language::lang(sem, language::Regex::Concat(tail), word) == language::lang(sem, r, word),
-        ensures forall|word: Seq<EventView>| language::lang(sem, language::Regex::Concat(prefix + tail), word)
-            == language::lang(sem, language::Regex::Concat(prefix.push(r)), word),
+        requires forall|word: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(tail), word) == language::numeric_lang(sem, r, word),
+        ensures forall|word: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(prefix + tail), word)
+            == language::numeric_lang(sem, language::Regex::Concat(prefix.push(r)), word),
     {
-        assert forall|word: Seq<EventView>| language::lang(sem, language::Regex::Concat(prefix + tail), word)
-            == language::lang(sem, language::Regex::Concat(prefix.push(r)), word) by {
+        assert forall|word: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(prefix + tail), word)
+            == language::numeric_lang(sem, language::Regex::Concat(prefix.push(r)), word) by {
             assert(prefix.push(r) =~= prefix + seq![r]);
             regex_concat_append(sem, prefix, tail, word);
             regex_concat_append(sem, prefix, seq![r], word);
-            if language::lang(sem, language::Regex::Concat(prefix + tail), word) {
+            if language::numeric_lang(sem, language::Regex::Concat(prefix + tail), word) {
                 let (u, v) = choose|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-                    && language::lang(sem, language::Regex::Concat(prefix), u)
-                    && language::lang(sem, language::Regex::Concat(tail), v);
-                assert(language::lang(sem, r, v));
+                    && language::numeric_lang(sem, language::Regex::Concat(prefix), u)
+                    && language::numeric_lang(sem, language::Regex::Concat(tail), v);
+                assert(language::numeric_lang(sem, r, v));
                 language::lemma_concat_singleton(sem, r, v);
                 assert(exists|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-                    && language::lang(sem, language::Regex::Concat(prefix), u)
-                    && language::lang(sem, language::Regex::Concat(seq![r]), v));
+                    && language::numeric_lang(sem, language::Regex::Concat(prefix), u)
+                    && language::numeric_lang(sem, language::Regex::Concat(seq![r]), v));
             }
-            if language::lang(sem, language::Regex::Concat(prefix.push(r)), word) {
+            if language::numeric_lang(sem, language::Regex::Concat(prefix.push(r)), word) {
                 let (u, v) = choose|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-                    && language::lang(sem, language::Regex::Concat(prefix), u)
-                    && language::lang(sem, language::Regex::Concat(seq![r]), v);
+                    && language::numeric_lang(sem, language::Regex::Concat(prefix), u)
+                    && language::numeric_lang(sem, language::Regex::Concat(seq![r]), v);
                 language::lemma_concat_singleton(sem, r, v);
-                assert(language::lang(sem, language::Regex::Concat(tail), v));
+                assert(language::numeric_lang(sem, language::Regex::Concat(tail), v));
                 assert(exists|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-                    && language::lang(sem, language::Regex::Concat(prefix), u)
-                    && language::lang(sem, language::Regex::Concat(tail), v));
+                    && language::numeric_lang(sem, language::Regex::Concat(prefix), u)
+                    && language::numeric_lang(sem, language::Regex::Concat(tail), v));
             }
         }
     }
 
     pub proof fn regex_concat_append_congruent<L>(sem: spec_fn(L, EventView) -> bool, left: Seq<language::Regex<L>>, right: Seq<language::Regex<L>>, suffix: Seq<language::Regex<L>>)
-        requires forall|word: Seq<EventView>| language::lang(sem, language::Regex::Concat(left), word)
-            == language::lang(sem, language::Regex::Concat(right), word),
-        ensures forall|word: Seq<EventView>| language::lang(sem, language::Regex::Concat(left + suffix), word)
-            == language::lang(sem, language::Regex::Concat(right + suffix), word),
+        requires forall|word: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(left), word)
+            == language::numeric_lang(sem, language::Regex::Concat(right), word),
+        ensures forall|word: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(left + suffix), word)
+            == language::numeric_lang(sem, language::Regex::Concat(right + suffix), word),
     {
-        assert forall|word: Seq<EventView>| language::lang(sem, language::Regex::Concat(left + suffix), word)
-            == language::lang(sem, language::Regex::Concat(right + suffix), word) by {
+        assert forall|word: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(left + suffix), word)
+            == language::numeric_lang(sem, language::Regex::Concat(right + suffix), word) by {
             regex_concat_append(sem, left, suffix, word);
             regex_concat_append(sem, right, suffix, word);
         }
@@ -8108,7 +8108,7 @@ pub mod verify {
             regex_concat_nats(g, theta, after, word)
                 == regex_concat_nats(g, theta, before.push(id), word),
     {
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(model::tables_wf);
         hide(model::lift_regex);
         regex_unfold(g, id);
@@ -8125,13 +8125,13 @@ pub mod verify {
             assert(model::lift_regexes(g, after) =~= lhs + rhs);
             assert(model::lift_regexes(g, before.push(id)) =~= lhs + seq![model::lift_regex(g, id)]);
             assert(lhs.push(model::lift_regex(g, id)) =~= lhs + seq![model::lift_regex(g, id)]);
-            assert forall|v: Seq<EventView>| language::lang(sem, language::Regex::Concat(rhs), v)
-                == language::lang(sem, model::lift_regex(g, id), v) by {
+            assert forall|v: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(rhs), v)
+                == language::numeric_lang(sem, model::lift_regex(g, id), v) by {
                 language::lemma_concat_singleton(sem, model::lift_regex(g, id), v);
                 match g.regexes[id as int].kind {
                     model::RegexKindNode::Epsilon => {
                         regex_concat_empty::<model::Test>(sem, v);
-                        reveal(language::lang);
+                        reveal(language::numeric_lang);
                     },
                     _ => {},
                 }
@@ -8182,7 +8182,7 @@ pub mod verify {
             == concat_combo(g, theta, ids, word),
         decreases ids.len(),
     {
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(model::tables_wf);
         hide(model::lift_regex);
         if ids.len() > 0 {
@@ -8196,8 +8196,8 @@ pub mod verify {
             let last_lifts = seq![model::lift_regex(g, id)];
             assert(model::lift_regexes(g, flat.push(id)) =~= flat_lifts + last_lifts);
             assert(model::lift_regexes(g, model::regex_ids(ids)) =~= input_lifts + last_lifts);
-            assert forall|v: Seq<EventView>| language::lang(sem, language::Regex::Concat(flat_lifts), v)
-                == language::lang(sem, language::Regex::Concat(input_lifts), v) by {
+            assert forall|v: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(flat_lifts), v)
+                == language::numeric_lang(sem, language::Regex::Concat(input_lifts), v) by {
                 regex_concat_flat_law(g, before, theta, v);
             }
             regex_concat_append_congruent(sem, flat_lifts, input_lifts, last_lifts);
@@ -8217,9 +8217,9 @@ pub mod verify {
             if concat_combo(g, theta, ids, word) {
                 let lifts = model::lift_regexes(g, model::regex_ids(ids));
                 let parts = choose|p: Seq<Seq<EventView>>| p.len() == lifts.len() && word == p.flatten()
-                    && forall|i: int| 0 <= i < lifts.len() ==> language::lang(model::gsem(theta), lifts[i], p[i]);
+                    && forall|i: int| 0 <= i < lifts.len() ==> language::numeric_lang(model::gsem(theta), lifts[i], p[i]);
                 assert(lifts[index] == language::Regex::Empty);
-                assert(language::lang(model::gsem(theta), lifts[index], parts[index]));
+                assert(language::numeric_lang(model::gsem(theta), lifts[index], parts[index]));
             }
         }
     }
@@ -8234,27 +8234,27 @@ pub mod verify {
     )
         requires left.len() == right.len(),
             forall|i: int, word: Seq<EventView>| 0 <= i < left.len()
-                ==> language::lang(sem, left[i], word) == language::lang(sem, right[i], word),
-        ensures forall|word: Seq<EventView>| language::lang(sem, language::Regex::Concat(left), word)
-            == language::lang(sem, language::Regex::Concat(right), word),
+                ==> language::numeric_lang(sem, left[i], word) == language::numeric_lang(sem, right[i], word),
+        ensures forall|word: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(left), word)
+            == language::numeric_lang(sem, language::Regex::Concat(right), word),
     {
-        assert forall|word: Seq<EventView>| language::lang(sem, language::Regex::Concat(left), word)
-            == language::lang(sem, language::Regex::Concat(right), word) by {
-            if language::lang(sem, language::Regex::Concat(left), word) {
+        assert forall|word: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(left), word)
+            == language::numeric_lang(sem, language::Regex::Concat(right), word) by {
+            if language::numeric_lang(sem, language::Regex::Concat(left), word) {
                 let parts = choose|p: Seq<Seq<EventView>>| p.len() == left.len() && word == p.flatten()
-                    && forall|i: int| 0 <= i < left.len() ==> language::lang(sem, left[i], p[i]);
-                assert forall|i: int| 0 <= i < right.len() implies language::lang(sem, right[i], parts[i]) by {
-                    assert(language::lang(sem, left[i], parts[i]));
+                    && forall|i: int| 0 <= i < left.len() ==> language::numeric_lang(sem, left[i], p[i]);
+                assert forall|i: int| 0 <= i < right.len() implies language::numeric_lang(sem, right[i], parts[i]) by {
+                    assert(language::numeric_lang(sem, left[i], parts[i]));
                 }
-                assert(language::lang(sem, language::Regex::Concat(right), word));
+                assert(language::numeric_lang(sem, language::Regex::Concat(right), word));
             }
-            if language::lang(sem, language::Regex::Concat(right), word) {
+            if language::numeric_lang(sem, language::Regex::Concat(right), word) {
                 let parts = choose|p: Seq<Seq<EventView>>| p.len() == right.len() && word == p.flatten()
-                    && forall|i: int| 0 <= i < right.len() ==> language::lang(sem, right[i], p[i]);
-                assert forall|i: int| 0 <= i < left.len() implies language::lang(sem, left[i], parts[i]) by {
-                    assert(language::lang(sem, right[i], parts[i]));
+                    && forall|i: int| 0 <= i < right.len() ==> language::numeric_lang(sem, right[i], p[i]);
+                assert forall|i: int| 0 <= i < left.len() implies language::numeric_lang(sem, left[i], parts[i]) by {
+                    assert(language::numeric_lang(sem, right[i], parts[i]));
                 }
-                assert(language::lang(sem, language::Regex::Concat(left), word));
+                assert(language::numeric_lang(sem, language::Regex::Concat(left), word));
             }
         }
     }
@@ -8526,13 +8526,13 @@ pub mod verify {
 
     pub proof fn regex_language_unfold<L>(sem: spec_fn(L, EventView) -> bool, regex: language::Regex<L>, word: Seq<EventView>)
         ensures match regex {
-            language::Regex::Union(cs) => language::lang(sem, regex, word) == (exists|i: int| 0 <= i < cs.len() && language::lang(sem, cs[i], word)),
-            language::Regex::Intersect(cs) => language::lang(sem, regex, word) == (forall|i: int| 0 <= i < cs.len() ==> language::lang(sem, cs[i], word)),
-            language::Regex::Test(t) => language::lang(sem, regex, word) == (word.len() == 1 && sem(t, word[0])),
-            language::Regex::Not(r) => language::lang(sem, regex, word) == !language::lang(sem, *r, word),
-            language::Regex::Epsilon => language::lang(sem, regex, word) == (word.len() == 0),
-            language::Regex::Empty => !language::lang(sem, regex, word),
-            language::Regex::All => language::lang(sem, regex, word),
+            language::Regex::Union(cs) => language::numeric_lang(sem, regex, word) == (exists|i: int| 0 <= i < cs.len() && language::numeric_lang(sem, cs[i], word)),
+            language::Regex::Intersect(cs) => language::numeric_lang(sem, regex, word) == (forall|i: int| 0 <= i < cs.len() ==> language::numeric_lang(sem, cs[i], word)),
+            language::Regex::Test(t) => language::numeric_lang(sem, regex, word) == (word.len() == 1 && sem(t, word[0])),
+            language::Regex::Not(r) => language::numeric_lang(sem, regex, word) == !language::numeric_lang(sem, *r, word),
+            language::Regex::Epsilon => language::numeric_lang(sem, regex, word) == (word.len() == 0),
+            language::Regex::Empty => !language::numeric_lang(sem, regex, word),
+            language::Regex::All => language::numeric_lang(sem, regex, word),
             _ => true,
         },
     {
@@ -8562,22 +8562,22 @@ pub mod verify {
         match g.regexes[id as int].kind {
             model::RegexKindNode::Union(cs) => {
                 if model::regex_lang(g, theta, id, word) {
-                    let i = choose|i: int| 0 <= i < cs.len() && language::lang(sem, model::lift_regexes(g, cs)[i], word);
+                    let i = choose|i: int| 0 <= i < cs.len() && language::numeric_lang(sem, model::lift_regexes(g, cs)[i], word);
                     assert(model::regex_lang(g, theta, cs[i], word));
                 }
                 if regex_combo_nats(g, theta, cs, word, false) {
                     let i = choose|i: int| 0 <= i < cs.len() && model::regex_lang(g, theta, cs[i], word);
-                    assert(language::lang(sem, model::lift_regexes(g, cs)[i], word));
+                    assert(language::numeric_lang(sem, model::lift_regexes(g, cs)[i], word));
                 }
             },
             model::RegexKindNode::Intersect(cs) => {
                 if model::regex_lang(g, theta, id, word) {
                     assert forall|i: int| 0 <= i < cs.len() implies model::regex_lang(g, theta, cs[i], word) by {
-                        assert(language::lang(sem, model::lift_regexes(g, cs)[i], word));
+                        assert(language::numeric_lang(sem, model::lift_regexes(g, cs)[i], word));
                     }
                 }
                 if regex_combo_nats(g, theta, cs, word, true) {
-                    assert forall|i: int| 0 <= i < cs.len() implies language::lang(sem, model::lift_regexes(g, cs)[i], word) by {
+                    assert forall|i: int| 0 <= i < cs.len() implies language::numeric_lang(sem, model::lift_regexes(g, cs)[i], word) by {
                         assert(model::regex_lang(g, theta, cs[i], word));
                     }
                 }
@@ -8823,27 +8823,27 @@ pub mod verify {
         let root = if intersect { language::Regex::Intersect(cs) } else { language::Regex::Union(cs) };
         language::lemma_nullable_iff_nil(sem, root);
         regex_language_unfold(sem, root, word);
-        assert forall|i: int| 0 <= i < ids.len() implies language::lang(sem, cs[i], word)
+        assert forall|i: int| 0 <= i < ids.len() implies language::numeric_lang(sem, cs[i], word)
             == language::nullable(model::lift_regex(g, ids[i]@)) by {
             assert(cs[i] == model::lift_regex(g, ids[i]@));
             language::lemma_nullable_iff_nil(sem, cs[i]);
         }
         if intersect {
             if nullable {
-                assert forall|i: int| 0 <= i < cs.len() implies language::lang(sem, cs[i], word) by {};
+                assert forall|i: int| 0 <= i < cs.len() implies language::numeric_lang(sem, cs[i], word) by {};
             }
-            if language::lang(sem, root, word) {
+            if language::numeric_lang(sem, root, word) {
                 assert forall|i: int| 0 <= i < ids.len() implies language::nullable(model::lift_regex(g, ids[i]@)) by {
-                    assert(language::lang(sem, cs[i], word));
+                    assert(language::numeric_lang(sem, cs[i], word));
                 }
             }
         } else {
             if nullable {
                 let i = choose|i: int| 0 <= i < ids.len() && language::nullable(model::lift_regex(g, ids[i]@));
-                assert(language::lang(sem, cs[i], word));
+                assert(language::numeric_lang(sem, cs[i], word));
             }
-            if language::lang(sem, root, word) {
-                let i = choose|i: int| 0 <= i < cs.len() && language::lang(sem, cs[i], word);
+            if language::numeric_lang(sem, root, word) {
+                let i = choose|i: int| 0 <= i < cs.len() && language::numeric_lang(sem, cs[i], word);
                 assert(language::nullable(model::lift_regex(g, ids[i]@)));
             }
         }
@@ -8871,7 +8871,7 @@ pub mod verify {
                 == if intersect { regex_group_combo(g, theta, tests, others, word, true) && model::regex_lang(g, theta, id@, word) }
                     else { regex_group_combo(g, theta, tests, others, word, false) || model::regex_lang(g, theta, id@, word) },
     {
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(model::test_holds);
         regex_test_ids_shape(tests);
         regex_test_ids_shape(next_tests);
@@ -8929,7 +8929,7 @@ pub mod verify {
                 == if mode.intersect { regex_combo(g, theta, before, word, true) && model::regex_lang(g, theta, id@, word) }
                     else { regex_combo(g, theta, before, word, false) || model::regex_lang(g, theta, id@, word) },
     {
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(model::lift_regex);
         regex_ids_shape(before);
         regex_ids_shape(after);
@@ -9171,7 +9171,7 @@ pub mod verify {
             ==> model::test_holds(theta, model::lift_test(next, id@), event) == test_combo(next, theta, tests, event, intersect),
     {
         hide(model::test_holds);
-        hide(language::lang);
+        hide(language::numeric_lang);
         model::lemma_lift_test_stable(g, next, id@);
         assert forall|i: int| 0 <= i < tests.len() implies model::lift_test(g, tests[i]@) == model::lift_test(next, tests[i]@) by {
             model::lemma_lift_test_stable(g, next, tests[i]@);
@@ -9307,7 +9307,7 @@ pub mod verify {
         value: GuardedTransition<L, C>, word: Seq<EventView>,
     ) -> bool {
         let context_sem = guarded_semantics(sem, ctx);
-        language::lang(context_sem, language::interp_transition(context_sem, event, value.term), word)
+        language::numeric_lang(context_sem, language::interp_transition(context_sem, event, value.term), word)
     }
 
     pub open spec fn guarded_refines<L, C>(
@@ -9495,8 +9495,8 @@ pub mod verify {
                 guarded_language(sem, ctx, event, guarded_set(before, intersect), word)
                     == guarded_language(sem, ctx, event, guarded_set(after, intersect), word) by {
                 assert forall|i: int| 0 <= i < before.len() implies
-                    language::lang(context_sem, language::interp_transition(context_sem, event, left[i]), word)
-                        == language::lang(context_sem, language::interp_transition(context_sem, event, right[i]), word) by {
+                    language::numeric_lang(context_sem, language::interp_transition(context_sem, event, left[i]), word)
+                        == language::numeric_lang(context_sem, language::interp_transition(context_sem, event, right[i]), word) by {
                     assert(guarded_refines(sem, valid, before[i], after[i]));
                     assert((before[i].guard)(ctx, event));
                     assert(guarded_language(sem, ctx, event, before[i], word)
@@ -9509,16 +9509,16 @@ pub mod verify {
                     language::lemma_interp_union(context_sem, event, left, word);
                     language::lemma_interp_union(context_sem, event, right, word);
                     if exists|i: int| 0 <= i < left.len()
-                        && language::lang(context_sem, language::interp_transition(context_sem, event, left[i]), word) {
+                        && language::numeric_lang(context_sem, language::interp_transition(context_sem, event, left[i]), word) {
                         let i = choose|i: int| 0 <= i < left.len()
-                            && language::lang(context_sem, language::interp_transition(context_sem, event, left[i]), word);
-                        assert(language::lang(context_sem, language::interp_transition(context_sem, event, right[i]), word));
+                            && language::numeric_lang(context_sem, language::interp_transition(context_sem, event, left[i]), word);
+                        assert(language::numeric_lang(context_sem, language::interp_transition(context_sem, event, right[i]), word));
                     }
                     if exists|i: int| 0 <= i < right.len()
-                        && language::lang(context_sem, language::interp_transition(context_sem, event, right[i]), word) {
+                        && language::numeric_lang(context_sem, language::interp_transition(context_sem, event, right[i]), word) {
                         let i = choose|i: int| 0 <= i < right.len()
-                            && language::lang(context_sem, language::interp_transition(context_sem, event, right[i]), word);
-                        assert(language::lang(context_sem, language::interp_transition(context_sem, event, left[i]), word));
+                            && language::numeric_lang(context_sem, language::interp_transition(context_sem, event, right[i]), word);
+                        assert(language::numeric_lang(context_sem, language::interp_transition(context_sem, event, left[i]), word));
                     }
                 }
             }
@@ -9543,7 +9543,7 @@ pub mod verify {
             let left = seq![language::interp_transition(context_sem, event, before.term), suffix];
             let right = seq![language::interp_transition(context_sem, event, after.term), suffix];
             assert forall|i: int, word: Seq<EventView>| 0 <= i < left.len() implies
-                language::lang(context_sem, left[i], word) == language::lang(context_sem, right[i], word) by {
+                language::numeric_lang(context_sem, left[i], word) == language::numeric_lang(context_sem, right[i], word) by {
                 if i == 0 {
                     assert(guarded_language(sem, ctx, event, before, word)
                         == guarded_language(sem, ctx, event, after, word));
@@ -13378,7 +13378,7 @@ pub mod verify {
             let sem = model::gsem(theta);
             assert forall|i: int| 0 <= i < children.len() implies
                 transition_lang(g, theta, children[i], event, word)
-                    == language::lang(sem, language::interp_transition(sem, event, terms[i]), word) by {
+                    == language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), word) by {
                 assert(terms[i] == model::lift_transition(g, children[i]@));
             }
             if intersect {
@@ -13387,13 +13387,13 @@ pub mod verify {
                 language::lemma_interp_union(sem, event, terms, word);
                 if transition_lang(g, theta, id, event, word) {
                     let i = choose|i: int| 0 <= i < terms.len()
-                        && language::lang(sem, language::interp_transition(sem, event, terms[i]), word);
+                        && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), word);
                     assert(transition_lang(g, theta, children[i], event, word));
                 }
                 if transition_combo(g, theta, children, event, word, false) {
                     let i = choose|i: int| 0 <= i < children.len()
                         && transition_lang(g, theta, children[i], event, word);
-                    assert(language::lang(sem, language::interp_transition(sem, event, terms[i]), word));
+                    assert(language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), word));
                 }
             }
         }
@@ -13854,20 +13854,20 @@ pub mod verify {
 
     pub proof fn transition_set_law(ids: Seq<TransitionId>, intersect: bool)
         ensures forall|g: model::Graph, theta: Subst, event: EventView, word: Seq<EventView>|
-            language::lang(model::gsem(theta), language::interp_transition(model::gsem(theta), event,
+            language::numeric_lang(model::gsem(theta), language::interp_transition(model::gsem(theta), event,
                 transition_unbounded_node(g, if intersect { model::TransitionNode::Intersect(model::transition_ids(ids)) }
                     else { model::TransitionNode::Union(model::transition_ids(ids)) })), word)
                 == transition_combo(g, theta, ids, event, word, intersect),
     {
         assert forall|g: model::Graph, theta: Subst, event: EventView, word: Seq<EventView>|
-            language::lang(model::gsem(theta), language::interp_transition(model::gsem(theta), event,
+            language::numeric_lang(model::gsem(theta), language::interp_transition(model::gsem(theta), event,
                 transition_unbounded_node(g, if intersect { model::TransitionNode::Intersect(model::transition_ids(ids)) }
                     else { model::TransitionNode::Union(model::transition_ids(ids)) })), word)
                 == transition_combo(g, theta, ids, event, word, intersect) by {
             let sem = model::gsem(theta);
             let terms = model::transition_ids(ids).map(|i: int, id: nat| model::lift_transition(g, id));
             assert forall|i: int| 0 <= i < ids.len() implies
-                language::lang(sem, language::interp_transition(sem, event, terms[i]), word)
+                language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), word)
                     == transition_lang(g, theta, ids[i], event, word) by {
                 assert(terms[i] == model::lift_transition(g, ids[i]@));
             }
@@ -13876,14 +13876,14 @@ pub mod verify {
             } else {
                 language::lemma_interp_union(sem, event, terms, word);
                 if exists|i: int| 0 <= i < terms.len()
-                    && language::lang(sem, language::interp_transition(sem, event, terms[i]), word) {
+                    && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), word) {
                     let i = choose|i: int| 0 <= i < terms.len()
-                        && language::lang(sem, language::interp_transition(sem, event, terms[i]), word);
+                        && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), word);
                     assert(transition_lang(g, theta, ids[i], event, word));
                 }
                 if transition_combo(g, theta, ids, event, word, false) {
                     let i = choose|i: int| 0 <= i < ids.len() && transition_lang(g, theta, ids[i], event, word);
-                    assert(language::lang(sem, language::interp_transition(sem, event, terms[i]), word));
+                    assert(language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), word));
                 }
             }
         }
@@ -14476,20 +14476,20 @@ pub mod verify {
         sem: spec_fn(L, EventView) -> bool, event: EventView,
         a: language::Transition<L>, b: language::Transition<L>, word: Seq<EventView>,
     )
-        ensures language::lang(sem, language::interp_transition(sem, event,
+        ensures language::numeric_lang(sem, language::interp_transition(sem, event,
             language::Transition::Intersect(seq![a, b])), word)
-            == (language::lang(sem, language::interp_transition(sem, event, a), word)
-                && language::lang(sem, language::interp_transition(sem, event, b), word)),
+            == (language::numeric_lang(sem, language::interp_transition(sem, event, a), word)
+                && language::numeric_lang(sem, language::interp_transition(sem, event, b), word)),
     {
         language::lemma_interp_intersect(sem, event, seq![a, b], word);
-        assert((forall|i: int| 0 <= i < 2 ==> language::lang(sem,
+        assert((forall|i: int| 0 <= i < 2 ==> language::numeric_lang(sem,
             language::interp_transition(sem, event, seq![a, b][i]), word))
-            == (language::lang(sem, language::interp_transition(sem, event, a), word)
-                && language::lang(sem, language::interp_transition(sem, event, b), word))) by {
-            assert forall|i: int| 0 <= i < 2 implies language::lang(sem,
+            == (language::numeric_lang(sem, language::interp_transition(sem, event, a), word)
+                && language::numeric_lang(sem, language::interp_transition(sem, event, b), word))) by {
+            assert forall|i: int| 0 <= i < 2 implies language::numeric_lang(sem,
                 language::interp_transition(sem, event, seq![a, b][i]), word)
-                    == if i == 0 { language::lang(sem, language::interp_transition(sem, event, a), word) }
-                    else { language::lang(sem, language::interp_transition(sem, event, b), word) } by {}
+                    == if i == 0 { language::numeric_lang(sem, language::interp_transition(sem, event, a), word) }
+                    else { language::numeric_lang(sem, language::interp_transition(sem, event, b), word) } by {}
         }
     }
 
@@ -14538,7 +14538,7 @@ pub mod verify {
             transition_lemma_context_sem(ctx);
             language::lemma_interp_intersect(model::gsem(theta), event, terms, word);
             assert forall|i: int| 0 <= i < ids.len() implies
-                language::lang(model::gsem(theta), language::interp_transition(model::gsem(theta), event, terms[i]), word)
+                language::numeric_lang(model::gsem(theta), language::interp_transition(model::gsem(theta), event, terms[i]), word)
                     == transition_lang(g, theta, ids[i], event, word) by {
                 assert(terms[i] == model::lift_transition(g, ids[i]@));
             }
@@ -14773,7 +14773,7 @@ pub mod verify {
         hide(model::test_holds);
         hide(model::lift_regex);
         hide(model::lift_transition);
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(language::interp_transition);
         let root = if left { a } else { b };
         transition_unfold(g, root@);
@@ -14805,25 +14805,25 @@ pub mod verify {
                 language::lemma_interp_union(context_sem, event, terms, word);
                 language::lemma_interp_union(context_sem, event, outputs, word);
                 assert forall|i: int| 0 <= i < children.len() implies
-                    language::lang(context_sem, language::interp_transition(context_sem, event, outputs[i]), word)
+                    language::numeric_lang(context_sem, language::interp_transition(context_sem, event, outputs[i]), word)
                         == if left {
-                            language::lang(context_sem, language::interp_transition(context_sem, event, terms[i]), word)
+                            language::numeric_lang(context_sem, language::interp_transition(context_sem, event, terms[i]), word)
                                 && transition_lang(g, ctx.bindings, b, event, word)
                         } else { transition_lang(g, ctx.bindings, a, event, word)
-                            && language::lang(context_sem, language::interp_transition(context_sem, event, terms[i]), word) } by {
+                            && language::numeric_lang(context_sem, language::interp_transition(context_sem, event, terms[i]), word) } by {
                     if left { machine_pair_binary_language(context_sem, event, terms[i], model::lift_transition(g, b@), word); }
                     else { machine_pair_binary_language(context_sem, event, model::lift_transition(g, a@), terms[i], word); }
                 }
                 if guarded_language(sem, ctx, event, expected, word) {
                     let i = choose|i: int| 0 <= i < terms.len()
-                        && language::lang(context_sem, language::interp_transition(context_sem, event, terms[i]), word);
-                    assert(language::lang(context_sem, language::interp_transition(context_sem, event, outputs[i]), word));
+                        && language::numeric_lang(context_sem, language::interp_transition(context_sem, event, terms[i]), word);
+                    assert(language::numeric_lang(context_sem, language::interp_transition(context_sem, event, outputs[i]), word));
                 }
                 if guarded_language(sem, ctx, event, result, word) {
                     let i = choose|i: int| 0 <= i < outputs.len()
-                        && language::lang(context_sem, language::interp_transition(context_sem, event, outputs[i]), word);
-                    assert(language::lang(context_sem, language::interp_transition(context_sem, event, terms[i]), word));
-                    assert(language::lang(context_sem, language::interp_transition(context_sem, event, language::Transition::Union(terms)), word));
+                        && language::numeric_lang(context_sem, language::interp_transition(context_sem, event, outputs[i]), word);
+                    assert(language::numeric_lang(context_sem, language::interp_transition(context_sem, event, terms[i]), word));
+                    assert(language::numeric_lang(context_sem, language::interp_transition(context_sem, event, language::Transition::Union(terms)), word));
                 }
             }
         }
@@ -14869,29 +14869,29 @@ pub mod verify {
                 if index + 1 < terms.len() { language::lemma_interp_intersect(context_sem, event, ats, word); }
                 machine_pair_binary_language(context_sem, event, head, terms[index as int], word);
                 if guarded_language(sem, ctx, event, before, word) {
-                    assert(language::lang(context_sem, language::interp_transition(context_sem, event, bs[0]), word));
-                    assert(language::lang(context_sem, language::interp_transition(context_sem, event, bs[1]), word));
+                    assert(language::numeric_lang(context_sem, language::interp_transition(context_sem, event, bs[0]), word));
+                    assert(language::numeric_lang(context_sem, language::interp_transition(context_sem, event, bs[1]), word));
                     assert forall|i: int| 0 <= i < ats.len() implies
-                        language::lang(context_sem, language::interp_transition(context_sem, event, ats[i]), word) by {
+                        language::numeric_lang(context_sem, language::interp_transition(context_sem, event, ats[i]), word) by {
                         if i > 0 {
                             assert(ats[i] == bs[i + 1]);
-                            assert(language::lang(context_sem, language::interp_transition(context_sem, event, bs[i + 1]), word));
+                            assert(language::numeric_lang(context_sem, language::interp_transition(context_sem, event, bs[i + 1]), word));
                         }
                     }
                 }
                 if guarded_language(sem, ctx, event, after, word) {
                     if index + 1 < terms.len() {
                         assert(after.term == language::Transition::Intersect(ats));
-                        assert(language::lang(context_sem, language::interp_transition(context_sem, event, ats[0]), word));
+                        assert(language::numeric_lang(context_sem, language::interp_transition(context_sem, event, ats[0]), word));
                         assert(ats[0] == pair.term);
                     }
-                    assert(language::lang(context_sem, language::interp_transition(context_sem, event, pair.term), word));
+                    assert(language::numeric_lang(context_sem, language::interp_transition(context_sem, event, pair.term), word));
                     assert forall|i: int| 0 <= i < bs.len() implies
-                        language::lang(context_sem, language::interp_transition(context_sem, event, bs[i]), word) by {
+                        language::numeric_lang(context_sem, language::interp_transition(context_sem, event, bs[i]), word) by {
                         if i > 1 {
                             assert(index + 1 < terms.len());
                             assert(bs[i] == ats[i - 1]);
-                            assert(language::lang(context_sem, language::interp_transition(context_sem, event, ats[i - 1]), word));
+                            assert(language::numeric_lang(context_sem, language::interp_transition(context_sem, event, ats[i - 1]), word));
                         }
                     }
                 }
@@ -14972,10 +14972,10 @@ pub mod verify {
                     language::lemma_interp_intersect(context_sem, event, terms, word);
                 }
                 assert forall|i: int| 0 <= i < ids.len() implies
-                    language::lang(context_sem, language::interp_transition(context_sem, event, input_terms[i]), word)
+                    language::numeric_lang(context_sem, language::interp_transition(context_sem, event, input_terms[i]), word)
                         == transition_lang(g, ctx.bindings, ids[i], event, word) by {};
                 assert forall|i: int| 0 <= i < children.len() implies
-                    language::lang(context_sem, language::interp_transition(context_sem, event, terms[i]), word)
+                    language::numeric_lang(context_sem, language::interp_transition(context_sem, event, terms[i]), word)
                         == transition_lang(g, ctx.bindings, children[i], event, word) by {};
                 assert(transition_combo(g, ctx.bindings, ids, event, word, true)
                     == transition_combo(g, ctx.bindings, children, event, word, true));
@@ -15088,8 +15088,8 @@ pub mod verify {
             let suffix_terms = model::lift_regexes(g, model::regex_ids(suffix));
             language::lemma_interp_append(context_sem, event, term, suffix_terms);
             language::lemma_interp_append(context_sem, event, term, seq![combined_term]);
-            assert forall|word: Seq<EventView>| language::lang(context_sem, language::Regex::Concat(suffix_terms), word)
-                == language::lang(context_sem, combined_term, word) by {
+            assert forall|word: Seq<EventView>| language::numeric_lang(context_sem, language::Regex::Concat(suffix_terms), word)
+                == language::numeric_lang(context_sem, combined_term, word) by {
                 assert(model::regex_lang(g, ctx.bindings, combined@, word)
                     == concat_combo(g, ctx.bindings, suffix, word));
             }
@@ -15126,7 +15126,7 @@ pub mod verify {
         g: model::Graph, theta: Subst, id: TransitionId, suffix: RegexId,
         event: EventView, word: Seq<EventView>,
     ) -> bool {
-        language::lang(model::gsem(theta), language::Regex::Concat(seq![
+        language::numeric_lang(model::gsem(theta), language::Regex::Concat(seq![
             language::interp_transition(model::gsem(theta), event, model::lift_transition(g, id@)),
             model::lift_regex(g, suffix@),
         ]), word)
@@ -15152,28 +15152,28 @@ pub mod verify {
     }
 
     pub proof fn machine_unary_append_identity<L>(sem: spec_fn(L, EventView) -> bool, head: language::Regex<L>, word: Seq<EventView>)
-        ensures language::lang(sem, language::Regex::Concat(seq![head, language::Regex::Epsilon]), word) == language::lang(sem, head, word),
-            !language::lang(sem, language::Regex::Concat(seq![head, language::Regex::Empty]), word),
+        ensures language::numeric_lang(sem, language::Regex::Concat(seq![head, language::Regex::Epsilon]), word) == language::numeric_lang(sem, head, word),
+            !language::numeric_lang(sem, language::Regex::Concat(seq![head, language::Regex::Empty]), word),
     {
         language::lemma_concat_pair(sem, head, language::Regex::Epsilon, word);
         language::lemma_concat_pair(sem, head, language::Regex::Empty, word);
-        if language::lang(sem, head, word) {
+        if language::numeric_lang(sem, head, word) {
             let empty = Seq::<EventView>::empty();
             assert(word == word + empty);
-            assert(language::lang(sem, language::Regex::Epsilon, empty));
+            assert(language::numeric_lang(sem, language::Regex::Epsilon, empty));
         }
     }
 
     pub proof fn machine_unary_append_reassociate<L>(
         sem: spec_fn(L, EventView) -> bool, head: language::Regex<L>, suffix: Seq<language::Regex<L>>, last: language::Regex<L>,
     )
-        ensures forall|word: Seq<EventView>| language::lang(sem,
+        ensures forall|word: Seq<EventView>| language::numeric_lang(sem,
             language::Regex::Concat(seq![language::Regex::Concat(seq![head] + suffix), last]), word)
-            == language::lang(sem, language::Regex::Concat(seq![head, language::Regex::Concat(suffix.push(last))]), word),
+            == language::numeric_lang(sem, language::Regex::Concat(seq![head, language::Regex::Concat(suffix.push(last))]), word),
     {
         let flat = seq![head] + suffix;
-        assert forall|word: Seq<EventView>| language::lang(sem, language::Regex::Concat(seq![language::Regex::Concat(flat)]), word)
-            == language::lang(sem, language::Regex::Concat(flat), word) by {
+        assert forall|word: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(seq![language::Regex::Concat(flat)]), word)
+            == language::numeric_lang(sem, language::Regex::Concat(flat), word) by {
             language::lemma_concat_singleton(sem, language::Regex::Concat(flat), word);
         }
         regex_concat_append_congruent(sem, seq![language::Regex::Concat(flat)], flat, seq![last]);
@@ -15182,45 +15182,45 @@ pub mod verify {
         assert(flat + seq![last] =~= seq![head] + tail);
         assert(seq![language::Regex::Concat(flat)] + seq![last] =~= seq![language::Regex::Concat(flat), last]);
         assert(seq![head].push(language::Regex::Concat(tail)) =~= seq![head, language::Regex::Concat(tail)]);
-        assert forall|word: Seq<EventView>| language::lang(sem,
+        assert forall|word: Seq<EventView>| language::numeric_lang(sem,
             language::Regex::Concat(seq![language::Regex::Concat(flat), last]), word)
-            == language::lang(sem, language::Regex::Concat(seq![head, language::Regex::Concat(tail)]), word) by {
-            assert(language::lang(sem, language::Regex::Concat(seq![language::Regex::Concat(flat)] + seq![last]), word)
-                == language::lang(sem, language::Regex::Concat(flat + seq![last]), word));
-            assert(language::lang(sem, language::Regex::Concat(seq![head] + tail), word)
-                == language::lang(sem, language::Regex::Concat(seq![head].push(language::Regex::Concat(tail))), word));
+            == language::numeric_lang(sem, language::Regex::Concat(seq![head, language::Regex::Concat(tail)]), word) by {
+            assert(language::numeric_lang(sem, language::Regex::Concat(seq![language::Regex::Concat(flat)] + seq![last]), word)
+                == language::numeric_lang(sem, language::Regex::Concat(flat + seq![last]), word));
+            assert(language::numeric_lang(sem, language::Regex::Concat(seq![head] + tail), word)
+                == language::numeric_lang(sem, language::Regex::Concat(seq![head].push(language::Regex::Concat(tail))), word));
         }
     }
 
     pub proof fn machine_unary_demorgan<L>(
         sem: spec_fn(L, EventView) -> bool, event: EventView, terms: Seq<language::Transition<L>>, intersect: bool, word: Seq<EventView>,
     )
-        ensures language::lang(sem, language::interp_transition(sem, event, language::Transition::Not(Box::new(
+        ensures language::numeric_lang(sem, language::interp_transition(sem, event, language::Transition::Not(Box::new(
             if intersect { language::Transition::Intersect(terms) } else { language::Transition::Union(terms) }))), word)
-            == language::lang(sem, language::interp_transition(sem, event,
+            == language::numeric_lang(sem, language::interp_transition(sem, event,
                 if intersect { language::Transition::Union(terms.map(|i: int, term: language::Transition<L>| language::Transition::Not(Box::new(term)))) }
                 else { language::Transition::Intersect(terms.map(|i: int, term: language::Transition<L>| language::Transition::Not(Box::new(term)))) }), word),
     {
         let negated = terms.map(|i: int, term: language::Transition<L>| language::Transition::Not(Box::new(term)));
         assert forall|i: int| 0 <= i < terms.len() implies
-            language::lang(sem, language::interp_transition(sem, event, negated[i]), word)
-                == !language::lang(sem, language::interp_transition(sem, event, terms[i]), word) by {
+            language::numeric_lang(sem, language::interp_transition(sem, event, negated[i]), word)
+                == !language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), word) by {
             language::lemma_interp_not(sem, event, terms[i]);
         }
         if intersect {
             language::lemma_interp_not(sem, event, language::Transition::Intersect(terms));
             language::lemma_interp_intersect(sem, event, terms, word);
             language::lemma_interp_union(sem, event, negated, word);
-            if !(forall|i: int| 0 <= i < terms.len() ==> language::lang(sem, language::interp_transition(sem, event, terms[i]), word)) {
-                let i = choose|i: int| 0 <= i < terms.len() && !language::lang(sem, language::interp_transition(sem, event, terms[i]), word);
-                assert(language::lang(sem, language::interp_transition(sem, event, negated[i]), word));
+            if !(forall|i: int| 0 <= i < terms.len() ==> language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), word)) {
+                let i = choose|i: int| 0 <= i < terms.len() && !language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), word);
+                assert(language::numeric_lang(sem, language::interp_transition(sem, event, negated[i]), word));
             }
         } else {
             language::lemma_interp_not(sem, event, language::Transition::Union(terms));
             language::lemma_interp_union(sem, event, terms, word);
             language::lemma_interp_intersect(sem, event, negated, word);
-            if !(exists|i: int| 0 <= i < terms.len() && language::lang(sem, language::interp_transition(sem, event, terms[i]), word)) {
-                assert forall|i: int| 0 <= i < terms.len() implies language::lang(sem, language::interp_transition(sem, event, negated[i]), word) by {}
+            if !(exists|i: int| 0 <= i < terms.len() && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), word)) {
+                assert forall|i: int| 0 <= i < terms.len() implies language::numeric_lang(sem, language::interp_transition(sem, event, negated[i]), word) by {}
             }
         }
     }
@@ -15228,9 +15228,9 @@ pub mod verify {
     pub proof fn machine_unary_append_union<L>(
         sem: spec_fn(L, EventView) -> bool, event: EventView, terms: Seq<language::Transition<L>>, suffix: language::Regex<L>, word: Seq<EventView>,
     )
-        ensures language::lang(sem, language::interp_transition(sem, event,
+        ensures language::numeric_lang(sem, language::interp_transition(sem, event,
             language::Transition::Append(Box::new(language::Transition::Union(terms)), seq![suffix])), word)
-            == language::lang(sem, language::interp_transition(sem, event, language::Transition::Union(
+            == language::numeric_lang(sem, language::interp_transition(sem, event, language::Transition::Union(
                 terms.map(|i: int, term: language::Transition<L>| language::Transition::Append(Box::new(term), seq![suffix])))), word),
     {
         let head = language::interp_transition(sem, event, language::Transition::Union(terms));
@@ -15240,27 +15240,27 @@ pub mod verify {
         language::lemma_concat_pair(sem, head, suffix, word);
         language::lemma_interp_union(sem, event, appended, word);
         assert forall|i: int| 0 <= i < terms.len() implies
-            language::lang(sem, language::interp_transition(sem, event, appended[i]), word)
+            language::numeric_lang(sem, language::interp_transition(sem, event, appended[i]), word)
                 == (exists|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-                    && language::lang(sem, language::interp_transition(sem, event, terms[i]), u) && language::lang(sem, suffix, v)) by {
+                    && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), u) && language::numeric_lang(sem, suffix, v)) by {
             language::lemma_interp_append(sem, event, terms[i], seq![suffix]);
             let r = language::interp_transition(sem, event, terms[i]);
             assert(seq![r] + seq![suffix] =~= seq![r, suffix]);
             language::lemma_concat_pair(sem, r, suffix, word);
         }
-        if language::lang(sem, language::Regex::Concat(seq![head, suffix]), word) {
-            let (u, v) = choose|u: Seq<EventView>, v: Seq<EventView>| word == u + v && language::lang(sem, head, u) && language::lang(sem, suffix, v);
+        if language::numeric_lang(sem, language::Regex::Concat(seq![head, suffix]), word) {
+            let (u, v) = choose|u: Seq<EventView>, v: Seq<EventView>| word == u + v && language::numeric_lang(sem, head, u) && language::numeric_lang(sem, suffix, v);
             language::lemma_interp_union(sem, event, terms, u);
-            let i = choose|i: int| 0 <= i < terms.len() && language::lang(sem, language::interp_transition(sem, event, terms[i]), u);
-            assert(language::lang(sem, language::interp_transition(sem, event, appended[i]), word));
+            let i = choose|i: int| 0 <= i < terms.len() && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), u);
+            assert(language::numeric_lang(sem, language::interp_transition(sem, event, appended[i]), word));
         }
-        if language::lang(sem, language::interp_transition(sem, event, language::Transition::Union(appended)), word) {
-            let i = choose|i: int| 0 <= i < appended.len() && language::lang(sem, language::interp_transition(sem, event, appended[i]), word);
+        if language::numeric_lang(sem, language::interp_transition(sem, event, language::Transition::Union(appended)), word) {
+            let i = choose|i: int| 0 <= i < appended.len() && language::numeric_lang(sem, language::interp_transition(sem, event, appended[i]), word);
             let (u, v) = choose|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-                && language::lang(sem, language::interp_transition(sem, event, terms[i]), u) && language::lang(sem, suffix, v);
+                && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), u) && language::numeric_lang(sem, suffix, v);
             language::lemma_interp_union(sem, event, terms, u);
-            assert(language::lang(sem, head, u));
-            assert(language::lang(sem, language::Regex::Concat(seq![head, suffix]), word));
+            assert(language::numeric_lang(sem, head, u));
+            assert(language::numeric_lang(sem, language::Regex::Concat(seq![head, suffix]), word));
         }
     }
 
@@ -15516,7 +15516,7 @@ pub mod verify {
         ensures machine_unary_append_language(after, theta, id, suffix, event, word)
             == concat_combo(before, theta, seq![head, suffix], word),
     {
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(model::test_holds);
         hide(model::lift_regex);
         hide(model::lift_transition);
@@ -15544,7 +15544,7 @@ pub mod verify {
         ensures transition_result(after, ActionShape::Append(id@, suffix@), out),
     {
         hide(model::test_holds);
-        hide(language::lang);
+        hide(language::numeric_lang);
         hide(language::event_wf);
         hide(model::lift_regex);
         hide(model::lift_transition);
@@ -15628,8 +15628,8 @@ pub mod verify {
             language::lemma_interp_append(context_sem, event, model::lift_transition(g, id@), seq![last]);
             language::lemma_interp_append(context_sem, event, model::lift_transition(g, inner@), seq![combined_term]);
             machine_unary_append_reassociate(context_sem, head, tail, last);
-            assert forall|word: Seq<EventView>| language::lang(context_sem, language::Regex::Concat(tail.push(last)), word)
-                == language::lang(context_sem, combined_term, word) by {
+            assert forall|word: Seq<EventView>| language::numeric_lang(context_sem, language::Regex::Concat(tail.push(last)), word)
+                == language::numeric_lang(context_sem, combined_term, word) by {
                 assert(model::regex_lang(g, ctx.bindings, combined@, word)
                     == concat_combo(g, ctx.bindings, children.push(suffix), word));
             }
@@ -15642,12 +15642,12 @@ pub mod verify {
             assert(seq![head] + seq![combined_term] =~= seq![head, combined_term]);
             assert forall|word: Seq<EventView>| guarded_language(sem, ctx, event, expected, word)
                 == guarded_language(sem, ctx, event, result, word) by {
-                assert(language::lang(context_sem, language::Regex::Concat(seq![language::Regex::Concat(seq![head] + tail), last]), word)
-                    == language::lang(context_sem, language::Regex::Concat(seq![head, language::Regex::Concat(tail.push(last))]), word));
-                assert(language::lang(context_sem, language::Regex::Concat(seq![head] + tail.push(last)), word)
-                    == language::lang(context_sem, language::Regex::Concat(seq![head, language::Regex::Concat(tail.push(last))]), word));
-                assert(language::lang(context_sem, language::Regex::Concat(seq![head] + tail.push(last)), word)
-                    == language::lang(context_sem, language::Regex::Concat(seq![head, combined_term]), word));
+                assert(language::numeric_lang(context_sem, language::Regex::Concat(seq![language::Regex::Concat(seq![head] + tail), last]), word)
+                    == language::numeric_lang(context_sem, language::Regex::Concat(seq![head, language::Regex::Concat(tail.push(last))]), word));
+                assert(language::numeric_lang(context_sem, language::Regex::Concat(seq![head] + tail.push(last)), word)
+                    == language::numeric_lang(context_sem, language::Regex::Concat(seq![head, language::Regex::Concat(tail.push(last))]), word));
+                assert(language::numeric_lang(context_sem, language::Regex::Concat(seq![head] + tail.push(last)), word)
+                    == language::numeric_lang(context_sem, language::Regex::Concat(seq![head, combined_term]), word));
             }
         }
         machine_unary_replace_effect(g, task, next, base, prior);
@@ -15692,7 +15692,7 @@ pub mod verify {
             let tail = model::lift_regexes(after, model::regex_ids(children));
             let last = model::lift_regex(after, suffix@);
             language::lemma_interp_append(sem, event, model::lift_transition(after, id@), tail);
-            assert forall|w: Seq<EventView>| language::lang(sem, language::Regex::Concat(tail), w) == language::lang(sem, last, w) by {
+            assert forall|w: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(tail), w) == language::numeric_lang(sem, last, w) by {
                 assert(model::regex_lang(before, theta, suffix@, w) == concat_combo(before, theta, children, w));
             }
             regex_concat_replace(sem, seq![head], tail, last);
@@ -15789,17 +15789,17 @@ pub mod verify {
                 == guarded_language(sem, ctx, event, result, word) by {
                 let terms = children.map(|i: int, value: TransitionMeaning| value.term);
                 language::lemma_interp_union(model::gsem(ctx.bindings), event, terms, word);
-                assert forall|i: int| 0 <= i < ids.len() implies language::lang(model::gsem(ctx.bindings),
+                assert forall|i: int| 0 <= i < ids.len() implies language::numeric_lang(model::gsem(ctx.bindings),
                     language::interp_transition(model::gsem(ctx.bindings), event, terms[i]), word)
                         == transition_lang(g, ctx.bindings, ids[i], event, word) by {}
                 if guarded_language(sem, ctx, event, expected, word) {
-                    let i = choose|i: int| 0 <= i < terms.len() && language::lang(model::gsem(ctx.bindings),
+                    let i = choose|i: int| 0 <= i < terms.len() && language::numeric_lang(model::gsem(ctx.bindings),
                         language::interp_transition(model::gsem(ctx.bindings), event, terms[i]), word);
                     assert(transition_combo(g, ctx.bindings, ids, event, word, false));
                 }
                 if transition_combo(g, ctx.bindings, ids, event, word, false) {
                     let i = choose|i: int| 0 <= i < ids.len() && transition_lang(g, ctx.bindings, ids[i], event, word);
-                    assert(language::lang(model::gsem(ctx.bindings),
+                    assert(language::numeric_lang(model::gsem(ctx.bindings),
                         language::interp_transition(model::gsem(ctx.bindings), event, terms[i]), word));
                 }
                 transition_lemma_known_language(g, out, ctx, event, word);
@@ -15970,7 +15970,7 @@ pub mod verify {
         g: model::Graph, theta: Subst, root: TransitionId, suffix: Seq<RegexId>, event: EventView, word: Seq<EventView>,
     ) -> bool {
         let sem = model::gsem(theta);
-        language::lang(sem, language::Regex::Concat(seq![language::interp_transition(sem, event, model::lift_transition(g, root@))]
+        language::numeric_lang(sem, language::Regex::Concat(seq![language::interp_transition(sem, event, model::lift_transition(g, root@))]
             + model::lift_regexes(g, model::regex_ids(suffix))), word)
     }
 
@@ -16047,7 +16047,7 @@ pub mod verify {
                 let tail = model::lift_regexes(after, model::regex_ids(suffix));
                 let combined_term = model::lift_regex(after, combined@);
                 language::lemma_interp_append(sem, event, model::lift_transition(after, root@), seq![combined_term]);
-                assert forall|w: Seq<EventView>| language::lang(sem, language::Regex::Concat(tail), w) == language::lang(sem, combined_term, w) by {
+                assert forall|w: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(tail), w) == language::numeric_lang(sem, combined_term, w) by {
                     assert(model::regex_lang(before, theta, combined@, w) == concat_combo(before, theta, suffix, w));
                     assert(concat_combo(before, theta, suffix, w) == concat_combo(after, theta, suffix, w));
                 }
