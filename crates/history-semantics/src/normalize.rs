@@ -31,9 +31,9 @@ use junco_core::observation::SmallVecSpecFns;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_assumptions::{KernelStoreSpec, dedup_spec};
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs as language;
+use junco_core::verify::{errors, numeric_regex as language};
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{EventView, Subst};
+use junco_core::verify::numeric_regex::{EventView, Subst};
 use junco_core::{loop_try, scan};
 #[cfg(verus_keep_ghost)]
 use verify::*;
@@ -61,7 +61,7 @@ const fn midpoint(low: usize, high: usize) -> KernelResult<usize> {
 )]
 #[verus_verify]
 #[verus_spec(result => ensures result != Err(HistoryError::WrongHistoryOwner),
-    index < ids@.len() ==> language::no_invariant_failure(result), match result {
+    index < ids@.len() ==> errors::no_invariant_failure(result), match result {
     Ok(id) => index < ids@.len() && id == ids@[index as int],
     Err(_) => index >= ids@.len(),
 })]
@@ -173,7 +173,7 @@ impl TestMode {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(result),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> errors::no_invariant_failure(result),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(found) => found ==> test_opposite(final(store).graph(), a, b), Err(_) => true },
@@ -241,7 +241,7 @@ impl TestMode {
     #[verus_spec(result =>
         requires model::graph_wf(store.graph()), test_child_count(store.graph(), parent, count as nat),
         ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-                store.errors_are_non_invariant() && store.valid_store() ==> language::no_invariant_failure(result),
+                store.errors_are_non_invariant() && store.valid_store() ==> errors::no_invariant_failure(result),
                 store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result {
             Ok(found) => found == test_children(store.graph(), parent).contains(id@),
@@ -267,7 +267,7 @@ impl TestMode {
                 forall|i: int| 0 <= i < low ==> #[trigger] test_children(store.graph(), parent)[i] < id@,
                 forall|i: int| high <= i < count ==> #[trigger] test_children(store.graph(), parent)[i] >= id@,
                 store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
-                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_invariant_failure::<()>(Err(error)), None => true }),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => errors::no_invariant_failure::<()>(Err(error)), None => true }),
                 store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> low == high,
             decreases high - low,
@@ -309,7 +309,7 @@ impl TestMode {
             test_child_count(store.graph(), a, a_count as nat),
             test_child_count(store.graph(), b, b_count as nat),
         ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-                store.errors_are_non_invariant() && store.valid_store() ==> language::no_invariant_failure(result),
+                store.errors_are_non_invariant() && store.valid_store() ==> errors::no_invariant_failure(result),
                 store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result {
             Ok(included) => included == (forall|i: int| 0 <= i < a_count
@@ -342,7 +342,7 @@ impl TestMode {
                 included == (forall|j: int| 0 <= j < i
                     ==> test_children(store.graph(), b).contains(test_children(store.graph(), a)[j])),
                 store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
-                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_invariant_failure::<()>(Err(error)), None => true }),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => errors::no_invariant_failure::<()>(Err(error)), None => true }),
                 store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> i == a_count,
             decreases a_count - i,
@@ -384,7 +384,7 @@ impl TestMode {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(result),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> errors::no_invariant_failure(result),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(out) => out ==> test_absorbs(final(store).graph(), seq![a] + siblings@, self.and), Err(_) => true },
     )]
@@ -455,7 +455,7 @@ impl TestMode {
                 store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
                 old(store).valid_store() ==> store.valid_store(),
                 old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
-                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(state),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> errors::no_invariant_failure(state),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 a@ < store.graph().tests.len(), test_ids_valid(store.graph(), siblings@), index <= siblings.len(),
                 match state { Ok(out) => out ==> test_absorbs(store.graph(), seq![a] + siblings@, self.and), Err(_) => true },
@@ -474,7 +474,7 @@ impl TestMode {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(result),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> errors::no_invariant_failure(result),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(out) => out ==> test_has_opposite(final(store).graph(), id, siblings@), Err(_) => true },
     )]
@@ -510,7 +510,7 @@ impl TestMode {
                 store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
                 old(store).valid_store() ==> store.valid_store(),
                 old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
-                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(state),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> errors::no_invariant_failure(state),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 id@ < store.graph().tests.len(), test_ids_valid(store.graph(), siblings@), index <= siblings.len(),
                 match state { Ok(out) => out ==> test_has_opposite(store.graph(), id, siblings@), Err(_) => true },
@@ -533,7 +533,7 @@ impl TestMode {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(result),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> errors::no_invariant_failure(result),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(out) => out ==> test_absorbs(final(store).graph(), seq![a] + siblings@, self.and), Err(_) => true },
     )]
@@ -593,7 +593,7 @@ impl TestMode {
                 store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
                 old(store).valid_store() ==> store.valid_store(),
                 old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
-                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(state),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> errors::no_invariant_failure(state),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 a@ < store.graph().tests.len(), test_ids_valid(store.graph(), siblings@), index <= count,
                 count != 0 ==> test_dual(store.graph(), a, self.and) && test_child_count(store.graph(), a, count as nat),
@@ -622,7 +622,7 @@ impl TestMode {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(result),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> errors::no_invariant_failure(result),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(out) => out == test_redundant_in(final(store).graph(), a, siblings@, self.and), Err(_) => true },
     )]
@@ -686,7 +686,7 @@ impl TestMode {
                 store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
                 old(store).valid_store() ==> store.valid_store(),
                 old(store).errors_are_non_owner() ==> state != Err(HistoryError::WrongHistoryOwner),
-                old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(state),
+                old(store).errors_are_non_invariant() && old(store).valid_store() ==> errors::no_invariant_failure(state),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(state matches Err(HistoryError::InvalidPolicy { .. })),
                 model::graph_wf(store.graph()), a@ < store.graph().tests.len(), test_ids_valid(store.graph(), siblings@),
                 index <= siblings.len(),
@@ -703,7 +703,7 @@ impl TestMode {
     #[verus_spec(result =>
         requires model::graph_wf(store.graph()), test_child_count(store.graph(), id, count as nat),
         ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-                store.errors_are_non_invariant() && store.valid_store() ==> language::no_invariant_failure(result),
+                store.errors_are_non_invariant() && store.valid_store() ==> errors::no_invariant_failure(result),
                 store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             old(flat).view().is_prefix_of(final(flat).view()),
             final(flat).view().len() <= old(flat).view().len() + count,
@@ -733,7 +733,7 @@ impl TestMode {
                     ==> #[trigger] flat.view()[j]@ == test_children(store.graph(), id)[j - old(flat).view().len()],
                 forall|j: int| old(flat).view().len() <= j < flat.view().len() ==> #[trigger] flat.view()[j]@ < store.graph().tests.len(),
                 store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
-                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_invariant_failure::<()>(Err(error)), None => true }),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => errors::no_invariant_failure::<()>(Err(error)), None => true }),
                 store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> i == count,
             decreases count - i,
@@ -761,7 +761,7 @@ pub(crate) trait TestNormalize: Sized {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(result),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> errors::no_invariant_failure(result),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result {
@@ -787,7 +787,7 @@ pub(crate) trait TestNormalize: Sized {
             final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-            old(store).errors_are_non_invariant() && old(store).valid_store() ==> language::no_invariant_failure(result),
+            old(store).errors_are_non_invariant() && old(store).valid_store() ==> errors::no_invariant_failure(result),
             old(store).errors_are_non_invalid_policy() && old(store).valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             match result { Ok(id) => id@ < final(store).graph().tests.len()
                 && test_connective_result(old(store).graph(), final(store).graph(), children@, and, id@)
@@ -808,7 +808,7 @@ pub(crate) trait TestNormalize: Sized {
     ) -> (result: KernelResult<()>)
         requires model::graph_wf(store.graph()), test_child_count(store.graph(), id, count as nat),
         ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
-                store.errors_are_non_invariant() && store.valid_store() ==> language::no_invariant_failure(result),
+                store.errors_are_non_invariant() && store.valid_store() ==> errors::no_invariant_failure(result),
                 store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
             old(tasks).view().is_prefix_of(final(tasks).view()),
             forall|j: int| old(tasks).view().len() <= j < final(tasks).view().len()
@@ -841,7 +841,7 @@ pub(crate) trait TestNormalize: Sized {
                         ==> #[trigger] tasks.view()[old(tasks).view().len() + j].0@
                             == test_children(store.graph(), id)[count as int - 1 - j]),
                 store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
-                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_invariant_failure::<()>(Err(error)), None => true }),
+                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => errors::no_invariant_failure::<()>(Err(error)), None => true }),
                 store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
             ensures failure.is_none() ==> remaining == 0,
             decreases remaining,

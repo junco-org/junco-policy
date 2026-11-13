@@ -7,7 +7,7 @@ use history_semantics::verify::refinement::encoding;
 use history_syntax::RuleMode;
 use junco_core::flat::{FlatPair, FlatRegex, FlatTest};
 use junco_core::kernel::verify as model;
-use junco_core::verify::history_specs::{self as language, EventView, Regex, Subst};
+use junco_core::verify::numeric_regex::{self as language, EventView, Regex, Subst};
 use vstd::prelude::*;
 
 verus! {

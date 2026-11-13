@@ -17,7 +17,7 @@ use crate::spec::monitor;
 use history_store::{History, Store};
 use history_syntax::{Event, Rule};
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{no_internal_compile_error, no_invariant_failure};
+use junco_core::verify::errors::{no_internal_compile_error, no_invariant_failure};
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
@@ -361,7 +361,7 @@ impl<E: Event + 'static> TracePolicy<E> {
         ensures junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> no_internal_compile_error(result),
             result matches Ok(policy) ==> trace_wf(policy) && trace_store(policy) == store
             && trace_context_calls(policy) == 0 && trace_diagnostic_calls(policy) == 0
-            && forall|items: Seq<TraceRule<E>>| junco_core::verify::history_specs::into_iter_yields(rules, items) ==>
+            && forall|items: Seq<TraceRule<E>>| junco_core::verify::numeric_regex::into_iter_yields(rules, items) ==>
                 trace_sources(policy) == items.map(|i: int, item: TraceRule<E>| trace_rule_source(item))
                     && trace_diagnostic_ids(policy) == items.map(|i: int, item: TraceRule<E>| trace_rule_diagnostic_id(item)))]
     pub fn new<I: IntoIterator<Item = TraceRule<E>>>(
@@ -379,14 +379,14 @@ impl<E: Event + 'static> TracePolicy<E> {
         proof! {
             if converted.obeys_prophetic_iter_laws() {
                 vstd::std_specs::iter::map_postcondition(converted, conversion, mapped_input);
-                junco_core::verify::history_specs::lemma_iterator_into_iter_yields(mapped_input);
+                junco_core::verify::numeric_regex::lemma_iterator_into_iter_yields(mapped_input);
             }
         }
         let compiled = CompiledPolicy::from_rules(store, mapped)?;
         proof! {
             super::evaluate::verify::lemma_policy_wf(compiled);
             assert forall|items: Seq<TraceRule<E>>|
-                junco_core::verify::history_specs::into_iter_yields(input, items) implies
+                junco_core::verify::numeric_regex::into_iter_yields(input, items) implies
                     super::evaluate::policy_sources(compiled)
                         == items.map(|i: int, item: TraceRule<E>| trace_rule_source(item))
                     && super::evaluate::policy_diagnostic_ids(compiled)

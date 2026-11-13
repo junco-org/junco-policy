@@ -22,7 +22,7 @@ use junco_core::flat::{FlatHead, FlatPair, FlatRegex};
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
 use junco_core::spec::semantics;
-use junco_core::verify::{dsl, history_specs};
+use junco_core::verify::{dsl, errors, numeric_regex};
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 use vstd::view::DeepView;
@@ -52,7 +52,7 @@ fn vec_history<E: Event>(events: Vec<E>) -> (result: Result<History<E>, HistoryE
         && value.spec_numeric().spec_revision() == 0,
 {
     let store = Arc::new(Store::<E>::new()?);
-    proof { history_specs::lemma_vec_into_iter_yields(events); }
+    proof { numeric_regex::lemma_vec_into_iter_yields(events); }
     let value = History::from_events(store, events)?;
     proof { history::lemma_initialized_history_facts(value, store); }
     Ok(value)
@@ -63,7 +63,7 @@ fn scoped_production_compile<E: Event>(source: Rule<E>)
     -> (result: Result<CompiledRule<E>, CompileError>)
     requires junco_core::spec::hypotheses::monitor_hypotheses::<E>(), dsl::head_scoped(source.head@),
         dsl::regex_scoped(source.tail@, source.head@),
-    ensures history_specs::no_internal_compile_error(result),
+    ensures errors::no_internal_compile_error(result),
         !(result matches Err(CompileError::VariableComponentConflict { .. })),
         !(result matches Err(CompileError::UnboundVariable { .. })),
         !(result matches Err(CompileError::Runtime(HistoryError::InvalidPolicy { .. }))),
@@ -82,7 +82,7 @@ fn compiled_truth_table<E: Event>(
         && history_semantics::compiled_rule::source_rule(rule) == (Rule { mode, head,
             tail: if universal { RegexExpr::All } else { RegexExpr::Empty } })
         && answer != Err(HistoryError::WrongHistoryOwner)
-        && history_specs::no_invariant_failure(answer)
+        && errors::no_invariant_failure(answer)
         && (answer matches Ok(option) ==>
             option == (if semantics::head_matches(head@, *candidate) {
                 Some(universal)
@@ -94,7 +94,7 @@ fn compiled_truth_table<E: Event>(
     let store = Arc::new(Store::<E>::new()?);
     let owner = share_store(&store);
     proof { books::lemma_same_store_owner_identity(store, owner); }
-    proof { history_specs::lemma_vec_into_iter_yields(events); }
+    proof { numeric_regex::lemma_vec_into_iter_yields(events); }
     let value = History::from_events(owner, events)?;
     let tail = if universal { RegexExpr::All } else { RegexExpr::Empty };
     let source = Rule::new(mode, head, tail);
@@ -153,7 +153,7 @@ fn empty_policy<E: Event>(events: Vec<E>, candidate: &E)
 {
     let store = Arc::new(Store::<E>::new()?);
     let owner = share_store(&store);
-    proof { history_specs::lemma_vec_into_iter_yields(events); }
+    proof { numeric_regex::lemma_vec_into_iter_yields(events); }
     let value = History::from_events(owner, events)?;
     let rules = Vec::<history_semantics::policy::PolicyRule<E, ()>>::new();
     let mut state = CompiledPolicy::new(store, rules)?;
@@ -201,7 +201,7 @@ fn trace_first_diagnostic<E: Event + 'static,
     let store = Arc::new(Store::<E>::new()?);
     let owner = share_store(&store);
     proof { books::lemma_same_store_owner_identity(store, owner); }
-    proof { history_specs::lemma_vec_into_iter_yields(events); }
+    proof { numeric_regex::lemma_vec_into_iter_yields(events); }
     let value = History::from_events(owner, events)?;
     proof { history::lemma_initialized_history_facts(value, owner); }
     let first = Rule::new(RuleMode::Forbid, first_head, RegexExpr::All);
@@ -227,7 +227,7 @@ fn trace_first_diagnostic<E: Event + 'static,
     let mut rules = Vec::new();
     rules.push(first);
     rules.push(second);
-    proof { history_specs::lemma_vec_into_iter_yields(rules); }
+    proof { numeric_regex::lemma_vec_into_iter_yields(rules); }
     let ghost items = rules@;
     let mut state = TracePolicy::new(store, rules)?;
     proof {
@@ -359,8 +359,8 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
     let store = Arc::new(Store::<E>::new()?);
     let owner = share_store(&store);
     proof {
-        history_specs::lemma_vec_into_iter_yields(events);
-        history_specs::lemma_vec_into_iter_yields(rules);
+        numeric_regex::lemma_vec_into_iter_yields(events);
+        numeric_regex::lemma_vec_into_iter_yields(rules);
     }
     let value = History::from_events(owner, events)?;
     let ghost items = rules@;
@@ -771,7 +771,7 @@ fn retained_raw_observations<L: Limits>(arity: usize, events: &[history_store::s
 
 fn numeric_runtime_readiness<L: Limits>(bindings: &junco_core::kernel::Bindings,
     limits: &mut L, world: &mut ObservationWorld) -> Result<(), HistoryError>
-    requires history_specs::event_wf(bindings@, bindings@.len()),
+    requires numeric_regex::event_wf(bindings@, bindings@.len()),
         1 <= bindings@.len() <= MAX_ARITY,
 {
     let arity = bindings.arity();

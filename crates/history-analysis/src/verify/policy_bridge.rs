@@ -15,7 +15,7 @@ use junco_core::flat::{FlatPair, FlatRule};
 use junco_core::kernel::verify as model;
 use junco_core::spec::{questions as q, semantics as s};
 use junco_core::verify::flatten as fl;
-use junco_core::verify::history_specs::{EventView, Subst};
+use junco_core::verify::numeric_regex::{EventView, Subst};
 use vstd::prelude::*;
 
 verus! {
@@ -60,7 +60,7 @@ pub(crate) proof fn lemma_rule_denies<E: Event>(c: Constants<E>, rule: Rule<E>,
     requires constants_wf(c), junco_core::spec::hypotheses::analyzer_hypotheses::<E>(), rule_bridge_wf(c, rule, flat, template, n),
         (typed::fixes_book::<E>(c, coding) || typed::fixes_known::<E>(c, coding, q::rule_constants(rule@))),
         typed::covered_event::<E>(coding, event_view(candidate)),
-        junco_core::verify::history_specs::event_wf(typed::numeric_event::<E>(coding, event_view(candidate)), arity::<E>()),
+        junco_core::verify::numeric_regex::event_wf(typed::numeric_event::<E>(coding, event_view(candidate)), arity::<E>()),
         forall|i: int| 0 <= i < history.len() ==> typed::covered_event::<E>(coding, event_view(history[i])),
     ensures s::rule_violated(rule, candidate, history)
         == encoding::n_rule_denies(n, typed::numeric_event::<E>(coding, event_view(candidate)), typed::numeric_history::<E>(coding, typed::projected_history(history))),
@@ -77,7 +77,7 @@ pub(crate) proof fn lemma_policy_denies<E: Event>(c: Constants<E>, rules: Seq<Ru
         (typed::fixes_book::<E>(c, coding) || forall|j: int| 0 <= j < rules.len()
             ==> typed::fixes_known::<E>(c, coding, q::rule_constants(rules[j]@))),
         typed::covered_event::<E>(coding, event_view(candidate)),
-        junco_core::verify::history_specs::event_wf(typed::numeric_event::<E>(coding, event_view(candidate)), arity::<E>()),
+        junco_core::verify::numeric_regex::event_wf(typed::numeric_event::<E>(coding, event_view(candidate)), arity::<E>()),
         forall|i: int| 0 <= i < history.len() ==> typed::covered_event::<E>(coding, event_view(history[i])),
     ensures s::policy_denies(rules, candidate, history)
         == encoding::n_policy_denies(numeric, typed::numeric_event::<E>(coding, event_view(candidate)), typed::numeric_history::<E>(coding, typed::projected_history(history))),

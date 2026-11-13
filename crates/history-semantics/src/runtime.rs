@@ -36,7 +36,7 @@ use junco_core::kernel::{KernelResult, RegexId};
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs as language;
+use junco_core::verify::{errors, numeric_regex as language};
 #[cfg(verus_keep_ghost)]
 use verify::*;
 use vstd::prelude::*;
@@ -60,7 +60,7 @@ pub mod verify {
         template: junco_core::flat::FlatPair<u64>,
     ) -> bool {
         result != Err(HistoryError::WrongHistoryOwner)
-            && (junco_core::flat::verify::structural_wf(template) ==> language::no_invariant_failure(result))
+            && (junco_core::flat::verify::structural_wf(template) ==> errors::no_invariant_failure(result))
             && (junco_core::flat::verify::structural_wf(template)
                 ==> !(result matches Err(HistoryError::InvalidPolicy { .. })))
             && (result matches Ok(runtime) ==> runtime_wf(runtime)
@@ -113,7 +113,7 @@ pub mod verify {
     ) -> bool {
         result != Err(HistoryError::WrongHistoryOwner)
             && (batch_size > 0 && start.consumed <= target_len
-                && target_len <= stored@.events.len() ==> language::no_invariant_failure(result))
+                && target_len <= stored@.events.len() ==> errors::no_invariant_failure(result))
             && runtime_wf(after) && after.store == before.store && progress::pair_frame(before.pair, after.pair)
             && after.snapshots@ == before.snapshots@.insert((stored.id(), stored.revision()), history_store::store::verify::events_view(history_store::history::verify::stored_events(&stored)))
             && batch_matches_snapshot(after.pair, cursor, stored.id(), stored.revision(), bindings, after.snapshots@)
@@ -220,7 +220,7 @@ pub mod verify {
         ensures runtime_wf(after), runtime_frame(before, after),
             result != Err(HistoryError::WrongHistoryOwner),
             batch_size > 0 && cursor_consumed(start) <= target_len && target_len <= stored@.events.len()
-                ==> language::no_invariant_failure(result),
+                ==> errors::no_invariant_failure(result),
             after.spec_store() == before.spec_store(),
             after.spec_snapshots() == before.spec_snapshots().insert(
                 (stored.id(), stored.revision()), stored@.events),
@@ -492,7 +492,7 @@ impl RuleRuntime {
 
     #[verus_spec(result => ensures constructor_result(result, *store, *template),
         result != Err(HistoryError::WrongHistoryOwner),
-        junco_core::flat::verify::structural_wf(*template) ==> language::no_invariant_failure(result)
+        junco_core::flat::verify::structural_wf(*template) ==> errors::no_invariant_failure(result)
             && !(result matches Err(HistoryError::InvalidPolicy { .. }))) ]
     pub fn new<L: Limits>(
         store: &Arc<HistoryStore>,
@@ -553,7 +553,7 @@ impl RuleRuntime {
             progress::pair_frame(old(self).pair, final(self).pair),
             final(self).spec_store() == old(self).spec_store(),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_invariant_failure(result),
+            errors::no_invariant_failure(result),
             result is Err ==> final(self).cursors@ == old(self).cursors@,
             final(self).snapshots@ == old(self).snapshots@
                 || final(self).snapshots@ == old(self).snapshots@.insert((stored.id(), stored.revision()),
@@ -898,12 +898,12 @@ impl BatchCursor {
             crate::progress::verify::pair_frame(*old(pair), *final(pair)),
             result != Err(HistoryError::WrongHistoryOwner),
             batch_size > 0 && old(self).consumed <= target_len && target_len <= events@.len()
-                ==> language::no_invariant_failure(result),
+                ==> errors::no_invariant_failure(result),
             result is Err ==> final(self).consumed == old(self).consumed
                 && final(self).residual == old(self).residual,
             result is Ok ==> old(self).consumed <= final(self).consumed
                 && final(self).consumed <= target_len
-                && final(self).consumed == junco_core::verify::history_specs::selected_end(old(self).consumed as nat, target_len as nat, batch_size as nat),
+                && final(self).consumed == junco_core::verify::numeric_regex::selected_end(old(self).consumed as nat, target_len as nat, batch_size as nat),
             result matches Ok(Some(_)) ==> final(self).consumed == target_len,
             result matches Ok(None) ==> final(self).consumed < target_len,
             result is Ok ==> crate::progress::verify::residual_folds(

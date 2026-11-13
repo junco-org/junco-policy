@@ -574,7 +574,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                 && source::rule_wf::<E>(*rule),
             result is Err ==> final(self)@.rules == old(self)@.rules,
             forall|id: RuleId| #[trigger] id.belongs_to(old(self)) ==> id.belongs_to(final(self)),
-            junco_core::verify::history_specs::no_internal_compile_error(result),
+            junco_core::verify::errors::no_internal_compile_error(result),
     {
         let ghost before = *self;
         let flat = flatten_rule_parts(rule.mode, &rule.head, &rule.tail, &mut Unmetered, &mut ObservationWorld)?;
@@ -613,7 +613,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// Every supplied id is checked at runtime; a foreign or unknown id returns `UnknownId`.
     pub fn covered(&self, rule: RuleId, by: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), analyzer_hypotheses::<E>(),
-        ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        ensures junco_core::verify::errors::no_invariant_failure(result),
             result is Ok ==> rule.belongs_to(self) && ids_belong_to(self, by@),
             result matches Ok(v) ==> verdict::covered_spec(self@, rule@, rule_ids(by@), v@),
     {
@@ -629,7 +629,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     /// coverage-query interpretation.
     pub fn redundant(&self, rule: RuleId, policy: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), analyzer_hypotheses::<E>(),
-        ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        ensures junco_core::verify::errors::no_invariant_failure(result),
             result is Ok ==> rule.belongs_to(self) && ids_belong_to(self, policy@),
             result matches Ok(v) ==> verdict::redundant_spec(self@, rule@, rule_ids(policy@), v@),
     {
@@ -652,7 +652,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     pub fn at_least_as_strict(&self, stricter: &[RuleId], than: &[RuleId])
         -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), analyzer_hypotheses::<E>(),
-        ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        ensures junco_core::verify::errors::no_invariant_failure(result),
             result is Ok ==> ids_belong_to(self, stricter@) && ids_belong_to(self, than@),
             result matches Ok(v) ==> verdict::at_least_as_strict_spec(self@, rule_ids(stricter@), rule_ids(than@), v@),
     {
@@ -686,7 +686,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     }
 
     fn check_id(&self, id: RuleId) -> (result: Result<(), HistoryError>)
-        ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        ensures junco_core::verify::errors::no_invariant_failure(result),
             result is Ok ==> id.0 < self.rules@.len(),
             (result is Ok) == id.belongs_to(self),
             result is Err ==> result matches Err(HistoryError::UnknownId { .. }),
@@ -702,7 +702,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     }
 
     fn check_ids(&self, ids: &[RuleId]) -> (result: Result<(), HistoryError>)
-        ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        ensures junco_core::verify::errors::no_invariant_failure(result),
             result is Ok ==> valid_ids(*self, ids@),
             (result is Ok) == ids_belong_to(self, ids@),
             result is Err ==> result matches Err(HistoryError::UnknownId { .. }),
@@ -724,7 +724,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         -> (result: Result<Inclusion<E>, HistoryError>)
         requires analyzer_state_wf(*self), analyzer_hypotheses::<E>(),
             rule.0 < self.rules@.len(), valid_ids(*self, by@),
-        ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        ensures junco_core::verify::errors::no_invariant_failure(result),
             result matches Ok(v) ==> verdict::covered_spec(self@, rule@, queries::selected_rule_ids(by@, exclude), v@),
     {
         let analyzed = &self.rules[rule.0];
@@ -763,8 +763,8 @@ impl<E: Event> PolicyAnalyzer<E> {
             None => {
                 proof {
                     assert(inclusion::n_covers(views::ndomains(self.universes), policy, left)) by {
-                        assert forall|theta: junco_core::verify::history_specs::Subst,
-                            word: Seq<junco_core::verify::history_specs::EventView>|
+                        assert forall|theta: junco_core::verify::numeric_regex::Subst,
+                            word: Seq<junco_core::verify::numeric_regex::EventView>|
                             encoding::n_theta_ok(views::ndomains(self.universes), theta)
                             && encoding::n_history_in(views::ndomains(self.universes), word)
                             && encoding::n_rule_denies(left, theta, word)
@@ -969,7 +969,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             forall|k: int, v: nat| 0 <= k < operands.constants@.len()
                 && views::codes(operands.constants@[k].view()).contains(v)
                 ==> views::reconstruction::code_field(self.constants, Component(k as u8), v),
-        ensures junco_core::verify::history_specs::no_invariant_failure(result),
+        ensures junco_core::verify::errors::no_invariant_failure(result),
             result matches Ok(difference) ==> decision_ready(*self, NumericInput {
                 left: inclusion::denial(queries::stored_numeric(self.rules@[rule.0 as int])),
                 right: inclusion::firing_denials(views::ndomains(self.universes),
@@ -1000,9 +1000,9 @@ impl<E: Event> PolicyAnalyzer<E> {
             lemma_primitives_known_subset(self.constants, known,
                 numeric::reachable_regex_primitives(analyzed.numeric, analyzed.numeric.root as nat),
                 numeric::reachable_regex_primitives(tables@, denial as nat));
-            assert forall|theta: junco_core::verify::history_specs::Subst,
-                word: Seq<junco_core::verify::history_specs::EventView>|
-                junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
+            assert forall|theta: junco_core::verify::numeric_regex::Subst,
+                word: Seq<junco_core::verify::numeric_regex::EventView>|
+                junco_core::verify::numeric_regex::event_wf(theta, theta.len()) implies
                 numeric::source_regex(tables@, denial as nat, theta, word)
                     == encoding::n_lang(theta, inclusion::denial(left), word) by {
                 inclusion::lemma_denial_lang(left, theta, word);
@@ -1029,8 +1029,8 @@ impl<E: Event> PolicyAnalyzer<E> {
                         && views::codes(operands.constants@[pair.0.0 as int].view()).contains(pair.1),
                 forall|j: int| 0 <= j < matching@.len() ==> matching@[j] < tables.regexes@.len(),
                 covering_prefix(*self, by@, exclude, index as int, *case, tables@, matching@),
-                forall|theta: junco_core::verify::history_specs::Subst, word: Seq<junco_core::verify::history_specs::EventView>|
-                    junco_core::verify::history_specs::event_wf(theta, theta.len())
+                forall|theta: junco_core::verify::numeric_regex::Subst, word: Seq<junco_core::verify::numeric_regex::EventView>|
+                    junco_core::verify::numeric_regex::event_wf(theta, theta.len())
                     ==> numeric::source_regex(tables@, denial as nat, theta, word)
                         == encoding::n_lang(theta, inclusion::denial(left), word),
             decreases by@.len() - index,
@@ -1073,9 +1073,9 @@ impl<E: Event> PolicyAnalyzer<E> {
                         proof {
                             added = Some(root);
                             assert(queries::stored_numeric(*theirs).head =~= pins(theirs.numeric.head@));
-                            assert forall|theta: junco_core::verify::history_specs::Subst,
-                                word: Seq<junco_core::verify::history_specs::EventView>|
-                                junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
+                            assert forall|theta: junco_core::verify::numeric_regex::Subst,
+                                word: Seq<junco_core::verify::numeric_regex::EventView>|
+                                junco_core::verify::numeric_regex::event_wf(theta, theta.len()) implies
                                 numeric::source_regex(tables@, root as nat, theta, word)
                                     == encoding::n_lang(theta, inclusion::denial(queries::stored_numeric(*theirs)), word) by {
                                 inclusion::lemma_denial_lang(queries::stored_numeric(*theirs), theta, word);
@@ -1130,8 +1130,8 @@ impl<E: Event> PolicyAnalyzer<E> {
                 numeric::reachable_regex_primitives(assembled, denial as nat)
                     .union(numeric::reachable_regex_primitives(assembled, covering as nat)),
                 numeric::reachable_regex_primitives(difference, difference.root as nat));
-            assert forall|theta: junco_core::verify::history_specs::Subst, word: Seq<junco_core::verify::history_specs::EventView>|
-                junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
+            assert forall|theta: junco_core::verify::numeric_regex::Subst, word: Seq<junco_core::verify::numeric_regex::EventView>|
+                junco_core::verify::numeric_regex::event_wf(theta, theta.len()) implies
                 numeric::source_regex(assembled, covering as nat, theta, word)
                     == encoding::n_lang(theta, inclusion::firing_denials(views::ndomains(self.universes),
                         queries::numeric_policy(*self, by@, exclude), implementation::constraint_of(case@)), word) by {
@@ -1172,7 +1172,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     #[verus_spec(result => requires analyzer_hypotheses::<E>(), old(self).wf(),
         ensures final(self).wf(),
             final(self)@.domains == old(self)@.domains, final(self)@.rules == old(self)@.rules,
-            junco_core::verify::history_specs::no_internal_compile_error(result),
+            junco_core::verify::errors::no_internal_compile_error(result),
             result matches Ok(v) ==> verdict::tail_included_spec(old(self)@, final(self)@, head@, left@, right@, v@))]
     pub fn tail_included(
         &mut self,
@@ -1255,7 +1255,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                     lemma_primitives_known_subset(self.constants, known,
                         numeric::reachable_regex_primitives(right_numeric, right_numeric.root as nat),
                         numeric::reachable_regex_primitives(tables@, right_root as nat));
-                    assert forall|theta: junco_core::verify::history_specs::Subst, word: Seq<junco_core::verify::history_specs::EventView>|
+                    assert forall|theta: junco_core::verify::numeric_regex::Subst, word: Seq<junco_core::verify::numeric_regex::EventView>|
                         numeric::source_regex(tables@, left_root as nat, theta, word)
                             == numeric::source_regex(left_numeric, left_numeric.root as nat, theta, word) by {}
                 }
@@ -1263,7 +1263,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                 let difference = tables.difference(left_root, right_root)?;
                 let ghost numeric_input = NumericInput {
                     left: views::policy_source::source_model(difference, difference.root as nat),
-                    right: junco_core::verify::history_specs::Regex::Empty,
+                    right: junco_core::verify::numeric_regex::Regex::Empty,
                 };
                 proof {
                     views::policy_source::lemma_difference_primitives(assembled, difference, left_root as nat, right_root as nat);
@@ -1335,7 +1335,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             final(self).owner == old(self).owner,
             final(self).declared_domains == old(self).declared_domains,
             analyzer_state_wf(*old(self)) ==> analyzer_state_wf(*final(self)),
-            junco_core::verify::history_specs::no_invariant_failure(result),
+            junco_core::verify::errors::no_invariant_failure(result),
             final(self).constants.values@.len() <= old(self).constants.values@.len() + source.head@.len() + source.tests@.len(),
             result matches Ok(target) ==> enc::lowering(*source, target, crate::verify::constant_book(final(self).constants), fl::component_equality::<E>())
                 && junco_core::flat::verify::structural_wf(target) && numeric_head_wf(target.head@),
@@ -1392,7 +1392,7 @@ impl<E: Event> PolicyAnalyzer<E> {
             known.len() == arity::<E>(),
             forall|k: int| 0 <= k < arity::<E>() ==> (#[trigger] self@.domains[k] matches Some(values) ==> values.subset_of(known[k])),
         ensures result matches Ok(v) ==> numeric_decision_ok(*self, input, constraint@, v, known),
-            junco_core::verify::history_specs::no_invariant_failure(result),
+            junco_core::verify::errors::no_invariant_failure(result),
     {
         proof {
             assert(numeric::source_dag_wf(difference)) by { reveal(views::table::dag); }
@@ -1419,8 +1419,8 @@ impl<E: Event> PolicyAnalyzer<E> {
             lemma_universes_known(*self, known);
             lemma_root_vocabulary_known(*self, language, constraint@, known);
             assert(views::constraint_unique::universes_distinct(self.universes));
-            assert forall|theta: junco_core::verify::history_specs::Subst, word: Seq<junco_core::verify::history_specs::EventView>|
-                junco_core::verify::history_specs::event_wf(theta, theta.len()) implies
+            assert forall|theta: junco_core::verify::numeric_regex::Subst, word: Seq<junco_core::verify::numeric_regex::EventView>|
+                junco_core::verify::numeric_regex::event_wf(theta, theta.len()) implies
                     history_semantics::verify::refinement::encoding::n_lang(theta, start.state, word)
                         == (encoding::n_lang(theta, input.left, word)
                             && !encoding::n_lang(theta, input.right, word)) by {
@@ -1488,7 +1488,7 @@ impl<E: Event> PolicyAnalyzer<E> {
                 self.universes, *constraint, letters@, known@),
         ensures result matches Ok(c) ==> crate::verify::reconstruction::reconstructed(self.constants,
             self.universes, *constraint, letters@, alphabets@, c) && c.known@ == known@,
-            junco_core::verify::history_specs::no_invariant_failure(result))]
+            junco_core::verify::errors::no_invariant_failure(result))]
     fn counterexample(
         &self,
         constraint: &Constraint,

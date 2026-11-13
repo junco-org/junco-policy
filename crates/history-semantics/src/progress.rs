@@ -29,9 +29,9 @@ use junco_core::observation::SmallVecSpecFns;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_assumptions::*;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs as language;
+use junco_core::verify::{errors, numeric_regex as language};
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{EventView, Subst};
+use junco_core::verify::numeric_regex::{EventView, Subst};
 use junco_core::{error::HistoryError, kernel::*};
 use smallvec::SmallVec;
 #[cfg(verus_keep_ghost)]
@@ -83,7 +83,7 @@ pub(crate) struct CompiledPair {
 impl CompiledPair {
     // Individually representable byte counts can overflow when combined.
     #[verus_verify]
-    #[verus_spec(result => ensures language::no_invariant_failure(result),
+    #[verus_spec(result => ensures errors::no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
         result matches Err(error) ==> error is IndexOverflow,
         result matches Ok(bytes) ==> bytes as int ==
@@ -101,7 +101,7 @@ impl CompiledPair {
         ensures result != Err(HistoryError::WrongHistoryOwner),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             transition@ < atoms@.len() && atoms@[transition@ as int] is Some
-                ==> language::no_invariant_failure(result),
+                ==> errors::no_invariant_failure(result),
             result matches Ok(set) ==> transition@ < atoms@.len() && atoms@[transition@ as int] == Some(*set),
     )]
     pub(crate) fn cached_atoms(
@@ -153,7 +153,7 @@ impl CompiledPair {
         requires pair_wf(*old(self)), residual@ < (*old(self)).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_invariant_failure(result),
+            errors::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             (*final(self)).store.graph() == (*old(self)).store.graph(),
             result matches Ok(answer) ==> answer == language::nullable(model::lift_regex((*final(self)).store.graph(), residual@)),
@@ -195,7 +195,7 @@ impl CompiledPair {
             residual@ < (*old(self)).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_invariant_failure(result),
+            errors::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result matches Ok(out) ==> residual_folds(*final(self), bindings@, residual, history_store::store::verify::events_view(events@), out),
     )]
@@ -324,7 +324,7 @@ impl CompiledPair {
         requires pair_wf(*old(self)), transition@ < old(self).store.graph().transitions.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_invariant_failure(result),
+            errors::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result is Ok ==> has_atoms(*final(self), transition),
             final(self).caches.derivatives@ == old(self).caches.derivatives@,
@@ -461,7 +461,7 @@ impl CompiledPair {
             residual@ < old(self).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_invariant_failure(result),
+            errors::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result is Ok ==> has_guard(*final(self), residual),
     )]
@@ -573,7 +573,7 @@ impl CompiledPair {
             residual@ < old(self).store.graph().regexes.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_invariant_failure(result),
+            errors::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).caches.atoms@ == old(self).caches.atoms@, final(self).caches.guards@ == old(self).caches.guards@,
             result matches Ok(mask) ==> guard_wf(final(self).store.graph(), final(self).caches.atoms@, residual@ as int, Guard { transition, mask }),
@@ -695,7 +695,7 @@ impl CompiledPair {
             transition@ < old(self).store.graph().transitions.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_invariant_failure(result),
+            errors::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).caches.atoms@ == old(self).caches.atoms@, final(self).caches.guards@ == old(self).caches.guards@,
             successor_entries((*final(self)).caches.successors) == successor_entries((*old(self)).caches.successors),
@@ -809,7 +809,7 @@ impl CompiledPair {
         requires pair_wf(*old(self)), transition@ < old(self).store.graph().transitions.len(),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_invariant_failure(result),
+            errors::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             result matches Ok(id) ==> instantiation_result(*final(self), transition, bindings@, *event, id),
     )]
@@ -998,7 +998,7 @@ impl CompiledPair {
             result != Err(HistoryError::WrongHistoryOwner),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             symbolic::verify::assignment_valid(old(self).caches.atoms@[key.transition@ as int].unwrap()@.len(), key.words.view())
-                ==> language::no_invariant_failure(result),
+                ==> errors::no_invariant_failure(result),
             final(self).caches.atoms@ == old(self).caches.atoms@,
             final(self).caches.derivatives@ == old(self).caches.derivatives@,
             result matches Ok(id) ==> successor_entries((*final(self)).caches.successors).contains_key(class_key(key))
@@ -1087,7 +1087,7 @@ impl CompiledPair {
         requires pair_wf(*old(self)),
         ensures pair_wf(*final(self)), pair_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
-            language::no_invariant_failure(result),
+            errors::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
     )]
     /// Eagerly builds derivatives, atom sets and successor classes for up to `PRECOMPILE_STATES`
@@ -1254,7 +1254,7 @@ impl CompiledPair {
             final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
             old(store).errors_are_non_invalid_policy()
                 ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-            old(store).errors_are_non_invariant() ==> language::no_invariant_failure(result),
+            old(store).errors_are_non_invariant() ==> errors::no_invariant_failure(result),
             old(store).errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             result matches Ok(atoms) ==> atoms_wf(final(store).graph(), root@, atoms@),
             result matches Ok(atoms) ==> atoms_contained(final(store).graph(), root@, atoms@),

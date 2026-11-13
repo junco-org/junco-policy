@@ -14,7 +14,7 @@ use history_syntax::{Component, Event, Rule};
 use junco_core::flat::verify as portable;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatRule, FlatTerm, FlatTest};
 use junco_core::spec::{hypotheses::eq_equivalence, questions, semantics as tdsl};
-use junco_core::verify::history_specs::{self as language, EventView, Subst};
+use junco_core::verify::numeric_regex::{self as language, EventView, Subst};
 use junco_core::verify::{encoding as enc, flatten as fl};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;

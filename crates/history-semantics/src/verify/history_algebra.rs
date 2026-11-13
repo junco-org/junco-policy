@@ -7,8 +7,8 @@
 use alloc::boxed::Box;
 use history_syntax::syntax::Component;
 use junco_core::kernel::verify as model;
-use junco_core::verify::history_specs as language;
-use junco_core::verify::history_specs::{EventView, Head, Regex, SrcTest, Subst, Term, Transition};
+use junco_core::verify::numeric_regex as language;
+use junco_core::verify::numeric_regex::{EventView, Head, Regex, SrcTest, Subst, Term, Transition};
 use vstd::prelude::*;
 
 verus! {

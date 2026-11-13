@@ -12,7 +12,7 @@ use history_semantics::{SymbolicLanguage, symbolic_language_verify as facade};
 use history_store::native::members;
 use junco_core::kernel::{RegexId, TestId, verify as model};
 use junco_core::observation::SmallVecSpecFns;
-use junco_core::verify::history_specs::{self as language, EventView, Regex, Subst};
+use junco_core::verify::numeric_regex::{self as language, EventView, Regex, Subst};
 use vstd::prelude::*;
 
 verus! {

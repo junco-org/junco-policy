@@ -11,8 +11,8 @@ use super::encoding::*;
 use super::inclusion::*;
 use history_syntax::syntax::Component;
 use junco_core::kernel::verify as model;
-use junco_core::verify::history_specs as language;
-use junco_core::verify::history_specs::{EventView, Regex, Subst};
+use junco_core::verify::numeric_regex as language;
+use junco_core::verify::numeric_regex::{EventView, Regex, Subst};
 use vstd::prelude::*;
 
 verus! {

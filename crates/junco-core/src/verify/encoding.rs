@@ -5,7 +5,7 @@
 
 use crate::flat::verify::field_index;
 use crate::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
-use crate::verify::history_specs::EventView;
+use crate::verify::numeric_regex::EventView;
 use history_syntax::MAX_ARITY;
 use history_syntax::syntax::Component;
 use vstd::prelude::*;

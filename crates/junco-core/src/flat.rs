@@ -4,7 +4,7 @@ use crate::error::HistoryError;
 use crate::limits::Limits;
 use crate::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_specs::no_invariant_failure;
+use crate::verify::errors::no_invariant_failure;
 use alloc::string::String;
 use alloc::vec::Vec;
 use history_syntax::{
@@ -91,12 +91,12 @@ pub mod verify {
 
     verus! {
     impl View for FlatHead<u64> {
-        type V = crate::verify::history_specs::HeadField;
-        open spec fn view(&self) -> crate::verify::history_specs::HeadField {
+        type V = crate::verify::numeric_regex::HeadField;
+        open spec fn view(&self) -> crate::verify::numeric_regex::HeadField {
             match self {
-                FlatHead::Any => crate::verify::history_specs::HeadField::Any,
-                FlatHead::Constant(value) => crate::verify::history_specs::HeadField::Constant(*value as nat),
-                FlatHead::Bind => crate::verify::history_specs::HeadField::Bind,
+                FlatHead::Any => crate::verify::numeric_regex::HeadField::Any,
+                FlatHead::Constant(value) => crate::verify::numeric_regex::HeadField::Constant(*value as nat),
+                FlatHead::Bind => crate::verify::numeric_regex::HeadField::Bind,
             }
         }
     }

@@ -10,8 +10,8 @@ use alloc::boxed::Box;
 use history_syntax::MAX_ARITY;
 use history_syntax::syntax::{Component, RuleMode};
 use junco_core::kernel::verify as model;
-use junco_core::verify::history_specs as language;
-use junco_core::verify::history_specs::{EventView, Regex, Subst};
+use junco_core::verify::numeric_regex as language;
+use junco_core::verify::numeric_regex::{EventView, Regex, Subst};
 use vstd::iset_lib::lemma_iset_subset_finite;
 use vstd::prelude::*;
 

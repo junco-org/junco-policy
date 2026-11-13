@@ -23,7 +23,7 @@ use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
 use junco_core::spec::{hypotheses::monitor_hypotheses, semantics};
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{no_internal_compile_error, no_invariant_failure};
+use junco_core::verify::errors::{no_internal_compile_error, no_invariant_failure};
 use vstd::prelude::*;
 
 /// Diagnostic returned when the first matching rule is violated.

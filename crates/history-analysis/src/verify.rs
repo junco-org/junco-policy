@@ -33,7 +33,7 @@ use history_syntax::syntax::Component;
 use junco_core::kernel::verify as model;
 use junco_core::observation::SmallVecSpecFns;
 use junco_core::spec::hypotheses::analyzer_hypotheses;
-use junco_core::verify::history_specs::{self as language, EventView, Subst};
+use junco_core::verify::numeric_regex::{self as language, EventView, Subst};
 use vstd::prelude::*;
 
 verus! {

@@ -14,7 +14,7 @@ use history_syntax::spec::events::{EventSpec, arity};
 use history_syntax::{Event, syntax::Component};
 use junco_core::kernel::verify as model;
 use junco_core::spec::questions as q;
-use junco_core::verify::history_specs::{self as language};
+use junco_core::verify::numeric_regex::{self as language};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
 

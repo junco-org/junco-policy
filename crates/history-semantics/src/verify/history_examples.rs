@@ -19,7 +19,7 @@ use junco_core::kernel::verify as model;
 use junco_core::kernel::{Bindings, KernelResult, RegexId};
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
-use junco_core::verify::history_specs::{
+use junco_core::verify::numeric_regex::{
     self as language, EventView, Head, HeadField, Regex, SrcTest, Subst, Term,
 };
 use vstd::prelude::*;

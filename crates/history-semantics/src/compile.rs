@@ -23,7 +23,7 @@ use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_assumptions::KernelStoreSpec;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs as language;
+use junco_core::verify::{errors, numeric_regex as language};
 #[cfg(verus_keep_ghost)]
 use verify::*;
 use vstd::prelude::*;
@@ -131,7 +131,7 @@ impl CompiledPair {
     #[verus_spec(result => ensures
         result != Err(HistoryError::WrongHistoryOwner),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
-        (id as nat) < values@.len() ==> language::no_invariant_failure(result),
+        (id as nat) < values@.len() ==> errors::no_invariant_failure(result),
         result matches Ok(value) ==> (id as nat) < values@.len() && value == values@[id as int])]
     #[allow(
         clippy::option_if_let_else,
@@ -154,7 +154,7 @@ impl CompiledPair {
         result != Err(HistoryError::WrongHistoryOwner),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
         (forall|i: int| 0 <= i < ids@.len() ==> #[trigger] ids@[i] < values@.len())
-            ==> language::no_invariant_failure(result),
+            ==> errors::no_invariant_failure(result),
         result matches Ok(found) ==> {
         found@.len() == ids@.len()
         && forall|i: int| 0 <= i < ids@.len()
@@ -214,7 +214,7 @@ impl CompiledPair {
         (source_dag_wf(*template) || flat::structural_wf(*template))
             && (budget == junco_core::limits::MAX_GRAPH_BYTES
                 || history_store::graph::verify::construction_layout(budget))
-            ==> language::no_invariant_failure(result),
+            ==> errors::no_invariant_failure(result),
         result matches Ok(pair) ==> {
         crate::progress::verify::pair_wf(pair)
         && crate::verify::finite_impl::regex_nf(model::lift_regex(pair.store.graph(), pair.root@))
@@ -655,7 +655,7 @@ impl CompiledPair {
     #[verus_verify]
     #[verus_spec(result => ensures
         result != Err(HistoryError::WrongHistoryOwner),
-        language::no_invariant_failure(result),
+        errors::no_invariant_failure(result),
         !(result matches Err(HistoryError::InvalidPolicy { .. })),
         result matches Ok(answer) ==> answer == model::primitive_holds(bindings@, primitive@, event@))]
 
@@ -693,7 +693,7 @@ pub mod verify {
     use super::*;
     pub use super::{bindings_match, head_rejects};
     pub(crate) use super::{lemma_bindings_match, lemma_head_rejects};
-    use junco_core::verify::history_specs::{EventView, Subst};
+    use junco_core::verify::numeric_regex::{EventView, Subst};
     verus! {
     broadcast use {junco_core::kernel::verify::group_kernel_views, vstd::set::group_set_lemmas};
     /// Test references must point to earlier nodes; atoms need no head bindings

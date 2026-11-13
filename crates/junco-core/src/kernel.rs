@@ -9,7 +9,7 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use crate::verify::history_assumptions::*;
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_specs::no_invariant_failure;
+use crate::verify::errors::no_invariant_failure;
 #[cfg(verus_keep_ghost)]
 use verify::*;
 #[cfg(verus_keep_ghost)]
@@ -945,8 +945,8 @@ impl TransitionId {
 #[cfg(verus_keep_ghost)]
 pub mod verify {
     use super::*;
-    use crate::verify::history_specs::{self as language, Regex, Transition};
-    use crate::verify::history_specs::{EventView, Subst};
+    use crate::verify::numeric_regex::{self as language, Regex, Transition};
+    use crate::verify::numeric_regex::{EventView, Subst};
     use alloc::boxed::Box;
     use vstd::std_specs::cmp::{OrdSpecImpl, PartialEqSpecImpl, PartialOrdSpecImpl};
 

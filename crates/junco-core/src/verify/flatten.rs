@@ -1223,7 +1223,7 @@ pub proof fn flattening_preserves_semantics<E: Event>(rule: Rule<E>, lowered: Fl
 pub fn flattening_client<E: Event, L: Limits>(rule: &Rule<E>, limits: &mut L, world: &mut ObservationWorld,
     Ghost(candidate): Ghost<E>, Ghost(history): Ghost<Seq<E>>)
     -> (result: Result<FlatRule<E::Component>, CompileError>)
-    ensures crate::verify::history_specs::no_internal_compile_error(result),
+    ensures crate::verify::errors::no_internal_compile_error(result),
         dsl::head_scoped(rule.head@) && dsl::regex_scoped(rule.tail@, rule.head@)
             ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
                 && !(result matches Err(CompileError::UnboundVariable { .. })),
@@ -1252,7 +1252,7 @@ pub fn named_variable_client<E: Event, L: Limits>(head: Head<E>, name: alloc::st
     -> (result: Result<FlatRule<E::Component>, CompileError>)
     requires dsl::head_scoped(head@), component.0 < head@.len(),
         dsl::pattern_name(head@[component.0 as int]) == Some(name@),
-    ensures crate::verify::history_specs::no_internal_compile_error(result),
+    ensures crate::verify::errors::no_internal_compile_error(result),
         !(result matches Err(CompileError::VariableComponentConflict { .. })),
         !(result matches Err(CompileError::UnboundVariable { .. })),
         result matches Ok(lowered) ==>
@@ -1281,7 +1281,7 @@ pub fn named_variable_client<E: Event, L: Limits>(head: Head<E>, name: alloc::st
 pub fn constant_head_client<E: Event, L: Limits>(head: Head<E>, limits: &mut L, world: &mut ObservationWorld)
     -> (result: Result<FlatRule<E::Component>, CompileError>)
     requires forall|i: int| 0 <= i < head@.len() ==> head@[i] is Constant,
-    ensures crate::verify::history_specs::no_internal_compile_error(result),
+    ensures crate::verify::errors::no_internal_compile_error(result),
         !(result matches Err(CompileError::VariableComponentConflict { .. })),
         !(result matches Err(CompileError::UnboundVariable { .. })),
         !(result matches Err(CompileError::Runtime(crate::error::HistoryError::InvalidPolicy { .. }))),

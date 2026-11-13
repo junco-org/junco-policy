@@ -21,7 +21,7 @@ use history_syntax::{Event, Rule, RuleMode};
 use junco_core::limits::{Limits, Unmetered};
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{no_internal_compile_error, no_invariant_failure};
+use junco_core::verify::errors::{no_internal_compile_error, no_invariant_failure};
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
@@ -355,7 +355,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
             result matches Ok(policy) ==> policy_wf(policy) && policy_store(policy) == store
             && policy_trace_empty(policy)
             && forall|items: Seq<PolicyRule<E, C>>|
-                junco_core::verify::history_specs::into_iter_yields(rules, items) ==>
+                junco_core::verify::numeric_regex::into_iter_yields(rules, items) ==>
                     policy_sources(policy) == items.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
                     && policy_diagnostic_ids(policy) == items.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item)),
             result is Ok ==> exists|converted: I::IntoIter|
@@ -376,7 +376,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                 assert(exists|actual: I::IntoIter| call_ensures(I::into_iter, (input,), actual)
                     && (actual.obeys_prophetic_iter_laws() ==> actual.will_return_none()));
                 assert forall|items: Seq<PolicyRule<E, C>>|
-                    junco_core::verify::history_specs::into_iter_yields(input, items) implies
+                    junco_core::verify::numeric_regex::into_iter_yields(input, items) implies
                         policy_sources(*policy) == items.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
                         && policy_diagnostic_ids(*policy) == items.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item)) by {
                     assert(converted.obeys_prophetic_iter_laws());

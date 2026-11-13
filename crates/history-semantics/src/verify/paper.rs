@@ -21,8 +21,8 @@
 use super::history_algebra as algebra;
 use super::refinement::{finiteness, inclusion, pruning, search, semantics};
 use history_syntax::Event;
-use junco_core::verify::history_specs as language;
-use junco_core::verify::history_specs::{EventView, Head, Regex, SrcTest, Subst};
+use junco_core::verify::numeric_regex as language;
+use junco_core::verify::numeric_regex::{EventView, Head, Regex, SrcTest, Subst};
 use vstd::prelude::*;
 
 verus! {

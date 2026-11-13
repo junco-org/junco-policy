@@ -14,7 +14,7 @@ use crate::verify::finite_states::*;
 use crate::verify::finite_trans::*;
 use junco_core::kernel::verify as model;
 use junco_core::kernel::{RegexId, TestId, TransitionId};
-use junco_core::verify::history_specs::Regex;
+use junco_core::verify::numeric_regex::Regex;
 use vstd::prelude::*;
 
 verus! {

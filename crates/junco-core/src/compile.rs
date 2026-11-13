@@ -7,7 +7,7 @@ use crate::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
 use crate::verify::encoding::*;
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_specs::no_invariant_failure;
+use crate::verify::errors::no_invariant_failure;
 use alloc::vec::Vec;
 use history_syntax::Event;
 #[cfg(verus_keep_ghost)]

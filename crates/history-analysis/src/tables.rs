@@ -11,9 +11,9 @@ use junco_core::HistoryError;
 use junco_core::flat::verify as flat;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::no_invariant_failure;
+use junco_core::verify::errors::no_invariant_failure;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::history_specs::{EventView, Subst};
+use junco_core::verify::numeric_regex::{EventView, Subst};
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
