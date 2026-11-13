@@ -11,7 +11,7 @@
 //!
 //! [`Model::contract`] states (N0)–(N5) and the successor equations (S0)–(S6). These numbers, the
 //! invariants (C1)–(C4) and the set `C(q)` are this development's; the paper's appendix
-//! `app:finiteness` describes the conditions in prose and calls `C(q)` `Bound(q)`. The table in
+//! `app:finiteness` outlines the construction informally and calls `C(q)` `Bound(q)`. The table in
 //! `refinement/finiteness.rs` names each condition and its predicate below. Under the
 //! contract, [`lemma_finite_states`] builds `C(q)` and [`theorem_finite_reachable`] bounds every
 //! state reachable from a state. [`lemma_uset_nset`] is the union-closure step, [`lemma_uset_closed`]

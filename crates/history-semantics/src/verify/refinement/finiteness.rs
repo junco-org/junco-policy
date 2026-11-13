@@ -6,7 +6,7 @@
 //! The abstract development is `verify::finite_states` (`Model<S>`, `theorem_finite_reachable`),
 //! proved against the contract `Model::contract` and the invariant `Model::good`. Their conjuncts
 //! carry the code's numbers (N0)–(N5), (S0)–(S6), (C1)–(C4); the paper's appendix `app:finiteness`
-//! states the same conditions in prose. The names, once, for both:
+//! outlines the construction informally and calls `C(q)` `Bound(q)`. The names, once, for both:
 //!
 //! | Code | Name | `Model` predicate | Meaning |
 //! |---|---|---|---|
