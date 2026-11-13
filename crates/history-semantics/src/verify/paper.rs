@@ -13,7 +13,7 @@
 //! | `lem:sderiv` | `stmt_lem_sderiv` | `stmt_symbolic_derivative_correct` | `theorem_symbolic_derivative_correct` | `history_algebra.rs` |
 //! | `thm:sderiv` | `stmt_thm_sderiv` | `stmt_symbolic_run_correct` | `theorem_symbolic_run_correct` | `history_algebra.rs` |
 //! | `thm:matcher` | `stmt_thm_matcher` | `stmt_rule_decision` (steps 2–3; step 1 holds by the definition of `pair_lang`), `stmt_similar_tails_same_decision` (normalization) | `theorem_rule_decision`, `theorem_similar_tails_same_decision` | `history_algebra.rs` |
-//! | `thm:matcher` (monitor level) | `stmt_matcher` | `check_step` and `trace_safe` for `Validator::check`/`rollback`: a grant means no rule is violated, a denial carries the mode of the first violated rule, every reachable history is trace safe | `theorem_matcher`; `theorem_monitor_check`, `theorem_trace_safe`, `theorem_analyzer_to_monitor` and the exec client `monitor_client` in `crates/history-semantics/tests/reviewer.rs` | `crates/history-semantics/src/spec/monitor.rs` |
+//! | `thm:matcher` (monitor level) | `stmt_matcher` | `check_step` and `trace_safe` for `Validator::check`/`rollback`: a grant means no rule is violated, a denial carries the index and mode of the first violated rule, every reachable history is trace safe | `theorem_matcher`; `theorem_monitor_check`, `theorem_trace_safe`, `theorem_analyzer_to_monitor` and the exec client `monitor_client` in `crates/history-semantics/tests/reviewer.rs` | `crates/history-semantics/src/spec/monitor.rs` |
 //! | `def:violates`, `def:policy-violates` | — (definition) | `rule_violated`, `policy_denies`, `least_violation` | — | `crates/junco-core/src/spec/semantics.rs` |
 //! | `def:policy-refinement` | — (definition) | `refines`, `covers` | — | `crates/junco-core/src/spec/questions.rs` |
 //! | `app:policy-reduction` | `stmt_app_policy_reduction` | `stmt_refines_iff_covers`, `stmt_redundant_iff_covered` (over events); `stmt_vacuity_reductions` (numeric, constrained form); `stmt_vacuity_via_refinement` (typed vacuity through `at_least_as_strict`) | `theorem_refines_iff_covers`, `theorem_redundant_iff_covered`, `theorem_vacuity_reductions`, `theorem_vacuity_via_refinement` | `refinement/semantics.rs`, `refinement/inclusion.rs` |
@@ -103,8 +103,8 @@ pub proof fn theorem_thm_matcher()
 }
 
 /// Theorem Matcher correctness at the level of `Validator` (`thm:matcher`): a `check` whose
-/// result satisfies `check_step` grants only when no rule is violated, denies with the mode of
-/// the first violated rule in source order, and never fails with an invariant error; a `check` or
+/// result satisfies `check_step` grants only when no rule is violated, denies with the index and
+/// mode of the first violated rule in source order, and never fails with an invariant error; a `check` or
 /// `rollback` preserves `trace_safe`.
 pub open spec fn stmt_matcher<E: Event, M>() -> bool {
     &&& forall|before: ValidatorView<E>, request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>|

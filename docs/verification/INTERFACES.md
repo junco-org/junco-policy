@@ -35,8 +35,7 @@ questions/hypotheses → monitor/analyzer → `verify/paper.rs` and the `reviewe
   in `crates/history-analysis/tests/reviewer.rs` expose these two guarantees.
 - Successful `PolicyAnalyzer::add_rule` and `ValidatorBuilder::add_rule` promise `rule_wf`,
   exact event arity and correctly tagged head constants (under the event hypotheses).
-  Both executable reviewer clients use these postconditions. The unused `analyzer_wf`
-  and `rule_constants_tagged` predicates have been removed; no separate view invariant is claimed.
+  Both executable reviewer clients use these postconditions.
 - A monitor denial carries `Denial::index`, the zero-based source-order index of its first
   violated rule. `check_step` states `least_violation` at this exact index and gives its mode;
   `stmt_monitor_check`, `stmt_matcher` and the public executable clients expose the same clause.

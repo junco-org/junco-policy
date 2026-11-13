@@ -79,14 +79,14 @@ is not verified at all (see Unverified glue below).
 
 ### `derived_eq_claim` (2)
 
-- `crates/history-analysis/src/constraint.rs:866`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for RegisterConstraint`
-- `crates/history-analysis/src/constraint.rs:908`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for Constraint`
+- `crates/history-analysis/src/constraint.rs:872`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for RegisterConstraint`
+- `crates/history-analysis/src/constraint.rs:914`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for Constraint`
 
 ## `crates/history-semantics`
 
 ### `external_body` (14)
 
-- `crates/history-semantics/src/compiled_rule.rs:433`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
+- `crates/history-semantics/src/compiled_rule.rs:437`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
 - `crates/history-semantics/src/policy/evaluate.rs:69`: `fn render_denial`
 - `crates/history-semantics/src/policy/evaluate.rs:161`: `fn unpack_policy_rule`
 - `crates/history-semantics/src/policy/rule.rs:23`: `struct PolicyRule<E: Event, C>`
@@ -119,22 +119,22 @@ is not verified at all (see Unverified glue below).
 
 ### `unannotated_pub_fn` (16)
 
-- `crates/history-semantics/src/compiled_rule.rs:647`: `impl<E: Event> CompiledRule<E> :: fn new_lazy`
-- `crates/history-semantics/src/compiled_rule.rs:651`: `impl<E: Event> CompiledRule<E> :: fn work_counters`
-- `crates/history-semantics/src/compiled_rule.rs:655`: `impl<E: Event> CompiledRule<E> :: fn work_events`
-- `crates/history-semantics/src/compiled_rule.rs:659`: `impl<E: Event> CompiledRule<E> :: fn reset_work_events`
-- `crates/history-semantics/src/compiled_rule.rs:663`: `impl<E: Event> CompiledRule<E> :: fn cursor_positions`
-- `crates/history-semantics/src/compiled_rule.rs:669`: `impl<E: Event> CompiledRule<E> :: fn replace_graph_byte_pressure`
-- `crates/history-semantics/src/compiled_rule.rs:673`: `impl<E: Event> CompiledRule<E> :: fn set_answer_checkpoint_failure`
-- `crates/history-semantics/src/progress.rs:2784`: `impl CompiledPair :: fn reset_work_events`
-- `crates/history-semantics/src/progress.rs:2788`: `impl CompiledPair :: fn work_events`
-- `crates/history-semantics/src/progress.rs:2792`: `impl CompiledPair :: fn set_answer_checkpoint_failure`
-- `crates/history-semantics/src/runtime.rs:831`: `impl RuleRuntime :: fn work_counters`
-- `crates/history-semantics/src/runtime.rs:835`: `impl RuleRuntime :: fn reset_work_events`
-- `crates/history-semantics/src/runtime.rs:839`: `impl RuleRuntime :: fn work_events`
-- `crates/history-semantics/src/runtime.rs:844`: `impl RuleRuntime :: fn cursor_positions`
-- `crates/history-semantics/src/runtime.rs:860`: `impl RuleRuntime :: fn replace_graph_byte_pressure`
-- `crates/history-semantics/src/runtime.rs:864`: `impl RuleRuntime :: fn set_answer_checkpoint_failure`
+- `crates/history-semantics/src/compiled_rule.rs:669`: `impl<E: Event> CompiledRule<E> :: fn new_lazy`
+- `crates/history-semantics/src/compiled_rule.rs:673`: `impl<E: Event> CompiledRule<E> :: fn work_counters`
+- `crates/history-semantics/src/compiled_rule.rs:677`: `impl<E: Event> CompiledRule<E> :: fn work_events`
+- `crates/history-semantics/src/compiled_rule.rs:681`: `impl<E: Event> CompiledRule<E> :: fn reset_work_events`
+- `crates/history-semantics/src/compiled_rule.rs:685`: `impl<E: Event> CompiledRule<E> :: fn cursor_positions`
+- `crates/history-semantics/src/compiled_rule.rs:691`: `impl<E: Event> CompiledRule<E> :: fn replace_graph_byte_pressure`
+- `crates/history-semantics/src/compiled_rule.rs:695`: `impl<E: Event> CompiledRule<E> :: fn set_answer_checkpoint_failure`
+- `crates/history-semantics/src/progress.rs:2808`: `impl CompiledPair :: fn reset_work_events`
+- `crates/history-semantics/src/progress.rs:2812`: `impl CompiledPair :: fn work_events`
+- `crates/history-semantics/src/progress.rs:2816`: `impl CompiledPair :: fn set_answer_checkpoint_failure`
+- `crates/history-semantics/src/runtime.rs:842`: `impl RuleRuntime :: fn work_counters`
+- `crates/history-semantics/src/runtime.rs:846`: `impl RuleRuntime :: fn reset_work_events`
+- `crates/history-semantics/src/runtime.rs:850`: `impl RuleRuntime :: fn work_events`
+- `crates/history-semantics/src/runtime.rs:855`: `impl RuleRuntime :: fn cursor_positions`
+- `crates/history-semantics/src/runtime.rs:871`: `impl RuleRuntime :: fn replace_graph_byte_pressure`
+- `crates/history-semantics/src/runtime.rs:875`: `impl RuleRuntime :: fn set_answer_checkpoint_failure`
 
 ## `crates/history-store`
 
@@ -156,17 +156,17 @@ is not verified at all (see Unverified glue below).
 - `crates/history-store/src/store.rs:749`: `struct NativeDomain`
 - `crates/history-store/src/store.rs:767`: `impl NativeDomain :: fn place`
 - `crates/history-store/src/store.rs:780`: `impl NativeDomain :: fn with_domain`
-- `crates/history-store/src/store.rs:860`: `struct NativeRecord`
-- `crates/history-store/src/store.rs:888`: `impl NativeRecord :: fn place_cell`
-- `crates/history-store/src/store.rs:899`: `impl NativeRecord :: fn with_record`
-- `crates/history-store/src/store.rs:920`: `impl Clone for NativeRecord :: fn clone`
-- `crates/history-store/src/store.rs:1644`: `fn borrow_numeric_owner`
-- `crates/history-store/src/store.rs:1651`: `fn same_numeric_reference`
-- `crates/history-store/src/store.rs:1659`: `fn share_numeric_owner`
-- `crates/history-store/src/store.rs:1806`: `struct NativeRecordReadGuard<'a>`
-- `crates/history-store/src/store.rs:1813`: `impl<'a> NativeRecordReadGuard<'a> :: fn acquire`
-- `crates/history-store/src/store.rs:1822`: `impl<'a> NativeRecordReadGuard<'a> :: fn cell`
-- `crates/history-store/src/store.rs:1886`: `impl HistoryStore :: fn new`
+- `crates/history-store/src/store.rs:861`: `struct NativeRecord`
+- `crates/history-store/src/store.rs:889`: `impl NativeRecord :: fn place_cell`
+- `crates/history-store/src/store.rs:900`: `impl NativeRecord :: fn with_record`
+- `crates/history-store/src/store.rs:921`: `impl Clone for NativeRecord :: fn clone`
+- `crates/history-store/src/store.rs:1645`: `fn borrow_numeric_owner`
+- `crates/history-store/src/store.rs:1652`: `fn same_numeric_reference`
+- `crates/history-store/src/store.rs:1660`: `fn share_numeric_owner`
+- `crates/history-store/src/store.rs:1807`: `struct NativeRecordReadGuard<'a>`
+- `crates/history-store/src/store.rs:1814`: `impl<'a> NativeRecordReadGuard<'a> :: fn acquire`
+- `crates/history-store/src/store.rs:1823`: `impl<'a> NativeRecordReadGuard<'a> :: fn cell`
+- `crates/history-store/src/store.rs:1887`: `impl HistoryStore :: fn new`
 - `crates/history-store/src/typed.rs:116`: `struct NativeStoreIds`
 - `crates/history-store/src/typed.rs:122`: `impl NativeStoreIds :: fn new`
 - `crates/history-store/src/typed.rs:129`: `impl NativeStoreIds :: fn with_state`
@@ -184,8 +184,8 @@ is not verified at all (see Unverified glue below).
 
 ### `external_type_specification` (2)
 
-- `crates/history-store/src/cache.rs:243`: `struct ExSuccessorHasher(lru::DefaultHasher) (opaque)`
-- `crates/history-store/src/cache.rs:246`: `struct ExLruCache<K, V, S>(LruCache<K, V, S>) (opaque)`
+- `crates/history-store/src/cache.rs:244`: `struct ExSuccessorHasher(lru::DefaultHasher) (opaque)`
+- `crates/history-store/src/cache.rs:247`: `struct ExLruCache<K, V, S>(LruCache<K, V, S>) (opaque)`
 
 ### `external` (2)
 
@@ -194,42 +194,42 @@ is not verified at all (see Unverified glue below).
 
 ### `exec_allows_no_decreases_clause` (1)
 
-- `crates/history-store/src/history.rs:309`: `impl<E: TypedEvent> History<E> :: fn from_iterator`
+- `crates/history-store/src/history.rs:310`: `impl<E: TypedEvent> History<E> :: fn from_iterator`
 
 ### `uninterp` (22)
 
-- `crates/history-store/src/cache.rs:259`: `fn successor_cache_view` — **meaning**: the entries of the LRU successor cache; contracts allow eviction, never a fabricated entry
-- `crates/history-store/src/store.rs:871`: `fn record_id`
-- `crates/history-store/src/store.rs:872`: `fn lifecycle_id`
-- `crates/history-store/src/store.rs:933`: `fn native_domain_valid`
-- `crates/history-store/src/store.rs:934`: `fn native_domain_index`
-- `crates/history-store/src/store.rs:935`: `fn native_domain_forward_authority`
-- `crates/history-store/src/store.rs:936`: `fn native_domain_reverse_authority`
-- `crates/history-store/src/store.rs:943`: `fn record_valid`
-- `crates/history-store/src/store.rs:1290`: `fn coordinate_ids`
-- `crates/history-store/src/store.rs:1291`: `fn coordinates_mutex_valid`
-- `crates/history-store/src/store.rs:1295`: `fn history_keys_id`
-- `crates/history-store/src/store.rs:1296`: `fn history_keys_mutex_valid`
-- `crates/history-store/src/store.rs:1497`: `fn singleton_store` — **meaning**: the process-wide numeric store of an arity (static installation)
-- `crates/history-store/src/store.rs:1498`: `fn numeric_authorities` — **meaning**: the process-wide coordinate and history-key allocators (static installation)
-- `crates/history-store/src/store.rs:1832`: `fn cell_view`
-- `crates/history-store/src/store.rs:1833`: `fn record_view`
-- `crates/history-store/src/typed.rs:999`: `fn store_ids_authority_id`
-- `crates/history-store/src/typed.rs:1000`: `fn process_store_ids` — **meaning**: the process-wide store-id allocator (static installation)
-- `crates/history-store/src/typed.rs:1004`: `fn store_ids_mutex_valid`
-- `crates/history-store/src/typed.rs:1188`: `fn snapshot_published` — **meaning**: persistent provenance of a codebook snapshot under the registry resource
-- `crates/history-store/src/typed.rs:1318`: `fn mutex_valid`
+- `crates/history-store/src/cache.rs:260`: `fn successor_cache_view` — **meaning**: the entries of the LRU successor cache; contracts allow eviction, never a fabricated entry
+- `crates/history-store/src/store.rs:872`: `fn record_id`
+- `crates/history-store/src/store.rs:873`: `fn lifecycle_id`
+- `crates/history-store/src/store.rs:934`: `fn native_domain_valid`
+- `crates/history-store/src/store.rs:935`: `fn native_domain_index`
+- `crates/history-store/src/store.rs:936`: `fn native_domain_forward_authority`
+- `crates/history-store/src/store.rs:937`: `fn native_domain_reverse_authority`
+- `crates/history-store/src/store.rs:944`: `fn record_valid`
+- `crates/history-store/src/store.rs:1291`: `fn coordinate_ids`
+- `crates/history-store/src/store.rs:1292`: `fn coordinates_mutex_valid`
+- `crates/history-store/src/store.rs:1296`: `fn history_keys_id`
+- `crates/history-store/src/store.rs:1297`: `fn history_keys_mutex_valid`
+- `crates/history-store/src/store.rs:1498`: `fn singleton_store` — **meaning**: the process-wide numeric store of an arity (static installation)
+- `crates/history-store/src/store.rs:1499`: `fn numeric_authorities` — **meaning**: the process-wide coordinate and history-key allocators (static installation)
+- `crates/history-store/src/store.rs:1833`: `fn cell_view`
+- `crates/history-store/src/store.rs:1834`: `fn record_view`
+- `crates/history-store/src/typed.rs:1012`: `fn store_ids_authority_id`
+- `crates/history-store/src/typed.rs:1013`: `fn process_store_ids` — **meaning**: the process-wide store-id allocator (static installation)
+- `crates/history-store/src/typed.rs:1017`: `fn store_ids_mutex_valid`
+- `crates/history-store/src/typed.rs:1201`: `fn snapshot_published` — **meaning**: persistent provenance of a codebook snapshot under the registry resource
+- `crates/history-store/src/typed.rs:1331`: `fn mutex_valid`
 - `crates/history-store/src/typed/map.rs:24`: `fn representatives` — **meaning**: the entries of an external_body hash map, as `eq_spec` classes under `key_laws`
 
 ### `derived_eq_claim` (1)
 
-- `crates/history-store/src/store.rs:1513`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for Event`
+- `crates/history-store/src/store.rs:1514`: `impl vstd::std_specs::cmp::PartialEqSpecImpl for Event`
 
 ### `unannotated_pub_fn` (3)
 
-- `crates/history-store/src/graph.rs:1792`: `impl CanonicalStore :: fn replace_graph_byte_pressure`
-- `crates/history-store/src/graph.rs:1796`: `impl CanonicalStore :: fn charged_bytes`
-- `crates/history-store/src/graph.rs:1803`: `impl CanonicalStore :: fn table_counts`
+- `crates/history-store/src/graph.rs:1800`: `impl CanonicalStore :: fn replace_graph_byte_pressure`
+- `crates/history-store/src/graph.rs:1804`: `impl CanonicalStore :: fn charged_bytes`
+- `crates/history-store/src/graph.rs:1811`: `impl CanonicalStore :: fn table_counts`
 
 ## `crates/history-syntax`
 
@@ -302,16 +302,16 @@ is not verified at all (see Unverified glue below).
 
 ### `derived_eq_claim` (10)
 
-- `crates/junco-core/src/kernel.rs:959`: `impl PartialEqSpecImpl for $id`
-- `crates/junco-core/src/kernel.rs:963`: `impl OrdSpecImpl for $id`
-- `crates/junco-core/src/kernel.rs:971`: `impl PartialOrdSpecImpl for $id`
-- `crates/junco-core/src/kernel.rs:1053`: `impl PartialEqSpecImpl for super::Term`
-- `crates/junco-core/src/kernel.rs:1057`: `impl PartialEqSpecImpl for super::Primitive`
-- `crates/junco-core/src/kernel.rs:1061`: `impl PartialEqSpecImpl for TestView<'_>`
-- `crates/junco-core/src/kernel.rs:1065`: `impl PartialEqSpecImpl for RegexKindView<'_>`
-- `crates/junco-core/src/kernel.rs:1069`: `impl PartialEqSpecImpl for RegexView<'_>`
-- `crates/junco-core/src/kernel.rs:1073`: `impl PartialEqSpecImpl for TransitionView<'_>`
-- `crates/junco-core/src/kernel.rs:1096`: `impl PartialEqSpecImpl for Bindings`
+- `crates/junco-core/src/kernel.rs:1025`: `impl PartialEqSpecImpl for $id`
+- `crates/junco-core/src/kernel.rs:1029`: `impl OrdSpecImpl for $id`
+- `crates/junco-core/src/kernel.rs:1037`: `impl PartialOrdSpecImpl for $id`
+- `crates/junco-core/src/kernel.rs:1119`: `impl PartialEqSpecImpl for super::Term`
+- `crates/junco-core/src/kernel.rs:1123`: `impl PartialEqSpecImpl for super::Primitive`
+- `crates/junco-core/src/kernel.rs:1127`: `impl PartialEqSpecImpl for TestView<'_>`
+- `crates/junco-core/src/kernel.rs:1131`: `impl PartialEqSpecImpl for RegexKindView<'_>`
+- `crates/junco-core/src/kernel.rs:1135`: `impl PartialEqSpecImpl for RegexView<'_>`
+- `crates/junco-core/src/kernel.rs:1139`: `impl PartialEqSpecImpl for TransitionView<'_>`
+- `crates/junco-core/src/kernel.rs:1162`: `impl PartialEqSpecImpl for Bindings`
 
 ## Helper crates (pinned git dependencies of `history-store`)
 

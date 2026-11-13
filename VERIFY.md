@@ -27,14 +27,15 @@ Verus clients of these files in `crates/history-semantics/tests/reviewer.rs` (mo
 `Validator::check` returns one of:
 
 - *grant*: no rule of $P$ is violated by $e$ after $u$, and the history becomes $u\,e$;
-- *denial*: the history stays $u$, and the denial carries the mode of the first rule of $P$
-  that $e$ violates after $u$;
-- *an error*: the history stays $u$, and the error is never an internal invariant failure.
+- *denial*: the history stays $u$, and the denial carries the index and mode of the first rule
+  of $P$ that $e$ violates after $u$;
+- *an error*: the history stays $u$, and the error is a resource error (`resource_error`: graph
+  budget or index overflow, allocation, arena, identifier, revision or configured time limit).
 
-The contract (`check_step`) makes no claim about when an error is returned. Every state reached
-by `check` and `rollback` from a new validator is trace safe: each committed event was permitted
-by every rule against the history before it (`theorem_trace_safe`). `Validator::permits` answers
-the same question without committing.
+So, short of exhausting a resource, `check` grants exactly when the policy permits the request.
+Every state reached by `check` and `rollback` from a new validator is trace safe: each committed
+event was permitted by every rule against the history before it (`theorem_trace_safe`).
+`Validator::permits` answers the same question without committing.
 
 **Analyzer.** `PolicyAnalyzer` holds rules and, optionally, finite domains declared for some
 event components. Its four queries answer, for every candidate and history inside the declared
@@ -59,8 +60,11 @@ Each query terminates and returns `Holds`, a counterexample, `Exhausted`, or an 
 - A counterexample has a shortest history: among all counterexamples for `tail_included`; among
   the counterexamples whose candidate agrees with it on every known constant for the other
   queries; for `at_least_as_strict`, among those the same rule of `q` denies.
-- `Exhausted` and errors carry no claim, except that an error is never an internal invariant
-  failure.
+- `Exhausted` means a search or compilation exceeded the graph budget (stated in the analyzer
+  specification's header, not proved). For identifiers the analyzer issued and well-formed rules
+  of the event's arity, an error is a resource error; adding a valid rule never fails with an
+  input error. So if the property fails, a query that neither exhausts a resource nor returns
+  `Exhausted` returns a counterexample.
 
 Rule vacuity (a rule that denies nothing, or denies every request its head matches) is decided
 with `at_least_as_strict` (`theorem_vacuity_corollaries`). If `at_least_as_strict(p, q)` returns
