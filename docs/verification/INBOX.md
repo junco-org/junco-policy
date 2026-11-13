@@ -4,6 +4,15 @@ The maintainer adds messages here, newest first, each with a UTC date and a shor
 message takes precedence over the handoff and over earlier messages where they conflict.
 Acknowledge each one in `STATUS.md` on your integration branch.
 
+## 2026-11-13: Keep completed `verify-all.sh` work
+
+This amends "Abandon the changes to `scripts/verify-all.sh`" below. You do not have to abandon work
+you have already completed: keep the `verify-all.sh` changes you already made and verified
+(`5f0523d`, "Add parallel filterable Verus configuration gates"), and keep using them for gates.
+Do not extend the script further beyond registering the two reviewer test targets. Before the final
+PR, confirm once that the default invocation, with no new options, still runs the same eleven
+configurations sequentially as on `main`, so CI is unchanged.
+
 ## 2026-11-13: Abandon the changes to `scripts/verify-all.sh`
 
 Do not add `--jobs`, `--target-root` or `--only` to `scripts/verify-all.sh`. If you already changed
