@@ -33,6 +33,16 @@ pub type Domain<C> = spec_fn(Component, C) -> bool;
 /// One finite sequence of representatives per policy coordinate.
 pub type Codebook<C> = Seq<Seq<(C, u64)>>;
 
+/// Selects one coordinate's binary relation as a carrier relation.
+pub open spec fn equality_at<C>(eq: Equality<C>, field: Component) -> spec_fn(C, C) -> bool {
+    |a: C, b: C| eq(field, a, b)
+}
+
+/// Selects one coordinate's admissible values as a carrier predicate.
+pub open spec fn domain_at<C>(domain: Domain<C>, field: Component) -> spec_fn(C) -> bool {
+    |a: C| domain(field, a)
+}
+
 pub open spec fn field_at(index: int) -> Component {
     Component(index as u8)
 }
@@ -48,7 +58,7 @@ pub open spec fn encoded<C>(maps: Codebook<C>, eq: Equality<C>, field: Component
 pub open spec fn maps_wf<C>(maps: Codebook<C>, eq: Equality<C>, domain: Domain<C>) -> bool {
     1 <= maps.len() <= MAX_ARITY
     && (forall|field: Component| #[trigger] crate::spec::hypotheses::eq_equivalence::<C>(
-        |a: C, b: C| eq(field, a, b), |a: C| domain(field, a)))
+        equality_at(eq, field), domain_at(domain, field)))
     && (forall|f: int, i: int| 0 <= f < maps.len() && 0 <= i < maps[f].len()
         ==> domain(field_at(f), maps[f][i].0) && maps[f][i].1 > 0)
     && (forall|f: int, i: int, j: int|
@@ -78,7 +88,7 @@ pub proof fn lemma_encoded_equality<C>(
 {
     let f = field_index(field);
     assert(crate::spec::hypotheses::eq_equivalence::<C>(
-        |a: C, b: C| eq(field, a, b), |a: C| domain(field, a)));
+        equality_at(eq, field), domain_at(domain, field)));
     assert(field_at(f) == field);
     let i = choose|i: int| 0 <= i < maps[f].len() && maps[f][i].1 == left_id
         && eq(field, left, maps[f][i].0);

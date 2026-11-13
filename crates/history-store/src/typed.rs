@@ -8,7 +8,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::hash::Hash;
 #[cfg(verus_keep_ghost)]
-use history_syntax::event::specs::{AritySpec, EventSpec, arity, event_view, projection_laws};
+use history_syntax::spec::events::{AritySpec, EventSpec, arity, event_view};
 use history_syntax::syntax::Component;
 use history_syntax::{Arity, Event, MAX_ARITY};
 use junco_core::compile::{FlatEncoder, lower_flat, validate_component};
@@ -16,6 +16,8 @@ use junco_core::error::HistoryError;
 use junco_core::flat::FlatPair;
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
+#[cfg(verus_keep_ghost)]
+use junco_core::spec::hypotheses::{eq_equivalence, key_laws, monitor_hypotheses};
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_assumptions::{arc_identity, reference_identity};
 #[cfg(feature = "std")]
@@ -28,8 +30,7 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
 
-pub(crate) mod map;
-use map::NativeMap;
+use crate::native::{self as map, NativeMap};
 
 // Ghost<T> signatures still name T after native erasure; this is the exact finite model.
 pub type ComponentMaps<E> = vstd::seq::Seq<vstd::seq::Seq<(<E as Event>::Component, u64)>>;
@@ -50,7 +51,7 @@ verus! {
 broadcast use {vstd::seq::group_seq_lemmas, vstd::std_specs::vec::group_vec_axioms};
 
 pub(crate) struct Codebook<K: Copy + Eq + Hash> {
-    pub(crate) values: NativeMap<K>,
+    pub(crate) values: NativeMap<K, u64>,
     pub(crate) last: u64,
     #[cfg(verus_keep_ghost)]
     pub(crate) issued: Tracked<Option<crate::store::ComponentReceipts>>,
@@ -168,7 +169,7 @@ impl<K: Copy + Eq + Hash> Codebook<K> {
             result matches Err(error) ==> error == HistoryError::AllocationFailed
                 || error == (HistoryError::IdExhausted { domain }),
             result matches Err(_) ==> final(self).issued@ == old(self).issued@,
-            map::key_obligations::<K>() && book_wf(*old(self)) ==> {
+            key_laws::<K>() && book_wf(*old(self)) ==> {
             &&& book_wf(*final(self))
             &&& book_entries(*old(self)).is_prefix_of(book_entries(*final(self)))
             &&& match result {
@@ -210,7 +211,7 @@ impl<K: Copy + Eq + Hash> Codebook<K> {
             assert((self.issued@->0)@.contains_key(self.last));
         }
         proof {
-            if map::key_obligations::<K>() {
+            if key_laws::<K>() {
                 assert(book_entries(*self) == before.push((*value, id)));
                 let ghost old_ids = before.map(|i: int, pair: (K,u64)| pair.1);
                 let ghost new_ids = book_entries(*self).map(|i: int, pair: (K,u64)| pair.1);
@@ -224,7 +225,7 @@ impl<K: Copy + Eq + Hash> Codebook<K> {
                 0 < key <= self.last && (self.issued@->0)@[key] == issuer by {
                 if key != id { assert(prior_entries.contains_key(key)); }
             }
-            if map::key_obligations::<K>() && initial_wf {
+            if key_laws::<K>() && initial_wf {
                 assert forall|i: int| #![trigger book_entries(*self)[i]]
                     0 <= i < book_entries(*self).len() implies
                     0 < book_entries(*self)[i].1 <= self.last by {
@@ -234,6 +235,8 @@ impl<K: Copy + Eq + Hash> Codebook<K> {
                     0 <= i < book_entries(*self).len() && 0 <= j < book_entries(*self).len()
                     implies (book_entries(*self)[i].0.eq_spec(&book_entries(*self)[j].0)
                         == (book_entries(*self)[i].1 == book_entries(*self)[j].1)) by {
+                    junco_core::spec::hypotheses::lemma_key_laws_at(
+                        book_entries(*self)[i].0, book_entries(*self)[j].0, *value);
                     if i == before.len() && j < before.len() {
                         assert(!value.eq_spec(&before[j].0));
                         assert(!before[j].0.eq_spec(value));
@@ -436,7 +439,7 @@ impl<E: Event> NativeBooks<E> {
         Ghost(second): Ghost<ComponentMaps<E>>, Ghost(registry): Ghost<vstd::resource::Loc>,
         context: Context, operation: F) -> (result: R)
         requires mutex_valid(*self, owner, registry),
-            native_obligations::<E>() ==> snapshot_published::<E>(registry, first)
+            monitor_hypotheses::<E>() ==> snapshot_published::<E>(registry, first)
                 && maps_wf::<E>(first) && snapshot_published::<E>(registry, second) && maps_wf::<E>(second),
             forall|borrow: &mut Codebooks<E>| books_acquired(mut_ref_current(borrow), owner, registry, first, second)
                 ==> call_requires(operation, (borrow, context)),
@@ -585,7 +588,7 @@ impl<E: Event> Store<E> {
             junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Err(error) ==> error == (HistoryError::IdExhausted { domain: "history" }),
     {
-        proof { if native_obligations::<E>() { lemma_empty_maps_wf::<E>(); } }
+        proof { if monitor_hypotheses::<E>() { lemma_empty_maps_wf::<E>(); } }
         let ghost owner = self.id;
         let ghost registry = self.history_registry@;
         self.books.with_books(Ghost(owner), Ghost(empty_maps::<E>()), Ghost(empty_maps::<E>()), Ghost(registry),
@@ -612,13 +615,13 @@ impl<E: Event> Store<E> {
     pub(crate) fn encode_event(&self, event: &E) -> (result: Result<NumericEvent, HistoryError>)
         requires store_wf(*self),
         ensures result matches Ok(numeric) ==> numeric@.len() == arity::<E>(),
-            native_obligations::<E>() ==> (result matches Ok(numeric) ==>
+            monitor_hypotheses::<E>() ==> (result matches Ok(numeric) ==>
             exists|maps: ComponentMaps<E>| snapshot_published::<E>(registry_id(self), maps)
                 && maps_wf::<E>(maps) && event_encoded::<E>(maps, *event, numeric)),
             junco_core::verify::history_specs::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
     {
-        proof { if native_obligations::<E>() { lemma_empty_maps_wf::<E>(); } }
+        proof { if monitor_hypotheses::<E>() { lemma_empty_maps_wf::<E>(); } }
         let (result, _) = self.encode_event_with_snapshot(event,
             Ghost(empty_maps::<E>()), Ghost(empty_maps::<E>()));
         result
@@ -629,7 +632,7 @@ impl<E: Event> Store<E> {
         Ghost(first): Ghost<ComponentMaps<E>>, Ghost(second): Ghost<ComponentMaps<E>>)
         -> (result: (Result<NumericEvent, HistoryError>, Ghost<ComponentMaps<E>>))
         requires store_wf(*self),
-            native_obligations::<E>() ==> maps_wf::<E>(first)
+            monitor_hypotheses::<E>() ==> maps_wf::<E>(first)
                 && snapshot_published::<E>(registry_id(self), first) && maps_wf::<E>(second)
                 && snapshot_published::<E>(registry_id(self), second),
         ensures snapshot_published::<E>(registry_id(self), result.1@),
@@ -637,7 +640,7 @@ impl<E: Event> Store<E> {
             result.0 matches Ok(numeric) ==> numeric@.len() == arity::<E>(),
             junco_core::verify::history_specs::no_invariant_failure(result.0),
             !(result.0 matches Err(HistoryError::InvalidPolicy { .. })),
-            native_obligations::<E>() ==> maps_wf::<E>(result.1@)
+            monitor_hypotheses::<E>() ==> maps_wf::<E>(result.1@)
                 && maps_extend::<E>(first, result.1@) && maps_extend::<E>(second, result.1@)
                 && (result.0 matches Ok(numeric) ==> event_encoded::<E>(result.1@, *event, numeric)),
     {
@@ -654,7 +657,7 @@ impl<E: Event> Store<E> {
                     junco_core::verify::history_specs::no_invariant_failure(output.0),
                     !(output.0 matches Err(HistoryError::InvalidPolicy { .. })),
                     output.1@ == books_maps(*final(books)),
-                    native_obligations::<E>() ==> maps_wf::<E>(output.1@)
+                    monitor_hypotheses::<E>() ==> maps_wf::<E>(output.1@)
                         && maps_extend::<E>(first, output.1@) && maps_extend::<E>(second, output.1@)
                         && (output.0 matches Ok(numeric) ==> event_encoded::<E>(output.1@, *event, numeric)),
             {
@@ -670,7 +673,7 @@ impl<E: Event> Store<E> {
                     assert(component_receipts_wf(books.components));
                     assert(books.components.registry@ == initial_registry);
                     assert(components_wf(books.components));
-                    if native_obligations::<E>() {
+                    if monitor_hypotheses::<E>() {
                         lemma_component_maps_wf(books.components);
                         junco_core::verify::encoding::lemma_extends_transitive(first, initial, maps,
                             junco_core::verify::flatten::component_equality::<E>());
@@ -687,15 +690,15 @@ impl<E: Event> Store<E> {
         limits: &mut L, world: &mut ObservationWorld, Ghost(prior): Ghost<ComponentMaps<E>>)
         -> (result: (Result<FlatPair<u64>, HistoryError>, Ghost<ComponentMaps<E>>))
         requires store_wf(*self),
-            native_obligations::<E>() ==> maps_wf::<E>(prior)
+            monitor_hypotheses::<E>() ==> maps_wf::<E>(prior)
                 && snapshot_published::<E>(registry_id(self), prior),
         ensures result.0 matches Ok(numeric) ==> junco_core::flat::verify::structural_wf(numeric),
             snapshot_published::<E>(registry_id(self), result.1@),
-            native_obligations::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(result.0),
-            native_obligations::<E>() && junco_core::flat::verify::structural_wf(*source)
+            monitor_hypotheses::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(result.0),
+            monitor_hypotheses::<E>() && junco_core::flat::verify::structural_wf(*source)
                 && junco_core::verify::encoding::constants_in_domain(*source, domain::<E>())
                 ==> !(result.0 matches Err(HistoryError::InvalidPolicy { .. })),
-            native_obligations::<E>() ==> maps_wf::<E>(result.1@)
+            monitor_hypotheses::<E>() ==> maps_wf::<E>(result.1@)
                 && maps_extend::<E>(prior, result.1@)
                 && (result.0 matches Ok(numeric) ==>
                     junco_core::verify::encoding::lowering(*source, numeric, result.1@,
@@ -714,11 +717,11 @@ impl<E: Event> Store<E> {
                 ensures publication_frame(*old(books), *final(books)),
                     output.1@ == books_maps(*final(books)),
                     output.0 matches Ok(numeric) ==> junco_core::flat::verify::structural_wf(numeric),
-                    native_obligations::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(output.0),
-                    native_obligations::<E>() && junco_core::flat::verify::structural_wf(*source)
+                    monitor_hypotheses::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(output.0),
+                    monitor_hypotheses::<E>() && junco_core::flat::verify::structural_wf(*source)
                         && junco_core::verify::encoding::constants_in_domain(*source, domain::<E>())
                         ==> !(output.0 matches Err(HistoryError::InvalidPolicy { .. })),
-                    native_obligations::<E>() ==> maps_wf::<E>(output.1@) && maps_extend::<E>(prior, output.1@)
+                    monitor_hypotheses::<E>() ==> maps_wf::<E>(output.1@) && maps_extend::<E>(prior, output.1@)
                         && (output.0 matches Ok(numeric) ==>
                             junco_core::verify::encoding::lowering(*source, numeric, output.1@,
                                 junco_core::verify::flatten::component_equality::<E>())
@@ -727,7 +730,7 @@ impl<E: Event> Store<E> {
                 let (limits, world, numeric_store) = context;
                 let ghost initial = books_maps(*books);
                 let ghost initial_registry = books.components.registry@;
-                proof { if native_obligations::<E>() { lemma_component_maps_wf(books.components); } }
+                proof { if monitor_hypotheses::<E>() { lemma_component_maps_wf(books.components); } }
                 let result = {
                     let mut encoder = BorrowedEncoder { books: &mut books.components, numeric_store,
                         #[cfg(verus_keep_ghost)] calls: Ghost(0nat) };
@@ -738,7 +741,7 @@ impl<E: Event> Store<E> {
                     assert(component_receipts_wf(books.components));
                     assert(books.components.registry@ == initial_registry);
                     assert(components_wf(books.components));
-                    if native_obligations::<E>() {
+                    if monitor_hypotheses::<E>() {
                         junco_core::verify::encoding::lemma_extends_transitive(prior, initial, maps,
                             junco_core::verify::flatten::component_equality::<E>());
                     }
@@ -769,7 +772,7 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
             && self.numeric_store.arity_spec() == arity::<E>()
     }
     open(crate) spec fn obeys_encoding_spec(&self) -> bool {
-        native_obligations::<E>() && components_wf(*self.books)
+        monitor_hypotheses::<E>() && components_wf(*self.books)
     }
     open spec fn errors_are_non_invariant(&self) -> bool { true }
 
@@ -785,7 +788,7 @@ impl<'a, E: Event> FlatEncoder<E::Component> for BorrowedEncoder<'a, E> {
         ensures encoder_frame(*old(self), *final(self)),
             result != Err(HistoryError::WrongHistoryOwner),
             junco_core::verify::history_specs::no_invariant_failure(result),
-            native_obligations::<E>() && domain::<E>()(field, *value)
+            monitor_hypotheses::<E>() && domain::<E>()(field, *value)
                 ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
     {
         proof { self.calls = Ghost(self.calls@ + 1); }
@@ -804,7 +807,7 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
     fn intern_component(&mut self, index: usize, value: &E::Component)
         -> (result: Result<u64, HistoryError>)
         requires old(self).state_wf(), index < arity::<E>(),
-            native_obligations::<E>() && components_wf(*old(self).books)
+            monitor_hypotheses::<E>() && components_wf(*old(self).books)
                 ==> domain::<E>()(Component(index as u8), *value),
         ensures final(self).state_wf(), encoder_frame(*old(self), *final(self)),
             final(self).restoration() == old(self).restoration(),
@@ -813,7 +816,7 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
             junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Err(error) ==> error == HistoryError::AllocationFailed
                 || error == (HistoryError::IdExhausted { domain: "component" }),
-            native_obligations::<E>() && components_wf(*old(self).books) ==>
+            monitor_hypotheses::<E>() && components_wf(*old(self).books) ==>
                 maps_wf::<E>(component_maps(*final(self).books))
                 && maps_extend::<E>(component_maps(*old(self).books), component_maps(*final(self).books))
                 && (result matches Ok(id) ==> junco_core::verify::encoding::encoded(
@@ -830,7 +833,7 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
                 if i != index { assert(self.books.books@[i] == initial.books@[i]); }
             }
             assert(component_receipts_wf(*self.books));
-            if native_obligations::<E>() && initial_wf {
+            if monitor_hypotheses::<E>() && initial_wf {
                 assert forall|i: int| 0 <= i < arity::<E>() implies
                     book_wf(self.books.books@[i])
                     && (forall|j: int| 0 <= j < book_entries(self.books.books@[i]).len() ==>
@@ -868,7 +871,7 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
             junco_core::verify::history_specs::no_invariant_failure(result),
             !(result matches Err(HistoryError::InvalidPolicy { .. })),
             final(self).books.registry@ == old(self).books.registry@,
-            native_obligations::<E>() ==>
+            monitor_hypotheses::<E>() ==>
             maps_extend::<E>(component_maps(*old(self).books), component_maps(*final(self).books))
             && (result matches Ok(numeric) ==> event_encoded::<E>(component_maps(*final(self).books), *event, numeric)),
             final(self).restoration() == old(self).restoration(),
@@ -885,17 +888,22 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
                 registry == old(self).books.registry@,
                 self.restoration() == restored, restored == old(self).restoration(),
                 before == component_maps(*old(self).books),
-                native_obligations::<E>() ==> maps_extend::<E>(before, component_maps(*self.books)),
-                native_obligations::<E>() ==> forall|i: int| 0 <= i < index ==>
+                monitor_hypotheses::<E>() ==> maps_extend::<E>(before, component_maps(*self.books)),
+                monitor_hypotheses::<E>() ==> forall|i: int| 0 <= i < index ==>
                     junco_core::verify::encoding::encoded(component_maps(*self.books), Self::equality(),
                         Component(i as u8), event_view(*event)[i], slots@[i]),
             decreases width - index,
         {
             let value = event.component(index);
             let ghost previous = component_maps(*self.books);
+            proof {
+                if monitor_hypotheses::<E>() {
+                    junco_core::spec::hypotheses::lemma_monitor_projection(*event, index as int);
+                }
+            }
             let result = self.intern_component(index, &value);
             proof {
-                if native_obligations::<E>() {
+                if monitor_hypotheses::<E>() {
                     junco_core::verify::encoding::lemma_extends_transitive(before, previous,
                         component_maps(*self.books), Self::equality());
                     assert(before.len() == previous.len());
@@ -915,9 +923,11 @@ impl<'a, E: Event> BorrowedEncoder<'a, E> {
         let numeric = NumericEvent::from_encoded(&slots[..width]);
         proof {
             assert forall|i: int| 0 <= i < width implies numeric_values(numeric)[i] == slots@[i] by {}
-            if native_obligations::<E>() {
+            if monitor_hypotheses::<E>() {
                 assert forall|i: int| 0 <= i < width implies
-                    domain::<E>()(Component(i as u8), event_view(*event)[i]) by {}
+                    domain::<E>()(Component(i as u8), event_view(*event)[i]) by {
+                    junco_core::spec::hypotheses::lemma_monitor_projection(*event, i);
+                }
             }
         }
         Ok(numeric)
@@ -1077,7 +1087,7 @@ pub mod verify {
 
     fn typed_component_receipt_client<E: Event>(store: &Store<E>, value: &E::Component, index: usize)
         -> (result: Result<(u64, Tracked<crate::store::ComponentIdReceipt>), HistoryError>)
-        requires store_wf(*store), index < arity::<E>(), map::key_obligations::<E::Component>(),
+        requires store_wf(*store), index < arity::<E>(), key_laws::<E::Component>(),
         ensures result matches Ok((id, receipt)) ==> receipt@.key() == id
             && receipt@.id() == crate::store::verify::coordinate_authority(index as int)
             && receipt@.value() == crate::store::ComponentIssuer::Typed(store.history_registry@),
@@ -1108,7 +1118,7 @@ pub mod verify {
         -> (result: Result<(u64, u64, u64), HistoryError>)
         requires store_wf(*left), store_wf(*right), component.0 < arity::<E>(),
             component.0 < arity::<F>(), left.history_registry@ != right.history_registry@,
-            map::key_obligations::<E::Component>(), map::key_obligations::<F::Component>(),
+            key_laws::<E::Component>(), key_laws::<F::Component>(),
         ensures result matches Ok((byte, first, second)) ==>
             byte != first && byte != second && first != second,
     {
@@ -1132,32 +1142,6 @@ pub mod verify {
         junco_core::verify::flatten::component_domain::<E>()
     }
 
-    pub open(super) spec fn native_obligations<E: Event>() -> bool {
-        1 <= arity::<E>() <= MAX_ARITY && E::obeys_projection_spec()
-            && projection_laws::<E>() && map::key_obligations::<E::Component>()
-    }
-
-    /// `eq_spec` is an equivalence on `T`: the reflexivity, symmetry and transitivity clauses of
-    /// the key obligations, exported for typed guarantees outside this crate.
-    pub open spec fn eq_equivalence<T: PartialEq>() -> bool {
-        &&& forall|a: T| #[trigger] a.eq_spec(&a)
-        &&& forall|a: T, b: T| #[trigger] a.eq_spec(&b) == b.eq_spec(&a)
-        &&& forall|a: T, b: T, c: T| #[trigger] a.eq_spec(&b) && #[trigger] b.eq_spec(&c) ==> a.eq_spec(&c)
-    }
-
-    /// The native obligations make component equality an equivalence.
-    pub proof fn lemma_native_obligations_eq_equivalence<E: Event>()
-        requires native_obligations::<E>(),
-        ensures eq_equivalence::<E::Component>(),
-    {
-    }
-
-    /// Projection and arity facts available to typed-policy clients outside this crate.
-    pub proof fn lemma_native_obligations_projection<E: Event>()
-        requires native_obligations::<E>(),
-        ensures E::obeys_projection_spec(), projection_laws::<E>(),
-            1 <= arity::<E>() <= MAX_ARITY,
-    {}
 
     pub open spec fn empty_maps<E: Event>() -> ComponentMaps<E> {
         Seq::new(arity::<E>(), |i: int| Seq::<(E::Component, u64)>::empty())
@@ -1225,7 +1209,7 @@ pub mod verify {
     pub(crate) open(crate) spec fn book_wf<K: Copy + Eq + Hash>(book: Codebook<K>) -> bool {
         (forall|i: int| #![trigger book_entries(book)[i]]
             0 <= i < book_entries(book).len() ==> 0 < book_entries(book)[i].1 <= book.last)
-            && (map::key_obligations::<K>() ==> forall|i: int, j: int|
+            && (key_laws::<K>() ==> forall|i: int, j: int|
                 0 <= i < book_entries(book).len() && 0 <= j < book_entries(book).len()
                 ==> (book_entries(book)[i].0.eq_spec(&book_entries(book)[j].0)
                     == (book_entries(book)[i].1 == book_entries(book)[j].1)))
@@ -1238,12 +1222,12 @@ pub mod verify {
         index: int, issuer: crate::store::ComponentIssuer) -> bool {
         match book.issued@ {
             None => book.last == 0
-                && (map::key_obligations::<K>() ==> book_entries(book).len() == 0),
+                && (key_laws::<K>() ==> book_entries(book).len() == 0),
             Some(receipts) => receipts.id() == crate::store::verify::coordinate_authority(index)
                 && receipts@.contains_key(book.last)
                 && (forall|id: u64| #[trigger] receipts@.contains_key(id) ==>
                     0 < id <= book.last && receipts@[id] == issuer)
-                && (map::key_obligations::<K>() ==> receipts@.dom() ==
+                && (key_laws::<K>() ==> receipts@.dom() ==
                     book_entries(book).map(|i: int, pair: (K,u64)| pair.1).to_set()),
         }
     }
@@ -1255,7 +1239,7 @@ pub mod verify {
     }
     pub(crate) open(crate) spec fn components_wf<E: Event>(books: ComponentBooks<E>) -> bool {
         component_receipts_wf(books)
-            && (native_obligations::<E>() ==> forall|index: int| 0 <= index < arity::<E>() ==>
+            && (monitor_hypotheses::<E>() ==> forall|index: int| 0 <= index < arity::<E>() ==>
                 book_wf(books.books@[index])
                 && forall|i: int| 0 <= i < book_entries(books.books@[index]).len() ==>
                     E::coordinate_spec(book_entries(books.books@[index])[i].0) == index)
@@ -1270,7 +1254,7 @@ pub mod verify {
 
     pub(crate) proof fn lemma_component_book_encoded<E: Event>(
         books: ComponentBooks<E>, field: Component, value: E::Component, id: u64)
-        requires native_obligations::<E>(), components_wf(books),
+        requires monitor_hypotheses::<E>(), components_wf(books),
             field.0 < arity::<E>(), domain::<E>()(field, value),
             book_encoded(books.books@[field.0 as int], value, id),
         ensures encoding::encoded(component_maps(books), component_equality::<E>(), field, value, id),
@@ -1308,7 +1292,7 @@ pub mod verify {
         registry: vstd::resource::Loc, first: ComponentMaps<E>, second: ComponentMaps<E>) -> bool {
         books.owner@ == owner && registry_wf(books) && books.history_resources@.id() == registry
             && books_wf(books)
-            && (native_obligations::<E>() ==>
+            && (monitor_hypotheses::<E>() ==>
                 maps_extend::<E>(first, books_maps(books)) && maps_extend::<E>(second, books_maps(books)))
     }
 
@@ -1317,20 +1301,44 @@ pub mod verify {
             && before.components.registry@ == after.components.registry@ && books_wf(after)
             && before.history_resources@.id() == after.history_resources@.id()
             && (before.history_resources@)@.submap_of((after.history_resources@)@)
-            && (native_obligations::<E>() ==> books_wf(after) && maps_extend::<E>(books_maps(before), books_maps(after)))
+            && (monitor_hypotheses::<E>() ==> books_wf(after) && maps_extend::<E>(books_maps(before), books_maps(after)))
+    }
+
+    /// Relates native key equality to the encoder's coordinate-scoped carrier.
+    pub proof fn lemma_component_key_model<E: Event>(field: Component)
+        requires monitor_hypotheses::<E>(),
+        ensures eq_equivalence::<E::Component>(
+            encoding::equality_at(component_equality::<E>(), field),
+            encoding::domain_at(domain::<E>(), field)),
+    {
+        let eq = encoding::equality_at(component_equality::<E>(), field);
+        let native = |a: E::Component, b: E::Component| a.eq_spec(&b);
+        assert(eq =~= native);
+        junco_core::spec::hypotheses::lemma_eq_equivalence_restrict(
+            eq, |_: E::Component| true, encoding::domain_at(domain::<E>(), field));
     }
 
     pub proof fn lemma_empty_maps_wf<E: Event>()
-        requires native_obligations::<E>(),
+        requires monitor_hypotheses::<E>(),
         ensures maps_wf::<E>(empty_maps::<E>()),
-    {}
+    {
+        assert forall|f: Component| #[trigger] eq_equivalence::<E::Component>(
+                encoding::equality_at(component_equality::<E>(), f),
+                encoding::domain_at(domain::<E>(), f)) by {
+            lemma_component_key_model::<E>(f);
+        }
+    }
 
     pub(super) proof fn lemma_component_maps_wf<E: Event>(books: ComponentBooks<E>)
         requires components_wf(books),
-        ensures native_obligations::<E>() ==> maps_wf::<E>(component_maps(books)),
+        ensures monitor_hypotheses::<E>() ==> maps_wf::<E>(component_maps(books)),
     {
-        if native_obligations::<E>() {
-            assert(encoding::equality_laws(component_equality::<E>(), domain::<E>()));
+        if monitor_hypotheses::<E>() {
+            assert forall|f: Component| #[trigger] eq_equivalence::<E::Component>(
+                encoding::equality_at(component_equality::<E>(), f),
+                encoding::domain_at(domain::<E>(), f)) by {
+                lemma_component_key_model::<E>(f);
+            }
             assert forall|f: int, i: int| 0 <= f < arity::<E>() && 0 <= i < component_maps(books)[f].len()
                 implies domain::<E>()(encoding::field_at(f), component_maps(books)[f][i].0)
                     && component_maps(books)[f][i].1 > 0 by {
