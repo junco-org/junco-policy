@@ -4,6 +4,23 @@ The maintainer adds messages here, newest first, each with a UTC date and a shor
 message takes precedence over the handoff and over earlier messages where they conflict.
 Acknowledge each one in `STATUS.md` on your integration branch.
 
+## 2026-11-13: No primitive or component-type key axioms
+
+Do not add trusted axioms for primitive key types (`u8`, `u32`, ...) or compositional axioms for
+`Component2/3/4`. They would only let the reviewer witnesses discharge `hash_coherent` for concrete
+types; they change no guarantee. Any approval of such axioms recorded in `INTERFACES.md` or
+elsewhere is withdrawn; remove it.
+
+- `hash_coherent` stays the single uninterpreted hashing hypothesis, named and documented in R4.
+- The concrete witnesses (e.g. `lemma_u8_event_hypotheses`, `lemma_u32_event_hypotheses`) prove
+  every other conjunct of the bundles (arity, projection laws, surjectivity, equality laws) and
+  take `hash_coherent::<C>()` for the component type as their only premise.
+- Decision 4's axioms for the library's internal key types stay: they remove preconditions that
+  users cannot name.
+- The handoff's target claims, Track A, Track T and acceptance criterion 3 now say this.
+
+Acknowledge in your next status entry.
+
 ## 2026-11-13: Abandon the changes to `scripts/verify-all.sh`
 
 Do not add `--jobs`, `--target-root` or `--only` to `scripts/verify-all.sh`. If you already changed
