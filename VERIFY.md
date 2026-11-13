@@ -183,10 +183,10 @@ count the client theorems only):
 | `-p junco-core --features runtime,std,serde` | 287, 0 |
 | `-p history-store --no-default-features --features runtime` | 289, 0 |
 | `-p history-store --features runtime,std` | 289, 0 |
-| `-p history-semantics --no-default-features --features runtime` | 1619, 0 |
-| `-p history-semantics --features runtime,std,cache` | 1624, 0 |
+| `-p history-semantics --no-default-features --features runtime` | 1618, 0 |
+| `-p history-semantics --features runtime,std,cache` | 1623, 0 |
 | `-p history-semantics --features runtime,std,cache --test public_specs` | 19, 0 |
 | `-p history-semantics --features runtime,std,cache --test reviewer` | 7, 0 |
-| `-p history-analysis --no-default-features --features runtime` | 603, 0 |
-| `-p history-analysis --no-default-features --features runtime,std` | 603, 0 |
+| `-p history-analysis --no-default-features --features runtime` | 601, 0 |
+| `-p history-analysis --no-default-features --features runtime,std` | 601, 0 |
 | `-p history-analysis --no-default-features --features runtime,std --test reviewer` | 16, 0 |
