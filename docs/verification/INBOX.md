@@ -4,7 +4,18 @@ The maintainer adds messages here, newest first, each with a UTC date and a shor
 message takes precedence over the handoff and over earlier messages where they conflict.
 Acknowledge each one in `STATUS.md` on your integration branch.
 
-## 2026-11-13: Track G additions (dead std spec; `arc_identity` fidelity)
+## 2026-11-13: Abandon the changes to `scripts/verify-all.sh`
+
+Do not add `--jobs`, `--target-root` or `--only` to `scripts/verify-all.sh`. If you already changed
+the script, revert it to its state on `main` and drop those commits (or revert them) on every
+branch, including track branches. The only change to the script that remains allowed is
+registering the two reviewer test targets (Track T).
+
+For faster gates, run the `cargo verus verify --locked <configuration> -- --num-threads N`
+commands directly (`scripts/verify-all.sh --list` prints them), several at once, each with its own
+persistent `CARGO_TARGET_DIR`. Use the unchanged `scripts/verify-all.sh` for the final run. The
+handoff's Track 0 and Verification/Gates sections have been updated to match. Acknowledge in your
+next status entry and say whether you had changed the script.## 2026-11-13: Track G additions (dead std spec; `arc_identity` fidelity)
 
 1. **Delete the dead `assume_specification` for `core::mem::replace`**
    (`junco-core/src/verify/history_assumptions.rs`). Its only use is in the unverified,
