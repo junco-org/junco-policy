@@ -229,7 +229,7 @@ pub(crate) proof fn lemma_work_scoped_pop<E: Event>(work: Seq<Work<'_, E>>, head
     } by { assert(work.drop_last()[i] == work[i]); }
 }
 
-// ----- the constants a flattening may intern are the rule's (R6 `known`) -----
+// ----- the constants a flattening may intern are the rule's (the analyzer's `known`) -----
 
 /// `source` compares each coordinate only against constants `tail` does (a sub-term of `tail`).
 pub open spec fn regex_constants_within<C>(source: RegexView<C>, tail: RegexView<C>) -> bool {
@@ -348,8 +348,8 @@ pub proof fn lemma_test_children_within<C>(children: Seq<TestView<C>>, source: T
     }
 }
 
-/// Every constant a flattening can intern is a constant of the rule at that coordinate (R6
-/// `known` after `add_rule` is `known_with(.., rule_constants(rule))`).
+/// Every constant a flattening can intern is a constant of the rule at that coordinate (the
+/// analyzer specification's `known` after `add_rule` is `known_with(.., rule_constants(rule))`).
 pub proof fn lemma_flattened_constants<E: Event>(rule: Rule<E>, flat: FlatRule<E::Component>)
     requires flattened::<E>(rule, flat),
     ensures forall|f: Component, v: E::Component| #[trigger] crate::verify::encoding::source_constant(flat.source, f, v)

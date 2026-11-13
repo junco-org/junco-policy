@@ -226,18 +226,6 @@ pub proof fn theorem_rule_decision()
     }
 }
 
-/// Theorem Matcher correctness (`thm:matcher`), step 1: without a complete matching substitution
-/// the rule is not fired.
-pub open spec fn stmt_not_fired() -> bool {
-    forall|head: Head, tail: Regex<SrcTest>, request: EventView, history: Seq<EventView>|
-        (forall|theta: Subst| !language::head_match(head, request, theta))
-            ==> !#[trigger] language::pair_lang(head, tail, request, history)
-}
-
-pub proof fn theorem_not_fired()
-    ensures stmt_not_fired(),
-{ }
-
 pub enum TestRule {
     AndSet(Seq<SrcTest>, Seq<SrcTest>),
     OrSet(Seq<SrcTest>, Seq<SrcTest>),

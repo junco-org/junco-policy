@@ -1,4 +1,5 @@
-//! R6: what the analyzer's verdicts mean (plan §5, A1–A6), over real events through R2/R3.
+//! What the analyzer's verdicts mean, over real events through the semantics
+//! (`junco_core::spec::semantics`) and the analysis questions (`junco_core::spec::questions`).
 //!
 //! A `PolicyAnalyzer` is read through `AnalyzerView`: declared domains, the added rules by index,
 //! and the constants it distinguishes per coordinate. The `*_spec` predicates are the postconditions
@@ -11,12 +12,12 @@
 //! happened before a failure); `covered`, `redundant` and `at_least_as_strict` leave the view
 //! unchanged. So capacity (`capacity_for`) is relative to exactly the constants of the inputs.
 //!
-//! A5 (escapes), in prose: `Exhausted` is returned only when a search's `charge` returned
+//! Escapes (`Exhausted` and errors), in prose: `Exhausted` is returned only when a search's `charge` returned
 //! `HistoryError::GraphBudget` (whose contract is `charged + bytes > budget`, with the budget
 //! `GRAPH_BYTES`); `Err` is never an invariant failure (`no_invariant_failure`); every call
 //! terminates (no `exec_allows_no_decreases_clause` in this crate, see TRUST.md); the policy
 //! queries stop at the first non-`Holds` split case; verdicts transfer to the monitor only for
-//! pairs inside the declared domains (S9).
+//! pairs inside the declared domains.
 
 use crate::analyzer::RuleId;
 use history_syntax::Event;
@@ -46,16 +47,6 @@ pub struct AnalyzerView<C> {
     pub known: Seq<Set<C>>,
 }
 
-/// Open consequences of the opaque `PolicyAnalyzer::wf`. (`known` is not required to be tagged:
-/// a failed `add_rule` may have interned ill-tagged constants; freshness tags the fresh values.)
-pub open spec fn analyzer_wf<E: Event>(a: AnalyzerView<E::Component>) -> bool {
-    &&& domains_wf::<E>(a.domains)
-    &&& a.known.len() == arity::<E>()
-    &&& forall|i: int| 0 <= i < a.rules.len() ==> rule_wf(#[trigger] a.rules[i])
-        && a.rules[i].head.len() == arity::<E>()
-        && forall|j: int| 0 <= j < a.known.len() ==> rule_constants(a.rules[i])[j].subset_of(a.known[j])
-}
-
 /// The number of known constants, summed over the coordinates.
 pub open spec fn known_count<C>(known: Seq<Set<C>>) -> nat
     decreases known.len(),
@@ -75,13 +66,7 @@ pub open spec fn tail_constants<C>(head: HeadView<C>, left: RegexView<C>, right:
         .union(regex_constants(right, head.len())[i]))
 }
 
-/// Every constant of the rule is tagged with the coordinate it occurs at.
-pub open spec fn rule_constants_tagged<E: Event>(rule: RuleView<E::Component>) -> bool {
-    forall|i: int, c: E::Component| 0 <= i < rule.head.len() && #[trigger] rule_constants(rule)[i].contains(c)
-        ==> E::coordinate_spec(c) == i
-}
-
-// ----- capacities, over the view (S6) -----
+// ----- capacities, over the view -----
 
 /// The declared sets, with the empty set at undeclared coordinates.
 pub open spec fn declared_sets<C>(domains: DomainsView<C>) -> Seq<Set<C>> {
@@ -138,7 +123,7 @@ pub open spec fn tail_fails<E: Event>(
         && !lang(right, head, event_view(c), history_view(h))
 }
 
-// ----- verdicts (A1–A6) -----
+// ----- verdicts -----
 
 /// Only undeclared coordinates need values outside the known constants. Declared coordinates
 /// use constants exclusively, as required separately by `counterexample_spec`.
@@ -149,7 +134,7 @@ pub open spec fn undeclared_capacity<E: Event>(
         ==> #[trigger] fresh_capacity::<E>(a.domains, a.known, i, fresh_used(cex, i).len())
 }
 
-/// What a returned symbolic counterexample promises about `fails` (A2): every real instance is a
+/// What a returned symbolic counterexample promises about `fails`: every real instance is a
 /// real pair in the domains that fails; under capacity for its own fresh values an instance exists.
 pub open spec fn counterexample_spec<E: Event>(
     a: AnalyzerView<E::Component>, cex: CexView<E::Component>, fails: spec_fn(E, Seq<E>) -> bool,
@@ -161,7 +146,7 @@ pub open spec fn counterexample_spec<E: Event>(
     &&& undeclared_capacity::<E>(a, cex) ==> cex_has_instance::<E>(a.domains, a.known, cex)
 }
 
-/// A1/A2/A6 for `covered`: Holds is coverage; a counterexample is an uncovered pair, refutes
+/// For `covered`: Holds is coverage; a counterexample is an uncovered pair, refutes
 /// coverage when it has an instance, and is shortest within its constant profile.
 pub open spec fn covered_spec<E: Event>(
     a: AnalyzerView<E::Component>, rule: nat, by: Seq<nat>, v: InclusionView<E::Component>,
@@ -177,7 +162,7 @@ pub open spec fn covered_spec<E: Event>(
     }
 }
 
-/// PR #10's removal semantics (decision 5): removing every occurrence of the id changes no
+/// Removal semantics: removing every occurrence of the id changes no
 /// decision; multiset/id reading.
 pub open spec fn removal_preserves_decisions<E: Event>(
     a: AnalyzerView<E::Component>, rule: nat, policy: Seq<nat>,
@@ -195,7 +180,7 @@ pub open spec fn removal_fails<E: Event>(
         && !policy_denies(rules_of(a, without_rule(policy, rule)), c, h)
 }
 
-/// A3 (redundancy): coverage by the others, plus PR #10's `redundant_decisions_ok`.
+/// Redundancy: coverage by the others, plus preservation of every decision under removal.
 pub open spec fn redundant_spec<E: Event>(
     a: AnalyzerView<E::Component>, rule: nat, policy: Seq<nat>, v: InclusionView<E::Component>,
 ) -> bool {
@@ -209,7 +194,7 @@ pub open spec fn redundant_spec<E: Event>(
     }
 }
 
-/// A3 (refinement): Holds is `P ⊑ Q`; a counterexample is uncovered for some rule of `Q`, refutes
+/// Refinement: Holds is `P ⊑ Q`; a counterexample is uncovered for some rule of `Q`, refutes
 /// refinement when it has an instance, and is shortest within its constant profile for that rule.
 pub open spec fn at_least_as_strict_spec<E: Event>(
     a: AnalyzerView<E::Component>, p: Seq<nat>, q: Seq<nat>, v: InclusionView<E::Component>,
@@ -226,7 +211,7 @@ pub open spec fn at_least_as_strict_spec<E: Event>(
     }
 }
 
-/// A4: tail inclusion for every matching real candidate; a counterexample is real (under
+/// Tail inclusion for every matching real candidate; a counterexample is real (under
 /// capacity) and of minimum history length.
 pub open spec fn tail_included_spec<E: Event>(
     a: AnalyzerView<E::Component>, head: HeadView<E::Component>,

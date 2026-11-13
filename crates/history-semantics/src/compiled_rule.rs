@@ -185,8 +185,8 @@ pub mod verify {
             rule@, candidate, raw::raw_events(history))
     }
 
-    /// Outcome of the ordered scan: the first violated source (R2 `least_violation`) or none
-    /// (R2 `policy_permits`), under the event laws.
+    /// Outcome of the ordered scan: the first violated source (`least_violation` in the semantics) or none
+    /// (`policy_permits`), under the event laws.
     pub open spec fn ordered_result<E: Event>(sources: Seq<Rule<E>>, history: History<E>, candidate: E,
         result: Result<Option<usize>, HistoryError>) -> bool {
         junco_core::spec::hypotheses::event_obligations::<E>() ==> match result {

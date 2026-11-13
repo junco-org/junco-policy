@@ -1,6 +1,6 @@
-//! Layer 0: proofs about the typed semantics and the policy questions of R2/R3
+//! Layer 0: proofs about the typed semantics and the policy questions
 //! (`junco_core::spec::{semantics, questions}`; paper `sec:rules`, `sec:policy`, appendix
-//! `app:policy-reduction`), plus the constants of a rule, which R6 reads.
+//! `app:policy-reduction`), plus the constants of a rule, which the analyzer specification reads.
 //!
 //! The valuation `θ` of the paper is the candidate itself; histories are oldest first and never
 //! contain the candidate. Component equality is `PartialEqSpec::eq_spec`. A policy is a finite
@@ -71,7 +71,7 @@ pub open spec fn pair_values<C>(candidate: Seq<C>, history: Seq<Seq<C>>, coordin
             && #[trigger] history[i][coordinate] == x)
 }
 
-/// Rule violation (R2 `rule_violated_view`) is invariant under tag-preserving renamings of the
+/// Rule violation (`rule_violated_view`) is invariant under tag-preserving renamings of the
 /// pair's values that fix the rule's constants.
 pub open spec fn stmt_genericity<E: Event>() -> bool {
     forall|rule: RuleView<E::Component>, candidate: Seq<E::Component>, history: Seq<Seq<E::Component>>, f: Seq<spec_fn(E::Component) -> E::Component>|

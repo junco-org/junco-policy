@@ -1,5 +1,5 @@
 //! Decision preservation for removing every occurrence of a rule id, independently of policy
-//! order and duplicate ids (R6 `removal_preserves_decisions`, decision 5). An absent id retains
+//! order and duplicate ids (`removal_preserves_decisions`). An absent id retains
 //! the coverage-query interpretation.
 
 use crate::spec::analyzer::{
@@ -117,7 +117,7 @@ pub proof fn lemma_removal_iff_covered<E: Event>(a: AnalyzerView<E::Component>, 
     }
 }
 
-/// The coverage verdict for the other rules also describes the effect of removing the id (A3).
+/// The coverage verdict for the other rules also describes the effect of removing the id.
 pub proof fn lemma_redundant_decisions<E: Event>(a: AnalyzerView<E::Component>, rule: nat,
     policy: Seq<nat>, v: InclusionView<E::Component>)
     requires rule < a.rules.len(),

@@ -84,7 +84,7 @@ pub enum FlowComponent<P, V, L> {
     Label(L),
 }
 
-// Hypothesis (D4): this crate is not verified, so `event_laws::<FlowEvent<P, V, L>>` (R1) is
+// Hypothesis: this crate is not verified, so `event_laws::<FlowEvent<P, V, L>>` is
 // assumed, not proved: arity 4; `coordinate(component(e, i)) == i`; every tuple tagged 0..3 is the
 // view of a `FlowEvent` with those fields. Converting to the verified tuple `(P, V, FlowAction, L)`
 // would drop the named `FlowComponent` variants from the public API, so the impl stays hand-written.

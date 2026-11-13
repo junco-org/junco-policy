@@ -1134,17 +1134,6 @@ pub(crate) proof fn lemma_trace_query_ok(d: encoding::NDomains,start: paper::Ite
     }
 }
 
-pub(crate) proof fn theorem_retained_search_bounded(d: encoding::NDomains,
-    archive: Map<paper::Item,Set<paper::Case>>,start: paper::Item)
-    requires finite_impl::regex_nf(start.state),archive_follows(archive),
-        finiteness::cases_from_atoms(d,archive_cases(archive),|q: Regex<model::Test>| symbolic::regex_primitives(q)),
-    ensures paper::finitely_many_items(archive_cases(archive),start),
-        exists|bound: nat| #[trigger] paper::traces_bounded(start.constraint,start.state,archive_cases(archive),bound),
-{
-    implementation::theorem_impl_search_bounded(d,archive_cases(archive),
-        |q: Regex<model::Test>| symbolic::regex_primitives(q),start.constraint,start.state);
-}
-
 pub(crate) open spec fn letter_numeric_codes(v: Seq<Set<nat>>,u: Universes,
     l: implementation::LetterView,atoms: Set<model::Primitive>) -> bool {
     &&& 1 <= v.len() <= history_syntax::MAX_ARITY
@@ -1278,15 +1267,12 @@ pub(crate) proof fn lemma_running_outcome(s: Search<'_>, expanded: nat,start: pa
     requires running(s,expanded,start,v),paper::trace_outcome(trace(s,expanded),outcome),
     ensures paper::trace_wf(ndomains(*s.universes),start.constraint,start.state,
             archive_cases(s.archive@),trace(s,expanded)),
-        paper::finitely_many_items(archive_cases(s.archive@),start),
-        exists|bound: nat| paper::traces_bounded(start.constraint,start.state,archive_cases(s.archive@),bound),
         forall|r: Regex<model::Test>,t: Regex<model::Test>| paper::initial_ok(start.state,r,t)
             ==> paper::outcome_ok(ndomains(*s.universes),start.constraint,r,t,outcome),
 {
     reveal(running);
     lemma_partial_trace_complete(ndomains(*s.universes),start,archive_cases(s.archive@),trace(s,expanded));
     lemma_trace_query_ok(ndomains(*s.universes),start,s.archive@,trace(s,expanded),outcome);
-    theorem_retained_search_bounded(ndomains(*s.universes),s.archive@,start);
 }
 
 
@@ -1333,8 +1319,6 @@ pub(crate) open spec fn search_result(d: encoding::NDomains,start: paper::Item,o
             && paper::trace_steps_ok(d,archive_cases(archive),t) && paper::trace_outcome(t,outcome)
             && archive_follows(archive)
             && finiteness::cases_from_atoms(d,archive_cases(archive),|q: Regex<model::Test>| symbolic::regex_primitives(q))
-            && paper::finitely_many_items(archive_cases(archive),start)
-            && (exists|bound: nat| paper::traces_bounded(start.constraint,start.state,archive_cases(archive),bound))
 }
 
 #[verifier::rlimit(20)]
@@ -1344,8 +1328,8 @@ pub(crate) proof fn lemma_search_result(s: Search<'_>,expanded: nat,start: paper
     ensures search_result(ndomains(*s.universes),start,outcome),
 {
     hide(paper::outcome_ok); hide(paper::initial_ok); hide(paper::trace_wf);
-    hide(paper::trace_steps_ok); hide(paper::trace_outcome); hide(paper::finitely_many_items);
-    hide(paper::traces_bounded); hide(finiteness::cases_from_atoms); hide(archive_follows);
+    hide(paper::trace_steps_ok); hide(paper::trace_outcome);
+    hide(finiteness::cases_from_atoms); hide(archive_follows);
     reveal(search_result);
     lemma_running_evidence(s,expanded,start,v);
     lemma_running_outcome(s,expanded,start,v,outcome);

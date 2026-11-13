@@ -99,7 +99,7 @@ is not verified at all (see Unverified glue below).
 - `crates/history-semantics/src/policy/trace.rs:228`: `fn unpack_trace_rule`
 - `crates/history-semantics/src/policy/trace.rs:239`: `fn forward_trace_diagnostic`
 - `crates/history-semantics/src/policy/trace.rs:273`: `struct TraceRule<E: Event>`
-- `crates/history-semantics/src/policy/trace.rs:302`: `impl<E: Event> Clone for TraceRule<E> :: fn clone`
+- `crates/history-semantics/src/policy/trace.rs:304`: `impl<E: Event> Clone for TraceRule<E> :: fn clone`
 
 ### `exec_allows_no_decreases_clause` (1)
 
@@ -114,7 +114,7 @@ is not verified at all (see Unverified glue below).
 - `crates/history-semantics/src/policy/trace.rs:51`: `fn trace_callback_identity`
 - `crates/history-semantics/src/policy/trace.rs:52`: `fn trace_diagnostic_identity`
 - `crates/history-semantics/src/policy/trace.rs:54`: `fn trace_arc_call` — **meaning**: the result of invoking a trace diagnostic callback
-- `crates/history-semantics/src/policy/trace.rs:56`: `fn trace_rule_source` — **meaning**: the source rule a trace rule was built from (`TraceRule::clone` preserves it)
+- `crates/history-semantics/src/policy/trace.rs:56`: `fn trace_rule_source` — **meaning**: the source rule a trace rule was built from
 - `crates/history-semantics/src/policy/trace.rs:57`: `fn trace_rule_diagnostic` — **meaning**: the diagnostic callback a trace rule retains
 
 ### `unannotated_pub_fn` (16)
@@ -140,10 +140,10 @@ is not verified at all (see Unverified glue below).
 
 ### `external_body` (41)
 
-- `crates/history-store/src/cache.rs:69`: `impl GraphCaches :: fn successor_cache`
-- `crates/history-store/src/cache.rs:79`: `impl GraphCaches :: fn successor_get`
-- `crates/history-store/src/cache.rs:93`: `impl GraphCaches :: fn successor_put`
-- `crates/history-store/src/cache.rs:129`: `impl HistoryCursor :: fn position`
+- `crates/history-store/src/cache.rs:71`: `impl GraphCaches :: fn successor_cache`
+- `crates/history-store/src/cache.rs:81`: `impl GraphCaches :: fn successor_get`
+- `crates/history-store/src/cache.rs:95`: `impl GraphCaches :: fn successor_put`
+- `crates/history-store/src/cache.rs:131`: `impl HistoryCursor :: fn position`
 - `crates/history-store/src/store.rs:214`: `impl Domain :: fn path_lookup`
 - `crates/history-store/src/store.rs:225`: `impl Domain :: fn path_insert`
 - `crates/history-store/src/store.rs:233`: `impl Domain :: fn path_remove`
@@ -184,8 +184,8 @@ is not verified at all (see Unverified glue below).
 
 ### `external_type_specification` (2)
 
-- `crates/history-store/src/cache.rs:241`: `struct ExSuccessorHasher(lru::DefaultHasher) (opaque)`
-- `crates/history-store/src/cache.rs:244`: `struct ExLruCache<K, V, S>(LruCache<K, V, S>) (opaque)`
+- `crates/history-store/src/cache.rs:243`: `struct ExSuccessorHasher(lru::DefaultHasher) (opaque)`
+- `crates/history-store/src/cache.rs:246`: `struct ExLruCache<K, V, S>(LruCache<K, V, S>) (opaque)`
 
 ### `external` (2)
 
@@ -198,7 +198,7 @@ is not verified at all (see Unverified glue below).
 
 ### `uninterp` (22)
 
-- `crates/history-store/src/cache.rs:257`: `fn successor_cache_view` — **meaning**: the entries of the LRU successor cache; contracts allow eviction, never a fabricated entry
+- `crates/history-store/src/cache.rs:259`: `fn successor_cache_view` — **meaning**: the entries of the LRU successor cache; contracts allow eviction, never a fabricated entry
 - `crates/history-store/src/store.rs:871`: `fn record_id`
 - `crates/history-store/src/store.rs:872`: `fn lifecycle_id`
 - `crates/history-store/src/store.rs:933`: `fn native_domain_valid`
@@ -296,7 +296,7 @@ is not verified at all (see Unverified glue below).
 ### `uninterp` (4)
 
 - `crates/junco-core/src/observation.rs:73`: `fn view`
-- `crates/junco-core/src/spec/hypotheses.rs:22`: `fn hash_coherent` — **meaning**: the single hashing hypothesis (R4): a key type's `Hash`/`Eq` are faithful to `eq_spec`, so the external_body hash containers behave as maps on `eq_spec` classes
+- `crates/junco-core/src/spec/hypotheses.rs:22`: `fn hash_coherent` — **meaning**: the single hashing hypothesis (`junco_core::spec::hypotheses`): a key type's `Hash`/`Eq` are faithful to `eq_spec`, so the external_body hash containers behave as maps on `eq_spec` classes
 - `crates/junco-core/src/verify/history_assumptions.rs:59`: `fn arc_identity` — **meaning**: native allocation identity of an `Arc`; faithful because every compared type has a unique-per-allocation value (comment at the declaration)
 - `crates/junco-core/src/verify/history_assumptions.rs:60`: `fn reference_identity` — **meaning**: native identity of a `&T`; same fidelity argument as `arc_identity`
 
@@ -385,9 +385,11 @@ Verus verifies `verus-bumpalo` and `hashconsius` as dependencies at the revision
 - `crates/history-store/src/cache.rs`: the LRU successor cache behind `successor_cache_view`.
   Its contracts allow any entry to be evicted and never a fabricated one; the search's
   correctness does not depend on hits, only on the cached values being the ones once inserted.
+  Exact lookup assumes that the derived `Hash`/`Eq` of its key `EventClass` agree with equality
+  of `class_key`, a hashing fact outside `hash_coherent`.
 - The hash containers `NativeMap`/`NativeSet`/`NativeGroups` (`crates/history-store/src/typed/map.rs`,
   `crates/history-analysis/src/native.rs`): external_body wrappers over hashbrown whose
-  contracts hold under `key_laws` (R4, `crates/junco-core/src/spec/hypotheses.rs`): the key's
+  contracts hold under `key_laws` (`crates/junco-core/src/spec/hypotheses.rs`): the key's
   `Hash`/`Eq` are faithful to `eq_spec` (`hash_coherent`, the single hashing hypothesis),
   instantiated for the library's own key types by the `axiom` items above.
 - Identity of stores: `arc_identity`/`reference_identity` are functions of the pointee's spec
@@ -404,6 +406,6 @@ Verus verifies `verus-bumpalo` and `hashconsius` as dependencies at the revision
   history errors become `Deny`). The verified `check_step` covers each `TracePolicy::decide`,
   not this composition.
 - The root event types `LockEvent`, `FlowEvent`, `AgentEvent` implement `Event` by hand in the
-  unverified crate; `event_laws` (R1) is a hypothesis for them, stated at each impl.
+  unverified crate; `event_laws` (`history_syntax::spec::events`) is a hypothesis for them, stated at each impl.
 - User `Hash`/`Eq` code runs under the store lock; a panic there unwinds through the lock and
   is outside the trusted base (the store assumes its lock invariant on re-entry).

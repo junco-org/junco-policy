@@ -1,10 +1,10 @@
-//! R5: the monitor's guarantees (plan §4; Theorem `thm:matcher` at the level of `Validator`).
+//! The monitor's guarantees (Theorem `thm:matcher` at the level of `Validator`).
 //!
 //! A `Validator` is read through `ValidatorView`: the rules passed to `add_rule`, in order, and
 //! the committed history (oldest first). `check_step` is the meaning of one `check` against the
 //! state before it, `check_frame` what it does to the state; `trace_safe` is the invariant they
-//! preserve. All three are stated with R2's `policy_permits` and `least_violation` over events.
-//! The guarantee is conditional on R4's `event_obligations::<E>()` where the contracts say so:
+//! preserve. All three are stated with the semantics' (`junco_core::spec::semantics`) `policy_permits` and `least_violation` over events.
+//! The guarantee is conditional on the hypotheses' (`junco_core::spec::hypotheses`) `event_obligations::<E>()` where the contracts say so:
 //! the compiled rules' hash containers are trusted only for faithful keys.
 
 use crate::validator::Decision;

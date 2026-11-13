@@ -1,7 +1,7 @@
-//! Reviewer theorems for the monitor (R5, Theorem `thm:matcher` at the level of `Validator`).
+//! Reviewer theorems for the monitor (Theorem `thm:matcher` at the level of `Validator`).
 //!
-//! Every statement here uses only public items: R1–R5, `Validator` and `Store`. The generic
-//! theorems take R4's `event_obligations::<E>()`; the concrete `(u32, u64)` instances take only
+//! Every statement here uses only public items: the event interface, the semantics, the analysis questions, the hypotheses, the monitor specification, `Validator` and `Store`. The generic
+//! theorems take the hypotheses' `event_obligations::<E>()`; the concrete `(u32, u64)` instances take only
 //! `hash_coherent::<Component2<u32, u64>>()` (TRUST.md: the single uninterpreted hashing
 //! hypothesis; `junco_core::verify::hypotheses` proves every other conjunct).
 #![cfg(all(verus_keep_ghost, feature = "runtime"))]
@@ -36,9 +36,9 @@ broadcast use vstd::seq::group_seq_lemmas;
 
 // ----- thm:matcher at the monitor level -----
 
-/// The three readable cases of `check_step` (R5): a grant means no rule is violated; a denial
+/// The three readable cases of `check_step`: a grant means no rule is violated; a denial
 /// names the first violated rule, in source order, by its mode; an error is never an invariant
-/// failure. Spelled out with R2's `rule_violated` so a reader needs no further unfolding.
+/// failure. Spelled out with `rule_violated` so a reader needs no further unfolding.
 pub open spec fn stmt_monitor_check<E: Event, M>(
     before: ValidatorView<E>, request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>,
 ) -> bool {
@@ -146,9 +146,9 @@ pub proof fn theorem_trace_safe<E: Event, M>(states: Seq<ValidatorView<E>>, step
     }
 }
 
-// ----- analyzer-to-monitor bridge (S9), stated with R3 `refines` -----
+// ----- analyzer-to-monitor bridge on declared domains, stated with `refines` -----
 
-/// If `p` refines `q` on the declared domains (`at_least_as_strict(p, q)` returned `Holds`, R6),
+/// If `p` refines `q` on the declared domains (`at_least_as_strict(p, q)` returned `Holds`),
 /// then whenever a validator over `p` grants a request inside the domains, the validator over `q`
 /// with the same history permits it, so it cannot deny it.
 pub proof fn theorem_analyzer_to_monitor<E: Event, M>(

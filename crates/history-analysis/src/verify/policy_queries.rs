@@ -173,8 +173,8 @@ pub(crate) proof fn lemma_covered_holds<E: Event>(a: PolicyAnalyzer<E>, rule: Ru
 }
 
 /// One case's Holds answer establishes inclusion only; the caller accumulates these facts over
-/// the split. A refuted case has the arity and a real instance under capacity (wave 1);
-/// `lemma_covered_decision_full` adds A1/A2 under `stored_known`, and minimality (A6) is
+/// the split. A refuted case has the arity and a real instance under capacity;
+/// `lemma_covered_decision_full` adds coverage and counterexample validity under `stored_known`, and minimality is
 /// `policy_minimality::lemma_covered_decision_minimal`'s.
 pub(crate) proof fn lemma_covered_decision<E: Event>(a: PolicyAnalyzer<E>, rule: RuleId,
     ids: Seq<RuleId>, exclude: Option<RuleId>, input: verdict::NumericInput,
@@ -211,7 +211,7 @@ pub(crate) proof fn lemma_covered_decision<E: Event>(a: PolicyAnalyzer<E>, rule:
     }
 }
 
-/// A1/A2 for a refuted case: every real instance is uncovered, and an instance refutes coverage
+/// Coverage and counterexample validity for a refuted case: every real instance is uncovered, and an instance refutes coverage
 /// (needs every interned constant known, `stored_known`).
 pub(crate) proof fn lemma_covered_decision_full<E: Event>(a: PolicyAnalyzer<E>, rule: RuleId,
     ids: Seq<RuleId>, exclude: Option<RuleId>, input: verdict::NumericInput,

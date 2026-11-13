@@ -299,9 +299,10 @@ impl<E: Event> TraceRule<E> {
 
 #[verus_verify]
 impl<E: Event> Clone for TraceRule<E> {
+    // Only the diagnostic's identity is promised: the rule's source equality would assume that
+    // the component type's `Clone` is the identity, which Rust does not guarantee.
     #[verus_verify(external_body)]
-    #[verus_spec(result => ensures trace_rule_source(result) == trace_rule_source(*self),
-        trace_rule_diagnostic_id(result) == trace_rule_diagnostic_id(*self))]
+    #[verus_spec(result => ensures trace_rule_diagnostic_id(result) == trace_rule_diagnostic_id(*self))]
     fn clone(&self) -> Self {
         Self {
             rule: self.rule.clone(),

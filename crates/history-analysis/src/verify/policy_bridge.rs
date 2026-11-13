@@ -1,5 +1,5 @@
 //! Policy-level clients of the existing typed/numeric pair and slot embeddings, concluding the
-//! R3/R6 predicates over real events.
+//! analysis-question and analyzer-specification predicates over real events.
 //!
 //! Each rule retains its own head and mode. The same finite equality-class coding is shared
 //! by all rules in a query; declared domains are transported by `typed_numeric` unchanged.
@@ -113,7 +113,7 @@ pub(crate) proof fn lemma_pair_in_domains<E: Event>(a: PolicyAnalyzer<E>, candid
     coding
 }
 
-/// A universal numeric coverage result is sound for all typed component types (A1, Holds).
+/// A universal numeric coverage result is sound for all typed component types (`Holds`).
 pub(crate) proof fn lemma_policy_covers<E: Event>(a: PolicyAnalyzer<E>, left: Rule<E>,
     left_flat: FlatRule<E::Component>, left_template: FlatPair<u64>, left_n: encoding::NRule,
     by: Seq<Rule<E>>, by_flat: Seq<FlatRule<E::Component>>, by_templates: Seq<FlatPair<u64>>,
@@ -180,7 +180,7 @@ pub(crate) proof fn lemma_instance_embedding<E: Event>(a: PolicyAnalyzer<E>, g: 
 }
 
 /// Reconstruction and one shared coding transfer every realization, including finite domains
-/// (A2 for the policy queries).
+/// (counterexample validity for the policy queries).
 pub(crate) proof fn lemma_policy_counterexample<E: Event>(a: PolicyAnalyzer<E>, left: Rule<E>,
     left_flat: FlatRule<E::Component>, left_template: FlatPair<u64>, left_n: encoding::NRule,
     by: Seq<Rule<E>>, by_flat: Seq<FlatRule<E::Component>>, by_templates: Seq<FlatPair<u64>>,
@@ -334,7 +334,7 @@ pub(crate) proof fn lemma_reconstructed_has_instance<E: Event>(a: PolicyAnalyzer
     }
 }
 
-/// Refinement: a non-Holds coverage verdict for `q[j]` is the refinement verdict (A3).
+/// Refinement: a non-Holds coverage verdict for `q[j]` is the refinement verdict.
 pub(crate) proof fn lemma_refinement_result<E: Event>(a: AnalyzerView<E::Component>,
     p: Seq<nat>, q: Seq<nat>, j: int, v: InclusionView<E::Component>)
     requires 0 <= j < q.len(), !(v is Holds), covered_spec::<E>(a, q[j], p, v),

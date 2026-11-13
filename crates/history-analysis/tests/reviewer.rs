@@ -1,9 +1,9 @@
-//! Reviewer theorems for the analyzer (R6, A1–A6) and its bridge to the monitor (S9).
+//! Reviewer theorems for the analyzer and its bridge to the monitor.
 //!
-//! Every statement uses only public items: R1–R6, `PolicyAnalyzer`, `Domains`, `Validator`.
-//! The `theorem_a*` take the `*_spec` postcondition of a query as hypothesis and conclude the
+//! Every statement uses only public items: the specification modules, `PolicyAnalyzer`, `Domains`, `Validator`.
+//! The `theorem_*` take the `*_spec` postcondition of a query as hypothesis and conclude the
 //! readable property; `analyzer_client` shows the postconditions are reachable from the public
-//! contracts alone; `stmt_analyzer_a1..a6` are the rows `paper.rs` points at.
+//! contracts alone; the `stmt_analyzer_*` are the rows `paper.rs` points at.
 #![cfg(all(verus_keep_ghost, feature = "runtime"))]
 
 extern crate alloc;
@@ -45,11 +45,11 @@ verus! {
 
 broadcast use {vstd::seq::group_seq_lemmas, vstd::array::group_array_axioms, vstd::slice::group_slice_axioms};
 
-// ----- A1: coverage decisions -----
+// ----- coverage decisions -----
 
-/// A1: `covered` answers coverage. `Holds` is coverage; a counterexample with a real instance
+/// `covered` answers coverage. `Holds` is coverage; a counterexample with a real instance
 /// refutes it; when the counterexample's fresh values have capacity, `Holds` iff coverage.
-pub open spec fn stmt_analyzer_a1<E: Event>() -> bool {
+pub open spec fn stmt_analyzer_coverage<E: Event>() -> bool {
     forall|a: AnalyzerView<E::Component>, rule: nat, by: Seq<nat>, v: InclusionView<E::Component>|
         #[trigger] covered_spec::<E>(a, rule, by, v) ==> {
             &&& v is Holds ==> covers::<E>(a.domains, rules_of(a, by), a.rules[rule as int])
@@ -60,16 +60,16 @@ pub open spec fn stmt_analyzer_a1<E: Event>() -> bool {
         }
 }
 
-pub proof fn theorem_a1_covered_decision<E: Event>()
-    ensures stmt_analyzer_a1::<E>(),
+pub proof fn theorem_covered_decision<E: Event>()
+    ensures stmt_analyzer_coverage::<E>(),
 {
 }
 
-// ----- A2: counterexamples are real -----
+// ----- counterexamples are real -----
 
-/// A2: every real instance `(c, h)` of a returned counterexample lies in the declared domains,
+/// Every real instance `(c, h)` of a returned counterexample lies in the declared domains,
 /// violates the rule and is denied by no rule of the policy; under capacity an instance exists.
-pub open spec fn stmt_analyzer_a2<E: Event>() -> bool {
+pub open spec fn stmt_analyzer_real_counterexamples<E: Event>() -> bool {
     forall|a: AnalyzerView<E::Component>, rule: nat, by: Seq<nat>, cex: CexView<E::Component>|
         #[trigger] covered_spec::<E>(a, rule, by, InclusionView::Counterexample(cex)) ==> {
             &&& forall|f: FreshChoice<E::Component>, c: E, h: Seq<E>|
@@ -82,8 +82,8 @@ pub open spec fn stmt_analyzer_a2<E: Event>() -> bool {
         }
 }
 
-pub proof fn theorem_a2_real_counterexamples<E: Event>()
-    ensures stmt_analyzer_a2::<E>(),
+pub proof fn theorem_real_counterexamples<E: Event>()
+    ensures stmt_analyzer_real_counterexamples::<E>(),
 {
     assert forall|a: AnalyzerView<E::Component>, rule: nat, by: Seq<nat>, cex: CexView<E::Component>|
         #[trigger] covered_spec::<E>(a, rule, by, InclusionView::Counterexample(cex)) implies {
@@ -130,7 +130,7 @@ pub proof fn theorem_declared_fresh_rejected<E: Event>(
     }
 }
 
-/// Port of attempt A's declared-coordinate lemma to the public counterexample contract.
+/// A declared coordinate uses no fresh numbers, from the public counterexample contract.
 pub proof fn lemma_declared_coordinate_zero<E: Event>(
     a: AnalyzerView<E::Component>, cex: CexView<E::Component>, coordinate: int,
     fails: spec_fn(E, Seq<E>) -> bool,
@@ -146,11 +146,11 @@ pub proof fn lemma_declared_coordinate_zero<E: Event>(
     assert(fresh_capacity::<E>(a.domains, a.known, coordinate, 0));
 }
 
-// ----- A3: refinement and redundancy -----
+// ----- refinement and redundancy -----
 
-/// A3 (refinement): `at_least_as_strict(p, q)` decides `P ⊑ Q`; a counterexample with an
+/// Refinement: `at_least_as_strict(p, q)` decides `P ⊑ Q`; a counterexample with an
 /// instance refutes it.
-pub open spec fn stmt_analyzer_a3_refinement<E: Event>() -> bool {
+pub open spec fn stmt_analyzer_refinement<E: Event>() -> bool {
     forall|a: AnalyzerView<E::Component>, p: Seq<nat>, q: Seq<nat>, v: InclusionView<E::Component>|
         #[trigger] at_least_as_strict_spec::<E>(a, p, q, v) ==> {
             &&& v is Holds ==> refines::<E>(a.domains, rules_of(a, p), rules_of(a, q))
@@ -159,9 +159,9 @@ pub open spec fn stmt_analyzer_a3_refinement<E: Event>() -> bool {
         }
 }
 
-/// A3 (redundancy, decision 5): for a rule of the policy, `Holds` iff removing every occurrence
+/// Redundancy: for a rule of the policy, `Holds` iff removing every occurrence
 /// of it changes no decision inside the domains (when a counterexample has an instance).
-pub open spec fn stmt_analyzer_a3_redundancy<E: Event>() -> bool {
+pub open spec fn stmt_analyzer_redundancy<E: Event>() -> bool {
     forall|a: AnalyzerView<E::Component>, rule: nat, policy: Seq<nat>, v: InclusionView<E::Component>|
         #[trigger] redundant_spec::<E>(a, rule, policy, v) ==> {
             &&& v is Holds ==> removal_preserves_decisions::<E>(a, rule, policy)
@@ -172,22 +172,22 @@ pub open spec fn stmt_analyzer_a3_redundancy<E: Event>() -> bool {
         }
 }
 
-pub proof fn theorem_a3_refinement<E: Event>()
-    ensures stmt_analyzer_a3_refinement::<E>(),
+pub proof fn theorem_refinement<E: Event>()
+    ensures stmt_analyzer_refinement::<E>(),
 {
 }
 
-pub proof fn theorem_a3_redundancy<E: Event>()
-    ensures stmt_analyzer_a3_redundancy::<E>(),
+pub proof fn theorem_redundancy<E: Event>()
+    ensures stmt_analyzer_redundancy::<E>(),
 {
 }
 
-// ----- A4: tail inclusion -----
+// ----- tail inclusion -----
 
-/// A4: `tail_included` decides inclusion of the tails for every matching candidate in the
+/// `tail_included` decides inclusion of the tails for every matching candidate in the
 /// domains; a counterexample is a matching pair in `left` but not `right`, of minimum history
 /// length among all such pairs.
-pub open spec fn stmt_analyzer_a4<E: Event>() -> bool {
+pub open spec fn stmt_analyzer_tail_inclusion<E: Event>() -> bool {
     forall|a: AnalyzerView<E::Component>, head: HeadView<E::Component>, left: RegexView<E::Component>,
         right: RegexView<E::Component>, v: InclusionView<E::Component>|
         #[trigger] tail_included_spec::<E>(a, head, left, right, v) ==> {
@@ -204,8 +204,8 @@ pub open spec fn stmt_analyzer_a4<E: Event>() -> bool {
         }
 }
 
-pub proof fn theorem_a4_tail_inclusion<E: Event>()
-    ensures stmt_analyzer_a4::<E>(),
+pub proof fn theorem_tail_inclusion<E: Event>()
+    ensures stmt_analyzer_tail_inclusion::<E>(),
 {
     assert forall|a: AnalyzerView<E::Component>, head: HeadView<E::Component>, left: RegexView<E::Component>,
         right: RegexView<E::Component>, v: InclusionView<E::Component>|
@@ -234,12 +234,12 @@ pub proof fn theorem_a4_tail_inclusion<E: Event>()
     }
 }
 
-// ----- A5: escapes -----
+// ----- escapes -----
 
-/// A5, as the contracts state it: a query's error is never an invariant failure, and `Exhausted`
-/// carries no claim (every `*_spec` is `true` on it). The remaining parts of A5 (when `Exhausted`
-/// is returned, termination) are prose in R6's header.
-pub open spec fn stmt_analyzer_a5<E: Event>() -> bool {
+/// Escapes, as the contracts state it: a query's error is never an invariant failure, and `Exhausted`
+/// carries no claim (every `*_spec` is `true` on it). The remaining escape guarantees (when `Exhausted`
+/// is returned, termination) are prose in the header of `history_analysis::spec::analyzer`.
+pub open spec fn stmt_analyzer_escapes<E: Event>() -> bool {
     &&& forall|a: AnalyzerView<E::Component>, rule: nat, by: Seq<nat>| #[trigger] covered_spec::<E>(a, rule, by, InclusionView::Exhausted)
     &&& forall|a: AnalyzerView<E::Component>, rule: nat, policy: Seq<nat>| #[trigger] redundant_spec::<E>(a, rule, policy, InclusionView::Exhausted)
     &&& forall|a: AnalyzerView<E::Component>, p: Seq<nat>, q: Seq<nat>| #[trigger] at_least_as_strict_spec::<E>(a, p, q, InclusionView::Exhausted)
@@ -247,27 +247,18 @@ pub open spec fn stmt_analyzer_a5<E: Event>() -> bool {
         #[trigger] tail_included_spec::<E>(a, head, left, right, InclusionView::Exhausted)
 }
 
-pub proof fn theorem_a5_escapes<E: Event>()
-    ensures stmt_analyzer_a5::<E>(),
+pub proof fn theorem_escapes<E: Event>()
+    ensures stmt_analyzer_escapes::<E>(),
 {
 }
 
-/// A5 for the executable: no query ever returns `HistoryError::Invariant` (from `covered`'s
-/// contract; `redundant` and `at_least_as_strict` are identical).
-pub proof fn theorem_a5_no_invariant_failure<E: Event>(a: &PolicyAnalyzer<E>, rule: history_analysis::RuleId,
-    by: Seq<history_analysis::RuleId>, result: Result<Inclusion<E>, HistoryError>)
-    requires no_invariant_failure(result),
-    ensures result matches Err(e) ==> !(e is Invariant),
-{
-}
+// ----- minimality within the split case -----
 
-// ----- A6: minimality within the split case (PR #10) -----
-
-/// A6: every real instance `(c, h)` of a `covered` counterexample is shortest among the failing
+/// Every real instance `(c, h)` of a `covered` counterexample is shortest among the failing
 /// pairs whose candidate has the same constant profile as `c`: no `(c2, h2)` in the domains with
 /// `h2` shorter than `h` and `c2` agreeing with `c` on equality with every known constant is
 /// violated by the rule and uncovered by the policy.
-pub open spec fn stmt_analyzer_a6<E: Event>() -> bool {
+pub open spec fn stmt_analyzer_minimality<E: Event>() -> bool {
     forall|a: AnalyzerView<E::Component>, rule: nat, by: Seq<nat>, cex: CexView<E::Component>|
         #[trigger] covered_spec::<E>(a, rule, by, InclusionView::Counterexample(cex)) ==>
         forall|f: FreshChoice<E::Component>, c: E, h: Seq<E>, c2: E, h2: Seq<E>|
@@ -277,8 +268,8 @@ pub open spec fn stmt_analyzer_a6<E: Event>() -> bool {
             ==> !(rule_violated(a.rules[rule as int], c2, h2) && !policy_denies(rules_of(a, by), c2, h2))
 }
 
-pub proof fn theorem_a6_minimality<E: Event>()
-    ensures stmt_analyzer_a6::<E>(),
+pub proof fn theorem_minimality<E: Event>()
+    ensures stmt_analyzer_minimality::<E>(),
 {
     assert forall|a: AnalyzerView<E::Component>, rule: nat, by: Seq<nat>, cex: CexView<E::Component>|
         #[trigger] covered_spec::<E>(a, rule, by, InclusionView::Counterexample(cex)) implies
@@ -301,7 +292,7 @@ pub proof fn theorem_a6_minimality<E: Event>()
     }
 }
 
-// ----- vacuity through refinement (decision 6) -----
+// ----- vacuity through refinement  -----
 
 /// `never_denies` is `at_least_as_strict([], [r])`, `always_denies` is
 /// `at_least_as_strict([r], [forbid head Univ])`, with the rule stored at index `f`.
@@ -332,7 +323,7 @@ pub proof fn theorem_vacuity_corollaries<E: Event>(a: AnalyzerView<E::Component>
     }
 }
 
-// ----- bridge to the monitor (S9) -----
+// ----- bridge to the monitor -----
 
 /// If `at_least_as_strict(p, q)` returned `Holds`, then whenever a validator over the rules `p`
 /// grants a request inside the declared domains, a validator over `q` with the same history
@@ -398,7 +389,7 @@ proof fn lemma_known_count_empty<C>(sets: Seq<Set<C>>)
 }
 
 /// Exec client: `Domains::infinite()`, `new`, one `add_rule`, then the four queries, every
-/// precondition discharged from the previous postconditions. Each `Ok` answer satisfies its R6
+/// precondition discharged from the previous postconditions. Each `Ok` answer satisfies its
 /// `*_spec` over the analyzer's view, with the rule at index 0.
 fn analyzer_client<E: Event>(rule: &Rule<E>, head: &Head<E>, left: &RegexExpr<E>, right: &RegexExpr<E>)
     -> (result: Result<(PolicyAnalyzer<E>, Result<Inclusion<E>, HistoryError>, Result<Inclusion<E>, HistoryError>,

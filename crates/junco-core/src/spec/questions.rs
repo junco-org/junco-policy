@@ -1,7 +1,7 @@
-//! R3: the policy questions the analyzer decides (paper Section 5, Definition
+//! The policy questions the analyzer decides (paper Section 5, Definition
 //! `def:policy-refinement`, appendix `app:policy-reduction`), declared domains, symbolic
 //! counterexamples with their real instances, fresh-value capacity, and per-case minimality.
-//! Everything is stated over real events `E` through R2.
+//! Everything is stated over real events `E` through the semantics (`junco_core::spec::semantics`).
 
 use crate::spec::semantics::*;
 use history_syntax::event::specs::EventSpec;
@@ -57,7 +57,7 @@ pub open spec fn in_domains<E: Event>(
 }
 
 /// Declared domains: one slot per coordinate; a declared set is nonempty and tagged with its
-/// coordinate (decision 8); `Set` is finite by construction in this vstd.
+/// coordinate; `Set` is finite by construction in this vstd.
 pub open spec fn domains_wf<E: Event>(domains: DomainsView<E::Component>) -> bool {
     domains.len() == arity::<E>() && forall|i: int| 0 <= i < domains.len() ==> match #[trigger] domains[i] {
         None => true,
@@ -100,8 +100,7 @@ pub open spec fn always_denies<E: Event>(
         ==> #[trigger] rule_violated(rule, c, h)
 }
 
-/// `forbid head Univ`: denies every candidate matching `head` (vacuity through refinement,
-/// decision 6).
+/// `forbid head Univ`: denies every candidate matching `head` (vacuity through refinement).
 pub open spec fn forbid_all<C>(head: HeadView<C>) -> RuleView<C> {
     RuleView { mode: RuleMode::Forbid, head, tail: RegexView::All }
 }
@@ -164,7 +163,7 @@ pub open spec fn cex_arity<C>(cex: CexView<C>, arity: nat) -> bool {
 }
 
 /// Fresh numbers at coordinate `i` map to pairwise distinct values tagged `i`, inside the
-/// domain, equal to no known constant (decision 1 adds the tag clause).
+/// domain, equal to no known constant.
 pub open spec fn choice_ok<E: Event>(
     f: spec_fn(nat) -> E::Component, used: ISet<nat>, known: Set<E::Component>,
     domain: Option<Set<E::Component>>, i: int,
@@ -213,7 +212,7 @@ pub open spec fn every_instance<E: Event>(
 }
 
 /// Coordinate `i` offers at least `k` pairwise distinct values tagged `i`, inside its domain,
-/// equal to no known constant (decision 2).
+/// equal to no known constant.
 pub open spec fn fresh_capacity<E: Event>(
     domains: DomainsView<E::Component>, known: Seq<Set<E::Component>>, i: int, k: nat,
 ) -> bool {
@@ -231,7 +230,7 @@ pub open spec fn capacity_for<E: Event>(
         ==> #[trigger] fresh_capacity::<E>(domains, known, i, fresh_used(cex, i).len())
 }
 
-// ----- minimality (PR #10's notions, over events) -----
+// ----- minimality (over events) -----
 
 /// `c2` agrees with `c` on equality with every known constant (so it lies in the same candidate
 /// case of every split the analyzer makes).
@@ -258,7 +257,7 @@ pub open spec fn shortest_in_case<E: Event>(
         && same_profile(known, event_view(c), event_view(c2)) ==> !#[trigger] fails(c2, h)
 }
 
-/// PR #10's `*_minimal`: every real instance is shortest among candidates with its constant
+/// Per-case minimality: every real instance is shortest among candidates with its constant
 /// profile.
 pub open spec fn minimal_in_case<E: Event>(
     domains: DomainsView<E::Component>, known: Seq<Set<E::Component>>, cex: CexView<E::Component>,
