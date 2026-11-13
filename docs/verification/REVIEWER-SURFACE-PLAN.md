@@ -365,7 +365,9 @@ byte charge from unverified code (`runtime.rs:857-863`, `compiled_rule.rs:660-66
 
 - `singleton_invariants` (`history-store/src/store.rs:1285`) is an `external_body` **proof** fn, i.e. an
   axiom; `trust-scan.sh` counts it as an ordinary wrapper, and the paper's "no assume or admit"
-  hides it.
+  hides it. It is redundant and can be eliminated: `HistoryStore::new` already ensures
+  `singleton_valid`, and its callers already require `numeric_store_wf`, which only `new`
+  establishes; folding `singleton_valid` into `numeric_store_wf` removes the need for it.
 - 27 `uninterp` specs are not listed; four carry meaning (`hash_coherent` ×2,
   `snapshot_published`, `diagnostic_output`).
 - `obeys_eq_spec`/`obeys_cmp_spec = true` on `external_derive` types (`RegexId`, `TestId`,

@@ -269,9 +269,23 @@ Files: `history-analysis/src/analyzer.rs`, `history-analysis/src/verify.rs` (`fr
 
 Files: `scripts/trust-scan.sh`, `TRUST.md`, root `Cargo.toml` and `fuzz/Cargo.toml`
 dev-dependencies, `benches/`, `fuzz/benches/`, root crate `src/model.rs`, `src/policy/flow/mod.rs`,
-`src/policy/agent/mod.rs` (event impls only).
+`src/policy/agent/mod.rs` (event impls only), and `history-store/src/store.rs` (the singleton
+predicates and the functions that call `singleton_invariants` only).
 
-- Extend the trust scan: proof axioms (`external_body` proof fns such as `singleton_invariants`),
+- Eliminate the axiom `singleton_invariants` (`history-store/src/store.rs`). It is redundant:
+  `HistoryStore::new`, the only constructor, already ensures `singleton_valid(arity)`, which is a
+  stateless fact about the uninterpreted `singleton_store`/`numeric_authorities`, and every caller
+  already requires `numeric_store_wf(*self)`, which only `new` establishes. Add
+  `singleton_valid(store.arity_spec())` to `numeric_store_wf`, delete `singleton_invariants` and
+  its calls (`allocate_after`, `allocate_history_after`, `intern_observed`, `validate_event`, and
+  the loop invariant in `validate_event`), and lower `numeric_store_wf` to `pub open(crate)` or
+  `closed` with crate-internal reveal lemmas, because `singleton_valid` mentions crate-private
+  uninterpreted specs; all users are in `history-store`. No new trusted item; `TRUST.md` loses
+  one. Do this first in the track: it is small and touches only `history-store`, so it needs only
+  that crate's merge gate.
+
+- Extend the trust scan: proof axioms (`external_body` proof fns; after the elimination above
+  there should be none),
   `uninterp` specs (flag the four with meaning), `obeys_*_spec = true` on `external_derive` types,
   unannotated public exec items, and the helper crates `verus-bumpalo`/`hashconsius` at their
   pinned revisions. List the successor LRU cache as a trusted leaf of the search.
@@ -381,7 +395,7 @@ File ownership (one owner each; others hand over lemmas in separate modules):
 | `history-semantics/src/validator.rs`, `compiled_rule.rs`, `policy/*` | D |
 | `history_algebra.rs`, `finite_*.rs`, `refinement/{search,pruning,finiteness}.rs` | E |
 | obligation definitions, `native.rs`, `typed/map.rs` | A |
-| `scripts/`, `TRUST.md`, `Cargo.toml` dev-dependencies, root crate `src/` | G |
+| `scripts/`, `TRUST.md`, `Cargo.toml` dev-dependencies, root crate `src/`, singleton part of `history-store/src/store.rs` | G |
 | `VERIFY.md`, `docs/`, `tests/reviewer.rs` | T |
 
 The `no_invariant_failure` rename (C) and the move of `least_violation` into R2 (D) touch many
@@ -401,7 +415,8 @@ Priority 1:
 
 Priority 2:
 5. `paper.rs` lists every result of the paper's `tab:mechanization`; hygiene items of plan §8 are
-   done; `TRUST.md` includes the new scan sections; benchmarks build from a verified feature set.
+   done; `TRUST.md` includes the new scan sections; benchmarks build from a verified feature set;
+   `singleton_invariants` is gone and no `external_body` proof function remains.
 
 Priority 3:
 6. D1 and D4 documented or fixed per decision 9 and track G.
