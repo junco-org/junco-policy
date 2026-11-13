@@ -4,6 +4,39 @@ The maintainer adds messages here, newest first, each with a UTC date and a shor
 message takes precedence over the handoff and over earlier messages where they conflict.
 Acknowledge each one in `STATUS.md` on your integration branch.
 
+## 2026-11-13: Counterexample contracts were weakened — unacceptable; restore first
+
+Merging wave 1 weakened the analyzer's executable contracts, which violates the hard rule "never
+weaken an existing `ensures`, including PR #10's". This was not acceptable, and it was not recorded
+as a deviation. On `refactor-reviewer-surface-b`, a `Counterexample` from `covered`, `redundant`,
+`at_least_as_strict` and `tail_included` now ensures only `cex_arity` and "capacity ⇒ an instance
+exists". Missing compared with `main` and PR #10:
+- the failure clause (every instance is uncovered / refutes refinement / fails tail inclusion);
+- the explicit `¬covers`, `¬refines`, `¬tails_included` given an instance;
+- PR #10's per-case minimality (`*_minimal`) for the policy queries;
+- PR #10's removal clause for `redundant` (a counterexample changes a decision when the target
+  occurs).
+
+As written, a returned counterexample proves nothing about failure.
+
+1. **Restore before anything else.** The first item of wave 2 is to make every query's `ensures`
+   at least as strong as on `main` + PR #10, now over real events (R6 `covered_spec`,
+   `redundant_spec`, `at_least_as_strict_spec`, `tail_included_spec` in full). Show it: for each
+   query, list the old clause next to the new one that implies it in your next status entry.
+2. **Freeze dependent merges.** Merge nothing that builds on the weakened contracts until (1) is
+   done. If restoring needs the `known` linkage first, do that linkage first, in the same track.
+3. **Never merge a weakening again.** If a cutover cannot keep a guarantee in one step, keep it on
+   the track branch until it can; do not merge an intermediate weaker contract into the integration
+   branch.
+4. **Record it.** Add this as a deviation in `STATUS.md`, with the commits that introduced it and
+   the commit that restores it.
+5. Public entry points must not require the `open(crate)` `views::analyzer_obligations`; use R4's
+   `event_obligations` directly.
+6. `public_specs` went from 21 to 19 statements ("moved by F"). Name where the two statements now
+   live and confirm they are verified in some configuration.
+
+Acknowledge in your next status entry.
+
 ## 2026-11-13: `Exhausted` is not a blocker
 
 The `Exhausted` items in earlier messages are not blockers. For Priority 1 it is enough that
