@@ -1,4 +1,4 @@
-//! R2: the typed semantics of rules (paper `sec:rules`, Definitions `def:violates` and
+//! The typed semantics of rules (paper `sec:rules`, Definitions `def:violates` and
 //! `def:policy-violates`), first over component tuples, then over events through `event_view`.
 //!
 //! Component equality is `PartialEqSpec::eq_spec`, not representation equality. Connecting
@@ -231,7 +231,7 @@ pub open spec fn rule_violated_view<C: PartialEq>(
 
 // ----- events -----
 
-/// A history of events as the tuples the semantics reads (R1 `event_view`, oldest first).
+/// A history of events as the tuples the semantics reads (`event_view`, oldest first).
 pub open spec fn history_view<E: Event>(history: Seq<E>) -> Seq<Seq<E::Component>> {
     history.map(|i: int, e: E| event_view(e))
 }

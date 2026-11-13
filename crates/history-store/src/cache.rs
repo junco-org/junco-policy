@@ -65,7 +65,9 @@ impl GraphCaches {
             successors: None,
         }
     }
-    // Concrete LRU leaves expose semantic keys and membership, not policy semantics.
+    // Concrete LRU leaves expose semantic keys and membership, not policy semantics. The lookup
+    // contracts below assume that the derived `Hash`/`Eq` of `EventClass` (a `TransitionId` and a
+    // `SmallVec<[u64; 2]>`) agree with equality of its `class_key`; this is trusted (TRUST.md).
     #[verus_verify(external_body)]
     #[verus_spec(result => ensures result is Some,
         result matches Some(cache) ==> successor_cache_view(cache) == Map::<ClassKey, RegexId>::empty())]

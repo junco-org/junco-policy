@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Builds the anonymized supplementary-material tarball of this repository.
+# Builds the anonymized supplementary-material zip of this repository.
 #
 # Usage: scripts/make-supplement.sh [--check] [OUT]
-#   OUT      tarball path, relative to the repository root
-#            (default: ../pldi2027-supplement/junco-proofs.tar.gz)
+#   OUT      zip path, relative to the repository root
+#            (default: ../pldi2027-supplement/junco-supplement.zip)
 #   --check  also run `cargo check --locked --workspace` in the staged tree
 #
 # Stages the working tree (tracked and untracked, non-ignored files), drops internal notes and
 # maintenance scripts, vendors the two git dependencies into third_party/, strips copyright
-# headers and identifying manifest fields, regenerates TRUST.md, and refuses to write the
-# tarball while any identifying string remains outside the justified allow-list below.
+# headers and identifying manifest fields, regenerates TRUST.md, and refuses to write the zip
+# while any identifying string or internal work-plan identifier remains outside the justified
+# allow-lists below. The zip has one top-level directory, `junco/`, with neutral timestamps.
+# Set TMPDIR to stage outside /tmp (the --check build needs a few GB).
 # This script itself is not shipped: it names the strings it scans for.
 set -euo pipefail
 
@@ -18,7 +20,7 @@ out=
 while (($#)); do
     case $1 in
         --check) check=1; shift ;;
-        -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "make-supplement: unknown option $1" >&2; exit 2 ;;
         *) [[ -z $out ]] || { echo "make-supplement: one OUT only" >&2; exit 2; }; out=$1; shift ;;
     esac
@@ -26,23 +28,24 @@ done
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$root"
-out="${out:-../pldi2027-supplement/junco-proofs.tar.gz}"
+out="${out:-../pldi2027-supplement/junco-supplement.zip}"
 [[ $out == /* ]] || out="$root/$out"
-for tool in git cargo python3 tar gzip; do
+for tool in git cargo python3; do
     command -v "$tool" >/dev/null || { echo "make-supplement: $tool required" >&2; exit 1; }
 done
 
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
-name=junco-proofs
+name=junco
 stage="$work/$name"
 mkdir -p "$stage"
 
 # --- 1. Copy the working tree, minus internal material. --------------------------------------
-# docs/history/: internal working notes (absolute paths, tool and agent names); docs/verification/INTERFACES.md stays.
+# docs/history/, docs/verification/{audit/,HANDOFF*,INBOX*,PROMPT*}, STATUS.md: internal working
+# notes and agent coordination files; docs/verification/INTERFACES.md stays.
 # scripts/*update_regorus*: maintenance scripts for mirroring into a downstream project.
 # scripts/make-supplement.sh: this script (it lists the identifying strings).
-excluded='^(docs/history/|STATUS\.md$|scripts/update_regorus\.sh$|scripts/test_update_regorus\.sh$|scripts/make-supplement\.sh$)'
+excluded='^(docs/history/|docs/verification/(audit/|HANDOFF|INBOX|PROMPT)|STATUS\.md$|AGENTS?\.md$|CLAUDE\.md$|\.omp/|\.graft/|scripts/update_regorus\.sh$|scripts/test_update_regorus\.sh$|scripts/make-supplement\.sh$)'
 git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
     [[ $f =~ $excluded ]] && continue
     [[ -e $f || -L $f ]] || continue  # deleted but still tracked
@@ -241,6 +244,57 @@ if offending:
 print("scan: clean")
 PY
 
+# --- 5b. Scan for internal work-plan identifiers and agent coordination text. ------------------
+# Plan item ids (interface files R1-R6, guarantees A1-A6, fix items H1-H15, milestones M0-M5),
+# decisions, tracks, waves, attempts, PR numbers and coordination files mean nothing to a
+# reviewer; the source must describe what a statement means instead.
+python3 - "$stage" <<'PY'
+import fnmatch, os, re, sys
+
+stage = sys.argv[1]
+pattern = re.compile(
+    r"\b(R[1-6]|A[1-6]|H[0-9]{1,2}|M[0-5]|S1[0-3])\b|\bdecision [0-9]|\bTrack [A-Z0-9]\b|\b[Ww]ave [0-9]"
+    r"|\battempt [AB]\b|\bPR #[0-9]+|\bhandoff\b|\bINBOX\b|STATUS\.md|plan §|docs/history|\bsubagent")
+# (path glob, allowed text, justification); applied as in the identifying-string scan.
+ALLOW = [
+    ("crates/history-analysis/tests/differential.rs", r"\bR[12]\b", "names of two rules in a regression test"),
+    ("benches/agentdojo/runs/*", r".*", "recorded third-party benchmark transcripts"),
+    ("benches/resharp/data/*", r".*", "vendored third-party benchmark corpora"),
+    ("*.lock", r".*", "dependency lock files (hashes and versions)"),
+    ("third_party/*", r".*", "vendored verified helper crates"),
+]
+offending, allowed = [], {}
+for dirpath, dirnames, filenames in os.walk(stage):
+    for n in filenames:
+        p = os.path.join(dirpath, n)
+        rel = os.path.relpath(p, stage)
+        try:
+            lines = open(p, encoding="utf-8").read().split("\n")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for no, line in enumerate(lines, 1):
+            if not pattern.search(line):
+                continue
+            rest, used = line, []
+            for glob, text, why in ALLOW:
+                if fnmatch.fnmatch(rel, glob) and re.search(text, rest):
+                    rest = re.sub(text, "", rest)
+                    used.append(why)
+            if pattern.search(rest):
+                offending.append(f"{rel}:{no}: {line.strip()[:200]}")
+            else:
+                for why in used:
+                    allowed.setdefault(why, set()).add(rel)
+for why, files in allowed.items():
+    print(f"allowed (plan ids): {why}: {len(files)} file(s)")
+if offending:
+    print("make-supplement: internal plan identifiers remain:", file=sys.stderr)
+    for o in offending:
+        print("  " + o, file=sys.stderr)
+    sys.exit(1)
+print("plan-id scan: clean")
+PY
+
 # --- 6. Optionally check that the staged tree builds. ------------------------------------------
 if ((check)); then
     (cd "$stage" && RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-1.98.1}" CARGO_TARGET_DIR="$work/target" \
@@ -248,10 +302,35 @@ if ((check)); then
     echo "cargo check --locked --workspace: ok"
 fi
 
-# --- 7. Write the tarball with neutral ownership and timestamps. -------------------------------
+# --- 7. Write the zip with neutral timestamps and permissions, in name order. ------------------
 mkdir -p "$(dirname "$out")"
 out="$(cd "$(dirname "$out")" && pwd -P)/$(basename "$out")"
-tar -C "$work" --sort=name --owner=0 --group=0 --numeric-owner --mtime='2026-01-01 00:00:00Z' \
-    -cf - "$name" | gzip -n -9 >"$out.part"
+python3 - "$work" "$name" "$out.part" <<'PY'
+import os, stat, sys, zipfile
+
+work, name, out = sys.argv[1:]
+stamp = (2026, 1, 1, 0, 0, 0)
+paths = []
+for dirpath, dirnames, filenames in os.walk(os.path.join(work, name)):
+    dirnames.sort()
+    for n in sorted(filenames):
+        paths.append(os.path.join(dirpath, n))
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+    for p in sorted(paths, key=lambda p: os.path.relpath(p, work)):
+        rel = os.path.relpath(p, work)
+        info = zipfile.ZipInfo(rel, stamp)
+        if os.path.islink(p):
+            info.create_system = 3
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            z.writestr(info, os.readlink(p))
+            continue
+        mode = 0o755 if os.stat(p).st_mode & 0o111 else 0o644
+        info.create_system = 3
+        info.external_attr = (stat.S_IFREG | mode) << 16
+        info.compress_type = zipfile.ZIP_DEFLATED
+        with open(p, "rb") as f:
+            z.writestr(info, f.read())
+print(len(paths))
+PY
 mv "$out.part" "$out"
-echo "wrote $out ($(du -h "$out" | cut -f1), $(tar -tzf "$out" | grep -vc '/$') files)"
+echo "wrote $out ($(du -h "$out" | cut -f1))"

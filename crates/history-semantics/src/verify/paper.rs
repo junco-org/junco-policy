@@ -1,32 +1,32 @@
-//! Paper index (P): one `stmt_<label>` per result of the paper, in paper order, each a
+//! Paper index: one `stmt_<label>` per result of the paper, in paper order, each a
 //! proposition over the definitions of its layer and each proved by `theorem_<label>` from the
 //! layer that mechanizes it. [`theorem_paper_index`] proves every row at once, so a renamed or
 //! deleted statement breaks the index.
 //!
 //! Paths are relative to `crates/history-semantics/src/verify/`. Definitions (`def:*`) are
-//! reviewer-interface files (R1–R6, `docs/verification/INTERFACES.md`) and carry no `stmt_`.
+//! reviewer-interface files (`docs/verification/INTERFACES.md`) and carry no `stmt_`.
 //!
 //! | Paper label | `stmt_` (this module) | Mechanized statement | Proof | File |
 //! |---|---|---|---|---|
-//! | `sec:events` (product events) | — (definition) | `event_view`, `event_laws` (R1) | Track A lemmas | `crates/history-syntax/src/spec/events.rs` |
+//! | `sec:events` (product events) | — (definition) | `event_view`, `event_laws` | event-law lemmas | `crates/history-syntax/src/spec/events.rs` |
 //! | `lem:similarity-language` | `stmt_lem_similarity_language` | `stmt_similarity_preserves_language` | `theorem_similarity_preserves_language` | `history_algebra.rs` |
 //! | `lem:sderiv` | `stmt_lem_sderiv` | `stmt_symbolic_derivative_correct` | `theorem_symbolic_derivative_correct` | `history_algebra.rs` |
 //! | `thm:sderiv` | `stmt_thm_sderiv` | `stmt_symbolic_run_correct` | `theorem_symbolic_run_correct` | `history_algebra.rs` |
-//! | `thm:matcher` | `stmt_thm_matcher` | `stmt_not_fired` (step 1), `stmt_rule_decision` (steps 2–3), `stmt_similar_tails_same_decision` (normalization) | `theorem_not_fired`, `theorem_rule_decision`, `theorem_similar_tails_same_decision` | `history_algebra.rs` |
-//! | `thm:matcher` (monitor level, R5) | `stmt_matcher` | `check_step` and `trace_safe` for `Validator::check`/`rollback`: a grant means no rule is violated, a denial names the first violated rule, every reachable history is trace safe | `theorem_matcher`; `theorem_monitor_check`, `theorem_trace_safe`, `theorem_analyzer_to_monitor` and the exec client `monitor_client` in `crates/history-semantics/tests/reviewer.rs` | `crates/history-semantics/src/spec/monitor.rs` |
-//! | `def:violates`, `def:policy-violates` | — (definition) | `rule_violated`, `policy_denies`, `least_violation` (R2) | — | `crates/junco-core/src/spec/semantics.rs` |
-//! | `def:policy-refinement` | — (definition) | `refines`, `covers` (R3) | — | `crates/junco-core/src/spec/questions.rs` |
-//! | `app:policy-reduction` | `stmt_app_policy_reduction` | `stmt_refines_iff_covers`, `stmt_redundant_iff_covered` (over events, R3); `stmt_vacuity_reductions` (numeric, constrained form); `stmt_vacuity_via_refinement` (typed vacuity through `at_least_as_strict`, decision 6) | `theorem_refines_iff_covers`, `theorem_redundant_iff_covered`, `theorem_vacuity_reductions`, `theorem_vacuity_via_refinement` | `refinement/semantics.rs`, `refinement/inclusion.rs` |
+//! | `thm:matcher` | `stmt_thm_matcher` | `stmt_rule_decision` (steps 2–3; step 1 holds by the definition of `pair_lang`), `stmt_similar_tails_same_decision` (normalization) | `theorem_rule_decision`, `theorem_similar_tails_same_decision` | `history_algebra.rs` |
+//! | `thm:matcher` (monitor level) | `stmt_matcher` | `check_step` and `trace_safe` for `Validator::check`/`rollback`: a grant means no rule is violated, a denial carries the mode of the first violated rule, every reachable history is trace safe | `theorem_matcher`; `theorem_monitor_check`, `theorem_trace_safe`, `theorem_analyzer_to_monitor` and the exec client `monitor_client` in `crates/history-semantics/tests/reviewer.rs` | `crates/history-semantics/src/spec/monitor.rs` |
+//! | `def:violates`, `def:policy-violates` | — (definition) | `rule_violated`, `policy_denies`, `least_violation` | — | `crates/junco-core/src/spec/semantics.rs` |
+//! | `def:policy-refinement` | — (definition) | `refines`, `covers` | — | `crates/junco-core/src/spec/questions.rs` |
+//! | `app:policy-reduction` | `stmt_app_policy_reduction` | `stmt_refines_iff_covers`, `stmt_redundant_iff_covered` (over events); `stmt_vacuity_reductions` (numeric, constrained form); `stmt_vacuity_via_refinement` (typed vacuity through `at_least_as_strict`) | `theorem_refines_iff_covers`, `theorem_redundant_iff_covered`, `theorem_vacuity_reductions`, `theorem_vacuity_via_refinement` | `refinement/semantics.rs`, `refinement/inclusion.rs` |
 //! | `prop:policy` | `stmt_prop_policy` | not mechanized as stated; the rule-by-rule reduction `stmt_policy_reduction` and its composition with search outcomes `stmt_policy_search_composition` replace it | `theorem_policy_reduction`, `theorem_policy_search_composition` | `refinement/inclusion.rs` |
 //! | `def:constraints`, `def:split` | — (definition) | `Constraint`, `paper_split`; `stmt_paper_split_ok` shows `Split` is a valid split family | `theorem_paper_split_ok` | `refinement/inclusion.rs` |
 //! | `def:atoms`, `def:realize`, `def:successors` | — (definition) | `Assignment`, `realizes`, `steps_ok` | — | `refinement/search.rs` |
 //! | `lem:succ`, `lem:uniform` | `stmt_lem_succ`, `stmt_lem_uniform` | `stmt_successor_cases` (one statement over successor cases; declared finite domains included) | `theorem_successor_cases` | `refinement/search.rs` |
-//! | `thm:search` | `stmt_thm_search` | `stmt_search_correct` (soundness, completeness, minimality), `stmt_search_terminates` (termination, conditional on finitely many items), `stmt_items_from_states` | `theorem_search_correct`, `theorem_search_terminates`, `theorem_items_from_states`; for the executable, `theorem_impl_search_bounded` and `search_exec::lemma_running_outcome` | `refinement/search.rs`, `refinement/finiteness.rs`, `refinement/implementation.rs` |
+//! | `thm:search` | `stmt_thm_search` | `stmt_search_correct` (soundness, completeness, minimality, assuming correct successor cases for the expanded items), `stmt_search_terminates` (termination, conditional on finitely many items), `stmt_items_from_states` | `theorem_search_correct`, `theorem_search_terminates`, `theorem_items_from_states`; for the executable, `Search::run` ensuring `search_exec::search_result` (correctness), and `theorem_impl_items_bound` with `search_exec::lemma_running_items_bound` (termination) | `refinement/search.rs`, `refinement/finiteness.rs`, `refinement/implementation.rs` |
 //! | `eq:decomposition`, `def:decomposition` | `stmt_eq_decomposition` | `stmt_decomposition` | `theorem_decomposition` | `refinement/pruning.rs` |
 //! | `lem:prune`, `def:pruning` | `stmt_lem_prune` | `stmt_prune_sound`, `stmt_checks_discard` | `theorem_prune_sound`, `theorem_checks_discard` | `refinement/pruning.rs` |
 //! | `lem:simulation`, `fig:simulation` | `stmt_lem_simulation` | `stmt_sim_rules_sound`, `stmt_test_rules_sound` (the code's relation is smaller than the figure's) | `theorem_sim_rules_sound`, `theorem_test_rules_sound` | `refinement/pruning.rs` |
 //! | `lem:finite-states`, `app:finiteness` | `stmt_lem_finite_states` | `stmt_reachable_states_finite`, `stmt_lift_injective`; for the implementation `m_impl().contract()` and the parametric `theorem_impl_finitely_many_items` | `theorem_reachable_states_finite`, `theorem_lift_injective`, `theorem_impl_contract` | `refinement/finiteness.rs`, `finite_impl.rs` |
-//! | Executable analyzer, A1–A6 (Section 6, R6) | `stmt_analyzer_a1` … `stmt_analyzer_a6` (in `crates/history-analysis/tests/reviewer.rs`; R6 is downstream of this crate) | A1 `covered_spec` decides coverage; A2 counterexamples are real pairs in the domains; A3 `at_least_as_strict_spec`/`redundant_spec`; A4 `tail_included_spec`; A5 escapes (`no_invariant_failure`, `Exhausted` claims nothing); A6 `minimal_in_case` | `theorem_a1_covered_decision`, `theorem_a2_real_counterexamples`, `theorem_a3_refinement`, `theorem_a3_redundancy`, `theorem_a4_tail_inclusion`, `theorem_a5_escapes`, `theorem_a6_minimality`, `theorem_vacuity_corollaries`, `analyzer_client` | `crates/history-analysis/src/spec/analyzer.rs`, `crates/history-analysis/tests/reviewer.rs` |
+//! | Executable analyzer (Section 6) | `stmt_analyzer_coverage`, `stmt_analyzer_real_counterexamples`, `stmt_analyzer_refinement`, `stmt_analyzer_redundancy`, `stmt_analyzer_tail_inclusion`, `stmt_analyzer_escapes`, `stmt_analyzer_minimality` (in `crates/history-analysis/tests/reviewer.rs`; the analyzer specification is downstream of this crate) | `covered_spec` decides coverage; counterexamples are real pairs in the domains; `at_least_as_strict_spec`/`redundant_spec`; `tail_included_spec`; escapes (`no_invariant_failure`, `Exhausted` claims nothing); `minimal_in_case` | `theorem_covered_decision`, `theorem_real_counterexamples`, `theorem_refinement`, `theorem_redundancy`, `theorem_tail_inclusion`, `theorem_escapes`, `theorem_minimality`, `theorem_vacuity_corollaries`, `analyzer_client` | `crates/history-analysis/src/spec/analyzer.rs`, `crates/history-analysis/tests/reviewer.rs` |
 //!
 //! Auxiliary statements, not paper results but cited by `app:mech-diff`: `stmt_genericity`
 //! (`refinement/semantics.rs`), `stmt_numeric_genericity`, `stmt_source_regex_local`,
@@ -34,7 +34,7 @@
 //! (`refinement/inclusion.rs`).
 //!
 //! Sections and algorithms, with the module whose definitions follow them: `sec:rules`,
-//! `sec:policy` (R2, R3; `refinement/semantics.rs`); `sec:search-state`, `sec:search`, `alg:succ`,
+//! `sec:policy` (`refinement/semantics.rs`); `sec:search-state`, `sec:search`, `alg:succ`,
 //! `alg:search`, `app:cases`, `app:search-proof` (`refinement/search.rs`); `app:pruning`,
 //! `app:simulation` (`refinement/pruning.rs`); `app:mech-diff` (the differences, listed in
 //! `VERIFY.md`).
@@ -86,11 +86,11 @@ pub proof fn theorem_thm_sderiv<L>()
     algebra::theorem_symbolic_run_correct::<L>();
 }
 
-/// Theorem Matcher correctness (`thm:matcher`) over the paper-shaped numeric rules: an unmatched
-/// head does not fire, a fired rule decides by the symbolic run under its head substitution, and
-/// similar tails decide alike. At the level of `Validator::check` the theorem is `check_step` (R5).
+/// Theorem Matcher correctness (`thm:matcher`) over the paper-shaped numeric rules: a fired rule
+/// decides by the symbolic run under its head substitution, and similar tails decide alike. That
+/// an unmatched head does not fire holds by the definition of `pair_lang`. At the level of
+/// `Validator::check` the theorem is `check_step`.
 pub open spec fn stmt_thm_matcher() -> bool {
-    &&& algebra::stmt_not_fired()
     &&& algebra::stmt_rule_decision()
     &&& algebra::stmt_similar_tails_same_decision()
 }
@@ -98,14 +98,13 @@ pub open spec fn stmt_thm_matcher() -> bool {
 pub proof fn theorem_thm_matcher()
     ensures stmt_thm_matcher(),
 {
-    algebra::theorem_not_fired();
     algebra::theorem_rule_decision();
     algebra::theorem_similar_tails_same_decision();
 }
 
-/// Theorem Matcher correctness at the level of `Validator` (`thm:matcher`, R5): a `check` whose
-/// result satisfies `check_step` grants only when no rule is violated, denies naming the first
-/// violated rule in source order, and never fails with an invariant error; a `check` or
+/// Theorem Matcher correctness at the level of `Validator` (`thm:matcher`): a `check` whose
+/// result satisfies `check_step` grants only when no rule is violated, denies with the mode of
+/// the first violated rule in source order, and never fails with an invariant error; a `check` or
 /// `rollback` preserves `trace_safe`.
 pub open spec fn stmt_matcher<E: Event, M>() -> bool {
     &&& forall|before: ValidatorView<E>, request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>|

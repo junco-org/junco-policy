@@ -409,7 +409,7 @@ pub(crate) proof fn lemma_counterexample_shape<E: Event>(a: PolicyAnalyzer<E>, i
     assert(result@.history.len() == exec::chain_assignments(letters, alphabets).len());
 }
 
-/// A4's counterexample clause: real instances fail, an instance exists under capacity and refutes
+/// Tail inclusion's counterexample clause: real instances fail, an instance exists under capacity and refutes
 /// the inclusion, and no failing pair in the domains is shorter (needs every interned constant
 /// known, `stored_known`).
 pub(crate) proof fn lemma_counterexample<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, q: language::Regex<model::Test>,
@@ -529,7 +529,7 @@ pub(crate) proof fn lemma_tail_decision<E: Event>(a: PolicyAnalyzer<E>, i: TailI
     }
 }
 
-/// R6 `tail_included_spec` (A4), under `stored_known`.
+/// `tail_included_spec`, under `stored_known`.
 pub(crate) proof fn lemma_tail_decision_full<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>,
     n: NumericInput, g: implementation::ConstraintView, decision: NumericDecision<E>)
     requires tail_ready(a, i, n.left), stored_known(a), n.right == language::Regex::Empty,

@@ -1,10 +1,10 @@
-//! Case-local minimality clients for stored policy queries (A6, R3 `minimal_in_case`).
+//! Case-local minimality clients for stored policy queries (`minimal_in_case`).
 //!
 //! The search starts at `g0`, whereas reconstruction uses the stronger `g_ref`.
 //! Its actual `outcome_ok` contract supplies the semantic entailment between them;
 //! profile transport is applied to `g0`, never to an assumed identical constraint.
 //! These ghost helpers add no executable work; they need every interned constant known
-//! (`stored_known`), which Track F establishes from `known`'s contracts.
+//! (`stored_known`), which `known`'s contracts establish.
 
 use super::frontend::*;
 use super::{
@@ -48,7 +48,7 @@ pub(crate) proof fn lemma_refutation_entails_start(d: encoding::NDomains,
 }
 
 /// Transfer the initial case's numeric length bound to every real instance, keeping all
-/// same-profile candidates and declared finite domains (R3 `minimal_in_case`).
+/// same-profile candidates and declared finite domains (`minimal_in_case`).
 pub(crate) proof fn lemma_policy_shortest_in_case<E: Event>(a: PolicyAnalyzer<E>, left: Rule<E>,
     left_flat: FlatRule<E::Component>, left_template: FlatPair<u64>, left_n: encoding::NRule,
     by: Seq<Rule<E>>, by_flat: Seq<FlatRule<E::Component>>, by_templates: Seq<FlatPair<u64>>,
@@ -95,7 +95,7 @@ pub(crate) proof fn lemma_policy_shortest_in_case<E: Event>(a: PolicyAnalyzer<E>
 
 /// Drop-in strengthening of `policy_queries::lemma_covered_decision_full`: the loop supplies its
 /// actual split constraint, whose codes are known by `decision_ready`. A Holds case is not
-/// coverage of the entire split; a refuted case is R6 `covered_spec` (A1, A2, A6).
+/// coverage of the entire split; a refuted case is `covered_spec`.
 pub(crate) proof fn lemma_covered_decision_minimal<E: Event>(a: PolicyAnalyzer<E>, rule: RuleId,
     ids: Seq<RuleId>, exclude: Option<RuleId>, input: verdict::NumericInput,
     g0: Constraint, decision: NumericDecision<E>)

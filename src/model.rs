@@ -64,7 +64,7 @@ impl<P, R> LockEvent<P, R> {
     }
 }
 
-// Hypothesis (D4): this crate is not verified, so `event_laws::<LockEvent<P, R>>` (R1) is assumed,
+// Hypothesis: this crate is not verified, so `event_laws::<LockEvent<P, R>>` is assumed,
 // not proved: arity 3; `coordinate(component(e, i)) == i`; every tuple tagged 0, 1, 2 is the view
 // of `LockEvent::new(p, a, r)`. Converting to the verified tuple `(P, Action, R)` would drop the
 // named `LockComponent` variants from the public API, so the impl stays hand-written.

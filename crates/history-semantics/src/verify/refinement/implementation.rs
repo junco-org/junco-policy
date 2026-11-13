@@ -85,7 +85,7 @@ pub open spec fn slot_value(s: SlotView, fresh: spec_fn(nat) -> nat) -> nat {
 /// Reconstruction is sound: every numeric instantiation of the reconstructed slots (fresh numbers
 /// to distinct codes outside the known codes, within `u64` for the candidate) satisfies the
 /// refutation's constraint and follows its letters. With `search::outcome_ok` and
-/// `encoding::stmt_front_end_denies`, this gives R3's `every_instance`.
+/// `encoding::stmt_front_end_denies`, this gives `every_instance` of the analysis questions (`junco_core::spec::questions`).
 pub open spec fn reconstruction_ok(d: NDomains, gamma: Constraint, letters: Seq<Assignment>,
     candidate: Seq<SlotView>, history: Seq<Seq<SlotView>>, known: Set<nat>) -> bool {
     forall|fresh: spec_fn(nat) -> nat| #[trigger] fresh_codes_ok(fresh, known) ==> {

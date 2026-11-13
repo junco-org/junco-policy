@@ -98,7 +98,7 @@ impl View for Slot {
     }
 }
 
-/// R3 `ValueView`: a constant, or a fresh number.
+/// `ValueView`: a constant, or a fresh number.
 impl<T> View for Value<T> {
     type V = analyzer::ValueView<T>;
     open spec fn view(&self) -> Self::V {
@@ -107,7 +107,7 @@ impl<T> View for Value<T> {
     }
 }
 
-/// R3 `ComponentsView`: the values in coordinate order.
+/// `ComponentsView`: the values in coordinate order.
 impl<E: Event> View for Components<E> {
     type V = analyzer::ComponentsView<E::Component>;
     open spec fn view(&self) -> Self::V {
@@ -115,7 +115,7 @@ impl<E: Event> View for Components<E> {
     }
 }
 
-/// R3 `CexView`: the symbolic candidate and history.
+/// `CexView`: the symbolic candidate and history.
 impl<E: Event> View for Counterexample<E> {
     type V = analyzer::CexView<E::Component>;
     open spec fn view(&self) -> Self::V {
@@ -124,7 +124,7 @@ impl<E: Event> View for Counterexample<E> {
     }
 }
 
-/// R3 `InclusionView`: the verdict the `*_spec` predicates are stated over.
+/// `InclusionView`: the verdict the `*_spec` predicates are stated over.
 impl<E: Event> View for Inclusion<E> {
     type V = analyzer::InclusionView<E::Component>;
     open spec fn view(&self) -> Self::V {

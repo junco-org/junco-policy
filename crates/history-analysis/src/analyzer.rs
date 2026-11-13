@@ -1,16 +1,16 @@
 //! Policy coverage, redundancy, refinement, and tail inclusion through constrained search.
 //!
-//! Every verdict is stated over real events inside the declared domains (R3 `in_domains`, R6
+//! Every verdict is stated over real events inside the declared domains (`in_domains`, and the analyzer specification's
 //! `covered_spec`/`redundant_spec`/`at_least_as_strict_spec`/`tail_included_spec`): a declared
 //! coordinate ranges over exactly its declared values, an undeclared one over every value of its
-//! type (decision 8, S9). So a verdict transfers to the monitor only for candidates and histories
+//! type. So a verdict transfers to the monitor only for candidates and histories
 //! whose declared coordinates take declared values; `Domains::with_domain` rejects an empty
-//! declaration, and the bridge theorem to `Validator::check` is Track T's.
+//! declaration, and the bridge theorem to `Validator::check` is `theorem_analyzer_to_monitor`.
 //!
 //! `Inclusion::Exhausted` is returned exactly when `SymbolicLanguage::compile` or `search` fails
 //! with `HistoryError::GraphBudget` (the two arms in `decide`); every other error, including
 //! `GraphIndex` overflow, propagates as `Err`. The budget error carries no ghost claim, so the
-//! `*_spec` predicates say nothing about `Exhausted` (A5 is prose in R6's header).
+//! `*_spec` predicates say nothing about `Exhausted` (the escape guarantees are prose in the header of `spec::analyzer`).
 
 use crate::native::NativeMap;
 #[cfg(verus_keep_ghost)]
@@ -78,8 +78,8 @@ use crate::tables::Tables;
 const GRAPH_BYTES: usize = 16 * 1024 * 1024;
 
 verus! {
-/// Stable index of a rule in one analyzer, tagged with the id of the analyzer that issued it
-/// (decision 7). A query given an id of another analyzer, or an index it never issued, returns
+/// Stable index of a rule in one analyzer, tagged with the id of the analyzer that issued it.
+/// A query given an id of another analyzer, or an index it never issued, returns
 /// `HistoryError::UnknownId`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleId(pub(crate) usize, pub(crate) u64);
@@ -91,14 +91,14 @@ impl RuleId {
     /// The issuing analyzer's owner id.
     pub closed spec fn owner(&self) -> u64 { self.1 }
 
-    /// A rule id's view (the index used by R6's `ids_of`) is its `index()`.
+    /// A rule id's view (the index used by `spec::analyzer::ids_of`) is its `index()`.
     pub proof fn lemma_view_is_index(&self)
         ensures self@ == self.index(),
     {
     }
 }
 
-/// Every id was issued by `a` and names one of its rules (decision 7).
+/// Every id was issued by `a` and names one of its rules.
 pub open spec fn ids_owned<E: Event>(a: &PolicyAnalyzer<E>, ids: Seq<RuleId>) -> bool {
     forall|i: int| 0 <= i < ids.len()
         ==> (#[trigger] ids[i]).owner() == a.owner() && ids[i].index() < a@.rules.len()
@@ -180,7 +180,7 @@ verus! {
 pub enum DomainError {
     /// The coordinate is outside the event's arity.
     OutOfArity,
-    /// No values were declared; a declared domain is nonempty (decision 8).
+    /// No values were declared; a declared domain is nonempty.
     Empty,
     /// A value belongs to another coordinate.
     WrongCoordinate,
@@ -206,7 +206,7 @@ impl<E: Event> Domains<E> {
     }
 
     /// Declares all values of one coordinate, in declaration order. Rejects a coordinate outside
-    /// the arity, an empty set (decision 8), and a value of another coordinate.
+    /// the arity, an empty set, and a value of another coordinate.
     pub fn with_domain(self, component: Component, values: &[E::Component])
         -> (result: Result<Self, DomainError>)
         ensures match result {
@@ -493,10 +493,10 @@ pub struct PolicyAnalyzer<E: Event> {
     pub(crate) rules: Vec<StoredRule<E>>,
     /// Process-unique id stamped on every issued `RuleId`; `0` only if the allocator is exhausted.
     pub(crate) owner: u64,
-    /// The declared domains, as passed to `new` (R6 `AnalyzerView::domains`).
+    /// The declared domains, as passed to `new` (`AnalyzerView::domains`).
     #[cfg(verus_keep_ghost)]
     pub(crate) declared: Ghost<junco_core::spec::questions::DomainsView<E::Component>>,
-    /// The constants of every input so far (R6 `AnalyzerView::known`): declared values, then the
+    /// The constants of every input so far (`AnalyzerView::known`): declared values, then the
     /// constants of each rule and tail query, whether or not the call succeeded.
     #[cfg(verus_keep_ghost)]
     pub(crate) known: Ghost<Seq<Set<E::Component>>>,
@@ -679,7 +679,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         Ok(id)
     }
 
-    /// Whether `by` covers every violation of the stored rule (A1, A2, A6: R6 `covered_spec`).
+    /// Whether `by` covers every violation of the stored rule (`covered_spec`).
     pub fn covered(&self, rule: RuleId, by: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), views::analyzer_obligations::<E>(),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
@@ -737,7 +737,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     }
 
     /// Checks coverage after excluding every occurrence of `rule`, without a filtered allocation
-    /// (A3, decision 5: R6 `redundant_spec`; `Holds` proves removal preserves every decision).
+    /// (`redundant_spec`; `Holds` proves removal preserves every decision).
     pub fn redundant(&self, rule: RuleId, policy: &[RuleId]) -> (result: Result<Inclusion<E>, HistoryError>)
         requires self.wf(), views::analyzer_obligations::<E>(),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
@@ -767,7 +767,7 @@ impl<E: Event> PolicyAnalyzer<E> {
         Ok(result)
     }
 
-    /// Whether `stricter` denies everything denied by `than` (A3, `def:policy-refinement`: R6
+    /// Whether `stricter` denies everything denied by `than` (`def:policy-refinement`:
     /// `at_least_as_strict_spec`).
     pub fn at_least_as_strict(&self, stricter: &[RuleId], than: &[RuleId])
         -> (result: Result<Inclusion<E>, HistoryError>)
@@ -1166,7 +1166,7 @@ impl<E: Event> PolicyAnalyzer<E> {
     }
 
     /// Whether, for every candidate that `head` matches, every history in `left` is in `right`
-    /// (A4: R6 `tail_included_spec`). The query's constants enter `known` on every return.
+    /// (`tail_included_spec`). The query's constants enter `known` on every return.
     ///
     /// Both tails may refer to the head's variables. A counterexample is a matching candidate and
     /// a history in `left` but not in `right`, of minimum length.
