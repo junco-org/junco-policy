@@ -4,6 +4,25 @@ The maintainer adds messages here, newest first, each with a UTC date and a shor
 message takes precedence over the handoff and over earlier messages where they conflict.
 Acknowledge each one in `STATUS.md` on your integration branch.
 
+## 2026-11-13: Submission cleanup PR; no plan ids in new text
+
+A cleanup PR from branch `submission/cleanup` (based on PR #13, `fix/audit-h1`) is coming. It
+changes comments and docs only: it removes plan identifiers (R1–R6, A1–A6, S/D/M/H item ids,
+"decision N", "Track", "wave", "attempt A/B", "PR #N", "handoff") from source comments,
+`INTERFACES.md`, `TRUST.md` and `README.md`, renames the plan-id theorem names in
+`crates/history-analysis/tests/reviewer.rs` (e.g. `theorem_a1_covered_decision`) to descriptive
+names, deletes `docs/history/`, and replaces `VERIFY.md` with a reviewer guide.
+
+- Keep PR #13 as is; do not push more commits to `fix/audit-h1`. The cleanup branch is based
+  on it.
+- Once the cleanup PR is merged, rebase your open branches onto `main`. Comment conflicts:
+  take the cleanup side, then re-apply your change.
+- From now on, write no plan identifiers in code, comments, commit messages that end up in
+  docs, or docs. Describe what a statement means instead (e.g. "counterexample validity", not
+  "A2"). Item ids belong only in `STATUS.md` and PR titles.
+- The gate and toolchain instructions you used from `docs/history/HANDOFF-reviewer-surface.md`
+  remain available on this handoff branch.
+
 ## 2026-11-13: Vacuity probe results (no blocker; priorities unchanged)
 
 The Verus probes ran at `969449b`; full report with every probe source, command and output in
