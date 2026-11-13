@@ -39,15 +39,15 @@ pub open spec fn check_frame<E: Event, M>(
 }
 
 /// Meaning of one `check` against the state before it (`thm:matcher`): Grant iff no rule is
-/// violated; Denied names the least violated rule's mode; an error is never an invariant failure.
+/// violated; Denied identifies the least violated rule and its mode; errors are never invariant failures.
 pub open spec fn check_step<E: Event, M>(
     before: ValidatorView<E>, request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>,
 ) -> bool {
     match result {
         Ok(Decision::Grant(_)) => policy_permits(before.rules, request.event, before.history),
-        Ok(Decision::Denied(denial)) => exists|i: int|
-            #[trigger] least_violation(before.rules, request.event, before.history, i)
-                && denial.mode == before.rules[i].mode,
+        Ok(Decision::Denied(denial)) =>
+            least_violation(before.rules, request.event, before.history, denial.index as int)
+                && denial.mode == before.rules[denial.index as int].mode,
         Err(error) => !(error is Invariant),
     }
 }

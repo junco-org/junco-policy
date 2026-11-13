@@ -127,7 +127,9 @@ fn forbid_rule_denies_duplicate_remove_without_mutating_history() {
     let denied = validator
         .check(request(Actor::Alice, Action::Remove, Path::A, ()))
         .unwrap();
-    assert!(matches!(denied, Decision::Denied(denial) if denial.mode == RuleMode::Forbid));
+    assert!(
+        matches!(denied, Decision::Denied(denial) if denial.index == 0 && denial.mode == RuleMode::Forbid)
+    );
     assert_eq!(validator.history(), history.as_slice());
 
     assert!(

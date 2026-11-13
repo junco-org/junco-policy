@@ -115,6 +115,7 @@ pub open spec fn stmt_matcher<E: Event, M>() -> bool {
             Ok(Decision::Denied(denial)) => exists|i: int| 0 <= i < before.rules.len()
                 && sem::rule_violated(#[trigger] before.rules[i], request.event, before.history)
                 && denial.mode == before.rules[i].mode
+                && i == denial.index as int
                 && forall|j: int| 0 <= j < i ==> !sem::rule_violated(#[trigger] before.rules[j], request.event, before.history),
             Err(error) => !(error is Invariant),
         }
@@ -135,6 +136,7 @@ pub proof fn theorem_matcher<E: Event, M>()
             Ok(Decision::Denied(denial)) => exists|i: int| 0 <= i < before.rules.len()
                 && sem::rule_violated(#[trigger] before.rules[i], request.event, before.history)
                 && denial.mode == before.rules[i].mode
+                && i == denial.index as int
                 && forall|j: int| 0 <= j < i ==> !sem::rule_violated(#[trigger] before.rules[j], request.event, before.history),
             Err(error) => !(error is Invariant),
         } by {
@@ -148,8 +150,7 @@ pub proof fn theorem_matcher<E: Event, M>()
                 }
             },
             Ok(Decision::Denied(denial)) => {
-                let i = choose|i: int| #[trigger] sem::least_violation(before.rules, request.event, before.history, i)
-                    && denial.mode == before.rules[i].mode;
+                let i = denial.index as int;
                 assert(sem::rule_violated(before.rules[i], request.event, before.history));
             },
             Err(_) => {},

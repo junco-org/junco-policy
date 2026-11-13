@@ -97,7 +97,7 @@ The theorems a reviewer reads:
 
 - `crates/history-semantics/tests/reviewer.rs`: `theorem_monitor_check` (the three cases of
   `check_step` spelled out with `rule_violated`: grant ⇔ no rule violated, denial names the
-  first violated rule by mode, errors are never invariant failures), `theorem_monitor_permits`,
+  first violated rule by zero-based source-order index and mode, errors are never invariant failures), `theorem_monitor_permits`,
   `theorem_trace_safe` (every state of a run of `check`/`rollback` from a fresh validator is
   `trace_safe`, by induction over the run), `theorem_analyzer_to_monitor` (if `P ⊑ Q` on the
   declared domains, a validator over `Q` permits what a validator over `P` grants inside them),
