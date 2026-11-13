@@ -2,11 +2,12 @@
 
 ## Current wave
 
-The atomic monitor/analyzer source is pushed at `e525e20`; all eleven configurations passed
-with zero errors, as did workspace/fuzz native gates. The latest inbox (`bb1b19d`) correctly
-identifies overbroad internal-key axioms in that version. Their five trusted introductions are
-being narrowed to hash_coherent only; equality/equivalence/SmallVec view facts must be proved.
-Reviewer clients T continue independently. Exhausted remains unit/no-claim and blocks nothing.
+The complete monitor/analyzer source, both reviewer clients, and the hash-only trust repair are
+integrated through `00fbeed`. The reviewer targets passed **4/0** (monitor) and **9/0** (analyzer),
+and their two real executable smoke cases passed. All five internal-key introductions now
+assert only `hash_coherent`; their remaining equality laws are verified, not assumed.
+The new thirteen-configuration full gate is running. The earlier eleven-config green result
+predates this repair and is not being substituted for the new gate. Exhausted blocks nothing.
 
 ## Last checks actually run
 
@@ -26,6 +27,13 @@ Reviewer clients T continue independently. Exhausted remains unit/no-claim and b
 - The subsequent all-eleven-configuration wave gate passed, zero errors (**338.63 seconds**).
   Those results predate the newly required hash-only trust narrowing; the repair gets a new
   verification gate, rather than treating the old broader contracts as final evidence.
+- Reviewer-client integration gate: monitor **4 verified / 0 errors**, analyzer **9 / 0**;
+  both configurations passed in **311.43 seconds**. Parent also ran both executable reviewer
+  smoke tests: monitor grant/denial and all four analyzer query families' verdict cases passed.
+- Hash-only repair worker focuses: Core observation/internal keys **9/0**, analyzer pruning
+  **39/0**, store native **3/0**, constraint **73/0**. Native repair suites passed **99 tests**,
+  with Clippy `-D warnings`; the worker applied three wrapping-only formatting corrections.
+  Parent's combined full verification/CI gate follows integration.
 
 - The first G/E gate found the removed finite-domain successor-theorem caller. Replacing it
   with the explicitly instantiated common theorem closed the downstream proof; no statement
@@ -63,11 +71,12 @@ view or legacy-predicate shim is retained.
 
 G's singleton-axiom/dead-std-spec removals, trust inventory, identity audit and instrumentation
 build split are integrated. E's thirteen-row paper index and independent hygiene are integrated,
-including its downstream successor caller. C's complete error split/callers and A/B event
-foundations are staged and passed the gates above. D's complete monitor track is staged.
-Native B/F proof closure and public adapters are now integrated in staging. T starts after the
-running merge gate passes. Independent numeric-algebra naming hygiene is prepared separately
-so it cannot invalidate or delay the active proof gate.
+including its downstream successor caller. C's complete error split/callers, A/B event
+foundations, D's monitor, and F's native query contracts are integrated. T's two reviewer
+clients and consolidated reviewer guide are integrated and passed the client gate above.
+Two independent workers finish Core/analyzer and semantics-proof numeric-algebra hygiene;
+parent owns the executable semantics callers. This separate batch cannot invalidate or delay
+the active hash-only proof gate.
 
 ## Decisions and checks
 
@@ -122,16 +131,15 @@ B/F migrate that content exactly to the new vocabulary and remove superseded pre
 
 ## Inbox acknowledgements
 
-**2026-11-13: Internal-key axioms may assert only hash_coherent** (`bb1b19d`): confirmed all
-five introductions were too broad. Parent is narrowing their frozen interface to exactly
-hash_coherent, removing the SmallVec view-equality assumption, and proving every equality
-and equivalence conjunct separately. No additional equality/view axiom will be introduced.
-Three tuple-key equality/equivalence proofs now close. SmallVec's existing model has an
-uninterpreted view and no equality specification, so its obeys_eq_spec, equivalence and
-eq_spec-to-view postconditions cannot follow from the existing specifications; focused attempts
-failed each obligation independently. Parent chose a locally owned PartsKey newtype with
-verified sequence equality, retargeting the single parts hashing axiom to that internal key.
-No additional trusted fact or primitive/user-type hashing axiom is introduced.
+**2026-11-13: Internal-key axioms may assert only hash_coherent** (`bb1b19d`): acknowledged,
+rechecked at this gate, and repaired in `6458d98`–`00fbeed`. All five introductions assert exactly
+hash_coherent. Tuple and constraint equality/equivalence are now proved. SmallVec's existing
+model has an uninterpreted view and no equality specification; focused attempts failed its
+obeys_eq_spec, equivalence, and eq_spec-to-view obligations independently. The conservative
+alternative is the library-owned `PartsKey`, retaining SmallVec storage/hash but implementing
+verified sequence equality over borrowed slices. The single parts hashing axiom is retargeted
+to PartsKey; the SmallVec axiom is removed. No additional trusted fact, equality/view axiom,
+primitive hashing axiom, or lookup allocation is introduced.
 
 **2026-11-13: Exhausted is not a blocker** (`baff915`): acknowledged. The unit/no-claim
 fallback is already implemented and pushed in `a3a0313`; no wave or merge waits for a token.
