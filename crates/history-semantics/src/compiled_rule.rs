@@ -25,8 +25,9 @@ use history_store::typed::verify as books;
 use junco_core::spec::{hypotheses::monitor_hypotheses, semantics};
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::{
-    dsl, encoding, flatten as source,
+    dsl, encoding,
     errors::{no_internal_compile_error, no_invariant_failure},
+    flatten as source,
 };
 #[cfg(verus_keep_ghost)]
 use verify::*;

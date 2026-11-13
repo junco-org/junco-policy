@@ -48,7 +48,10 @@ use junco_core::observation::SmallVecSpecFns;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_assumptions::*;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::{errors, numeric_regex::{self as language, EventView, Regex, Subst}};
+use junco_core::verify::{
+    errors,
+    numeric_regex::{self as language, EventView, Regex, Subst},
+};
 #[cfg(verus_keep_ghost)]
 use verify::*;
 use vstd::prelude::*;

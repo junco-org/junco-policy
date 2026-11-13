@@ -13,9 +13,9 @@ use history_syntax::{Arity, Event};
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
-use crate::verify::flatten::*;
-#[cfg(verus_keep_ghost)]
 use crate::verify::errors::{no_internal_compile_error, no_invariant_failure};
+#[cfg(verus_keep_ghost)]
+use crate::verify::flatten::*;
 #[cfg(verus_keep_ghost)]
 use history_syntax::spec::events::{EventSpec, arity};
 

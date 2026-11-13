@@ -7,9 +7,9 @@ use history_syntax::{MAX_ARITY, syntax::Component};
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
-use crate::verify::history_assumptions::*;
-#[cfg(verus_keep_ghost)]
 use crate::verify::errors::no_invariant_failure;
+#[cfg(verus_keep_ghost)]
+use crate::verify::history_assumptions::*;
 #[cfg(verus_keep_ghost)]
 use verify::*;
 #[cfg(verus_keep_ghost)]

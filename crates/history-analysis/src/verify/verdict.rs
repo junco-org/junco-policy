@@ -602,12 +602,6 @@ pub(crate) open spec fn tail_failure<E: Event>(i: TailInput<E>) -> spec_fn(E, Se
 }
 
 
-pub(crate) proof fn lemma_numeric_head_sat(h: encoding::NHead, theta: Subst)
-    requires h.len() == theta.len(), h.len() <= history_syntax::MAX_ARITY,
-    ensures inclusion::sat_by(theta, inclusion::head_constraint(h)) == encoding::n_head_matches(h, theta),
-{
-    inclusion::lemma_head_sat(h, theta);
-}
 
 pub(crate) proof fn lemma_empty_language(theta: Subst, w: Seq<EventView>)
     ensures !encoding::n_lang(theta, language::Regex::<model::Test>::Empty, w),
@@ -644,7 +638,7 @@ proof fn lemma_embed_failure<E: Event>(a: PolicyAnalyzer<E>, i: TailInput<E>, q:
     typed::lemma_analyzer_domain_embedding(a, coding, c, h);
     typed::lemma_source_failure(i.left, i.right, i.left_flat, i.right_flat,
         i.left_numeric, i.right_numeric, a.constants, coding, c, h);
-    lemma_numeric_head_sat(typed::template_head(i.left_numeric), typed::numeric_event::<E>(coding, event_view(c)));
+    inclusion::lemma_head_sat(typed::template_head(i.left_numeric), typed::numeric_event::<E>(coding, event_view(c)));
     lemma_empty_language(typed::numeric_event::<E>(coding, event_view(c)),
         typed::numeric_history::<E>(coding, typed::projected_history(h)));
     coding
@@ -692,7 +686,7 @@ pub(crate) proof fn lemma_no_candidates<E: Event>(a: PolicyAnalyzer<E>, i: TailI
             typed::lemma_source_failure(i.left, i.right, i.left_flat, i.right_flat,
                 i.left_numeric, i.right_numeric, a.constants, coding, c, h);
             let theta = typed::numeric_event::<E>(coding, event_view(c));
-            lemma_numeric_head_sat(typed::template_head(i.left_numeric), theta);
+            inclusion::lemma_head_sat(typed::template_head(i.left_numeric), theta);
             assert(inclusion::satisfiable(ndomains(a.universes), inclusion::head_constraint(typed::template_head(i.left_numeric))));
         }
     }
@@ -728,7 +722,7 @@ pub(crate) proof fn lemma_counterexample<E: Event>(a: PolicyAnalyzer<E>, i: Tail
         assert(search::follows(ndomains(a.universes), exec::chain_assignments(letters, alphabets), theta, w));
         assert(inclusion::inclusion_cex(ndomains(a.universes), inclusion::head_constraint(typed::template_head(i.left_numeric)),
             q, language::Regex::Empty, theta, w));
-        lemma_numeric_head_sat(typed::template_head(i.left_numeric), theta);
+        inclusion::lemma_head_sat(typed::template_head(i.left_numeric), theta);
         typed::lemma_source_failure(i.left, i.right, i.left_flat, i.right_flat,
             i.left_numeric, i.right_numeric, a.constants, coding, c, h);
     }

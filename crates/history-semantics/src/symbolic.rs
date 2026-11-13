@@ -33,9 +33,9 @@ use junco_core::observation::SmallVecSpecFns;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_assumptions::KernelStoreSpec;
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::{errors, numeric_regex as language};
-#[cfg(verus_keep_ghost)]
 use junco_core::verify::numeric_regex::{EventView, Subst};
+#[cfg(verus_keep_ghost)]
+use junco_core::verify::{errors, numeric_regex as language};
 use junco_core::{loop_try, scan};
 #[cfg(verus_keep_ghost)]
 use verify::*;

@@ -31,9 +31,9 @@ use junco_core::observation::SmallVecSpecFns;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_assumptions::{KernelStoreSpec, dedup_spec};
 #[cfg(verus_keep_ghost)]
-use junco_core::verify::{errors, numeric_regex as language};
-#[cfg(verus_keep_ghost)]
 use junco_core::verify::numeric_regex::{EventView, Subst};
+#[cfg(verus_keep_ghost)]
+use junco_core::verify::{errors, numeric_regex as language};
 use junco_core::{loop_try, scan};
 #[cfg(verus_keep_ghost)]
 use verify::*;
@@ -8045,7 +8045,7 @@ pub mod verify {
         if word.len() == 0 {
             let parts = Seq::<Seq<EventView>>::empty();
             assert(word =~= parts.flatten());
-            assert(forall|i: int| 0 <= i < 0 ==> language::numeric_lang(sem, Seq::<language::Regex<L>>::empty()[i], p[i]));
+            assert(forall|i: int| 0 <= i < 0 ==> language::numeric_lang(sem, Seq::<language::Regex<L>>::empty()[i], parts[i]));
         }
     }
 
