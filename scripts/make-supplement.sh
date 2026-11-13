@@ -39,10 +39,10 @@ stage="$work/$name"
 mkdir -p "$stage"
 
 # --- 1. Copy the working tree, minus internal material. --------------------------------------
-# docs/verification/: internal working notes (absolute paths, tool and agent names).
+# docs/history/: internal working notes (absolute paths, tool and agent names); docs/verification/INTERFACES.md stays.
 # scripts/*update_regorus*: maintenance scripts for mirroring into a downstream project.
 # scripts/make-supplement.sh: this script (it lists the identifying strings).
-excluded='^(docs/verification/|scripts/update_regorus\.sh$|scripts/test_update_regorus\.sh$|scripts/make-supplement\.sh$)'
+excluded='^(docs/history/|STATUS\.md$|scripts/update_regorus\.sh$|scripts/test_update_regorus\.sh$|scripts/make-supplement\.sh$)'
 git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
     [[ $f =~ $excluded ]] && continue
     [[ -e $f || -L $f ]] || continue  # deleted but still tracked

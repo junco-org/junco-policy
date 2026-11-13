@@ -1,16 +1,9 @@
 # Checking the mechanized proofs
 
-This repository contains the Junco policy checker and policy analyzer together with their
-Verus proofs. This file explains how to re-run the proofs, where each result of the paper is
-proved, which hypotheses the proved statements make, and where the mechanization differs from
-the paper.
-
-The specification and proofs of the policy analysis (Sections 4–5 and Appendices A–C of the
-paper) are in `crates/history-semantics/src/verify/refinement/`. Each paper result is a
-`stmt_*` spec function that states the proposition, proved by a `theorem_*` proof function
-with `ensures stmt_*()`. The results of Section 4 on derivatives and the matcher are proof
-functions in `crates/history-semantics/src/verify/history_algebra.rs`. The executable
-analyzer in `crates/history-analysis/` is verified against these specifications.
+This repository contains the Junco policy checker (the monitor) and policy analyzer together
+with their Verus proofs. This file is the reviewer's entry point: how to re-run the proofs, which
+six files fix the meaning of every theorem, where each result of the paper is proved, which
+hypotheses the proved statements make, and where the mechanization differs from the paper.
 
 ## Toolchain
 
@@ -32,7 +25,7 @@ scripts/verify-all.sh --download ~/junco-tools
 # PATH, and VERUS_Z3_PATH (or z3 on PATH).
 VERUS_DIST=/path/to/verus-x86-linux VERUS_Z3_PATH=/path/to/z3 scripts/verify-all.sh
 
-# Check the toolchain and print the eleven commands without running them.
+# Check the toolchain and print the thirteen commands without running them.
 scripts/verify-all.sh --list
 
 # Pass arguments to Verus in every command, e.g. to use more cores.
@@ -40,238 +33,221 @@ scripts/verify-all.sh -- --num-threads 8
 ```
 
 `scripts/verify-all.sh` checks the Verus, Z3 and Rust versions, runs `cargo fetch --locked`, and
-then runs the same eleven `cargo verus verify --locked` configurations as the `verify-core`
+then runs the same thirteen `cargo verus verify --locked` configurations as the `verify-core`
 job of `.github/workflows/ci.yml` (no module filter: every verified function of each package
 and of its verified dependencies). It prints a table of verified-function and error counts per
 configuration and exits nonzero if any configuration fails. The `rustup` toolchain must be
 installed:
 `rustup toolchain install 1.98.1-x86_64-unknown-linux-gnu --profile minimal --component rustc-dev --component llvm-tools`.
-On a 2-core machine with 7 GB of memory, a full run with `-- --num-threads 2` takes about
-41 minutes. Verus's memory use grows with the thread count: with 16 threads on that machine
-the verifier was killed for running out of memory (reported as `signal: 9, SIGKILL`), so keep
-the thread count near the number of cores when memory is limited.
+Verus's memory use grows with the thread count; keep it near the number of cores when memory is
+limited (with 16 threads on a 7 GB machine the verifier was killed, `signal: 9, SIGKILL`).
 
 `scripts/trust-scan.sh > TRUST.md` regenerates `TRUST.md`, the inventory of every place where
-the proofs assume rather than prove a fact: `assume_specification`, `external_body`, external
-type/trait specifications, `#[verifier::external]`, `admit`, `assume`, and functions whose
-termination is not checked. There are no `admit`s or `assume`s.
+the proofs assume rather than prove a fact (the counted kinds are listed at its top:
+`assume_specification`, `external_body`, external type/trait specifications, `external`,
+`admit`, `assume`, unchecked termination, `axiom`, `uninterp`, `derived_eq_claim`,
+`unannotated_pub_fn`, and the two verified helper crates). There are no `admit`s or `assume`s.
 
 `scripts/spec-check.sh` tests the `assume_specification`s for the standard library and
 `smallvec` (`crates/junco-core/src/verify/history_assumptions.rs`) against the real
-implementations with the `verus-spec-check` tool. It clones that tool's release paired with the
-pinned Verus into `spec-check/vendor/` on first use (network access required).
+implementations with the `verus-spec-check` tool (network access on first use).
 
 ## Expected results
 
 | Configuration (`cargo verus verify --locked ...`) | Result |
 |---|---|
-| `-p history-syntax --no-default-features` | 55 verified, 0 errors |
-| `-p history-syntax --features serde,std` | 55 verified, 0 errors |
-| `-p junco-core --no-default-features` | 164 verified, 0 errors |
-| `-p junco-core --features runtime,std,serde` | 248 verified, 0 errors |
-| `-p history-store --no-default-features --features runtime` | 287 verified, 0 errors |
-| `-p history-store --features runtime,std` | 287 verified, 0 errors |
-| `-p history-semantics --no-default-features --features runtime` | 1615 verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache` | 1620 verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache --test public_specs` | 21 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime` | 570 verified, 0 errors |
-| `-p history-analysis --no-default-features --features runtime,std` | 570 verified, 0 errors |
+| `-p history-syntax --no-default-features` | TBD verified, 0 errors |
+| `-p history-syntax --features serde,std` | TBD verified, 0 errors |
+| `-p junco-core --no-default-features` | TBD verified, 0 errors |
+| `-p junco-core --features runtime,std,serde` | TBD verified, 0 errors |
+| `-p history-store --no-default-features --features runtime` | TBD verified, 0 errors |
+| `-p history-store --features runtime,std` | TBD verified, 0 errors |
+| `-p history-semantics --no-default-features --features runtime` | TBD verified, 0 errors |
+| `-p history-semantics --features runtime,std,cache` | TBD verified, 0 errors |
+| `-p history-semantics --features runtime,std,cache --test public_specs` | TBD verified, 0 errors |
+| `-p history-semantics --features runtime,std,cache --test reviewer` | TBD verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime` | TBD verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime,std` | TBD verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime,std --test reviewer` | TBD verified, 0 errors |
 
-These counts are from the pinned toolchain with `-- --num-threads 144 --triggers-mode silent`.
-The full gate also passes on the completed model/firing and typed-policy bridge snapshots.
-`cargo test --workspace` passes (196 tests across 24 suites). The differential suite includes
-444 policy queries and 900 tail queries; separate executable smoke runs cover Alice/Bob,
-constant-book growth between queries, duplicate removal, and arities 1 and 8.
-The per-case minimality smoke also observes a two-event Alice witness even though Bob has a
-one-event witness: all three policy queries are shortest within the returned profile, not
-globally across candidate cases.
+The counts are from the pinned toolchain (`-- --num-threads N` only changes wall time). The
+`--test` rows count the theorems and clients of the test target itself; the library they build
+on is verified in the row above them. `cargo test --workspace --features junco-policy/test-util`
+passes; the differential suite (`crates/history-analysis/tests/differential.rs`) compares every
+analyzer query against brute-force enumeration over small declared domains.
 
-## Paper results and their mechanized statements
+## Reviewer map
 
-Paths are relative to `crates/history-semantics/src/verify/` unless they start with `crates/`.
-Results marked † assume infinite component domains (`n_unrestricted`, see below).
+Six interface files fix the meaning of every theorem (`docs/verification/INTERFACES.md` has the
+per-definition tables and the reading order). Everything else is proof, connected to these by
+refinement. Read them against the paper in this order:
 
-| Paper result | Mechanized statement | File |
-|---|---|---|
-| Proposition Similarity preserves language (`lem:similarity-language`) | `theorem_similarity_preserves_language` | `history_algebra.rs` |
-| Lemma One-step correctness (`lem:sderiv`) | `theorem_symbolic_derivative_correct` | `history_algebra.rs` |
-| Theorem Symbolic derivative correctness (`thm:sderiv`) | `theorem_matcher_correct` | `history_algebra.rs` |
-| Theorem Matcher correctness (`thm:matcher`) | `theorem_not_fired` (step 1), `theorem_rule_decision` (steps 2–3), `theorem_similar_tails_same_decision` (normalization) | `history_algebra.rs` |
-| Lemma Finitely many residuals (`lem:finite-states`) | `stmt_reachable_states_finite` / `theorem_reachable_states_finite`; for the implementation: `theorem_impl_contract`, `theorem_impl_finitely_many_items` | `refinement/finiteness.rs`, `finite_impl.rs` |
-| Reductions of refinement, redundancy and vacuity (appendix `app:policy-reduction`) | `stmt_refines_iff_covers`, `stmt_redundant_iff_covered`; `stmt_vacuity_reductions` | `refinement/semantics.rs`; `refinement/inclusion.rs` |
-| Proposition Refinement as inclusion (`prop:policy`) | not mechanized as stated; the equivalent rule-by-rule reduction `stmt_policy_reduction` (difference 9 below) | `refinement/inclusion.rs` |
-| Lemmas Computing successors (`lem:succ`) and Uniform reachability (`lem:uniform`)† | `stmt_successor_cases` (one statement over successor cases, difference 10 below); for the implementation, `expansion_ok` | `refinement/search.rs`, `refinement/implementation.rs` |
-| Theorem Inclusion search correctness (`thm:search`)† | `stmt_search_correct` (soundness, completeness, minimality), `stmt_search_terminates` (termination); for the implementation, `theorem_impl_search_bounded` and `lemma_running_outcome` | `refinement/search.rs`, `refinement/implementation.rs`, `crates/history-analysis/src/verify/search_exec.rs` |
-| Equation decomposition (`eq:decomposition`) | `stmt_decomposition` | `refinement/pruning.rs` |
-| Lemma Pruning soundness (`lem:prune`) | `stmt_prune_sound`, `stmt_checks_discard` | `refinement/pruning.rs` |
-| Lemma Simulation soundness (`lem:simulation`) | `stmt_sim_rules_sound`, `stmt_test_rules_sound` | `refinement/pruning.rs` |
-| Executable analyzer (Section 6) | `covered`, `redundant`, and `at_least_as_strict` ensure typed correctness and per-case minimality (`*_ok`); `tail_included` retains `tail_included_ok`; errors exclude internal failures and search terminates by the implemented finite-item bound | `refinement/analyzer.rs`, `refinement/inclusion.rs`; `crates/history-analysis/src/analyzer.rs`, `verify/{verdict,policy_bridge,policy_queries,policy_case_profile,policy_minimality}.rs` |
+| Id | File | Definitions | Read for | Paper |
+|---|---|---:|---|---|
+| R1 | `crates/history-syntax/src/spec/events.rs` | 14 (+6 `View` impls) | what an event is: `arity`, `event_view`, `well_tagged`, `views_surjective`, `event_laws`; the DSL views `RuleView`, `HeadView`, `RegexView`, `TestView` | `sec:events`, `sec:rules` |
+| R2 | `crates/junco-core/src/spec/semantics.rs` | 26 | `head_matches`, `test_sem`, `lang`; over events `rule_evaluation`, `rule_violated`, `policy_denies`, `policy_permits`, `least_violation` | `def:violates`, `def:policy-violates` |
+| R3 | `crates/junco-core/src/spec/questions.rs` | 44 | `in_domains`, `domains_wf`, `refines`, `covers`, `never_denies`, `always_denies`, `tails_included`; symbolic counterexamples `CexView`, `InclusionView`, `admissible`, `instantiates`, `cex_has_instance`, `every_instance`, `fresh_capacity`, `capacity_for`; minimality `same_profile`, `shortest`, `shortest_in_case`, `minimal_in_case`; the constant extractors | `def:policy-refinement`, `app:policy-reduction`, `thm:search` |
+| R4 | `crates/junco-core/src/spec/hypotheses.rs` | 4 | `hash_coherent` (the trust token), `eq_equivalence`, `key_laws`, `event_obligations` | hypotheses (below) |
+| R5 | `crates/history-semantics/src/spec/monitor.rs` | 6 | `ValidatorView`, `check_frame`, `check_step`, `permits_result`, `rollback_step`, `trace_safe` | `thm:matcher` at the level of `Validator` |
+| R6 | `crates/history-analysis/src/spec/analyzer.rs` | 22 | `AnalyzerView`, `analyzer_wf`, `known_with`, the capacities, `rules_of`, `without_rule`, `counterexample_spec`, `covered_spec`, `removal_preserves_decisions`, `redundant_spec`, `at_least_as_strict_spec`, `tail_included_spec`; A5 in prose in the header | A1–A6 |
+| P | `crates/history-semantics/src/verify/paper.rs` | one `stmt_*`/`theorem_*` per paper result | the paper index: table of paper label → mechanized statement → proof → file; `theorem_paper_index` proves every row | all |
+| T | `crates/history-semantics/tests/reviewer.rs`, `crates/history-analysis/tests/reviewer.rs` | 7 and 15 verified items | the end-to-end statements over public items only (below) | `thm:matcher`, A1–A6, S9 |
 
-Each `stmt_X` above is proved by `theorem_X` in the same file. The remaining statements of the
-`refinement/` layer are auxiliary: `stmt_genericity` and `stmt_numeric_genericity` (renaming
-invariance, used to read counterexamples with fresh values), `stmt_source_regex_local` and
-`stmt_front_end_denies` (the typed-to-numeric encoding), `stmt_paper_split_ok` (the paper's
-Split satisfies `split_ok`), `stmt_lift_injective` and `stmt_items_from_states` (finiteness),
-`stmt_choice_exists` (counterexamples can be instantiated), and the `*_finite_domains`
-extensions described below.
+The theorems a reviewer reads:
 
-## Paper notation and specification names
+- `crates/history-semantics/tests/reviewer.rs`: `theorem_monitor_check` (the three cases of
+  `check_step` spelled out with `rule_violated`: grant ⇔ no rule violated, denial names the
+  first violated rule by mode, errors are never invariant failures), `theorem_monitor_permits`,
+  `theorem_trace_safe` (every state of a run of `check`/`rollback` from a fresh validator is
+  `trace_safe`, by induction over the run), `theorem_analyzer_to_monitor` (if `P ⊑ Q` on the
+  declared domains, a validator over `Q` permits what a validator over `P` grants inside them),
+  `theorem_event_obligations_u32_u64`, and the exec clients `monitor_client` /
+  `monitor_client_u32_u64` (a `Store`, a builder with one rule, `finish`, one `check`; the result
+  satisfies `thm:matcher` and the state is `trace_safe`, from the public contracts only).
+- `crates/history-analysis/tests/reviewer.rs`: `stmt_analyzer_a1` … `stmt_analyzer_a6` with
+  `theorem_a1_covered_decision`, `theorem_a2_real_counterexamples`, `theorem_a3_refinement`,
+  `theorem_a3_redundancy`, `theorem_a4_tail_inclusion`, `theorem_a5_escapes`
+  (`theorem_a5_no_invariant_failure`), `theorem_a6_minimality`; `theorem_vacuity_corollaries`
+  (`never_denies`/`always_denies` through `at_least_as_strict` with `[]` and
+  `[forbid head Univ]`); `theorem_analyzer_to_monitor` (S9, with `at_least_as_strict_spec`);
+  `theorem_capacity_u32_u64`; the exec clients `analyzer_client` / `analyzer_client_u32_u64`
+  (`Domains::infinite`, `new`, `add_rule`, the four queries, every precondition discharged from
+  the previous postconditions).
 
-All names are in `crates/history-semantics/src/verify/refinement/`.
+The `stmt_*` statements of the paper index and the `theorem_*` proofs of the `refinement/`
+layer (`crates/history-semantics/src/verify/refinement/`) are the mechanization of Sections 4–5
+and Appendices A–C; the executable analyzer (`crates/history-analysis/src/analyzer.rs`) and
+monitor (`crates/history-semantics/src/validator.rs`) are verified against R5/R6. Paper notation,
+in `crates/history-semantics/src/verify/refinement/`: $\mathcal{L}_\theta(r)$ is `n_lang`
+(`encoding`); constraint $\Gamma$, `entails`, `decides`, `paper_split`, `included_under`,
+`head_constraint`, `n_covers` are in `inclusion`; `Item`, `witness`, `realizes`, `steps_ok`,
+`Case`, `Outcome`/`outcome_ok` in `search`; `dead`, `dominated`, `sim_step`, `sim_sound` in
+`pruning`.
 
-| Paper | Specification | File |
-|---|---|---|
-| $\mathcal{L}_\theta(r)$ | `n_lang` | `encoding.rs` |
-| rule violation, policy violation (`def:violates`, `def:policy-violates`) | `Status`, `rule_status`, `rule_denies`, `policy_denies` | `semantics.rs` |
-| constraint $\Gamma$ | `Constraint` (a set of `Literal`s) | `inclusion.rs` |
-| $\Gamma' \models \Gamma$ | `entails` | `inclusion.rs` |
-| $\Gamma$ decides $x_c = v$ | `decides` | `inclusion.rs` |
-| $\mathrm{Split}(\Gamma; \Pi)$ | `paper_split`; what the theorems require of a split: `split_ok` | `inclusion.rs` |
-| $r \sqsubseteq_\Gamma s$ | `included_under` | `inclusion.rs` |
-| head constraint $\Gamma_h$ | `head_constraint` | `inclusion.rs` |
-| $P$ covers $R$ | `n_covers` | `inclusion.rs` |
-| item $(\Gamma, q)$ | `Item` | `search.rs` |
-| witnesses $W(I)$ | `witness` | `search.rs` |
-| $(\theta, e)$ realizes $\alpha$ | `realizes` | `search.rs` |
-| successors $\mathrm{succ}(\Gamma, q)$ (`def:successors`) | the items of `paper_steps`; the conclusion of Lemmas `lem:succ` and `lem:uniform`: `steps_ok` | `search.rs` |
-| successor case: a successor $(\Gamma', q')$ with its assignment $\alpha$ | `Case { constraint, alpha, next }` | `search.rs` |
-| $\theta \vdash I \overset{e}{\leadsto} J$ ($e$ reaches $J$ from $I$ under $\theta$) | `sat_by(theta, c.constraint) && realizes(theta, e, c.alpha)` for a case `c` of `I` with `case_item(c) == J` | `search.rs` |
-| search result | `Outcome`, `outcome_ok` | `search.rs` |
-| dead item, domination $J \preceq I$ | `dead`, `dominated` | `pruning.rs` |
-| syntactic simulation $\sqsubseteq$ | `sim_step` (the rules), `sim_sound` (soundness of a relation) | `pruning.rs` |
+## Hypotheses
 
-## Hypotheses of the proved statements
-
-- **Infinite domains.** `stmt_successor_cases` and `stmt_search_correct` assume
-  `n_unrestricted(d)`: no component has a declared finite domain, as the paper assumes. The
-  variants `stmt_successor_cases_finite_domains` and `stmt_search_correct_finite_domains` drop
-  this hypothesis for declared finite domains, which the paper does not treat.
-- **Component-local atoms.** `stmt_successor_cases` assumes `atoms_local(atoms)`: an atom compares
-  a component of an event only with the same component of the candidate, as in the paper's
-  event model. The analyzer's atoms satisfy it by construction (`atom` in
-  `crates/history-analysis/src/search.rs` ensures `atoms_local`).
-- **Termination.** `stmt_search_terminates` is conditional on `finitely_many_items`: the search
-  is bounded when finitely many items are reachable. For the implementation this is discharged:
-  `theorem_impl_finitely_many_items` proves it for the implemented normalizer and successor
-  function (via `theorem_impl_contract`) for every case function that follows implemented steps
-  (`cases_follow`); the executed search maintains this as the loop invariant `archive_follows`
-  (`running` in `crates/history-analysis/src/verify/search_exec.rs`), and
-  `theorem_impl_items_bound` gives one finite item set, fixed before the loop, whose size is the
-  `decreases` measure of the real search loop (`Search::run` in
-  `crates/history-analysis/src/search.rs`); `lemma_running_outcome` gives the same bound for
-  every returned outcome.
-- **Executable analyzer.** Queries require `analyzer_obligations::<E>()`: stable event projections
-  and equality/hashing consistent with their models. Stored-rule queries also require valid
-  `RuleId` indices. `add_rule_capacity` and `query_capacity` bound constant-id allocation for
-  registration and the borrowed tail query; stored-policy queries add no vocabulary-capacity
-  premise. Cartesian-product overflows are checked runtime errors.
-- **Nonvacuous counterexamples.** Policy queries additionally require
-  `unrestricted_components_infinite`: `infinite_type::<E::Component>()` if any coordinate has no
-  declared domain. No infinity premise is needed when all coordinates have declared finite
-  domains. `lemma_choice_exists_mixed` and reconstruction establish `cex_has_instance`; a
-  counterexample explicitly entails `!covers` or `!refines`, and every admissible instantiation
-  witnesses the failure. The standalone `*_correct` predicates retain the earlier vacuous
-  meaning on unrestricted types with too few fresh values.
+- **`event_obligations::<E>()` (R4).** Every monitor and analyzer guarantee about the event type
+  `E` is conditional on `event_laws::<E>()` (R1: arity in `1..=MAX_ARITY`, stable projections
+  tagged with their coordinate, `views_surjective`) and `key_laws::<E::Component>()` (`Eq` agrees
+  with `eq_spec`, which is an equivalence, and `hash_coherent`). The frames (`check_frame`,
+  `rollback_step`, the view equations of `add_rule`/`tail_included`) are unconditional.
+  `junco_core::verify::hypotheses` and `history_syntax::verify::events` prove every conjunct for
+  the built-in tuple events `(A, B)`, `(A, B, C)`, `(A, B, C, D)` from the payloads' `eq_spec`,
+  except `hash_coherent`.
+- **`hash_coherent::<C>()`, the single trust token.** The `external_body` hash containers
+  (`NativeMap`/`NativeSet`/`NativeGroups`) behave as maps on `eq_spec` classes only if the key's
+  `Hash`/`Eq` are faithful. Nothing discharges this for a user component type: every concrete
+  reviewer theorem (`theorem_event_obligations_u32_u64`, `monitor_client_u32_u64`,
+  `analyzer_client_u32_u64`, `theorem_capacity_u32_u64`) carries
+  `hash_coherent::<Component2<u32, u64>>()` as its only premise. The library's own internal key
+  types take it by the five `axiom fn`s in `crates/history-analysis/src/verify/key_axioms.rs`
+  (TRUST.md, `axiom`).
+- **Root event types.** `LockEvent`, `FlowEvent`, `AgentEvent` in the unverified root crate
+  implement `Event` by hand; `event_laws` is a documented hypothesis at each impl (D4), not a
+  theorem.
+- **Declared domains (R3 `domains_wf`, S9).** A declared coordinate ranges over exactly its
+  declared, nonempty, correctly tagged values; an undeclared coordinate over every value of its
+  type. Every verdict is stated over pairs `in_domains`; `Domains::with_domain` rejects empty and
+  mistagged declarations at runtime. A verdict transfers to the monitor only for requests and
+  histories inside the domains (`theorem_analyzer_to_monitor`).
+- **Capacity (R3 `fresh_capacity`, `capacity_for`).** A counterexample promises a real instance
+  only when each coordinate offers as many fresh values, distinct from the known constants, as
+  the counterexample uses (`counterexample_spec`). `junco_core::verify::capacity` discharges
+  this for integer coordinates (`lemma_fresh_capacity_u8/u16/u32/u64`: `known[i].len() + k <=
+  2^bits`); `theorem_capacity_u32_u64` is the instance for `(u32, u64)`. Every instance is
+  always a real failing pair in the domains (`every_instance`), capacity or not.
+- **Interning capacities (R6).** `new`, `add_rule` and `tail_included` require
+  `constructor_capacity`, `add_rule_capacity`, `query_capacity`: the constants interned so far
+  plus the input's fit in `u32`. `known` is fixed by the contracts (`declared_sets(domains)`,
+  then `known_with(known, rule_constants(rule))` / `known_with(known, tail_constants(..))` on
+  every return).
+- **Termination.** `stmt_search_terminates` is conditional on finitely many reachable items,
+  discharged for the implementation (`theorem_impl_finitely_many_items`,
+  `theorem_impl_items_bound`); no function of `history-analysis` uses
+  `exec_allows_no_decreases_clause` (TRUST.md).
 
 ## Differences between the paper and the mechanization
 
-1. **Events and valuations.** Each event type chooses its arity, from 1 to `MAX_ARITY` (8),
-   instead of an arbitrary $n$. In the numeric layer the candidate's values are bounded by
-   `u64` (`n_theta_ok`); history values are unbounded. Declared finite domains are supported
-   in addition to the paper's infinite domains (see Hypotheses).
-2. **Split.** The implementation emits a smaller partition than the paper's
-   $\mathrm{Split}$: per compared component, one case per undecided constant plus one case
-   different from all of them. The theorems are stated for every case family satisfying
-   `split_ok`, which includes both (`stmt_paper_split_ok` for the paper's).
-3. **Exhaustion and errors.** The paper's search always answers. The mechanized search and the
-   implementation may stop with `Exhausted` under a resource budget (the analyzer charges each
-   search at most 16 MiB of graph), and the implementation may return an error (`Err`, e.g. on
-   an id overflow). `*_correct`, `tail_included_ok`, and `outcome_ok` claim nothing about
-   `Exhausted`. Policy queries ensure `no_invariant_failure`; `tail_included` and `add_rule` ensure
-   `no_invariant_compile_failure`. Invalid-input and resource errors remain possible. The search's
-   existing success contract is unchanged; its additional error guarantee is conditional on
-   component-local primitives with constant codes fitting `u32`, proved for analyzer inputs.
-4. **Simulation rules.** The implemented syntactic simulation has more rules than the paper's
-   figure (`fig:simulation`): recursive rules for conjunctions and disjunctions of tests on
-   either side, `x ⊑ Star(b)` from `x ⊑ b`, and padding with several `All` factors.
-   `sim_step` and `test_step` specify the implemented rules, and `stmt_sim_rules_sound` and
-   `stmt_test_rules_sound` prove them sound.
-5. **Minimality** is global for `tail_included` (`shortest`) and case-local for policy queries
-   (`shortest_in_case`, `same_profile`). `covered`, `redundant`, and `at_least_as_strict` ensure
-   `*_ok = *_correct && *_minimal`: every admissible counterexample instance has minimum history
-   length among failing pairs with its constant profile. Refinement uses the same denying rule
-   for correctness and shortestness. The proof transfers the initial search case's numeric
-   length bound through known-code equality reflection; it does not confuse the initial split
-   constraint with the stronger reconstructed refutation constraint.
-6. **Rule status and policy decisions.** Both are specified. For the analysis, `semantics.rs`
-   defines `Status`, `rule_status` (`def:violates`) and `policy_denies` (some rule is violated;
-   `def:policy-violates`),
-   over which `stmt_refines_iff_covers` and `stmt_redundant_iff_covered` are stated; the numeric
-   `n_rule_denies` and `n_policy_denies` (`encoding.rs`, related to the typed ones by
-   `stmt_front_end_denies`) are used by `stmt_policy_reduction` and `stmt_vacuity_reductions`.
-   For the runtime checker, the verified `Validator`, `CompiledPolicy` and `TracePolicy` return
-   the first violated rule in source order, or none exactly when no rule is violated
-   (`ordered_result` and `least_violation` in `crates/history-semantics/src/compiled_rule.rs`,
-   over `rule_violated` in `crates/junco-core/src/verify/dsl.rs`). The theorems for Matcher
-   correctness (`theorem_rule_decision`, `theorem_not_fired`) are stated over the paper-shaped
-   numeric model (`pair_lang` in `crates/junco-core/src/verify/history_specs.rs`) and prove the
-   tail-membership steps; the final case split from membership to `Violated`/`Satisfied` by the
-   rule's mode is a definition (`violated_by`, `rule_violated`), not a separate theorem.
-7. **Executable policy queries.** `add_rule` stores validated rules with stable `RuleId` indices,
-   retaining verified encodings as the constant book grows. `covered`, `redundant`, and
-   `at_least_as_strict` return `Inclusion` and ensure `covered_ok`, `redundant_ok`, and
-   `at_least_as_strict_ok`, respectively, including explicit negated properties for
-   counterexamples under the stated nonvacuity hypothesis. `tail_included` remains available
-   without registration. `never_fires` and `always_fires` remain specification-only and are
-   outside this artifact's executable policy-query work.
-   `redundant` additionally ensures `policy_removal::redundant_decisions_ok`: `Holds` means
-   removing every target id preserves every deny/permit decision. `lemma_removal_iff_covered`
-   instantiates `stmt_redundant_iff_covered` after an exact id-filter denial lemma handles
-   arbitrary order and duplicate ids. When the target is present, every counterexample instance
-   is denied before removal and permitted afterward, explicitly refuting decision preservation.
-   If the target is absent, the API keeps its coverage-query meaning; a coverage counterexample
-   is not claimed to change an already target-free policy.
-8. **Similarity and normalization.** `theorem_symbolic_derivative_correct` and
-   `theorem_matcher_correct` are stated for the symbolic derivative before normalization.
-   `theorem_similarity_preserves_language` proves that the similarity equations preserve
-   languages, and `theorem_similar_tails_same_decision` lifts this to rule decisions. The
-   implemented normalizing constructors in `crates/history-semantics/src/normalize.rs`, which
-   also apply rewrites that are not similarity equations, are verified directly: each
-   constructor's contract states that its result has the language of the expression it builds.
-9. **Reducing refinement.** The paper's Proposition `prop:policy` reduces refinement to one
-   inclusion between denial expressions, which append the candidate to the history and test it
-   with $\pi = x$. The mechanization instead reduces refinement rule by rule
-   (`stmt_refines_iff_covers`) and avoids the extra event: for a rule `R`, it splits the head
-   constraint $\Gamma_R$ on the head constants of the covering policy and, for each case
-   $\Gamma'$, checks the constrained inclusion of `R`'s denial tail in the union of the denial
-   tails of the rules whose heads $\Gamma'$ entails (`stmt_policy_reduction`,
-   `firing_denials`). `lemma_policy_search_composition` connects this reduction to the proved
-   `outcome_ok` search contracts: all cases `Holds` imply coverage; a refuted case supplies every
-   uncovered realization and explicit numeric noncoverage, including declared finite domains.
-   The executable firing test is exact on split cases, including different heads and both rule
-   modes. The typed-policy bridge transports these results to the entry-point contracts.
-   This avoids appending a candidate event; Proposition 5.2 itself remains outside scope.
-10. **Successors.** The paper defines successors semantically as the items reached by a
-    candidate and an event (`def:successors`), computes them with Algorithm `alg:succ`, and
-    states Lemmas `lem:succ` and `lem:uniform`. The mechanization states both lemmas as one
-    statement over successor cases `(Γ', α, q')`, which also record the atom assignment; the
-    search keeps `α` to reconstruct counterexamples. A case's residual is specified up to
-    language (`successor_ok`), which suffices for search correctness; finiteness of residuals is
-    proved separately. The implementation's enumeration (per-register value options, declared
-    finite domains) differs from Algorithm `alg:succ` and is verified to emit cases satisfying
-    the same specification (`expansion_ok`).
+1. **One tagged component type, not a product.** An event's components share one Rust type
+   `E::Component` tagged with their coordinate (`Component2`, `Component3`, …), so `event_view`
+   is a sequence over one type instead of a tuple over $n$ domains. R1's `well_tagged` and
+   `views_surjective` make the two readings equivalent: every well-tagged sequence is the view
+   of an event. Arity is bounded by `MAX_ARITY` (8).
+2. **Named scoped variables.** Rules bind head variables by name and tails refer to them by
+   name and coordinate (`head_scoped`, `regex_scoped`, R2), instead of the paper's positional
+   $x_i$; `rule_wf` (R2) is the well-formedness every stored rule satisfies.
+3. **Equality up to `eq_spec`.** Component equality in every reviewer-facing statement is
+   vstd's `PartialEqSpec::eq_spec` (what the type's `PartialEq` computes), never representation
+   equality; `key_laws` requires it to be an equivalence respected by `Hash`.
+4. **Require rules are covered too.** `rule_violated` (R2) is "fired and the mode disagrees with
+   tail membership" (`violated_by`), so coverage, redundancy and refinement are stated uniformly
+   over `forbid` and `require` rules; the paper's definitions treat `forbid`.
+5. **Declared domains as a runtime assumption.** Declared finite domains (R3) are supported in
+   addition to the paper's infinite domains; verdicts hold for pairs inside them (hypotheses
+   above). The paper's $\theta$ is bounded by `u64` in the numeric layer (`n_theta_ok`); history
+   values are unbounded.
+6. **`GRAPH_BYTES` and `Exhausted`.** The paper's search always answers. Each query's search
+   may charge at most `MAX_GRAPH_BYTES` of graph; when a charge fails with
+   `HistoryError::GraphBudget` (whose contract is `charged + bytes > budget`) the query returns
+   `Inclusion::Exhausted`, about which every R6 `*_spec` claims nothing. Every other error,
+   including index overflow (`GraphIndex`), propagates as `Err`, never an invariant failure
+   (`no_invariant_failure`). When `Exhausted` is returned is prose in R6's header, not a theorem
+   (deviation from the handoff's A5 statement: a ghost token threaded from the failing charge
+   into `Exhausted` was judged not worth touching the store, the search and the analyzer at
+   once).
+7. **`RulePolicy` is unverified glue.** The root crate's `RulePolicy::check` (`src/policy/rules.rs`)
+   adds a `could_fire` head filter, one `TracePolicy` per distinct event, decide-then-append,
+   audit mode and error-to-deny around the verified `TracePolicy`/`History`; `check_step` covers
+   each `TracePolicy::decide`, not this composition (TRUST.md, Unverified glue). The AgentDojo
+   evaluation path runs it; the RegExLib path uses declared domains and `tail_included`.
+8. **Split.** The implementation emits a smaller partition than the paper's $\mathrm{Split}$:
+   per compared component, one case per undecided constant plus one case different from all of
+   them. The theorems are stated for every case family satisfying `split_ok`
+   (`stmt_paper_split_ok` for the paper's).
+9. **Simulation rules.** The code's syntactic simulation relation is smaller than Figure
+   `fig:simulation`'s; `sim_step`/`test_step` specify the implemented rules and
+   `stmt_sim_rules_sound`/`stmt_test_rules_sound` prove them sound.
+10. **Minimality** is global for `tail_included` (`shortest`) and per split case for the policy
+    queries (`minimal_in_case` over `shortest_in_case`/`same_profile`, R3): every real instance
+    of a counterexample has minimum history length among failing pairs whose candidate agrees
+    with it on equality with every known constant (A6).
+11. **Rule status and the monitor's decision.** `rule_violated`/`policy_denies`/`least_violation`
+    (R2) are definitions; the monitor (`Validator::check`, `CompiledPolicy`, `TracePolicy`)
+    returns the first violated rule in source order or grants exactly when none is violated
+    (`check_step`, R5). `thm:matcher`'s tail-membership steps are `theorem_not_fired`,
+    `theorem_rule_decision`, `theorem_similar_tails_same_decision` over the paper-shaped numeric
+    model (`pair_lang`); the final case split by the rule's mode is the definition `violated_by`.
+12. **Similarity and normalization.** `theorem_symbolic_derivative_correct` and
+    `theorem_symbolic_run_correct` are stated for the symbolic derivative before normalization;
+    `theorem_similarity_preserves_language` and `theorem_similar_tails_same_decision` lift it;
+    the implemented normalizing constructors (`crates/history-semantics/src/normalize.rs`) are
+    verified directly against the language of the expression they build.
+13. **Reducing refinement.** Proposition `prop:policy` is not mechanized as stated: refinement is
+    reduced rule by rule (`stmt_refines_iff_covers`) and the head constraint is split on the
+    covering policy's constants with a constrained inclusion per case (`stmt_policy_reduction`,
+    `stmt_policy_search_composition`), without appending the candidate event. Vacuity is decided
+    through `at_least_as_strict` with `[]` and `[forbid head Univ]`
+    (`stmt_vacuity_via_refinement`, `theorem_vacuity_corollaries`).
+14. **Successors.** Lemmas `lem:succ` and `lem:uniform` are one statement over successor cases
+    `(Γ', α, q')` (`stmt_successor_cases`); a case's residual is specified up to language
+    (`successor_ok`); finiteness of residuals is proved separately (`lemma_emitted_steps` for the
+    implementation's enumeration).
 
 ## Trusted base
 
-Besides Verus (with `vstd`), Z3 and Rust, the proofs trust the items listed in `TRUST.md`:
-specifications of standard-library and `smallvec` operations (tested by
-`scripts/spec-check.sh`); external bodies at native boundaries (the history store's
-interior-mutable tables and caches, callback and diagnostic adapters of the runtime policies,
-allocation-reservation helpers, and the analyzer's hash-map wrappers in
-`crates/history-analysis/src/native.rs`); external specifications of the `Event` trait and of
-`frunk` coproduct and `smallvec`/`lru` types; and two `from_iterator` constructors whose
-termination is not checked. The verified helper crates `verus-bumpalo` and `hashconsius`
-(arena allocation and hash-consing) are verified together with `history-store` and have their
-own trusted items. No analysis algorithm is trusted. Typed guarantees are conditional on the
-event type's projection and equality/hashing laws, stated as explicit hypotheses
-(`native_obligations`, `key_obligations`, `analyzer_obligations`), not assumed.
+Besides Verus (with `vstd`), Z3 and Rust, the proofs trust the items listed in `TRUST.md`
+(181 in the five crates at the last regeneration; 17 more in the verified helper crates
+`verus-bumpalo` and `hashconsius`): 19 `assume_specification`s for the standard library and
+`smallvec` (tested by `scripts/spec-check.sh`); 70 `external_body` items at native boundaries
+(the history store's interior-mutable tables and caches, the runtime policies' callback and
+diagnostic adapters, allocation-reservation helpers, the hash-map wrappers); external
+type/trait specifications for the `Event` trait, `frunk` coproducts, `smallvec` and `lru`; two
+`from_iterator` constructors whose termination is not checked; the 5 `axiom fn`s giving
+`hash_coherent` to the library's internal key types; 38 `uninterp` spec fns (the native
+values' identities, lock invariants and views; those with a meaning are marked); 16
+`derived_eq_claim`s (what `derive(PartialEq)` computes, including `Component2/3/4`); and 19
+`unannotated_pub_fn`s outside `verus!`. TRUST.md's "Trusted leaves of the search" names the LRU
+successor cache and the hash containers; "Unverified glue" names `RulePolicy::check` and the
+root event impls (`event_laws` as hypothesis). No analysis algorithm is trusted; typed
+guarantees are conditional on `event_obligations::<E>()`, stated as a hypothesis, with
+`hash_coherent::<C>()` the only conjunct no proof discharges.
