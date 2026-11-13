@@ -198,7 +198,8 @@ Files: `history-semantics/src/verify/paper.rs`, `history_algebra.rs`, `finite_st
 - `paper.rs`: one `stmt_*` per paper result in paper order, with the paper label and proving
   `theorem_*`. Convert `history_algebra.rs` theorems to the `stmt_`/`theorem_` convention; rename
   `theorem_matcher_correct` → `theorem_symbolic_run_correct`.
-- Rename the (N0)–(S6) contract conditions to the paper's names; drop the unused
+- Give the (N0)–(S6) and (C1)–(C4) conditions descriptive names documented in one place (the
+  paper's `app:finiteness` now describes them in prose without names or numbers); drop the unused
   `n_unrestricted` hypothesis of `stmt_search_correct`; factor the `*_finite_domains` duplicates;
   replace `Set::new(..).unwrap_or(Set::empty())` in stated definitions.
 - Delete `expansion_ok` and `covered_with_ok` (both unused); rename the extra `lang`s
