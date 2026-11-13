@@ -8,9 +8,9 @@ Concurrent work: explicitly reported by user. This worker uses isolated `/tmp/ju
 |---|---|---|
 | H1 | merged | [PR #13](https://github.com/junco-org/junco-policy/pull/13), merge commit `bce1df8511fc56919724e18bdbf5e610c8252bdb`; every CI check passed. Public statements detailed below. |
 | H3 | merged | [PR #15](https://github.com/junco-org/junco-policy/pull/15), merge commit `bedc0c955dd9eb24e224126a456d6c84a6092d55`; all seven CI checks passed on exact head `2a6f942428173122cb0e546a62182ea219e28747`. Public statements detailed below. |
-| H4 | in progress | Local gates passed; [PR #17](https://github.com/junco-org/junco-policy/pull/17), rebased head `dd3e3ad` atop H6, awaits CI. Prior head passed every check. `stmt_search_correct` and its theorem require trace_steps_ok only for expanded nodes; public index uses the same statement. |
+| H4 | in progress | Local gates passed; [PR #17](https://github.com/junco-org/junco-policy/pull/17), rebased head `55282cb` atop merged H3, awaits CI. Prior head passed every check. `stmt_search_correct` and its theorem require trace_steps_ok only for expanded nodes; public index uses the same statement. |
 | H6 | merged | [PR #14](https://github.com/junco-org/junco-policy/pull/14), merge commit `4151cb0a66058e9ecbc7e787b23438b40f319192`; all CI passed. Public statements detailed below. |
-| H5 | in progress | Monitor half passed: core **288**, store **289**, monitor **1624**, reviewer **9**, public_specs **19** verified, **0 errors**. Native clippy/fmt passed, **118 tests passed**; runtime grant/deny/history smoke passed. UnknownId-as-check_step negative probe failed its postcondition as required (**0 verified, 1 error**); removed. Analyzer half now implemented, awaiting integrated proof gate. |
+| H5 | in progress | Monitor half passed: core **288**, store **289**, monitor **1624**, reviewer **9**, public_specs **19** verified, **0 errors**. Preserved as pushed commit `f898619` on `fix/audit-h5`. Analyzer half implemented; integrated proof gate running. Full workspace ghost-erased clippy/fmt passed, **200 tests passed**. Both runtime monitor and all-four-query analyzer smokes passed. UnknownId-as-check_step negative probe failed its postcondition as required (**0 verified, 1 error**); removed. |
 | H2 | not started | |
 | H7 | not started | |
 | H8 | not started | |
@@ -40,7 +40,7 @@ H6 changed public statements:
 H3 changed public statements:
 - `Denial<E>::index` (`crates/history-semantics/src/validator.rs`) is the zero-based source index of the first violated rule.
 - `check_step<E,M>` (`crates/history-semantics/src/spec/monitor.rs`), denial arm: `least_violation(before.rules, request.event, before.history, denial.index as int) && denial.mode == before.rules[denial.index as int].mode`. Grant/error clauses and history frame retained.
-- `stmt_matcher` (`crates/history-semantics/src/paper.rs`) and `stmt_monitor_check` (`crates/history-semantics/tests/reviewer.rs`) identify the same exact index; executable/public reviewer clients consume it.
+- `stmt_matcher` (`crates/history-semantics/src/verify/paper.rs`) and `stmt_monitor_check` (`crates/history-semantics/tests/reviewer.rs`) identify the same exact index; executable/public reviewer clients consume it.
 
 Verification: H1 library merge gate `history-analysis --no-default-features --features runtime,std`: **603 verified, 0 errors**; reviewer: **17 verified, 0 errors**. Ghost-erased clippy passed (`--all-targets -- -D warnings`); package tests **27 passed**. Final package fmt passed after removing the throwaway smoke example. Runtime smoke observed counterexample candidate `[Constant(C0(3)), Constant(C1(7))]`, empty history, both coordinates declared; concrete `(3,7), []` refutes All ⊆ Empty. No ensures weakened; no trusted items added; no paper or benchmark edits.
 
@@ -51,6 +51,8 @@ H3 gates before rebase: monitor **1624**, public_specs **19**, monitor reviewer 
 H4 gates: monitor **1624**, public_specs **19**, analyzer **603**, analyzer reviewer **17** verified, all **0 errors**; ghost-erased clippy/fmt passed, **73 tests passed**. Runtime search smoke: All ⊆ All returned Holds; All ⊆ Empty returned a constant-only counterexample with empty history.
 
 Rebased H6 composition gate passed: analyzer **603**, reviewer **17**, **0 errors**; subsequently all seven CI checks passed and PR #14 merged.
+
+H5 runtime evidence: monitor permits/check granted `(3,7)`, committed it once, then permits/check denied `(9,7)` without appending; final history `[(3,7)]`. Analyzer registered two different constant-head rules; self-coverage and self-refinement returned `Holds`, redundancy and All ⊆ Empty returned real constant-only `(3,7), []` counterexamples. Throwaway examples removed. No item PR yet: analyzer proof acceptance is still pending.
 
 Toolchain: downloaded pinned Z3 cannot execute on host glibc 2.31. Existing `/ssd0/zkent/junco-proof-tools/compat-verus` and `z3-compat` pass the script's pinned version checks; these are used for verification.
 
