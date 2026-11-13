@@ -403,8 +403,10 @@ cargo +1.98.1 bench --bench agentdojo -- --suite banking \
   --user-task user_task_0 --injection-task injection_task_0 --concurrency 1
 cargo +1.98.1 bench --bench agentdojo -- --suite banking --clean-only \
   --user-task user_task_0 --concurrency 1
-cargo +1.98.1 bench --bench agentdojo -- --concurrency 4
-cargo +1.98.1 bench --bench agentdojo -- --report
+cargo +1.98.1 bench --bench agentdojo -- --out comparison --concurrency 4
+cargo +1.98.1 bench --bench agentdojo -- --audit --out comparison --concurrency 4
+cargo +1.98.1 bench --bench agentdojo -- --out comparison --report
+cargo +1.98.1 bench --bench agentdojo -- --audit --out comparison --report
 ```
 
 The self-test needs no credentials: it exercises the real worker and scorer, scripted
@@ -418,25 +420,31 @@ attacked tasks only. `--concurrency` defaults to 4 and must be positive. See `--
 for the complete CLI. Model names must be safe path components (letters, digits,
 `-`, `_`, `.`, `+`); `--q-model` defaults to the selected P model.
 
-Unconstrained runs continue after policy denials. Enforced scores reset the same
-injected environment and replay only calls before the first denial, without another
-model run. This harness is for simulated AgentDojo environments, not real side effects.
-Each task is atomically saved with its transcript, resolved calls and input taint,
-events, policy decisions, skipped calls, scores, duration, and any error. Logs contain
-full benchmark payloads and are gitignored. The canonical location is
-`benches/agentdojo/runs/<model>+camel/<suite>/<user_task_id>/<important_instructions|none>/<injection_task_id|none>.json`.
-Matching successfully scored logs are skipped automatically; failed or unscored tasks
-are retried. Incompatible task/model/Q-model logs are rejected unless `--force` is
-used to replace them. Use `--force` after changing code, prompts, or classifications.
-Old noncanonical smoke directories are left untouched and excluded from reports.
+Default mode enforces the policy: denied tool calls are not executed, and denied contacts
+are not appended. `--audit` deliberately continues after denials and commits them; it does not
+preserve trace safety. Compare modes with two separate executions and AgentDojo scorings,
+not a relabeling of old outcomes. The separate `deny_prefix_counterfactual` scores replay the prefix before the
+first denial; they are counterfactual scores, not a new adaptive enforcement run.
+
+Each task is atomically saved with its transcript, resolved calls and input taint, attempted
+and committed events, decisions, skipped calls, scores, duration and errors. Logs include
+`policy_mode` (`enforce`/`audit`) and `run_kind` (`live`/`script`/`events`), and contain full
+benchmark payloads. The default gitignored location is
+`benches/agentdojo/runs/<model>+camel-<enforce|audit>/<suite>/<user_task_id>/<important_instructions|none>/<injection_task_id|none>.json`.
+Matching successfully scored logs are skipped; failed or unscored tasks are retried.
+Incompatible task/model/Q-model/mode/run-kind and unlabeled legacy logs are rejected rather
+than assigned an inferred mode. `--force` explicitly replaces incompatible logs; source
+datasets and old noncanonical directories are otherwise untouched.
 
 `--replay DIR` answers both models from per-task scripts instead of a provider, so a
 policy or classification change can be re-measured on recorded traces without model
 calls. A script mirrors the log layout and holds `{"p": [assistant messages], "q":
 [result arguments]}`; `camel-prompt-injection/benchmarks/junco_vs_camel/junco_trace_replay.py scripts`
 derives them from a previous run, reconstructing hidden Q values from the arguments the
-run later resolved. Tasks without a script are skipped. `--out NAME` writes logs under
-`benches/agentdojo/runs/NAME` so the replay does not overwrite the source run.
+run later resolved. Tasks without a script are skipped. `--out NAME` writes separate logs
+under `benches/agentdojo/runs/NAME-enforce` or `NAME-audit`, preserving the source run.
+Use the same `--replay DIR` option when reporting a script run. Fixed scripts exercise and
+rescore real environments but do not measure adaptive model recovery after a new denial.
 
 `--events DIR --out NAME` replays saved events through the four-coordinate policy,
 without Python, tool execution, model calls or credentials. Live logs can be used
@@ -457,26 +465,26 @@ contacts with the source file named in the error.
 
 Offline replay applies `--suite`, `--user-task`, `--injection-task`, `--clean-only`
 and `--attacked-only` to canonical paths. `--out` is required; `--events` conflicts
-with `--replay`, `--report` and `--self-test`. Each output preserves the input and adds
-`replayed` and `replayed_seconds` to each decision, plus task-level `mismatches` and
-`replayed_policy_seconds`. The original `error` is retained as `source_error`;
-the output `error` reports replay failure.
+with `--replay`, `--report` and `--self-test`. Outputs retain attempted events separately from
+committed events and add replay timing, mismatches and source error metadata. Historical
+utility/attack fields are kept only under `source_scores`; current utility/attack scores are
+unavailable because event replay neither executes tools nor reruns the scorer.
 
 Per-suite and total rows report tasks, contacts, recorded and replayed denials,
 mismatches, errors, and policy time: total, median, p99 and maximum in milliseconds.
 The distribution uses per-task sums of time inside `FlowPolicy::check`, excluding
 other history appends and file I/O. Any mismatch or replay error makes the command
-exit nonzero. Utility and attack scores remain the recorded values.
+exit nonzero. Event-only replay never supplies fresh utility or attack measurements.
 
-The recorded `replay-readers-timed` corpus translates to 13,036 events across 1,024
-tasks. Its 219 contact decisions all replayed as denials, with zero mismatches or
-replay errors.
+The historical `replay-readers-timed` event-only corpus has 13,036 events across 1,024 tasks;
+its earlier replay reported 219 contact denials without mismatches or replay errors. Those
+historical records do not establish current enforcement utility or attack success.
 
 `--report` reads canonical logs without Python, model calls, or credentials, applying
 the same suite and task filters. The report also runs after task execution. Per-suite
-and overall rows show clean/attacked utility, CaMeL and CaMeL+policy attack counts,
-benign/attacked denials, and errors as counts and rates. Unavailable scores are logged
-as null and excluded from score denominators, not treated as failures or successes.
+and overall rows show observed clean/attacked utility and attack counts for the selected mode,
+the separately labeled deny-prefix counterfactual, denials and errors as counts and rates.
+Unavailable scores are excluded from denominators, not treated as successes or failures.
 A partial run can establish a denial occurred, but not that no denial would occur.
 Utility and attack columns include scorer results from aborted runs; those rates are
 not paper-comparable while any task has an error. Errors and incomplete outcomes

@@ -17,6 +17,12 @@ cargo +1.98.1 bench --manifest-path fuzz/Cargo.toml --bench other -- 'dogwood_fu
 
 Junco retains its compiled policy/store with fresh histories; Dogwood re-lowers and rebuilds each authorizer outside timing because it consumes the policy set and has no reset. Timed routines include ingestion and teardown. Events are prebuilt: a request decides; only grants add a response visible to temporal predicates. Timestamps advance by one second, inside the 24h window. No warm Dogwood single-decision probe exists: every call appends; `../lock_policy.rs` covers junco's warm decisions.
 
+Junco's enforcing replay paths use `LockPolicy::check` through `check_and_commit`: decision and
+granted append occur together in verified code, with denials leaving history unchanged.
+Read-only warm/cold decision probes retain the public `CompiledPolicy::decide` contract and do
+not append. Filtering, diagnostic glue and conversion of errors remain outside the proofs.
+
+
 | Junco rule | Dogwood `@id` |
 | --- | --- |
 | edit × owned_by_other | edit_owned_by_other |

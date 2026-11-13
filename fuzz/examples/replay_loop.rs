@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use history_store::History;
 use junco_policy::LockPolicy;
-use lock_policy_harness::{BYTES_PER_EVENT, check, entropy, granted_history};
+use lock_policy_harness::{BYTES_PER_EVENT, check_and_commit, entropy, granted_history};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     const SEED: u64 = 0x9e37_79b9_7f4a_7c15;
@@ -20,8 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for _ in 0..repeats {
         let mut history = History::new(Arc::clone(&store))?;
         for event in events.as_slice() {
-            assert!(check(&mut policy, &history, event)?);
-            history.push(*event)?;
+            assert!(check_and_commit(&mut policy, &mut history, event)?);
         }
         assert_eq!(history.len(), length);
     }

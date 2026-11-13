@@ -196,11 +196,18 @@ in `crates/history-semantics/src/verify/refinement/`: $\mathcal{L}_\theta(r)$ is
    `check`/`permits` have the same
    resource-only error guarantee. Valid source rules of the event arity with correctly tagged
    constants cannot fail registration or tail inclusion with arity, coordinate or scope errors.
-7. **`RulePolicy` is unverified glue.** The root crate's `RulePolicy::check` (`src/policy/rules.rs`)
-   adds a `could_fire` head filter, one `TracePolicy` per distinct event, decide-then-append,
-   audit mode and error-to-deny around the verified `TracePolicy`/`History`; `check_step` covers
-   each `TracePolicy::decide`, not this composition (TRUST.md, Unverified glue). The AgentDojo
-   evaluation path runs it; the RegExLib path uses declared domains and `tail_included`.
+7. **Policy front ends and unverified glue.** Lock and flow enforcement use the public verified
+   `CompiledPolicy::check` / `TracePolicy::check` decide-and-commit operations, whose
+   `policy_step` and `policy_commit_frame` expose event-level decisions and exact history updates.
+   Native per-event filtering, orchestration, error-to-deny, explicit audit mode and AgentDojo
+   tool/scoring glue remain outside the proofs (TRUST.md). Audit histories may include denied
+   events and are not trace safe. Actual utility/attack comparisons require separately executed
+   and scored enforcement/audit runs; event replay and deny-prefix counterfactuals are not those
+   measurements.
+   Paired live AgentDojo scoring is not available from this workstation: the installed runtime
+   and model-free self-test pass, but the configured provider credential returns HTTP 403.
+   Available local event-only corpora cannot establish new utility/attack scores; a usable
+   provider credential or genuine recorded P/Q scripts is required.
 8. **Split.** The implementation emits a smaller partition than the paper's $\mathrm{Split}$:
    per compared component, one case per undecided constant plus one case different from all of
    them. The theorems are stated for every case family satisfying `split_ok`

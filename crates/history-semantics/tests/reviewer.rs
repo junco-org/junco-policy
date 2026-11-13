@@ -264,6 +264,61 @@ fn monitor_client_u32_u64<M>(head: Head<(u32, u64)>, request: Request<(u32, u64)
     monitor_client(head, request)
 }
 
+/// The production compiled-policy API has the same event-level meaning and trace invariant
+/// as the central monitor. Its proof consumes the actual check contract, not Validator::check.
+pub proof fn theorem_compiled_policy_check<E: Event, C>(
+    before: history_semantics::policy::CompiledPolicy<E, C>,
+    after: history_semantics::policy::CompiledPolicy<E, C>,
+    history_before: history_store::History<E>, history_after: history_store::History<E>,
+    candidate: E, result: Result<history_semantics::policy::PolicyDecision, HistoryError>,
+)
+    requires event_obligations::<E>(),
+        history_semantics::policy::evaluate::verify::policy_store(before)
+            == history_store::history::verify::store_of(history_before),
+        history_semantics::policy::evaluate::verify::policy_check_result(
+            before, after, history_before, history_after, candidate, result),
+        trace_safe(history_semantics::policy::evaluate::verify::policy_view(before, history_before)),
+    ensures history_semantics::spec::monitor::policy_step(
+            history_semantics::policy::evaluate::verify::policy_view(before, history_before),
+            candidate, history_semantics::policy::evaluate::verify::policy_selected_index(after), result),
+        history_semantics::spec::monitor::policy_commit_frame(
+            history_semantics::policy::evaluate::verify::policy_view(before, history_before),
+            history_semantics::policy::evaluate::verify::policy_view(after, history_after), candidate, result),
+        trace_safe(history_semantics::policy::evaluate::verify::policy_view(after, history_after)),
+{
+    history_semantics::spec::monitor::lemma_policy_check_preserves_trace_safe(
+        history_semantics::policy::evaluate::verify::policy_view(before, history_before),
+        history_semantics::policy::evaluate::verify::policy_view(after, history_after),
+        candidate, history_semantics::policy::evaluate::verify::policy_selected_index(after), result);
+}
+
+/// The trace facade also bridges its own public check guarantee to the same monitor invariant.
+pub proof fn theorem_trace_policy_check<E: Event>(
+    before: history_semantics::policy::TracePolicy<E>,
+    after: history_semantics::policy::TracePolicy<E>,
+    history_before: history_store::History<E>, history_after: history_store::History<E>,
+    candidate: E, result: Result<history_semantics::policy::PolicyDecision, HistoryError>,
+)
+    requires event_obligations::<E>(),
+        history_semantics::policy::trace::verify::trace_store(before)
+            == history_store::history::verify::store_of(history_before),
+        history_semantics::policy::trace::verify::trace_check_result(
+            before, after, history_before, history_after, candidate, result),
+        trace_safe(history_semantics::policy::trace::verify::trace_view(before, history_before)),
+    ensures history_semantics::spec::monitor::policy_step(
+            history_semantics::policy::trace::verify::trace_view(before, history_before),
+            candidate, history_semantics::policy::trace::verify::trace_selected_index(after), result),
+        history_semantics::spec::monitor::policy_commit_frame(
+            history_semantics::policy::trace::verify::trace_view(before, history_before),
+            history_semantics::policy::trace::verify::trace_view(after, history_after), candidate, result),
+        trace_safe(history_semantics::policy::trace::verify::trace_view(after, history_after)),
+{
+    history_semantics::spec::monitor::lemma_policy_check_preserves_trace_safe(
+        history_semantics::policy::trace::verify::trace_view(before, history_before),
+        history_semantics::policy::trace::verify::trace_view(after, history_after),
+        candidate, history_semantics::policy::trace::verify::trace_selected_index(after), result);
+}
+
 } // verus!
 
 #[test]

@@ -7,6 +7,7 @@
 //! The guarantee is conditional on R4's `event_obligations::<E>()` where the contracts say so:
 //! the compiled rules' hash containers are trusted only for faithful keys.
 
+use crate::policy::PolicyDecision;
 use crate::validator::Decision;
 use history_syntax::Event;
 use history_syntax::spec::events::RuleView;
@@ -49,6 +50,53 @@ pub open spec fn check_step<E: Event, M>(
             least_violation(before.rules, request.event, before.history, denial.index as int)
                 && denial.mode == before.rules[denial.index as int].mode,
         Err(error) => resource_error(error),
+    }
+}
+
+/// The same event semantics as `check_step`, for policies with caller-owned histories.
+/// The caller supplies the selected source index; diagnostics do not affect authorization.
+pub open spec fn policy_step<E: Event>(
+    before: ValidatorView<E>, candidate: E, selected: nat,
+    result: Result<PolicyDecision, HistoryError>,
+) -> bool {
+    match result {
+        Ok(PolicyDecision::Grant) => policy_permits(before.rules, candidate, before.history),
+        Ok(PolicyDecision::Deny { .. }) =>
+            least_violation(before.rules, candidate, before.history, selected as int),
+        Err(error) => junco_core::spec::semantics::resource_error(error),
+    }
+}
+
+/// Commit frame shared by compiled and trace policies: only a successful grant appends.
+pub open spec fn policy_commit_frame<E: Event>(
+    before: ValidatorView<E>, after: ValidatorView<E>, candidate: E,
+    result: Result<PolicyDecision, HistoryError>,
+) -> bool {
+    after.rules == before.rules && match result {
+        Ok(PolicyDecision::Grant) => after.history == before.history.push(candidate),
+        _ => after.history == before.history,
+    }
+}
+
+/// A semantic policy check preserves trace safety under exactly the monitor invariant.
+pub proof fn lemma_policy_check_preserves_trace_safe<E: Event>(
+    before: ValidatorView<E>, after: ValidatorView<E>, candidate: E, selected: nat,
+    result: Result<PolicyDecision, HistoryError>,
+)
+    requires trace_safe(before), policy_step(before, candidate, selected, result),
+        policy_commit_frame(before, after, candidate, result),
+    ensures trace_safe(after),
+{
+    assert forall|j: int| 0 <= j < after.history.len() implies
+        policy_permits(after.rules, #[trigger] after.history[j], after.history.take(j)) by {
+        if j < before.history.len() {
+            assert(after.history[j] == before.history[j]);
+            assert(after.history.take(j) == before.history.take(j));
+        } else {
+            assert(result matches Ok(PolicyDecision::Grant));
+            assert(j == before.history.len());
+            assert(after.history.take(j) == before.history);
+        }
     }
 }
 

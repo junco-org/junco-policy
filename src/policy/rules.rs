@@ -49,14 +49,11 @@ impl<E: Judged> RuleSet<E> {
 
 /// Rules over one event type, and how their verdicts are applied to an owned history.
 ///
-/// Unverified glue (D1): this type is outside the Verus proofs. On top of the verified
-/// `TracePolicy`/`History` it adds, exactly: (1) a `could_fire` head filter selecting the rules
-/// compiled for each event; (2) one `TracePolicy` per distinct event of the batch, built from the
-/// selected rules; (3) decide-then-append: a granted event is pushed to the history after its
-/// decision; (4) audit mode, which also appends denied events and reports them without enforcing;
-/// (5) error-to-deny: a compile or history error becomes a `Deny` decision (and a reported
-/// denial, even in audit mode when the append itself failed). The verified `check_step` contract
-/// covers each `TracePolicy::decide` call, not this composition.
+/// Unverified orchestration: a `could_fire` head filter selects the rules compiled for each
+/// distinct event in a batch; compile and history errors become denials. Enforcement delegates
+/// decision and granted-history append together to `TracePolicy::check`, under its public
+/// policy decision/commit contracts. Explicit audit mode instead uses noncommitting `decide`
+/// and appends both grants and denials in this unverified layer; it does not preserve trace safety.
 pub struct RulePolicy<E: Judged> {
     rules: Vec<TraceRule<E>>,
     audit: bool,
@@ -129,24 +126,25 @@ impl<E: Judged> RulePolicy<E> {
         for event in batch {
             let judge = match judges.entry(*event) {
                 Entry::Occupied(judge) => judge.into_mut(),
-                Entry::Vacant(slot) => {
-                    let firing = self.firing(event);
-                    slot.insert((!firing.is_empty()).then(|| {
-                        TracePolicy::new(history.store().clone(), firing)
-                            .map_err(|error| uncompiled(event, &error))
-                    }))
-                }
+                Entry::Vacant(slot) => slot.insert(
+                    TracePolicy::new(history.store().clone(), self.firing(event))
+                        .map_err(|error| uncompiled(event, &error)),
+                ),
             };
             let mut decision = match judge {
-                None => PolicyDecision::Grant,
-                Some(Ok(judge)) => judge.decide(history, event).unwrap_or_else(history_failure),
-                Some(Err(denial)) => PolicyDecision::Deny {
+                Ok(judge) => if self.audit {
+                    judge.decide(history, event)
+                } else {
+                    judge.check(history, event)
+                }
+                .unwrap_or_else(history_failure),
+                Err(denial) => PolicyDecision::Deny {
                     failed_precondition: denial.failed_precondition.clone(),
                     allowed_fixes: denial.allowed_fixes.clone(),
                 },
             };
             let mut append_failed = false;
-            if (matches!(decision, PolicyDecision::Grant) || self.audit)
+            if self.audit
                 && let Err(error) = history.push(*event)
             {
                 decision = history_failure(error);
