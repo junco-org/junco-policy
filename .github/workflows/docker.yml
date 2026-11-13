@@ -1,0 +1,19 @@
+name: Docker image
+
+on:
+  pull_request:
+    paths: [Dockerfile, .dockerignore, scripts/verify-all.sh, .github/workflows/docker.yml]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the image
+        run: docker build -t junco .
+      - name: Verify one configuration inside the image
+        run: docker run --rm junco cargo verus verify --locked -p history-syntax --features serde,std
+      - name: Run the library tests inside the image
+        run: docker run --rm junco cargo test --locked -p junco-core -p history-syntax

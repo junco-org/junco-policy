@@ -639,6 +639,26 @@ Analysis has no features beyond `runtime`/`std`; it is no_std + alloc and verifi
 configurations. It uses Semantics `runtime` through `SymbolicLanguage`, a native facade like
 `TracePolicy` that owns a compiled pair and calls only verified graph operations.
 
+## Build and test
+
+The crates need Rust `1.98.1` (the toolchain the pinned Verus release is built against):
+
+```sh
+rustup toolchain install 1.98.1-x86_64-unknown-linux-gnu --profile minimal \
+    --component rustc-dev --component llvm-tools --component rustfmt
+export RUSTUP_TOOLCHAIN=1.98.1-x86_64-unknown-linux-gnu
+cargo build --locked --workspace
+cargo test --locked --workspace --features junco-policy/test-util
+```
+
+The `Dockerfile` builds the same environment with Verus and Z3 installed (Linux x86-64):
+
+```sh
+docker build -t junco .
+docker run --rm junco                    # verify every configuration
+docker run --rm junco cargo test --locked --workspace --features junco-policy/test-util
+```
+
 ## Reproduce the verification
 
 The pinned toolchain is Rust `1.98.1`, Verus `0.2026.10.04.426d8b0`, Z3 `4.16.0` and

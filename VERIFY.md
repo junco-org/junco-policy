@@ -139,9 +139,20 @@ calls the verified decision procedures and commits events itself.
 | vstd | `0.0.0-2026-10-04-0306`, pinned in `Cargo.lock` |
 | Platform | Linux x86-64 |
 
+The quickest route is the `Dockerfile`, which installs exactly these versions:
+
+```sh
+docker build -t junco .
+docker run --rm junco                    # verify every configuration
+docker run --rm junco cargo verus verify --locked -p history-analysis \
+    --no-default-features --features runtime,std --test reviewer
+```
+
+Without Docker:
+
 ```sh
 rustup toolchain install 1.98.1-x86_64-unknown-linux-gnu --profile minimal \
-    --component rustc-dev --component llvm-tools
+    --component rustc-dev --component llvm-tools --component rustfmt
 
 # Download Verus and Z3, check their sha256, and verify every configuration.
 scripts/verify-all.sh --download ~/junco-tools
