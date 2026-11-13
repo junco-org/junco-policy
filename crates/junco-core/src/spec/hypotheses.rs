@@ -3,8 +3,8 @@
 
 use core::fmt::Debug;
 use core::hash::Hash;
-use history_syntax::Event;
 use history_syntax::Component3;
+use history_syntax::Event;
 use history_syntax::spec::events::EventSpec;
 use history_syntax::spec::events::{arity, event_view, projection_laws, surjectivity, well_tagged};
 use vstd::prelude::*;
@@ -125,19 +125,7 @@ pub proof fn lemma_tuple3_event_hypotheses<
             _ => {},
         }
     }
-    assert forall|event: (A, B, C)| #[trigger] well_tagged::<(A, B, C)>(event_view(event)) by {
-        assert forall|i: int| 0 <= i < 3 implies
-            <(A, B, C) as EventSpec>::coordinate_spec(event_view(event)[i]) == i by {}
-    }
-    assert forall|values: Seq<Component3<A, B, C>>| #[trigger] well_tagged::<(A, B, C)>(values)
-        implies exists|event: (A, B, C)| #[trigger] event_view(event) == values by {
-        match (values[0], values[1], values[2]) {
-            (Component3::C0(a), Component3::C1(b), Component3::C2(c)) => {
-                assert(event_view((a, b, c)) =~= values);
-            },
-            _ => {},
-        }
-    }
+    history_syntax::spec::events::lemma_tuple3_event_laws::<A, B, C>();
 }
 
 /// All finite three-u8 event hypotheses except the explicit external-container faithfulness token.

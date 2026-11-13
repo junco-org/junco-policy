@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use core::hash::Hash;
 use hashbrown::{HashMap, HashSet};
 use junco_core::error::HistoryError;
+#[cfg(verus_keep_ghost)]
 use junco_core::spec::hypotheses::key_laws;
 use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
@@ -139,4 +140,59 @@ impl<K: Eq + Hash, V> NativeGroups<K, V> {
     }
 }
 
+impl<K: Eq + Hash, V: Copy> Default for NativeMap<K, V> {
+    fn default() -> Self { Self::new() }
+}
+
+impl<K: Eq + Hash> Default for NativeSet<K> {
+    fn default() -> Self { Self::new() }
+}
+
+impl<K: Eq + Hash, V> Default for NativeGroups<K, V> {
+    fn default() -> Self { Self::new() }
+}
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::hash::{Hash, Hasher};
+
+    #[derive(Clone, Copy, Debug)]
+    struct ClassKey(u8);
+
+    impl PartialEq for ClassKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.0 % 10 == other.0 % 10
+        }
+    }
+    impl Eq for ClassKey {}
+    impl Hash for ClassKey {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            (self.0 % 10).hash(state);
+        }
+    }
+
+    #[test]
+    fn native_containers_use_equality_classes() {
+        let mut map = NativeMap::<ClassKey, u32>::new();
+        map.reserve_one().unwrap();
+        map.insert_fresh(ClassKey(1), 7);
+        map.insert_fresh(ClassKey(2), 9);
+        assert_eq!(map.lookup(&ClassKey(11)), Some(7));
+        assert_eq!(map.lookup(&ClassKey(12)), Some(9));
+        assert_eq!(map.lookup(&ClassKey(3)), None);
+
+        let mut set = NativeSet::new();
+        assert!(set.insert(ClassKey(1)));
+        assert!(!set.insert(ClassKey(11)));
+        assert!(set.insert(ClassKey(2)));
+
+        let mut groups = NativeGroups::new();
+        groups.push(ClassKey(1), 7);
+        groups.push(ClassKey(11), 9);
+        assert_eq!(groups.get(&ClassKey(21)).unwrap().as_slice(), &[7, 9]);
+        assert!(groups.get(&ClassKey(2)).is_none());
+    }
 }

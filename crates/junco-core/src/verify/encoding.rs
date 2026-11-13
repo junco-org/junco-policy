@@ -97,15 +97,25 @@ pub proof fn lemma_encoded_equality<C>(
     let a = maps[f][i].0;
     let b = maps[f][j].0;
     assert(domain(field, a) && domain(field, b));
+    crate::spec::hypotheses::lemma_eq_equivalence_at(
+        equality_at(eq, field), domain_at(domain, field), a, left, right);
+    crate::spec::hypotheses::lemma_eq_equivalence_at(
+        equality_at(eq, field), domain_at(domain, field), b, right, right);
     assert(eq(field, a, left));
     assert(eq(field, b, right));
     if eq(field, left, right) {
         assert(eq(field, a, right));
+        crate::spec::hypotheses::lemma_eq_equivalence_at(
+            equality_at(eq, field), domain_at(domain, field), a, right, b);
         assert(eq(field, a, b));
     }
     if left_id == right_id {
         assert(eq(field, a, b));
+        crate::spec::hypotheses::lemma_eq_equivalence_at(
+            equality_at(eq, field), domain_at(domain, field), left, a, b);
         assert(eq(field, left, b));
+        crate::spec::hypotheses::lemma_eq_equivalence_at(
+            equality_at(eq, field), domain_at(domain, field), left, b, right);
         assert(eq(field, left, right));
     }
 }

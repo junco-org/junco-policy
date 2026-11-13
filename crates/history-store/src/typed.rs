@@ -30,7 +30,9 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use vstd::std_specs::cmp::PartialEqSpec;
 
-use crate::native::{self as map, NativeMap};
+#[cfg(verus_keep_ghost)]
+use crate::native as map;
+use crate::native::NativeMap;
 
 // Ghost<T> signatures still name T after native erasure; this is the exact finite model.
 pub type ComponentMaps<E> = vstd::seq::Seq<vstd::seq::Seq<(<E as Event>::Component, u64)>>;
