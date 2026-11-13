@@ -4,6 +4,34 @@ The maintainer adds messages here, newest first, each with a UTC date and a shor
 message takes precedence over the handoff and over earlier messages where they conflict.
 Acknowledge each one in `STATUS.md` on your integration branch.
 
+## 2026-11-13: Surface review of `b18250c`
+
+1. **Run all eleven configurations now.** `hash_coherent` is defined as
+   `vstd::std_specs::hash::obeys_key_model`, and both `verify/key_axioms.rs` files import
+   `vstd::std_specs::hash`. In the pinned vstd that module exists only with its `std` feature
+   (`std_specs/mod.rs`: `#[cfg(all(feature = "alloc", feature = "std"))] pub mod hash;`), and
+   `junco-core` depends on vstd with `alloc` only unless its own `std` feature is on. Your gates ran
+   only the full-feature configurations. Run the no-default ones (`history-syntax`, `junco-core`,
+   `history-store … runtime`, `history-semantics … runtime`, `history-analysis … runtime`) before
+   wave-1 tracks build on R4. If they fail, keep R4 compiling in every configuration, e.g. a single
+   `uninterp` `hash_coherent` (linked to `obeys_key_model` only under `std`), and report the choice.
+2. **Bound `AnalyzerView::known` from above.** `analyzer_wf` only requires rule constants ⊆ `known`.
+   If `known` can grow arbitrarily, capacity can be made to fail and every counterexample clause
+   becomes vacuous. Make the contracts determine it: `new` ensures `known == declared_sets(domains)`,
+   `add_rule` ensures `known_grows` by exactly the rule's constants, `tail_included` by exactly
+   `tail_constants(head, left, right)`, and the other queries leave it unchanged. State this in R6.
+3. **Move the constant extractors into the surface.** R6 imports `head_constants`,
+   `regex_constants` and `rule_constants` from `history_semantics::verify::refinement::semantics`,
+   which the cutover removes. Define them in R2 or R3 and delete the old ones (decision 10).
+4. **Record the `Exhausted` choice.** Making `Exhausted` vacuous in every `*_spec`, with A5 only as
+   prose in R6's header, differs from the handoff's target A5 (`Exhausted` ⇒ a search exceeded
+   `GRAPH_BYTES`). Record it under deviations. If you keep A5 as a statement, its evidence must be
+   unforgeable: a ghost token that only the store's failing budget charge can construct, carried in
+   `Exhausted`; never ghost numbers the implementation chooses.
+
+The `Component2/3/4` axioms are covered by the earlier message "No primitive or component-type key
+axioms". Acknowledge in your next status entry.
+
 ## 2026-11-13: No primitive or component-type key axioms
 
 Do not add trusted axioms for primitive key types (`u8`, `u32`, ...) or compositional axioms for
