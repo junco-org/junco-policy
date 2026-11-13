@@ -3,7 +3,7 @@
 
 use crate::Event;
 use crate::event::{Arity, MAX_ARITY, sealed};
-use crate::{Comparison, RuleMode};
+use crate::{Comparison, Component2, Component3, Component4, RuleMode};
 use alloc::boxed::Box;
 use core::fmt::Debug;
 use core::hash::Hash;
@@ -132,6 +132,95 @@ pub open spec fn finite_coordinate<E: Event>(index: nat, count: nat) -> bool {
 pub open spec fn event_laws<E: Event>() -> bool {
     1 <= arity::<E>() <= crate::MAX_ARITY && E::obeys_projection_spec()
         && projection_laws::<E>() && surjectivity::<E>()
+}
+
+/// Built-in two-coordinate tuples realize every correctly tagged product tuple.
+pub proof fn lemma_tuple2_event_laws<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash>()
+    ensures event_laws::<(A, B)>(),
+{
+    assert forall|event: (A, B)| #[trigger] well_tagged::<(A, B)>(event_view(event)) by {
+        assert(event_view(event) =~= seq![Component2::C0(event.0), Component2::C1(event.1)]);
+    }
+    assert forall|values: Seq<Component2<A, B>>| #[trigger] well_tagged::<(A, B)>(values)
+        implies exists|event: (A, B)| #[trigger] event_view(event) == values by {
+        assert(values[0] is C0);
+        assert(values[1] is C1);
+        let a = match values[0] { Component2::C0(value) => value, _ => arbitrary() };
+        let b = match values[1] { Component2::C1(value) => value, _ => arbitrary() };
+        assert(event_view((a, b)) =~= values);
+    }
+}
+
+/// Built-in three-coordinate tuples realize every correctly tagged product tuple.
+pub proof fn lemma_tuple3_event_laws<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash,
+    C: Copy + Debug + Eq + Hash>()
+    ensures event_laws::<(A, B, C)>(),
+{
+    assert forall|event: (A, B, C)| #[trigger] well_tagged::<(A, B, C)>(event_view(event)) by {
+        assert(event_view(event) =~= seq![Component3::C0(event.0), Component3::C1(event.1), Component3::C2(event.2)]);
+    }
+    assert forall|values: Seq<Component3<A, B, C>>| #[trigger] well_tagged::<(A, B, C)>(values)
+        implies exists|event: (A, B, C)| #[trigger] event_view(event) == values by {
+        assert(values[0] is C0);
+        assert(values[1] is C1);
+        assert(values[2] is C2);
+        let a = match values[0] { Component3::C0(value) => value, _ => arbitrary() };
+        let b = match values[1] { Component3::C1(value) => value, _ => arbitrary() };
+        let c = match values[2] { Component3::C2(value) => value, _ => arbitrary() };
+        assert(event_view((a, b, c)) =~= values);
+    }
+}
+
+/// Built-in four-coordinate tuples realize every correctly tagged product tuple.
+pub proof fn lemma_tuple4_event_laws<A: Copy + Debug + Eq + Hash, B: Copy + Debug + Eq + Hash,
+    C: Copy + Debug + Eq + Hash, D: Copy + Debug + Eq + Hash>()
+    ensures event_laws::<(A, B, C, D)>(),
+{
+    assert forall|event: (A, B, C, D)| #[trigger] well_tagged::<(A, B, C, D)>(event_view(event)) by {
+        assert(event_view(event) =~= seq![Component4::C0(event.0), Component4::C1(event.1),
+            Component4::C2(event.2), Component4::C3(event.3)]);
+    }
+    assert forall|values: Seq<Component4<A, B, C, D>>| #[trigger] well_tagged::<(A, B, C, D)>(values)
+        implies exists|event: (A, B, C, D)| #[trigger] event_view(event) == values by {
+        assert(values[0] is C0);
+        assert(values[1] is C1);
+        assert(values[2] is C2);
+        assert(values[3] is C3);
+        let a = match values[0] { Component4::C0(value) => value, _ => arbitrary() };
+        let b = match values[1] { Component4::C1(value) => value, _ => arbitrary() };
+        let c = match values[2] { Component4::C2(value) => value, _ => arbitrary() };
+        let d = match values[3] { Component4::C3(value) => value, _ => arbitrary() };
+        assert(event_view((a, b, c, d)) =~= values);
+    }
+}
+
+/// The final coproduct variant inherits realization of every tagged tuple from its event arm.
+pub proof fn lemma_coproduct_last_surjectivity<H: Event>()
+    requires surjectivity::<H>(),
+    ensures surjectivity::<Coproduct<H, CNil>>(),
+{
+    assert forall|values: Seq<H::Component>|
+        #[trigger] well_tagged::<Coproduct<H, CNil>>(values)
+        implies exists|event: Coproduct<H, CNil>| #[trigger] event_view(event) == values by {
+        assert(well_tagged::<H>(values));
+        let head = choose|head: H| #[trigger] event_view(head) == values;
+        assert(event_view(Coproduct::<H, CNil>::Inl(head)) =~= values);
+    }
+}
+
+/// A coproduct with shared coordinate types inherits tuple realization from its head event arm.
+pub proof fn lemma_coproduct_surjectivity<H: Event, T, Rest>()
+    where Coproduct<T, Rest>: Event<Component = H::Component, Arity = H::Arity>
+    requires surjectivity::<H>(),
+    ensures surjectivity::<Coproduct<H, Coproduct<T, Rest>>>(),
+{
+    assert forall|values: Seq<H::Component>|
+        #[trigger] well_tagged::<Coproduct<H, Coproduct<T, Rest>>>(values)
+        implies exists|event: Coproduct<H, Coproduct<T, Rest>>| #[trigger] event_view(event) == values by {
+        assert(well_tagged::<H>(values));
+        let head = choose|head: H| #[trigger] event_view(head) == values;
+        assert(event_view(Coproduct::<H, Coproduct<T, Rest>>::Inl(head)) =~= values);
+    }
 }
 
 }
