@@ -1,11 +1,11 @@
 //! R1: events as tagged component tuples, and the views of the owned DSL (paper: `sec:events`,
 //! `sec:rules`).
 
-use crate::Event;
 use crate::event::specs::{AritySpec, EventSpec};
 use crate::syntax::{
     AtomPattern, Comparison, ComponentPattern, Head, RegexExpr, Rule, RuleMode, TestExpr,
 };
+use crate::{Event, MAX_ARITY};
 use alloc::boxed::Box;
 use vstd::prelude::*;
 
@@ -13,15 +13,39 @@ verus! {
 
 broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
 
+/// The number of coordinates of an event type (paper: product events, `sec:events`).
 pub open spec fn arity<E: Event>() -> nat { E::Arity::value_spec() }
 
+/// Every projection of an event carries its own coordinate as tag (`sec:events`).
 pub open spec fn projection_laws<E: Event>() -> bool {
     forall|e: E, i: int| 0 <= i < arity::<E>() ==>
         E::coordinate_spec(e.component_spec(i)) == i
 }
 
+/// An event as the tuple of its tagged components, coordinate by coordinate (`sec:events`).
 pub open spec fn event_view<E: Event>(e: E) -> Seq<E::Component> {
     Seq::new(arity::<E>(), |i: int| e.component_spec(i))
+}
+
+/// `xs` has the shape of an event: arity-many components, the i-th tagged with coordinate i
+/// (paper: product events, `sec:events`).
+pub open spec fn well_tagged<E: Event>(xs: Seq<E::Component>) -> bool {
+    xs.len() == arity::<E>()
+        && forall|i: int| 0 <= i < xs.len() ==> E::coordinate_spec(#[trigger] xs[i]) == i
+}
+
+/// Every well-tagged tuple is the view of some event; makes the tagged component type
+/// equivalent to the paper's product domain (`sec:events`).
+pub open spec fn views_surjective<E: Event>() -> bool {
+    forall|xs: Seq<E::Component>| #[trigger] well_tagged::<E>(xs) ==> exists|e: E| event_view(e) == xs
+}
+
+/// Everything the semantics assumes about an event type's projections (`sec:events`).
+pub open spec fn event_laws<E: Event>() -> bool {
+    &&& 1 <= arity::<E>() <= MAX_ARITY
+    &&& E::obeys_projection_spec()
+    &&& projection_laws::<E>()
+    &&& views_surjective::<E>()
 }
 
 pub enum PatternView<T> {

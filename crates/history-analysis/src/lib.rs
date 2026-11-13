@@ -64,6 +64,8 @@ mod tables;
 mod tests;
 
 #[cfg(all(verus_keep_ghost, feature = "runtime"))]
+pub mod spec;
+#[cfg(all(verus_keep_ghost, feature = "runtime"))]
 pub mod verify;
 
 #[cfg(all(verus_keep_ghost, feature = "runtime"))]

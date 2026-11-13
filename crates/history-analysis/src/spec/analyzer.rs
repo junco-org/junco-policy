@@ -1,0 +1,231 @@
+//! R6: what the analyzer's verdicts mean (plan §5, A1–A6), over real events through R2/R3.
+//!
+//! A `PolicyAnalyzer` is read through `AnalyzerView`: declared domains, the added rules by index,
+//! and the constants it distinguishes per coordinate. The `*_spec` predicates are the postconditions
+//! of `covered`, `redundant`, `at_least_as_strict` and `tail_included` on an `Ok` answer.
+//!
+//! A5 (escapes), in prose: `Exhausted` is returned only when a search's `charge` returned
+//! `HistoryError::GraphBudget` (whose contract is `charged + bytes > budget`, with the budget
+//! `GRAPH_BYTES`); `Err` is never an invariant failure (`no_invariant_failure`); every call
+//! terminates (no `exec_allows_no_decreases_clause` in this crate, see TRUST.md); the policy
+//! queries stop at the first non-`Holds` split case; verdicts transfer to the monitor only for
+//! pairs inside the declared domains (S9).
+
+use crate::analyzer::RuleId;
+use history_semantics::verify::refinement::semantics::{
+    head_constants, regex_constants, rule_constants,
+};
+use history_syntax::Event;
+use history_syntax::event::specs::EventSpec;
+use history_syntax::spec::events::{HeadView, RegexView, RuleView, arity, event_view};
+use junco_core::spec::questions::*;
+use junco_core::spec::semantics::{
+    head_matches, history_view, lang, policy_denies, rule_violated, rule_wf,
+};
+use junco_core::verify::flatten::regex_cost;
+use vstd::prelude::*;
+
+verus! {
+
+broadcast use vstd::seq::group_seq_lemmas;
+
+/// What a reviewer needs of a `PolicyAnalyzer`: declared domains, the added rules by index, and
+/// the constants it distinguishes per coordinate (rule constants, declared values, constants of
+/// tails it has been asked about). `known` is what counterexample freshness and per-case minimality
+/// are relative to.
+pub struct AnalyzerView<C> {
+    /// Declared domain per coordinate (`None` = every value of the type).
+    pub domains: DomainsView<C>,
+    /// The added rules, by `RuleId` index.
+    pub rules: Seq<RuleView<C>>,
+    /// The constants the analyzer distinguishes, per coordinate.
+    pub known: Seq<Set<C>>,
+}
+
+/// Open consequences of the opaque `PolicyAnalyzer::wf`.
+pub open spec fn analyzer_wf<E: Event>(a: AnalyzerView<E::Component>) -> bool {
+    &&& domains_wf::<E>(a.domains)
+    &&& a.known.len() == arity::<E>()
+    &&& forall|i: int, v: E::Component| 0 <= i < a.known.len() && #[trigger] a.known[i].contains(v)
+        ==> E::coordinate_spec(v) == i
+    &&& forall|i: int| 0 <= i < a.rules.len() ==> rule_wf(#[trigger] a.rules[i])
+        && a.rules[i].head.len() == arity::<E>()
+        && forall|j: int| 0 <= j < a.known.len() ==> rule_constants(a.rules[i])[j].subset_of(a.known[j])
+}
+
+/// The number of known constants, summed over the coordinates.
+pub open spec fn known_count<C>(known: Seq<Set<C>>) -> nat
+    decreases known.len(),
+{
+    if known.len() == 0 { 0 } else { known_count(known.drop_last()) + known.last().len() }
+}
+
+/// `known` grows by at most `added`, per coordinate.
+pub open spec fn known_grows<C>(before: Seq<Set<C>>, after: Seq<Set<C>>, added: Seq<Set<C>>) -> bool {
+    after.len() == before.len() && forall|i: int| 0 <= i < before.len()
+        ==> before[i].subset_of(#[trigger] after[i]) && after[i].subset_of(before[i].union(added[i]))
+}
+
+/// The constants of a `tail_included` query per coordinate: head constants and both tails'.
+pub open spec fn tail_constants<C>(head: HeadView<C>, left: RegexView<C>, right: RegexView<C>) -> Seq<Set<C>> {
+    Seq::new(head.len(), |i: int| head_constants(head)[i]
+        .union(regex_constants(left, head.len())[i])
+        .union(regex_constants(right, head.len())[i]))
+}
+
+/// Every constant of the rule is tagged with the coordinate it occurs at.
+pub open spec fn rule_constants_tagged<E: Event>(rule: RuleView<E::Component>) -> bool {
+    forall|i: int, c: E::Component| 0 <= i < rule.head.len() && #[trigger] rule_constants(rule)[i].contains(c)
+        ==> E::coordinate_spec(c) == i
+}
+
+// ----- capacities, over the view (S6) -----
+
+/// The declared sets, with the empty set at undeclared coordinates.
+pub open spec fn declared_sets<C>(domains: DomainsView<C>) -> Seq<Set<C>> {
+    domains.map(|i: int, d: Option<Set<C>>| match d { None => Set::empty(), Some(values) => values })
+}
+
+/// The constructor can intern every declared value.
+pub open spec fn constructor_capacity<E: Event>(domains: DomainsView<E::Component>) -> bool {
+    known_count(declared_sets(domains)) <= u32::MAX
+}
+
+/// `add_rule` can intern the rule's constants.
+pub open spec fn add_rule_capacity<E: Event>(a: AnalyzerView<E::Component>, rule: RuleView<E::Component>) -> bool {
+    known_count(a.known) + arity::<E>() + regex_cost::<E>(rule.tail) <= u32::MAX
+}
+
+/// `tail_included` can intern both tails' constants.
+pub open spec fn query_capacity<E: Event>(
+    a: AnalyzerView<E::Component>, left: RegexView<E::Component>, right: RegexView<E::Component>,
+) -> bool {
+    known_count(a.known) + 2 * arity::<E>() + regex_cost::<E>(left) + regex_cost::<E>(right) <= u32::MAX
+}
+
+// ----- rule selection -----
+
+/// The index of each rule id (`RuleId`'s view is its index).
+pub open spec fn ids_of(ids: Seq<RuleId>) -> Seq<nat> {
+    ids.map_values(|id: RuleId| id@)
+}
+
+/// The rules selected by index, in order.
+pub open spec fn rules_of<C>(a: AnalyzerView<C>, ids: Seq<nat>) -> Seq<RuleView<C>> {
+    ids.map(|i: int, id: nat| a.rules[id as int])
+}
+
+/// The policy without every occurrence of `rule`.
+pub open spec fn without_rule(policy: Seq<nat>, rule: nat) -> Seq<nat> {
+    policy.filter(|id: nat| id != rule)
+}
+
+/// The pairs `rule` violates and `p` does not deny.
+pub open spec fn uncovered<E: Event>(
+    p: Seq<RuleView<E::Component>>, rule: RuleView<E::Component>,
+) -> spec_fn(E, Seq<E>) -> bool {
+    |c: E, h: Seq<E>| rule_violated(rule, c, h) && !policy_denies(p, c, h)
+}
+
+/// The pairs matching `head` whose history is in `left` but not in `right`.
+pub open spec fn tail_fails<E: Event>(
+    head: HeadView<E::Component>, left: RegexView<E::Component>, right: RegexView<E::Component>,
+) -> spec_fn(E, Seq<E>) -> bool {
+    |c: E, h: Seq<E>| head_matches(head, event_view(c))
+        && lang(left, head, event_view(c), history_view(h))
+        && !lang(right, head, event_view(c), history_view(h))
+}
+
+// ----- verdicts (A1–A6) -----
+
+/// What a returned symbolic counterexample promises about `fails` (A2): every real instance is a
+/// real pair in the domains that fails; under capacity for its own fresh values an instance exists.
+pub open spec fn counterexample_spec<E: Event>(
+    a: AnalyzerView<E::Component>, cex: CexView<E::Component>, fails: spec_fn(E, Seq<E>) -> bool,
+) -> bool {
+    &&& cex_arity(cex, arity::<E>())
+    &&& every_instance::<E>(a.domains, a.known, cex, fails)
+    &&& capacity_for::<E>(a.domains, a.known, cex) ==> cex_has_instance::<E>(a.domains, a.known, cex)
+}
+
+/// A1/A2/A6 for `covered`: Holds is coverage; a counterexample is an uncovered pair, refutes
+/// coverage when it has an instance, and is shortest within its constant profile.
+pub open spec fn covered_spec<E: Event>(
+    a: AnalyzerView<E::Component>, rule: nat, by: Seq<nat>, v: InclusionView<E::Component>,
+) -> bool {
+    let p = rules_of(a, by);
+    let r = a.rules[rule as int];
+    match v {
+        InclusionView::Holds => covers::<E>(a.domains, p, r),
+        InclusionView::Counterexample(cex) => counterexample_spec::<E>(a, cex, uncovered::<E>(p, r))
+            && (cex_has_instance::<E>(a.domains, a.known, cex) ==> !covers::<E>(a.domains, p, r))
+            && minimal_in_case::<E>(a.domains, a.known, cex, uncovered::<E>(p, r)),
+        InclusionView::Exhausted => true,
+    }
+}
+
+/// PR #10's removal semantics (decision 5): removing every occurrence of the id changes no
+/// decision; multiset/id reading.
+pub open spec fn removal_preserves_decisions<E: Event>(
+    a: AnalyzerView<E::Component>, rule: nat, policy: Seq<nat>,
+) -> bool {
+    forall|c: E, h: Seq<E>| in_domains::<E>(a.domains, c, h)
+        ==> (#[trigger] policy_denies(rules_of(a, policy), c, h)
+            == policy_denies(rules_of(a, without_rule(policy, rule)), c, h))
+}
+
+/// The pairs whose decision removal changes: denied with the rule, permitted without it.
+pub open spec fn removal_fails<E: Event>(
+    a: AnalyzerView<E::Component>, rule: nat, policy: Seq<nat>,
+) -> spec_fn(E, Seq<E>) -> bool {
+    |c: E, h: Seq<E>| policy_denies(rules_of(a, policy), c, h)
+        && !policy_denies(rules_of(a, without_rule(policy, rule)), c, h)
+}
+
+/// A3 (redundancy): coverage by the others, plus PR #10's `redundant_decisions_ok`.
+pub open spec fn redundant_spec<E: Event>(
+    a: AnalyzerView<E::Component>, rule: nat, policy: Seq<nat>, v: InclusionView<E::Component>,
+) -> bool {
+    covered_spec::<E>(a, rule, without_rule(policy, rule), v) && match v {
+        InclusionView::Holds => removal_preserves_decisions::<E>(a, rule, policy),
+        InclusionView::Counterexample(cex) => policy.contains(rule)
+            ==> every_instance::<E>(a.domains, a.known, cex, removal_fails::<E>(a, rule, policy))
+                && (cex_has_instance::<E>(a.domains, a.known, cex)
+                    ==> !removal_preserves_decisions::<E>(a, rule, policy)),
+        InclusionView::Exhausted => true,
+    }
+}
+
+/// A3 (refinement): Holds is `P ⊑ Q`; a counterexample is uncovered for some rule of `Q`, refutes
+/// refinement when it has an instance, and is shortest within its constant profile for that rule.
+pub open spec fn at_least_as_strict_spec<E: Event>(
+    a: AnalyzerView<E::Component>, p: Seq<nat>, q: Seq<nat>, v: InclusionView<E::Component>,
+) -> bool {
+    let pp = rules_of(a, p);
+    let qq = rules_of(a, q);
+    match v {
+        InclusionView::Holds => refines::<E>(a.domains, pp, qq),
+        InclusionView::Counterexample(cex) => (exists|j: int| 0 <= j < qq.len()
+                && counterexample_spec::<E>(a, cex, #[trigger] uncovered::<E>(pp, qq[j]))
+                && minimal_in_case::<E>(a.domains, a.known, cex, uncovered::<E>(pp, qq[j])))
+            && (cex_has_instance::<E>(a.domains, a.known, cex) ==> !refines::<E>(a.domains, pp, qq)),
+        InclusionView::Exhausted => true,
+    }
+}
+
+/// A4: tail inclusion for every matching real candidate; a counterexample is real (under
+/// capacity) and of minimum history length.
+pub open spec fn tail_included_spec<E: Event>(
+    a: AnalyzerView<E::Component>, head: HeadView<E::Component>,
+    left: RegexView<E::Component>, right: RegexView<E::Component>, v: InclusionView<E::Component>,
+) -> bool {
+    match v {
+        InclusionView::Holds => tails_included::<E>(a.domains, head, left, right),
+        InclusionView::Counterexample(cex) => counterexample_spec::<E>(a, cex, tail_fails::<E>(head, left, right))
+            && (cex_has_instance::<E>(a.domains, a.known, cex) ==> !tails_included::<E>(a.domains, head, left, right))
+            && shortest::<E>(a.domains, cex.history.len(), tail_fails::<E>(head, left, right)),
+        InclusionView::Exhausted => true,
+    }
+}
+
+} // verus!
