@@ -1,6 +1,6 @@
 //! Structural and semantic clients of the actual iterative owned-source lowering.
 
-use crate::error::CompileError;
+use crate::errors::CompileError;
 use crate::flat::verify as flat;
 use crate::flat::{FlatHead, FlatRegex, FlatRule, FlatTerm, FlatTest};
 use crate::flatten::Work;
@@ -1028,7 +1028,7 @@ pub fn constant_head_client<E: Event, L: Limits>(head: Head<E>, limits: &mut L, 
     ensures crate::verify::history_specs::no_invariant_compile_failure(result),
         !(result matches Err(CompileError::VariableComponentConflict { .. })),
         !(result matches Err(CompileError::UnboundVariable { .. })),
-        !(result matches Err(CompileError::Runtime(crate::error::HistoryError::InvalidPolicy { .. }))),
+        !(result matches Err(CompileError::Runtime(crate::errors::HistoryError::InvalidPolicy { .. }))),
 {
     let source = Rule::new(RuleMode::Require, head, RegexExpr::all());
     let result = crate::flatten::flatten_rule(&source, limits, world);

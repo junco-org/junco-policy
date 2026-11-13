@@ -1,6 +1,6 @@
 //! Fallible, iterative lowering of the owned DSL into the canonical portable tables.
 
-use crate::error::{CompileError, HistoryError};
+use crate::errors::{CompileError, HistoryError};
 use crate::flat::{FlatBuilder, FlatHead, FlatPair, FlatRegex, FlatRule, FlatTerm, FlatTest};
 use crate::limits::Limits;
 use crate::observation::ObservationWorld;

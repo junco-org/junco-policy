@@ -27,7 +27,7 @@ use history_store::history::StoredHistory;
 #[cfg(verus_keep_ghost)]
 use history_store::history::verify as raw;
 use history_store::store::{Event, HistoryStore};
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use junco_core::flat::FlatPair;
 use junco_core::kernel::Bindings;
 #[cfg(verus_keep_ghost)]

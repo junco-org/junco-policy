@@ -32,7 +32,7 @@ use junco_core::verify::history_assumptions::*;
 use junco_core::verify::history_specs as language;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::{EventView, Subst};
-use junco_core::{error::HistoryError, kernel::*};
+use junco_core::{errors::HistoryError, kernel::*};
 use smallvec::SmallVec;
 #[cfg(verus_keep_ghost)]
 use verify::*;

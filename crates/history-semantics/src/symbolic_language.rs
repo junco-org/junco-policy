@@ -18,7 +18,7 @@
 use alloc::vec::Vec;
 use history_store::cache::EventClass;
 use history_store::graph::RuntimeKernel;
-use junco_core::error::HistoryError;
+use junco_core::errors::HistoryError;
 use junco_core::flat::FlatPair;
 use junco_core::kernel::{
     KernelStore, Primitive, RegexId, RegexView, TestId, TestView, TransitionId,
