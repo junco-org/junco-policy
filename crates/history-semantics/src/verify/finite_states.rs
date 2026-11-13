@@ -9,13 +9,32 @@
 //! intersection of *literals*. `lit(p, v)` and `prod(p, v)` hold when `v` is the value of a literal
 //! or of a product of the transition of `p` under some valuation and event.
 //!
-//! [`Model::contract`] states (N0)–(N5) and the successor equations (S0)–(S6). These numbers, the
-//! invariants (C1)–(C4) and the set `C(q)` are this development's; the paper's appendix
-//! `app:finiteness` describes the conditions in prose and calls `C(q)` `Bound(q)`. Under the
-//! contract, [`lemma_finite_states`] builds `C(q)` and [`theorem_finite_reachable`] bounds every
-//! state reachable from a state. [`lemma_uset_nset`] is the union-closure step, [`lemma_uset_closed`]
-//! and [`lemma_dnf_closed`] are the successor-closure step, and [`lemma_cat_assoc`] is (N4′).
-//! [`lemma_contract_satisfiable`] shows the contract is consistent.
+//! [`Model::contract`] is the language-independent finiteness contract. Its descriptive
+//! conditions are documented here; the old numbers are local proof shorthand, not paper labels:
+//!
+//! | Condition | Predicate / shape | Local shorthand |
+//! |---|---|---|
+//! | Canonical constants, well-founded substates, constructor fixpoints | `canonical_constants`, `well_founded_substates`, `constructor_fixpoints` | N0 |
+//! | Bounded union/intersection normalization | `bounded_set_normalization`, `nset_shape` | N1–N2 |
+//! | Complement normalization | `complement_normalization`, `not_shape` | N3 |
+//! | Flattened concatenation normalization | `concatenation_normalization`, `cat_shape` | N4 |
+//! | Finite closure of combined tests | `finite_test_closure`, `closure_for` | N5 |
+//! | Successors are normalized unions of products | `successor_decomposition`, `succ_shape` | S0 |
+//! | Base constants/tests have constant pieces | `lit_shape`, `prod_shape`, base branch | S1 |
+//! | Union pieces come from operands | `lit_shape`, `prod_shape`, union branch | S2 |
+//! | Intersection pieces combine operand literals | `lit_shape`, `prod_shape`, intersection branch | S3 |
+//! | Complement pieces negate body literals | `lit_shape`, `prod_shape`, complement branch | S4 |
+//! | Star pieces retain the fixed star suffix | `star_lit`, star branch | S5 |
+//! | List pieces retain a fixed remaining suffix | `list_lit`, list branch | S6 |
+//! | Finite state seed containing the source and constants | `good`'s first three clauses | C1 |
+//! | Closure under successors, literals and products | `vals_into` | C2 |
+//! | Closure under set operands and complement bodies | `r_ops` | C3 |
+//! | Closure under partial list successors and suffixes | `r_lists_in`, `list_in` | C4 |
+//!
+//! The paper's `app:finiteness` describes these conditions in prose and calls `C(q)`
+//! `Bound(q)`. [`lemma_finite_states`] builds it, [`theorem_finite_reachable`] bounds every
+//! reachable state, and [`lemma_contract_satisfiable`] witnesses consistency. Union closure is
+//! [`lemma_uset_nset`]; successor closure is [`lemma_uset_closed`]/[`lemma_dnf_closed`].
 //!
 //! The implemented constructors establish (N1)–(N4) and the shape of (N5) in their postconditions
 //! (`regex_set_shape`, `regex_not_result`, `regex_concat_result`, `test_connective_result` in
@@ -126,8 +145,8 @@ impl<S> Model<S> {
 
     // ----- (N0)–(N5) -----
 
-    /// (N0) constants.
-    pub open spec fn constants_ok(self) -> bool {
+    /// Canonical constants: each distinguished constant is the unique state of its kind.
+    pub open spec fn canonical_constants(self) -> bool {
         &&& self.st(self.empty) && self.k(self.empty) == Kind::Empty
         &&& self.st(self.epsilon) && self.k(self.epsilon) == Kind::Epsilon
         &&& self.st(self.universal) && self.k(self.universal) == Kind::Universal
@@ -136,8 +155,8 @@ impl<S> Model<S> {
         &&& forall|x: S| self.st(x) && #[trigger] self.k(x) == Kind::Universal ==> x == self.universal
     }
 
-    /// (N0) sub-nodes of states are smaller states; list elements are atoms.
-    pub open spec fn substates_ok(self) -> bool {
+    /// Well-founded substates: proper children are smaller states; list factors are atoms.
+    pub open spec fn well_founded_substates(self) -> bool {
         &&& forall|x: S, o: S| self.st(x) && (self.k(x) == Kind::Union || self.k(x) == Kind::Intersect)
             && #[trigger] (self.ops)(x).contains(o) ==> self.st(o) && (self.size)(o) < (self.size)(x)
         &&& forall|x: S| self.st(x) && (self.k(x) == Kind::Not || self.k(x) == Kind::Star)
@@ -149,8 +168,8 @@ impl<S> Model<S> {
         }
     }
 
-    /// (N0) constructors applied to the parts of a list or complement state return it unchanged.
-    pub open spec fn fixpoints_ok(self) -> bool {
+    /// Constructor fixpoints: rebuilding a list or complement state leaves it unchanged.
+    pub open spec fn constructor_fixpoints(self) -> bool {
         &&& forall|x: S| self.st(x) && self.k(x) == Kind::List ==> (self.ncat)(#[trigger] (self.elems)(x)) == x
         &&& forall|x: S| self.st(x) && self.k(x) == Kind::Not ==> (self.nnot)(#[trigger] (self.body)(x)) == x
     }
@@ -178,9 +197,9 @@ impl<S> Model<S> {
         exists|g: Set<S>| #[trigger] self.set_states_within(inter, f, g)
     }
 
-    /// (N1)/(N2): every output has the shape above, and finitely many union (intersection) states
-    /// have their operands in a given finite set.
-    pub open spec fn nset_ok(self) -> bool {
+    /// Bounded set normalization: outputs use only inherited operands or combined tests,
+    /// and only finitely many set states use operands from a fixed finite set.
+    pub open spec fn bounded_set_normalization(self) -> bool {
         &&& forall|inter: bool, xs: Set<S>, u: S| (forall|x: S| xs.contains(x) ==> self.st(x))
             && #[trigger] (self.nset)(inter, xs, u) ==> self.nset_shape(inter, xs, u)
         &&& forall|inter: bool, f: Set<S>| #[trigger] self.has_set_bound(inter, f)
@@ -194,7 +213,8 @@ impl<S> Model<S> {
             || (self.k(r) == Kind::Not && (self.body)(r) == x)
     }
 
-    pub open spec fn not_ok(self) -> bool {
+    /// Complement normalization preserves statehood and eliminates constants/double negation.
+    pub open spec fn complement_normalization(self) -> bool {
         forall|x: S| self.st(x) ==> #[trigger] self.not_shape(x)
     }
 
@@ -208,7 +228,8 @@ impl<S> Model<S> {
             else if f.len() == 1 { r == f[0] } else { self.k(r) == Kind::List && (self.elems)(r) == f }
     }
 
-    pub open spec fn cat_ok(self) -> bool {
+    /// Concatenation normalization absorbs empty factors and flattens nonempty factors.
+    pub open spec fn concatenation_normalization(self) -> bool {
         forall|xs: Seq<S>| self.states(xs) ==> #[trigger] self.cat_shape(xs)
     }
 
@@ -225,8 +246,8 @@ impl<S> Model<S> {
         exists|c: ISet<S>| #[trigger] self.closure_for(inter, ts, c)
     }
 
-    /// (N5).
-    pub open spec fn tests_ok(self) -> bool {
+    /// Finite test closure: combining tests drawn from any finite family stays in a finite family.
+    pub open spec fn finite_test_closure(self) -> bool {
         forall|inter: bool, ts: ISet<S>| ts.finite() && (forall|t: S| ts.contains(t) ==> self.is_test(t))
             ==> #[trigger] self.has_closure(inter, ts)
     }
@@ -312,7 +333,8 @@ impl<S> Model<S> {
         }
     }
 
-    pub open spec fn succ_ok(self) -> bool {
+    /// Successor decomposition: successors and their literal/product pieces obey the shapes above.
+    pub open spec fn successor_decomposition(self) -> bool {
         &&& forall|p: S, v: S| self.st(p) && #[trigger] (self.succ)(p, v) ==> self.st(v) && self.succ_shape(p, v)
         &&& forall|p: S, v: S| self.st(p) && #[trigger] (self.lit)(p, v) ==> self.st(v) && self.lit_shape(p, v)
         &&& forall|p: S, v: S| self.st(p) && #[trigger] (self.prod)(p, v) ==> self.st(v) && self.prod_shape(p, v)
@@ -320,14 +342,14 @@ impl<S> Model<S> {
 
     /// Language-independent structural contract: (N0)–(N5) and the successor equations.
     pub open spec fn contract(self) -> bool {
-        &&& self.constants_ok()
-        &&& self.substates_ok()
-        &&& self.fixpoints_ok()
-        &&& self.nset_ok()
-        &&& self.not_ok()
-        &&& self.cat_ok()
-        &&& self.tests_ok()
-        &&& self.succ_ok()
+        &&& self.canonical_constants()
+        &&& self.well_founded_substates()
+        &&& self.constructor_fixpoints()
+        &&& self.bounded_set_normalization()
+        &&& self.complement_normalization()
+        &&& self.concatenation_normalization()
+        &&& self.finite_test_closure()
+        &&& self.successor_decomposition()
     }
 
     // ----- invariants (C1)–(C4) -----
@@ -341,34 +363,34 @@ impl<S> Model<S> {
         forall|p: S, v: S| r.contains(p) && #[trigger] (self.succ)(p, v) ==> r.contains(v)
     }
 
-    /// (C2) relative to a target set `u` (`good` uses `u == y`): successors, literals, and
-    /// products of members of `y` lie in `u`.
+    /// Piece closure relative to a target set `u` (`good` uses `u == y`):
+    /// successors, literals, and products of members of `y` lie in `u`.
     pub open spec fn vals_into(self, y: ISet<S>, u: ISet<S>) -> bool {
         &&& forall|p: S, v: S| y.contains(p) && #[trigger] (self.succ)(p, v) ==> u.contains(v)
         &&& forall|p: S, v: S| y.contains(p) && #[trigger] (self.lit)(p, v) ==> u.contains(v)
         &&& forall|p: S, v: S| y.contains(p) && #[trigger] (self.prod)(p, v) ==> u.contains(v)
     }
 
-    /// (C3)
+    /// Operand closure: set operands and complement bodies of bound members stay in the bound.
     pub open spec fn r_ops(self, r: ISet<S>) -> bool {
         &&& forall|p: S, o: S| r.contains(p) && (self.k(p) == Kind::Union || self.k(p) == Kind::Intersect)
             && #[trigger] (self.ops)(p).contains(o) ==> r.contains(o)
         &&& forall|p: S| r.contains(p) && self.k(p) == Kind::Not ==> r.contains(#[trigger] (self.body)(p))
     }
 
-    /// (C4) for one list `p` relative to a target set `u`: `N(v yᵢ₊₁⋯yₖ)` for the products `v`
-    /// of each element `yᵢ`.
+    /// Partial-list closure for one list: products of each factor, followed by the remaining
+    /// suffix and normalized, lie in the target set.
     pub open spec fn list_in(self, p: S, u: ISet<S>) -> bool {
         forall|i: int, a: S| 0 <= i < (self.elems)(p).len() && #[trigger] (self.prod)((self.elems)(p)[i], a)
             ==> u.contains((self.ncat)(seq![a] + (self.elems)(p).skip(i + 1)))
     }
 
-    /// (C4) relative to a target set `u` (`good` uses `u == r`).
+    /// Partial-list closure for every list in a bound (`good` uses `u == r`).
     pub open spec fn r_lists_in(self, r: ISet<S>, u: ISet<S>) -> bool {
         forall|p: S| r.contains(p) && self.k(p) == Kind::List ==> #[trigger] self.list_in(p, u)
     }
 
-    /// (C1)–(C4).
+    /// Finite residual bound: a finite state seed with piece, operand and partial-list closure.
     pub open spec fn good(self, r: ISet<S>, q: S) -> bool {
         &&& r.finite()
         &&& r.contains(q) && self.has_consts(r)
@@ -615,7 +637,7 @@ pub proof fn lemma_uset_nset<S>(m: Model<S>, inter: bool, y: ISet<S>, xs: Set<S>
     let yv = m.yv(inter, y);
     let c = m.tclosure(inter, y);
     assert forall|x: S| xs.contains(x) implies m.st(x) by {}
-    assert(m.nset_ok());
+    assert(m.bounded_set_normalization());
     assert(m.nset_shape(inter, xs, u));
     if !m.is_const(u) {
         assert forall|o: S| #[trigger] m.sops(inter, u).contains(o) implies yv.contains(o) by {
@@ -672,7 +694,7 @@ pub proof fn lemma_yv_base<S>(m: Model<S>, inter: bool, y: ISet<S>, p: S)
 {
     lemma_yv(m, inter, y);
     if m.is_const(p) {
-        assert(m.constants_ok());
+        assert(m.canonical_constants());
     } else {
         assert(m.is_test(p));
     }
@@ -1182,7 +1204,7 @@ pub proof fn lemma_good_base<S>(m: Model<S>, q: S)
     ensures m.good(m.rset(q), q),
 {
     let r = ISet::empty().insert(q).insert(m.empty).insert(m.epsilon).insert(m.universal);
-    assert(m.constants_ok());
+    assert(m.canonical_constants());
     assert forall|p: S| r.contains(p) implies m.st(p) && #[trigger] m.base_kind(p) by {}
     assert(m.vals_into(r, r)) by {
         assert forall|p: S, v: S| r.contains(p) && #[trigger] (m.succ)(p, v) implies r.contains(v) by {
@@ -1339,7 +1361,7 @@ pub proof fn lemma_good_not<S>(m: Model<S>, q: S)
     let nn = |s: S| (m.nnot)(s);
     rp.lemma_map_finite(nn);
     let lam = rp.union(rp.map(nn));
-    assert(m.constants_ok());
+    assert(m.canonical_constants());
     // Members of Λ outside C(p) are constants or complements of members of C(p).
     assert forall|x: S| lam.contains(x) && !rp.contains(x) implies m.st(x)
         && (m.is_const(x) || (m.k(x) == Kind::Not && rp.contains((m.body)(x)))) by {
@@ -1497,7 +1519,7 @@ pub proof fn lemma_good_star<S>(m: Model<S>, q: S)
     rp.lemma_map_finite(cq);
     let t = m.star_terms(q);
     let w = seq![q];
-    assert(m.constants_ok());
+    assert(m.canonical_constants());
     assert(m.atom(q));
     assert(m.atoms(w));
     lemma_cat_single(m, q);
@@ -1775,7 +1797,7 @@ pub proof fn lemma_good_list<S>(m: Model<S>, q: S)
         assert(m.atom(c[0]));
         lemma_cat_pair(m, c[0], c.skip(1));
         assert(m.piece(c[0]) + c.skip(1) =~= c);
-        assert(m.fixpoints_ok());
+        assert(m.constructor_fixpoints());
         assert((m.ncat)(c) == q);
         assert(m.cat2(c[0], m.suffix(c, 0)) == q);
         lemma_list_term(m, c, 0, c[0]);
@@ -1850,7 +1872,7 @@ pub proof fn lemma_good_list<S>(m: Model<S>, q: S)
             assert forall|v: S| #[trigger] (m.lit)(y, v) implies us.contains(v) by { assert(rl.contains(v)); }
             assert forall|v: S| #[trigger] (m.prod)(y, v) implies us.contains(v) by { assert(rl.contains(v)); }
         } else if y == m.empty {
-            assert(m.constants_ok());
+            assert(m.canonical_constants());
             lemma_base_vals(m, y);
         } else {
             lemma_list_in_mono(m, y, t, us);
@@ -2021,12 +2043,12 @@ pub proof fn lemma_contract_satisfiable()
     ensures toy().contract(),
 {
     let m = toy();
-    assert(m.constants_ok());
-    assert(m.substates_ok());
+    assert(m.canonical_constants());
+    assert(m.well_founded_substates());
     assert forall|xs: Seq<Toy>| m.states(xs) implies #[trigger] m.cat_shape(xs) by {
         lemma_toy_flat(xs);
     }
-    assert(m.fixpoints_ok()) by {
+    assert(m.constructor_fixpoints()) by {
         assert forall|x: Toy| m.st(x) && m.k(x) == Kind::List implies (m.ncat)(#[trigger] (m.elems)(x)) == x by {
             let s = toy_elems(x);
             assert forall|i: int| 0 <= i < s.len() implies toy_state(#[trigger] s[i]) by {}
@@ -2038,20 +2060,20 @@ pub proof fn lemma_contract_satisfiable()
             assert(!m.has_empty(s));
         }
     }
-    assert(m.nset_ok()) by {
+    assert(m.bounded_set_normalization()) by {
         assert forall|inter: bool, f: Set<Toy>| #[trigger] m.has_set_bound(inter, f) by {
             assert(m.set_states_within(inter, f, Set::empty()));
         }
     }
-    assert(m.not_ok());
-    assert(m.cat_ok());
-    assert(m.tests_ok()) by {
+    assert(m.complement_normalization());
+    assert(m.concatenation_normalization());
+    assert(m.finite_test_closure()) by {
         assert forall|inter: bool, ts: ISet<Toy>| ts.finite() && (forall|t: Toy| ts.contains(t) ==> m.is_test(t))
             implies #[trigger] m.has_closure(inter, ts) by {
             assert(m.closure_for(inter, ts, ts));
         }
     }
-    assert(m.succ_ok()) by {
+    assert(m.successor_decomposition()) by {
         assert forall|p: Toy, v: Toy| m.st(p) && #[trigger] (m.succ)(p, v) implies m.st(v) && m.succ_shape(p, v) by {
             if p is Lst { assert(m.built(false, |w: Toy| (m.prod)(p, w), v)); }
         }

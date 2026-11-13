@@ -52,7 +52,7 @@ pub open spec fn realizes(theta: Subst, e: EventView, alpha: Assignment) -> bool
 /// `Π_q`: `(x_c, v)` such that `π_c = x_c` and `π_c = v` are both atoms.
 pub open spec fn atom_pairs(atoms: Set<model::Primitive>) -> Pairs {
     Set::new(|p: (Component, nat)| atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Variable(p.0)))
-        && atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Constant(p.1)))).unwrap_or(Set::empty())
+        && atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Constant(p.1)))).unwrap()
 }
 
 /// `next` is the successor of `q` for `α`: `L_θ(next) = e⁻¹ L_θ(q)` whenever `(θ, e)` realizes `α`
@@ -122,18 +122,20 @@ pub open spec fn atoms_bounded(atoms: Set<model::Primitive>, arity: nat) -> bool
     }
 }
 
-/// Lemmas `lem:succ` and `lem:uniform` (one statement over successor cases), infinite domains:
-/// with `Γ` satisfiable, complete atoms, correct successors for every realizable assignment, and
-/// any `Split(Γ; Π_q)` family, the successor cases are finite and satisfy `steps_ok`.
+/// Lemmas `lem:succ` and `lem:uniform`, generalized to declared finite domains.
+/// `pi` is the paper's `atom_pairs` for unrestricted coordinates, or `domain_pairs`
+/// for mixed domains. Both use the same successor-case conclusion and proof.
+/// Finiteness is established before converting the case family to a finite `Set`.
 pub open spec fn stmt_successor_cases() -> bool {
-    forall|d: NDomains, item: Item, atoms: Set<model::Primitive>, cases_split: Set<Constraint>,
-        next: spec_fn(Assignment) -> Regex<model::Test>|
-        n_unrestricted(d) && satisfiable(d, item.constraint) && atoms_local(atoms) && atoms_complete(item.state, atoms)
+    forall|d: NDomains, item: Item, atoms: Set<model::Primitive>, pi: Pairs,
+        cases_split: Set<Constraint>, next: spec_fn(Assignment) -> Regex<model::Test>|
+        satisfiable(d, item.constraint) && atoms_local(atoms) && atoms_complete(item.state, atoms)
             && atoms_bounded(atoms, d.len())
-            && split_ok(d, item.constraint, atom_pairs(atoms), cases_split)
+            && (pi == atom_pairs(atoms) && n_unrestricted(d) || pi == domain_pairs(d, atoms))
+            && #[trigger] split_ok(d, item.constraint, pi, cases_split)
             && (forall|alpha: Assignment| alpha.dom() == atoms ==> #[trigger] successor_ok(item.state, alpha, next(alpha)))
             ==> #[trigger] paper_steps(d, item, atoms, cases_split, next).finite()
-                && steps_ok(d, item, Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next)).unwrap_or(Set::empty()))
+                && steps_ok(d, item, Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next)).unwrap())
 }
 
 /// Extension beyond the paper (declared finite domains): `Π` additionally pairs each register
@@ -142,19 +144,9 @@ pub open spec fn stmt_successor_cases() -> bool {
 pub open spec fn domain_pairs(d: NDomains, atoms: Set<model::Primitive>) -> Pairs {
     Set::new(|p: (Component, nat)| atom_pairs(atoms).contains(p)
         || (atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Variable(p.0)))
-            && match n_domain(d, p.0) { Some(values) => values.contains(p.1), None => false })).unwrap_or(Set::empty())
+            && match n_domain(d, p.0) { Some(values) => values.contains(p.1), None => false })).unwrap()
 }
 
-pub open spec fn stmt_successor_cases_finite_domains() -> bool {
-    forall|d: NDomains, item: Item, atoms: Set<model::Primitive>, cases_split: Set<Constraint>,
-        next: spec_fn(Assignment) -> Regex<model::Test>|
-        satisfiable(d, item.constraint) && atoms_local(atoms) && atoms_complete(item.state, atoms)
-            && atoms_bounded(atoms, d.len())
-            && split_ok(d, item.constraint, domain_pairs(d, atoms), cases_split)
-            && (forall|alpha: Assignment| alpha.dom() == atoms ==> #[trigger] successor_ok(item.state, alpha, next(alpha)))
-            ==> #[trigger] paper_steps(d, item, atoms, cases_split, next).finite()
-                && steps_ok(d, item, Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next)).unwrap_or(Set::empty()))
-}
 
 // ----- the breadth-first search (Algorithm Inclusion search, `alg:search`) -----
 
@@ -260,19 +252,8 @@ pub open spec fn initial_ok(q0: Regex<model::Test>, r: Regex<model::Test>, s: Re
 }
 
 /// Theorem Inclusion search correctness (`thm:search`), soundness, completeness and minimality: every trace that returns satisfies
-/// `outcome_ok`, with or without pruning. Infinite domains.
+/// `outcome_ok`, with or without pruning, for unrestricted or declared finite domains.
 pub open spec fn stmt_search_correct() -> bool {
-    forall|d: NDomains, g0: Constraint, r: Regex<model::Test>, s: Regex<model::Test>, q0: Regex<model::Test>,
-        cases_of: spec_fn(Item) -> Set<Case>, t: Trace, outcome: Outcome|
-        n_unrestricted(d) && satisfiable(d, g0) && #[trigger] initial_ok(q0, r, s)
-            && (forall|i: Item| #[trigger] steps_ok(d, i, cases_of(i)))
-            && #[trigger] trace_wf(d, g0, q0, cases_of, t) && #[trigger] trace_outcome(t, outcome)
-            ==> outcome_ok(d, g0, r, s, outcome)
-}
-
-/// The same without the `n_unrestricted` hypothesis, so it also covers declared finite domains
-/// (whose successor cases split on `domain_pairs`; see `stmt_successor_cases_finite_domains`).
-pub open spec fn stmt_search_correct_finite_domains() -> bool {
     forall|d: NDomains, g0: Constraint, r: Regex<model::Test>, s: Regex<model::Test>, q0: Regex<model::Test>,
         cases_of: spec_fn(Item) -> Set<Case>, t: Trace, outcome: Outcome|
         satisfiable(d, g0) && #[trigger] initial_ok(q0, r, s)
@@ -280,6 +261,7 @@ pub open spec fn stmt_search_correct_finite_domains() -> bool {
             && #[trigger] trace_wf(d, g0, q0, cases_of, t) && #[trigger] trace_outcome(t, outcome)
             ==> outcome_ok(d, g0, r, s, outcome)
 }
+
 
 /// Items reachable from `start` through successor cases, in `n` steps.
 pub open spec fn reachable_item(cases_of: spec_fn(Item) -> Set<Case>, start: Item, n: nat, j: Item) -> bool
@@ -711,7 +693,7 @@ pub proof fn lemma_successor_cases_common(d: NDomains, item: Item,
             ==> #[trigger] successor_ok(item.state, alpha, next(alpha)),
     ensures paper_steps(d, item, atoms, cases_split, next).finite(),
         steps_ok(d, item, Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next))
-            .unwrap_or(Set::empty())),
+            .unwrap()),
 {
     hide(language::lang);
     hide(successor_ok);
@@ -727,7 +709,7 @@ pub proof fn lemma_successor_cases_common(d: NDomains, item: Item,
     broadcast use vstd::set::lemma_set_new_from_iset;
     lemma_paper_steps_finite(d, item, atoms, cases_split, next);
     let cases = Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next))
-        .unwrap_or(Set::empty());
+        .unwrap();
     assert(cases.to_iset() == paper_steps(d, item, atoms, cases_split, next));
     assert forall|c: Case| #[trigger] cases.contains(c) implies {
         &&& satisfiable(d, c.constraint) && entails(d, c.constraint, item.constraint)
@@ -771,42 +753,22 @@ pub proof fn theorem_successor_cases()
     hide(atoms_complete);
     hide(steps_ok);
     hide(paper_steps);
-    assert forall|d: NDomains, item: Item, atoms: Set<model::Primitive>,
+    assert forall|d: NDomains, item: Item, atoms: Set<model::Primitive>, pi: Pairs,
         cases_split: Set<Constraint>, next: spec_fn(Assignment) -> Regex<model::Test>|
-        n_unrestricted(d) && satisfiable(d, item.constraint) && atoms_local(atoms)
+        satisfiable(d, item.constraint) && atoms_local(atoms)
         && atoms_bounded(atoms, d.len())
         && atoms_complete(item.state, atoms)
-        && split_ok(d, item.constraint, atom_pairs(atoms), cases_split)
+        && (pi == atom_pairs(atoms) && n_unrestricted(d) || pi == domain_pairs(d, atoms))
+        && #[trigger] split_ok(d, item.constraint, pi, cases_split)
         && (forall|alpha: Assignment| alpha.dom() == atoms
             ==> #[trigger] successor_ok(item.state, alpha, next(alpha)))
         implies #[trigger] paper_steps(d, item, atoms, cases_split, next).finite()
             && steps_ok(d, item, Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next))
-                .unwrap_or(Set::empty())) by {
-        lemma_successor_cases_common(d, item, atoms, atom_pairs(atoms), cases_split, next);
+                .unwrap()) by {
+        lemma_successor_cases_common(d, item, atoms, pi, cases_split, next);
     }
 }
 
-pub proof fn theorem_successor_cases_finite_domains()
-    ensures stmt_successor_cases_finite_domains(),
-{
-    hide(language::lang);
-    hide(successor_ok);
-    hide(atoms_complete);
-    hide(steps_ok);
-    hide(paper_steps);
-    assert forall|d: NDomains, item: Item, atoms: Set<model::Primitive>,
-        cases_split: Set<Constraint>, next: spec_fn(Assignment) -> Regex<model::Test>|
-        satisfiable(d, item.constraint) && atoms_local(atoms) && atoms_complete(item.state, atoms)
-        && atoms_bounded(atoms, d.len())
-        && split_ok(d, item.constraint, domain_pairs(d, atoms), cases_split)
-        && (forall|alpha: Assignment| alpha.dom() == atoms
-            ==> #[trigger] successor_ok(item.state, alpha, next(alpha)))
-        implies #[trigger] paper_steps(d, item, atoms, cases_split, next).finite()
-            && steps_ok(d, item, Set::new_from_iset(paper_steps(d, item, atoms, cases_split, next))
-                .unwrap_or(Set::empty())) by {
-        lemma_successor_cases_common(d, item, atoms, domain_pairs(d, atoms), cases_split, next);
-    }
-}
 
 /// Only expanded nodes need complete cases; an implementation may retain their ghost evidence.
 pub open spec fn trace_steps_ok(d: NDomains, cases_of: spec_fn(Item) -> Set<Case>,
@@ -1130,20 +1092,6 @@ pub proof fn theorem_search_correct()
 {
     assert forall|d: NDomains, g0: Constraint, r: Regex<model::Test>, s: Regex<model::Test>,
         q0: Regex<model::Test>, cases_of: spec_fn(Item) -> Set<Case>, t: Trace, outcome: Outcome|
-        n_unrestricted(d) && satisfiable(d, g0) && #[trigger] initial_ok(q0, r, s)
-        && (forall|i: Item| #[trigger] steps_ok(d, i, cases_of(i)))
-        && #[trigger] trace_wf(d, g0, q0, cases_of, t) && #[trigger] trace_outcome(t, outcome)
-        implies outcome_ok(d, g0, r, s, outcome) by {
-        assert(trace_steps_ok(d, cases_of, t));
-        lemma_search_correct(d, g0, r, s, q0, cases_of, t, outcome);
-    }
-}
-
-pub proof fn theorem_search_correct_finite_domains()
-    ensures stmt_search_correct_finite_domains(),
-{
-    assert forall|d: NDomains, g0: Constraint, r: Regex<model::Test>, s: Regex<model::Test>,
-        q0: Regex<model::Test>, cases_of: spec_fn(Item) -> Set<Case>, t: Trace, outcome: Outcome|
         satisfiable(d, g0) && #[trigger] initial_ok(q0, r, s)
         && (forall|i: Item| #[trigger] steps_ok(d, i, cases_of(i)))
         && #[trigger] trace_wf(d, g0, q0, cases_of, t) && #[trigger] trace_outcome(t, outcome)
@@ -1152,5 +1100,6 @@ pub proof fn theorem_search_correct_finite_domains()
         lemma_search_correct(d, g0, r, s, q0, cases_of, t, outcome);
     }
 }
+
 
 } // verus!

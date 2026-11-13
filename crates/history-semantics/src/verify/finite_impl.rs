@@ -355,7 +355,7 @@ pub proof fn lemma_pre_flat_atoms(xs: Seq<R>)
 }
 
 pub proof fn lemma_impl_substates()
-    ensures m_impl().substates_ok(),
+    ensures m_impl().well_founded_substates(),
 {
     let m = m_impl();
     lemma_models_agree();
@@ -381,7 +381,7 @@ pub proof fn lemma_impl_substates()
 }
 
 pub proof fn lemma_impl_fixpoints()
-    ensures m_impl().fixpoints_ok(),
+    ensures m_impl().constructor_fixpoints(),
 {
     let m = m_impl();
     lemma_models_agree();
@@ -402,7 +402,7 @@ pub proof fn lemma_impl_fixpoints()
 }
 
 pub proof fn lemma_impl_not()
-    ensures m_impl().not_ok(),
+    ensures m_impl().complement_normalization(),
 {
     let m = m_impl();
     lemma_models_agree();
@@ -410,7 +410,7 @@ pub proof fn lemma_impl_not()
 }
 
 pub proof fn lemma_impl_cat()
-    ensures m_impl().cat_ok(),
+    ensures m_impl().concatenation_normalization(),
 {
     let m = m_impl();
     lemma_models_agree();
@@ -435,7 +435,7 @@ pub proof fn lemma_impl_cat()
 }
 
 pub proof fn lemma_impl_nset()
-    ensures m_impl().nset_ok(),
+    ensures m_impl().bounded_set_normalization(),
 {
     let m = m_impl();
     lemma_models_agree();
@@ -633,7 +633,7 @@ pub proof fn lemma_closure_pieces(inter: bool, ts: ISet<R>, psi: model::Test, ph
 }
 
 pub proof fn lemma_impl_tests()
-    ensures m_impl().tests_ok(),
+    ensures m_impl().finite_test_closure(),
 {
     let m = m_impl();
     lemma_models_agree();
@@ -923,7 +923,7 @@ pub proof fn lemma_prod_fold(a: R, v: R)
 }
 
 pub proof fn lemma_impl_succ()
-    ensures m_impl().succ_ok(),
+    ensures m_impl().successor_decomposition(),
 {
     let m = m_impl();
     lemma_models_agree();
@@ -945,12 +945,12 @@ pub proof fn lemma_impl_succ()
     }
 }
 
-/// The implementation's model satisfies the contract (N0)–(N5), (S0)–(S6).
+/// The implementation satisfies the descriptive finiteness contract in [`Model::contract`].
 pub proof fn theorem_impl_contract()
     ensures m_impl().contract(),
 {
     lemma_models_agree();
-    assert(m_impl().constants_ok());
+    assert(m_impl().canonical_constants());
     lemma_impl_substates();
     lemma_impl_fixpoints();
     lemma_impl_nset();
