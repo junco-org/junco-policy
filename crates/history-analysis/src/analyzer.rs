@@ -1,7 +1,7 @@
 //! Policy coverage, redundancy, refinement, and tail inclusion through constrained search.
 
 #[cfg(verus_keep_ghost)]
-use crate::spec::analyzer as verdict;
+use crate::spec::analyzer::{self as verdict, rule_ids};
 #[cfg(verus_keep_ghost)]
 use crate::verify::constraint_wf;
 #[cfg(verus_keep_ghost)]
@@ -75,6 +75,16 @@ impl RuleId {
             Some(owner) => self.1 == owner.value(),
             None => false,
         }
+    }
+
+    /// A native owner-checked id selects a registered rule in the public analyzer view.
+    pub proof fn lemma_belongs_to<E: Event>(&self, analyzer: &PolicyAnalyzer<E>)
+        requires self.belongs_to(analyzer),
+        ensures self@ < analyzer@.rules.len(),
+    {
+        reveal(RuleId::belongs_to);
+        crate::verify::frontend::domain_view::lemma_rule_id_view(*self);
+        crate::verify::frontend::domain_view::lemma_analyzer_view(*analyzer);
     }
 }
 
@@ -268,8 +278,9 @@ pub struct Counterexample<E: Event> {
     pub candidate: Components<E>,
     /// Components of the events before the candidate, oldest first.
     pub history: Vec<Components<E>>,
+    /// Query-local excluded constants used by R3; erased from the native result at runtime.
     #[cfg(verus_keep_ghost)]
-    pub(crate) known: Ghost<Seq<Set<E::Component>>>,
+    pub known: Ghost<Seq<Set<E::Component>>>,
 }
 
 /// Outcome of an analysis query.

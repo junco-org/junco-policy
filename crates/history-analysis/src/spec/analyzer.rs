@@ -1,7 +1,7 @@
 //! R6: the analyzer's semantic view and decision contracts over real events.
 //! Holds is unconditional; only counterexample existence/refutation needs its own fresh capacity.
 
-use crate::PolicyAnalyzer;
+use crate::{Components, Counterexample, Inclusion, PolicyAnalyzer, RuleId, Value};
 use history_syntax::spec::events::{HeadView, RegexView};
 use history_syntax::{Event, Rule};
 use junco_core::HistoryError;
@@ -32,6 +32,50 @@ pub struct AnalyzerView<E: Event> {
     pub domains: q::Domains<E::Component>,
     /// Source rules in stable registration order.
     pub rules: Seq<Rule<E>>,
+}
+
+impl<T> Value<T> {
+    /// Reveals whether a native symbolic value is a literal or a shared fresh name.
+    pub proof fn lemma_view(&self)
+        ensures self@ == match self {
+            Value::Constant(value) => q::SymbolicValue::Constant(*value),
+            Value::Fresh(name) => q::SymbolicValue::Fresh(*name as nat),
+        },
+    {
+        crate::verify::reconstruction::lemma_value_view(*self);
+    }
+}
+
+impl<E: Event> Components<E> {
+    /// Relates the public component vector to the symbolic event interpreted by R3.
+    pub proof fn lemma_view(&self)
+        ensures self@ == self.values@.map(|i: int, value: Value<E::Component>| value@),
+    {
+        crate::verify::reconstruction::lemma_components_view(*self);
+    }
+}
+
+impl<E: Event> Counterexample<E> {
+    /// Relates the public candidate and history to this witness's R3 interpretation.
+    pub proof fn lemma_view(&self)
+        ensures self@.candidate == self.candidate@,
+            self@.history == self.history@.map(|i: int, event: Components<E>| event@),
+    {
+        crate::verify::reconstruction::lemma_counterexample_view(*self);
+    }
+}
+
+impl<E: Event> Inclusion<E> {
+    /// Reveals the R6 result corresponding to each native verdict without exposing private state.
+    pub proof fn lemma_view(&self)
+        ensures self@ == match self {
+            Inclusion::Holds => QueryResult::Holds,
+            Inclusion::Exhausted => QueryResult::Exhausted,
+            Inclusion::Counterexample(witness) => QueryResult::Counterexample(witness@),
+        },
+    {
+        crate::verify::reconstruction::lemma_inclusion_view(*self);
+    }
 }
 
 impl<E: Event> PolicyAnalyzer<E> {
@@ -109,6 +153,11 @@ pub proof fn lemma_vocabulary_growth<E: Event>(
     vstd::set_lib::lemma_len_union(old_known, literals[coordinate]);
 }
 
+
+/// Projects native owner-checked ids to semantic rule indices without changing order or duplicates.
+pub open spec fn rule_ids(ids: Seq<RuleId>) -> Seq<nat> {
+    ids.map_values(|id: RuleId| id@)
+}
 
 /// Rule ids select this view's registered source rules; duplicates retain their id/multiset meaning.
 pub open spec fn rules_of<E: Event>(a: AnalyzerView<E>, ids: Seq<nat>) -> Seq<Rule<E>> {
