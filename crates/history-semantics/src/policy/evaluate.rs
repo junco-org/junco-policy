@@ -11,6 +11,8 @@ use super::rule::verify::{diagnostic_output, policy_rule_diagnostic, policy_rule
 use super::rule::{NativeDiagnostic, PolicyRule};
 use crate::CompiledRule;
 #[cfg(verus_keep_ghost)]
+use crate::spec::monitor;
+#[cfg(verus_keep_ghost)]
 use crate::compiled_rule::verify as compiled;
 #[cfg(verus_keep_ghost)]
 use history_store::typed::verify as books;
@@ -94,26 +96,23 @@ fn render_denial<E: Event, C, F: FnOnce() -> C>(
 
 #[cfg(verus_keep_ghost)]
 verus! {
-pub open(crate) spec fn policy_decision_result<E: Event, C>(before: CompiledPolicy<E, C>, after: CompiledPolicy<E, C>,
+pub closed spec fn policy_storage_result<E: Event, C>(before: CompiledPolicy<E, C>, after: CompiledPolicy<E, C>,
     history: History<E>, candidate: E, result: Result<PolicyDecision, HistoryError>) -> bool {
-    verify::policy_wf(after) && verify::policy_frame(before, after)
+    policy_wf(after) && policy_frame(before, after)
         && no_invariant_failure(result)
         && ((result == Err(HistoryError::WrongHistoryOwner))
             == !books::same_store_owner(before.store, history_store::history::verify::store_of(history)))
         && match result {
             Err(_) => after.callback_trace@ == before.callback_trace@,
-            Ok(PolicyDecision::Grant) => after.callback_trace@ == before.callback_trace@
-                && crate::compiled_rule::verify::ordered_result(verify::policy_sources(before), history, candidate, Ok(None)),
+            Ok(PolicyDecision::Grant) => after.callback_trace@ == before.callback_trace@,
             Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) => {
                 let call = after.callback_trace@.calls.last();
                 let index = call.index as int;
                 after.callback_trace@.calls.len() == before.callback_trace@.calls.len() + 1
-                    && 0 <= index < verify::policy_sources(before).len()
-                    && (history_store::typed::verify::native_obligations::<E>() ==>
-                        junco_core::spec::semantics::least_violation(verify::policy_sources(before), history_store::history::verify::raw_events(history), candidate, index))
+                    && 0 <= index < policy_sources(before).len()
                     && after.callback_trace@.calls == before.callback_trace@.calls.push(DiagnosticCall {
-                        index: call.index, source: verify::policy_sources(before)[index],
-                        diagnostic_id: verify::policy_diagnostic_ids(before)[index],
+                        index: call.index, source: policy_sources(before)[index],
+                        diagnostic_id: policy_diagnostic_ids(before)[index],
                         failed_precondition: failed_precondition@, allowed_fixes: allowed_fixes.deep_view(),
                     })
             },
@@ -122,7 +121,7 @@ pub open(crate) spec fn policy_decision_result<E: Event, C>(before: CompiledPoli
 
 // The value here is the actual context returned at the selected callback invocation.
 // Outputs are observations, never a deterministic function of a callback identity.
-pub open(crate) spec fn policy_context_result<E: Event, C, F: FnOnce() -> C>(
+pub closed spec fn policy_context_result<E: Event, C, F: FnOnce() -> C>(
     after: CompiledPolicy<E, C>, context: F, result: Result<PolicyDecision, HistoryError>,
 ) -> bool {
     result matches Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) ==>
@@ -130,6 +129,41 @@ pub open(crate) spec fn policy_context_result<E: Event, C, F: FnOnce() -> C>(
             && diagnostic_output(after.callback_trace@.calls.last().diagnostic_id,
                 value, failed_precondition@, allowed_fixes.deep_view())
 }
+    pub closed spec fn policy_store<E: Event, C>(policy: CompiledPolicy<E, C>) -> Arc<Store<E>> { policy.store }
+    pub closed spec fn policy_trace_empty<E: Event, C>(policy: CompiledPolicy<E, C>) -> bool {
+        policy.callback_trace@.calls == Seq::<DiagnosticCall<E>>::empty()
+    }
+    pub closed spec fn policy_sources<E: Event, C>(policy: CompiledPolicy<E, C>) -> Seq<Rule<E>> {
+        entry_sources(policy.rules@)
+    }
+    pub closed spec fn policy_diagnostic_ids<E: Event, C>(policy: CompiledPolicy<E, C>) -> Seq<int> {
+        entry_diagnostic_ids(policy.rules@)
+    }
+    pub closed spec fn policy_wf<E: Event, C>(policy: CompiledPolicy<E, C>) -> bool {
+        policy_entries_wf(policy.rules@, policy.store) && policy.callback_trace@.wf()
+    }
+    pub closed spec fn policy_frame<E: Event, C>(before: CompiledPolicy<E, C>, after: CompiledPolicy<E, C>) -> bool {
+        policy_wf(after) && before.store == after.store && policy_entries_frame(before.rules@, after.rules@)
+    }
+    /// Callback observations expose selection and cardinality, not the native log representation.
+    pub closed spec fn policy_context_calls<E: Event, C>(policy: CompiledPolicy<E, C>) -> nat {
+        policy.callback_trace@.context_calls
+    }
+    pub closed spec fn policy_diagnostic_calls<E: Event, C>(policy: CompiledPolicy<E, C>) -> nat {
+        policy.callback_trace@.diagnostic_calls
+    }
+    pub closed spec fn policy_selected_index<E: Event, C>(policy: CompiledPolicy<E, C>) -> nat {
+        policy.callback_trace@.calls.last().index
+    }
+    pub closed spec fn policy_selected_source<E: Event, C>(policy: CompiledPolicy<E, C>) -> Rule<E> {
+        policy.callback_trace@.calls.last().source
+    }
+    pub closed spec fn policy_selected_diagnostic_id<E: Event, C>(policy: CompiledPolicy<E, C>) -> int {
+        policy.callback_trace@.calls.last().diagnostic_id
+    }
+    pub closed spec fn policy_callbacks_frame<E: Event, C>(before: CompiledPolicy<E, C>, after: CompiledPolicy<E, C>) -> bool {
+        after.callback_trace@ == before.callback_trace@
+    }
 }
 
 /// One compiled runtime rule paired with the diagnostic rendered when it is violated.
@@ -176,20 +210,21 @@ pub mod verify {
     verus! {
     broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
 
-    pub open(crate) spec fn entry_sources<E: Event, C>(entries: Seq<CompiledPolicyRule<E, C>>) -> Seq<Rule<E>> {
-        entries.map(|i: int, entry: CompiledPolicyRule<E, C>| compiled::source_rule(entry.runtime))
+    pub(crate) open spec fn entry_sources<E: Event, C>(entries: Seq<CompiledPolicyRule<E, C>>) -> Seq<Rule<E>> {
+        entries.map(|i: int, entry: CompiledPolicyRule<E, C>| crate::compiled_rule::source_rule(entry.runtime))
     }
-    pub open(crate) spec fn entry_diagnostic_ids<E: Event, C>(entries: Seq<CompiledPolicyRule<E, C>>) -> Seq<int> {
+    pub(crate) open spec fn entry_diagnostic_ids<E: Event, C>(entries: Seq<CompiledPolicyRule<E, C>>) -> Seq<int> {
         entries.map(|i: int, entry: CompiledPolicyRule<E, C>| entry.diagnostic.id())
     }
-    pub open(crate) spec fn policy_entries_wf<E: Event, C>(entries: Seq<CompiledPolicyRule<E, C>>, store: Arc<Store<E>>) -> bool {
+    pub(crate) open spec fn policy_entries_wf<E: Event, C>(entries: Seq<CompiledPolicyRule<E, C>>, store: Arc<Store<E>>) -> bool {
         books::store_wf(*store) && forall|i: int| 0 <= i < entries.len() ==>
-            compiled::compiled_wf(entries[i].runtime) && entries[i].runtime.store == store
+            crate::compiled_rule::compiled_wf(entries[i].runtime)
+                && crate::compiled_rule::compiled_store(entries[i].runtime) == store
     }
-    pub open(crate) spec fn policy_entries_frame<E: Event, C>(before: Seq<CompiledPolicyRule<E, C>>, after: Seq<CompiledPolicyRule<E, C>>) -> bool {
+    pub(crate) open spec fn policy_entries_frame<E: Event, C>(before: Seq<CompiledPolicyRule<E, C>>, after: Seq<CompiledPolicyRule<E, C>>) -> bool {
         before.len() == after.len() && entry_diagnostic_ids(before) == entry_diagnostic_ids(after)
             && forall|i: int| 0 <= i < before.len() ==>
-                compiled::compiled_structure_frame(before[i].runtime, after[i].runtime)
+                crate::compiled_rule::compiled_structure_frame(before[i].runtime, after[i].runtime)
     }
     pub(crate) proof fn lemma_policy_entries_frame_facts<E: Event, C>(
         before: Seq<CompiledPolicyRule<E, C>>, after: Seq<CompiledPolicyRule<E, C>>)
@@ -199,43 +234,8 @@ pub mod verify {
     {
         assert(entry_sources(before) =~= entry_sources(after));
     }
-    pub open(crate) spec fn policy_store<E: Event, C>(policy: CompiledPolicy<E, C>) -> Arc<Store<E>> { policy.store }
-    pub open(crate) spec fn policy_trace<E: Event, C>(policy: CompiledPolicy<E, C>) -> DiagnosticTrace<E> { policy.callback_trace@ }
-    pub open(crate) spec fn policy_trace_empty<E: Event, C>(policy: CompiledPolicy<E, C>) -> bool {
-        policy.callback_trace@.calls == Seq::<DiagnosticCall<E>>::empty()
-    }
-    pub open(crate) spec fn policy_sources<E: Event, C>(policy: CompiledPolicy<E, C>) -> Seq<Rule<E>> {
-        entry_sources(policy.rules@)
-    }
-    pub open(crate) spec fn policy_diagnostic_ids<E: Event, C>(policy: CompiledPolicy<E, C>) -> Seq<int> {
-        entry_diagnostic_ids(policy.rules@)
-    }
-    pub open(crate) spec fn policy_wf<E: Event, C>(policy: CompiledPolicy<E, C>) -> bool {
-        policy_entries_wf(policy.rules@, policy.store) && policy.callback_trace@.wf()
-    }
-    pub open(crate) spec fn policy_frame<E: Event, C>(before: CompiledPolicy<E, C>, after: CompiledPolicy<E, C>) -> bool {
-        policy_wf(after) && before.store == after.store && policy_entries_frame(before.rules@, after.rules@)
-    }
+    pub(crate) open spec fn policy_trace<E: Event, C>(policy: CompiledPolicy<E, C>) -> DiagnosticTrace<E> { policy.callback_trace@ }
 
-    /// Callback observations expose selection and cardinality, not the native log representation.
-    pub open(crate) spec fn policy_context_calls<E: Event, C>(policy: CompiledPolicy<E, C>) -> nat {
-        policy.callback_trace@.context_calls
-    }
-    pub open(crate) spec fn policy_diagnostic_calls<E: Event, C>(policy: CompiledPolicy<E, C>) -> nat {
-        policy.callback_trace@.diagnostic_calls
-    }
-    pub open(crate) spec fn policy_selected_index<E: Event, C>(policy: CompiledPolicy<E, C>) -> nat {
-        policy.callback_trace@.calls.last().index
-    }
-    pub open(crate) spec fn policy_selected_source<E: Event, C>(policy: CompiledPolicy<E, C>) -> Rule<E> {
-        policy.callback_trace@.calls.last().source
-    }
-    pub open(crate) spec fn policy_selected_diagnostic_id<E: Event, C>(policy: CompiledPolicy<E, C>) -> int {
-        policy.callback_trace@.calls.last().diagnostic_id
-    }
-    pub open(crate) spec fn policy_callbacks_frame<E: Event, C>(before: CompiledPolicy<E, C>, after: CompiledPolicy<E, C>) -> bool {
-        after.callback_trace@ == before.callback_trace@
-    }
 
     /// Constructor and retained-state facts needed by public decision clients.
     pub proof fn lemma_policy_wf<E: Event, C>(policy: CompiledPolicy<E, C>)
@@ -250,7 +250,11 @@ pub mod verify {
     pub proof fn lemma_policy_decision_result_facts<E: Event, C>(
         before: CompiledPolicy<E, C>, after: CompiledPolicy<E, C>,
         history: History<E>, candidate: E, result: Result<PolicyDecision, HistoryError>)
-        requires policy_decision_result(before, after, history, candidate, result),
+        requires policy_storage_result(before, after, history, candidate, result),
+            junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
+                monitor::policy_decision_spec(policy_sources(before),
+                    history_store::history::verify::raw_events(history), candidate,
+                    policy_selected_index(after) as int, result),
         ensures policy_wf(after), policy_frame(before, after),
             policy_store(after) == policy_store(before),
             policy_sources(after) == policy_sources(before),
@@ -265,19 +269,21 @@ pub mod verify {
                 Ok(PolicyDecision::Grant) => policy_callbacks_frame(before, after)
                     && policy_context_calls(after) == policy_context_calls(before)
                     && policy_diagnostic_calls(after) == policy_diagnostic_calls(before)
-                    && compiled::ordered_result(policy_sources(before), history, candidate, Ok(None))
-                    && (books::native_obligations::<E>() ==> forall|i: int| 0 <= i < policy_sources(before).len() ==>
-                        !junco_core::verify::dsl::rule_violated(policy_sources(before)[i], candidate,
-                            history_store::history::verify::raw_events(history))),
+                    && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
+                        monitor::selected_rule(policy_sources(before),
+                            history_store::history::verify::raw_events(history), candidate, None)),
                 Ok(PolicyDecision::Deny { .. }) => policy_selected_index(after) < policy_sources(before).len()
                     && policy_selected_source(after) == policy_sources(before)[policy_selected_index(after) as int]
                     && policy_selected_diagnostic_id(after) == policy_diagnostic_ids(before)[policy_selected_index(after) as int]
-                    && (books::native_obligations::<E>() ==> junco_core::spec::semantics::least_violation(policy_sources(before), history_store::history::verify::raw_events(history),
-                        candidate, policy_selected_index(after) as int))
+                    && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
+                        monitor::selected_rule(policy_sources(before),
+                            history_store::history::verify::raw_events(history), candidate,
+                            Some(policy_selected_index(after) as int)))
                     && (policy_wf(before) ==> policy_context_calls(after) == policy_context_calls(before) + 1
                         && policy_diagnostic_calls(after) == policy_diagnostic_calls(before) + 1),
             },
     {
+        reveal(policy_storage_result);
         lemma_policy_entries_frame_facts(before.rules@, after.rules@);
         if let Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) = result {
             let call = after.callback_trace@.calls.last();
@@ -325,7 +331,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     /// Keeps arbitrary conversions streaming; exact input facts require their conversion law.
     /// Native event laws exclude internal invariant failures while preserving resource errors.
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures books::native_obligations::<E>() ==> no_internal_compile_error(result),
+        ensures junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> no_internal_compile_error(result),
             result matches Ok(policy) ==> policy_wf(policy) && policy_store(policy) == store
             && policy_trace_empty(policy)
             && forall|items: Seq<PolicyRule<E, C>>|
@@ -367,7 +373,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     /// Compiles every source rule in order and preserves its paired diagnostic.
     #[verus_verify]
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures books::native_obligations::<E>() ==> no_internal_compile_error(result),
+        ensures junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> no_internal_compile_error(result),
             result matches Ok(policy) ==> policy_wf(policy) && policy_store(policy) == store
             && policy_sources(policy) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
             && policy_diagnostic_ids(policy) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
@@ -380,7 +386,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     #[verus_verify]
     #[cfg_attr(verus_keep_ghost, verifier::exec_allows_no_decreases_clause)]
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures books::native_obligations::<E>() ==> no_internal_compile_error(result),
+        ensures junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> no_internal_compile_error(result),
             result matches Ok(policy) ==> policy_wf(policy) && policy.store == store
             && policy.callback_trace@.calls == Seq::<DiagnosticCall<E>>::empty()
             && (iterator.obeys_prophetic_iter_laws() ==>
@@ -446,7 +452,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                 Err(error) =>
                 {
                     #[cfg_attr(verus_keep_ghost, verus_spec(invariant books::store_wf(*store),
-                        books::native_obligations::<E>() ==> no_internal_compile_error::<CompiledRule<E>>(Err(error))))]
+                        junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> no_internal_compile_error::<CompiledRule<E>>(Err(error))))]
                     loop {
                         match remaining.next() {
                             Some(pending) => {
@@ -458,6 +464,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                     }
                 }
             };
+            proof! { compiled::lemma_constructed_facts(runtime, policy_rule_source(current_item), store); }
             compiled.push(CompiledPolicyRule {
                 runtime,
                 diagnostic,
@@ -465,13 +472,14 @@ impl<E: Event, C> CompiledPolicy<E, C> {
             proof! {
                 yielded = yielded.push(current_item);
                 assert forall|i: int| 0 <= i < compiled@.len() implies
-                    compiled::compiled_wf(compiled@[i].runtime) && compiled@[i].runtime.store == store by {
+                    crate::compiled_rule::compiled_wf(compiled@[i].runtime)
+                        && crate::compiled_rule::compiled_store(compiled@[i].runtime) == store by {
                     if i < previous_entries.len() {
                         assert(compiled@[i] == previous_entries[i]);
                     }
                 }
                 assert forall|i: int| 0 <= i < yielded.len() implies
-                    compiled::source_rule(compiled@[i].runtime) == policy_rule_source(yielded[i])
+                    crate::compiled_rule::source_rule(compiled@[i].runtime) == policy_rule_source(yielded[i])
                         && compiled@[i].diagnostic.id() == policy_rule_diagnostic(yielded[i]) by {
                     if i < previous_yielded.len() {
                         assert(compiled@[i] == previous_entries[i]);
@@ -493,9 +501,13 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     /// Matching native store owners cannot return `WrongHistoryOwner`.
     /// Operational errors cannot be internal invariant failures.
     #[verus_verify]
-    #[verus_spec(result => requires verify::policy_wf(*old(self)), history_store::history::verify::history_wf(*history),
+    #[verus_spec(result => requires policy_wf(*old(self)), history_store::history::verify::history_wf(*history),
         call_requires(context, ()),
-        ensures policy_decision_result(*old(self), *final(self), *history, *probe, result),
+        ensures policy_storage_result(*old(self), *final(self), *history, *probe, result),
+            junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
+                monitor::policy_decision_spec(policy_sources(*old(self)),
+                    history_store::history::verify::raw_events(*history), *probe,
+                    policy_selected_index(*final(self)) as int, result),
             policy_context_result(*final(self), context, result),
             no_invariant_failure(result))]
     pub fn decide(
@@ -514,9 +526,13 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     }
 
     #[verus_verify]
-    #[verus_spec(result => requires verify::policy_wf(*old(self)), history_store::history::verify::history_wf(*history),
+    #[verus_spec(result => requires policy_wf(*old(self)), history_store::history::verify::history_wf(*history),
         call_requires(context, ()),
-        ensures policy_decision_result(*old(self), *final(self), *history, *probe, result),
+        ensures policy_storage_result(*old(self), *final(self), *history, *probe, result),
+            junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
+                monitor::policy_decision_spec(policy_sources(*old(self)),
+                    history_store::history::verify::raw_events(*history), *probe,
+                    policy_selected_index(*final(self)) as int, result),
             policy_context_result(*final(self), context, result),
             no_invariant_failure(result))]
     pub(super) fn decide_with_limits<L: Limits>(
@@ -531,8 +547,8 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         proof_decl! { let ghost original_context = context; }
         let index = self.first_violation_with(history, probe, limits, world)?;
         proof! {
-            assert(verify::policy_sources(*self) =~= verify::policy_sources(entry));
-            assert(verify::policy_diagnostic_ids(*self) == verify::policy_diagnostic_ids(entry));
+            assert(policy_sources(*self) =~= policy_sources(entry));
+            assert(policy_diagnostic_ids(*self) == policy_diagnostic_ids(entry));
         }
         match index {
             None => Ok(PolicyDecision::Grant),
@@ -542,23 +558,24 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                     &rule.diagnostic,
                     context,
                     verus_exec_expr! { Ghost(index as nat) },
-                    verus_exec_expr! { Ghost(crate::compiled_rule::verify::source_rule(rule.runtime)) },
+                    verus_exec_expr! { Ghost(crate::compiled_rule::source_rule(rule.runtime)) },
                     verus_exec_expr! { Ghost(rule.diagnostic.id()) },
                     verus_exec_expr! { Tracked(self.callback_trace.borrow_mut()) },
                 );
                 proof! {
-                    assert(compiled::source_rule(rule.runtime) == verify::policy_sources(entry)[index as int]);
-                    assert(rule.diagnostic.id() == verify::policy_diagnostic_ids(entry)[index as int]);
-                    assert(verify::policy_wf(*self));
-                    assert(verify::policy_frame(entry, *self));
-                    assert(index < verify::policy_sources(entry).len());
-                    assert(books::native_obligations::<E>() ==> junco_core::spec::semantics::least_violation(
-                        verify::policy_sources(entry), history_store::history::verify::raw_events(*history), *probe, index as int));
+                    assert(crate::compiled_rule::source_rule(rule.runtime) == policy_sources(entry)[index as int]);
+                    assert(rule.diagnostic.id() == policy_diagnostic_ids(entry)[index as int]);
+                    assert(policy_wf(*self));
+                    assert(policy_frame(entry, *self));
+                    assert(index < policy_sources(entry).len());
+                    assert(junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
+                        monitor::selected_rule(policy_sources(entry),
+                            history_store::history::verify::raw_events(*history), *probe, Some(index as int)));
                     let ghost observed_decision = decision;
                     if let PolicyDecision::Deny { failed_precondition, allowed_fixes } = observed_decision {
                         assert(self.callback_trace@.calls == entry.callback_trace@.calls.push(DiagnosticCall {
-                            index: index as nat, source: verify::policy_sources(entry)[index as int],
-                            diagnostic_id: verify::policy_diagnostic_ids(entry)[index as int],
+                            index: index as nat, source: policy_sources(entry)[index as int],
+                            diagnostic_id: policy_diagnostic_ids(entry)[index as int],
                             failed_precondition: failed_precondition@, allowed_fixes: allowed_fixes.deep_view(),
                         }));
                     }
@@ -569,7 +586,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                         assert(diagnostic_output(self.callback_trace@.calls.last().diagnostic_id,
                             value, failed_precondition@, allowed_fixes.deep_view()));
                     }
-                    assert(policy_decision_result(entry, *self, *history, *probe, Ok(decision)));
+                    assert(policy_storage_result(entry, *self, *history, *probe, Ok(decision)));
                     assert(policy_context_result(*self, original_context, Ok(decision)));
                 }
                 Ok(decision)
@@ -578,14 +595,16 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     }
 
     #[verus_verify]
-    #[verus_spec(result => requires verify::policy_wf(*old(self)), history_store::history::verify::history_wf(*history),
+    #[verus_spec(result => requires policy_wf(*old(self)), history_store::history::verify::history_wf(*history),
         ensures no_invariant_failure(result),
-            verify::policy_wf(*final(self)), verify::policy_frame(*old(self), *final(self)),
+            policy_wf(*final(self)), policy_frame(*old(self), *final(self)),
             final(self).callback_trace@ == old(self).callback_trace@,
             (result == Err(HistoryError::WrongHistoryOwner))
                 == !books::same_store_owner(old(self).store, history_store::history::verify::store_of(*history)),
             result matches Ok(Some(index)) ==> index < final(self).rules@.len(),
-            crate::compiled_rule::verify::ordered_result(verify::policy_sources(*old(self)), *history, *probe, result))]
+            junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
+                monitor::selection_spec(policy_sources(*old(self)),
+                    history_store::history::verify::raw_events(*history), *probe, result))]
     fn first_violation_with<L: Limits>(
         &mut self,
         history: &History<E>,
@@ -599,14 +618,14 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         }
         let mut index = 0;
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            index <= self.rules@.len(), verify::policy_wf(*self), verify::policy_frame(entry, *self),
+            index <= self.rules@.len(), policy_wf(*self), policy_frame(entry, *self),
             entry == *old(self),
             self.callback_trace@ == entry.callback_trace@,
             history_store::history::verify::history_wf(*history),
             books::same_store_owner(entry.store, history_store::history::verify::store_of(*history)),
-            history_store::typed::verify::native_obligations::<E>() ==>
-                forall|j: int| 0 <= j < index ==> !junco_core::verify::dsl::rule_violated(
-                    verify::policy_sources(entry)[j], *probe, history_store::history::verify::raw_events(*history)),
+            junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
+                forall|j: int| 0 <= j < index ==> !junco_core::spec::semantics::rule_violated(
+                    policy_sources(entry)[j], *probe, history_store::history::verify::raw_events(*history)),
             decreases self.rules@.len() - index))]
         while index < self.rules.len() {
             proof_decl! { let ghost before = *self; }
@@ -616,20 +635,20 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                 .accepts_history_with_limits(history, probe, limits, world);
             let mode = rule.runtime.mode();
             proof! {
-                if history_store::typed::verify::native_obligations::<E>() {
+                if junco_core::spec::hypotheses::monitor_hypotheses::<E>() {
                     crate::compiled_rule::verify::lemma_dsl_violation(rule.runtime, *history, *probe, answer, mode);
                 }
                 verify::lemma_policy_entries_frame_facts(entry.rules@, before.rules@);
                 assert forall|j: int| 0 <= j < entry.rules@.len() implies
-                    compiled::compiled_structure_frame(entry.rules@[j].runtime, self.rules@[j].runtime)
+                    crate::compiled_rule::compiled_structure_frame(entry.rules@[j].runtime, self.rules@[j].runtime)
                         && self.rules@[j].diagnostic.id() == entry.rules@[j].diagnostic.id() by {
                     if j != index as int { assert(self.rules@[j] == before.rules@[j]); }
                     assert(verify::entry_diagnostic_ids(before.rules@)[j] == verify::entry_diagnostic_ids(entry.rules@)[j]);
                 }
                 assert(verify::entry_diagnostic_ids(self.rules@) =~= verify::entry_diagnostic_ids(entry.rules@));
                 verify::lemma_policy_entries_frame_facts(entry.rules@, self.rules@);
-                assert(verify::policy_wf(*self));
-                assert(verify::policy_frame(entry, *self));
+                assert(policy_wf(*self));
+                assert(policy_frame(entry, *self));
             }
             let violated = match answer? {
                 None => false,

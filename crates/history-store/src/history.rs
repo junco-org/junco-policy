@@ -46,6 +46,7 @@ pub proof fn lemma_stored_history_view(stored: StoredHistory)
         revision: stored.spec_revision() as nat,
     }),
 {
+    broadcast use verify::group_history_representation;
     reveal(<StoredHistory as View>::view);
 }
 }
@@ -70,6 +71,7 @@ impl StoredHistory {
     #[verus_spec(result => ensures result@ == verify::stored_events(self),
         crate::store::verify::events_view(result@) == self@.events)]
     pub fn as_slice(&self) -> &[Event] {
+        proof! { broadcast use verify::group_history_representation; }
         proof! { reveal(<StoredHistory as View>::view); }
         &self.events
     }
@@ -77,6 +79,7 @@ impl StoredHistory {
     /// Return the number of encoded events without exposing mutable storage.
     #[verus_spec(result => ensures result == self@.events.len())]
     pub fn len(&self) -> usize {
+        proof! { broadcast use verify::group_history_representation; }
         proof! { reveal(<StoredHistory as View>::view); }
         self.events.len()
     }
@@ -84,6 +87,7 @@ impl StoredHistory {
     /// Return whether the encoded history is empty without exposing storage.
     #[verus_spec(result => ensures result == (self@.events.len() == 0))]
     pub fn is_empty(&self) -> bool {
+        proof! { broadcast use verify::group_history_representation; }
         proof! { reveal(<StoredHistory as View>::view); }
         self.events.is_empty()
     }
@@ -92,6 +96,7 @@ impl StoredHistory {
     #[cfg_attr(verus_keep_ghost, verifier::when_used_as_spec(spec_revision))]
     #[verus_spec(result => ensures result == self@.revision, result == self.spec_revision())]
     pub const fn revision(&self) -> u64 {
+        proof! { broadcast use verify::group_history_representation; }
         proof! { reveal(<StoredHistory as View>::view); }
         self.revision
     }
@@ -100,6 +105,7 @@ impl StoredHistory {
     #[cfg_attr(verus_keep_ghost, verifier::when_used_as_spec(spec_id))]
     #[verus_spec(result => ensures result == self.spec_id())]
     pub const fn id(&self) -> usize {
+        proof! { broadcast use verify::group_history_representation; }
         self.id
     }
 
@@ -107,6 +113,7 @@ impl StoredHistory {
         verify::stored_events(&result) == Seq::<Event>::empty(), result.spec_revision() == 0,
         result.id == id, result.spec_id() == id)]
     pub(crate) const fn new(id: usize) -> Self {
+        proof! { broadcast use verify::group_history_representation; }
         Self {
             events: Vec::new(),
             revision: 0,
@@ -125,6 +132,7 @@ impl StoredHistory {
         limits: &mut L,
         world: &mut ObservationWorld,
     ) -> Result<(), HistoryError> {
+        proof! { broadcast use verify::group_history_representation; }
         proof! {
             reveal(<StoredHistory as View>::view);
             reveal(StoredHistory::spec_id);
@@ -162,6 +170,7 @@ impl StoredHistory {
         ensures verify::stored_truncate_result(*old(self), *final(self), len, result),
     )]
     pub(crate) fn truncate_events(&mut self, len: usize) -> Result<(), HistoryError> {
+        proof! { broadcast use verify::group_history_representation; }
         proof! { reveal(<StoredHistory as View>::view); }
         proof_decl! { let ghost entry_events = self.events@; }
         if len < self.events.len() {
@@ -222,12 +231,14 @@ impl<E: TypedEvent> History<E> {
     #[cfg_attr(verus_keep_ghost, verifier::when_used_as_spec(spec_id))]
     #[verus_spec(result => ensures result == self.spec_id())]
     pub const fn id(&self) -> usize {
+        proof! { broadcast use verify::group_history_representation; }
         self.numeric.id
     }
 
     #[cfg_attr(verus_keep_ghost, verifier::when_used_as_spec(spec_numeric))]
     #[verus_spec(result => ensures *result == *self.spec_numeric())]
     pub fn numeric(&self) -> &StoredHistory {
+        proof! { broadcast use verify::group_history_representation; }
         &self.numeric
     }
 
@@ -238,6 +249,7 @@ impl<E: TypedEvent> History<E> {
             junco_core::verify::history_specs::no_invariant_failure(result),
     )]
     pub fn new(store: Arc<Store<E>>) -> Result<Self, HistoryError> {
+        proof! { broadcast use verify::group_history_representation; }
         proof! { books::lemma_empty_snapshot(&*store); }
         proof_decl! {
             let ghost empty = junco_core::verify::history_specs::HistoryStateView {
@@ -286,6 +298,7 @@ impl<E: TypedEvent> History<E> {
         store: Arc<Store<E>>,
         events: I,
     ) -> Result<Self, HistoryError> {
+        proof! { broadcast use verify::group_history_representation; }
         proof_decl! { let ghost input = events; }
         let convert = I::into_iter;
         let iterator = convert(events);
@@ -317,6 +330,7 @@ impl<E: TypedEvent> History<E> {
         store: Arc<Store<E>>,
         iterator: I,
     ) -> Result<Self, HistoryError> {
+        proof! { broadcast use verify::group_history_representation; }
         proof_decl! { let ghost original_iterator = iterator; }
         let mut remaining = iterator;
         let mut history = Self::new(store)?;
@@ -327,6 +341,7 @@ impl<E: TypedEvent> History<E> {
             remaining.obeys_prophetic_iter_laws() ==>
                 history.events@ + remaining.remaining() == original_iterator.remaining()))]
         loop {
+            proof! { broadcast use verify::group_history_representation; }
             match remaining.next() {
                 Some(event) => history.push(event)?,
                 None => {
@@ -352,6 +367,7 @@ impl<E: TypedEvent> History<E> {
         ensures history_wf(*final(self)), push_result(*old(self), *final(self), event, result),
     )]
     pub fn push(&mut self, event: E) -> Result<(), HistoryError> {
+        proof! { broadcast use verify::group_history_representation; }
         self.push_with(event, &mut Unmetered, &mut ObservationWorld)
     }
 
@@ -365,6 +381,7 @@ impl<E: TypedEvent> History<E> {
         limits: &mut L,
         world: &mut ObservationWorld,
     ) -> Result<(), HistoryError> {
+        proof! { broadcast use verify::group_history_representation; }
         proof_decl! { let ghost before = *self; }
         proof! {
             reveal(<StoredHistory as View>::view);
@@ -426,6 +443,7 @@ impl<E: TypedEvent> History<E> {
         ensures history_wf(*final(self)), truncate_result(*old(self), *final(self), len, result),
     )]
     pub fn truncate(&mut self, len: usize) -> Result<(), HistoryError> {
+        proof! { broadcast use verify::group_history_representation; }
         proof_decl! { let ghost before = *self; }
         proof! { reveal(<StoredHistory as View>::view); }
         self.numeric.truncate_events(len)?;
@@ -465,6 +483,7 @@ impl<E: TypedEvent> History<E> {
         ensures history_wf(*final(self)), rollback_result(*old(self), *final(self), checkpoint, result),
     )]
     pub fn rollback(&mut self, checkpoint: Checkpoint) -> Result<(), HistoryError> {
+        proof! { broadcast use verify::group_history_representation; }
         if checkpoint.store_id != self.store.id() || checkpoint.history != self.numeric.id {
             return Err(HistoryError::WrongCheckpointOwner);
         }
@@ -481,6 +500,7 @@ impl<E: TypedEvent> History<E> {
         ensures result matches Ok(history) ==> history_wf(history) && clone_result(*self, history),
     )]
     pub fn try_clone(&self) -> Result<Self, HistoryError> {
+        proof! { broadcast use verify::group_history_representation; }
         self.try_clone_with(&mut Unmetered, &mut ObservationWorld)
     }
 
@@ -493,6 +513,7 @@ impl<E: TypedEvent> History<E> {
         limits: &mut L,
         world: &mut ObservationWorld,
     ) -> Result<Self, HistoryError> {
+        proof! { broadcast use verify::group_history_representation; }
         let mut events = Vec::new();
         allocation(world.try_reserve_vec_exact(&mut events, self.events.len()))?;
         let mut numeric_events = Vec::new();
@@ -505,6 +526,7 @@ impl<E: TypedEvent> History<E> {
             history_wf(*self),
             decreases self.events@.len() - index))]
         while index < self.events.len() {
+            proof! { broadcast use verify::group_history_representation; }
             limits.checkpoint()?;
             events.push(self.events[index]);
             numeric_events.push(self.numeric.events[index]);
@@ -561,29 +583,34 @@ impl<E: TypedEvent> History<E> {
     /// Returns the original committed events, including all payload fields and variants.
     #[verus_spec(result => ensures result@ == raw_events(*self))]
     pub fn as_slice(&self) -> &[E] {
+        proof! { broadcast use verify::group_history_representation; }
         &self.events
     }
 
     /// Iterates the original committed events in order.
     pub fn iter(&self) -> core::slice::Iter<'_, E> {
+        proof! { broadcast use verify::group_history_representation; }
         self.events.iter()
     }
 
     /// Returns the number of committed events.
     #[verus_spec(result => ensures result == raw_events(*self).len())]
     pub fn len(&self) -> usize {
+        proof! { broadcast use verify::group_history_representation; }
         self.events.len()
     }
 
     /// Returns whether the history is empty.
     #[verus_spec(result => ensures result == (raw_events(*self).len() == 0))]
     pub fn is_empty(&self) -> bool {
+        proof! { broadcast use verify::group_history_representation; }
         self.events.is_empty()
     }
 
     /// Captures a reusable owner-specific length marker.
     #[verus_spec(result => ensures checkpoint_matches(*self, result))]
     pub fn checkpoint(&self) -> Checkpoint {
+        proof! { broadcast use verify::group_history_representation; }
         Checkpoint {
             store_id: self.store.id(),
             history: self.numeric.id,
@@ -596,6 +623,7 @@ impl<E: TypedEvent> History<E> {
         junco_core::verify::history_assumptions::arc_identity(*result)
             == junco_core::verify::history_assumptions::arc_identity(store_of(*self)))]
     pub fn store(&self) -> &Arc<Store<E>> {
+        proof! { broadcast use verify::group_history_representation; }
         &self.store
     }
 }
@@ -632,7 +660,7 @@ pub mod verify {
     verus! {
     broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
 
-    pub open(super) spec fn stored_events(stored: &StoredHistory) -> Seq<Event> { stored.events@ }
+    pub closed spec fn stored_events(stored: &StoredHistory) -> Seq<Event> { stored.events@ }
 
     /// Failure-atomic numeric append, retaining record identity and lifecycle compatibility.
     pub open spec fn stored_append_result(before: StoredHistory, after: StoredHistory,
@@ -697,9 +725,9 @@ pub mod verify {
 
 
     impl<E: TypedEvent> History<E> {
-        pub open(super) spec fn lifecycle_model(&self) -> Lifecycle { self.lifecycle@ }
-        pub open(super) spec fn registration_model(&self) -> books::HistoryRegistration { self.registration@ }
-        pub open(super) spec fn global_registration_model(&self) -> crate::store::HistoryKeyReceipt {
+        pub closed spec fn lifecycle_model(&self) -> Lifecycle { self.lifecycle@ }
+        pub closed spec fn registration_model(&self) -> books::HistoryRegistration { self.registration@ }
+        pub(crate) open spec fn global_registration_model(&self) -> crate::store::HistoryKeyReceipt {
             self.global_registration@
         }
 
@@ -831,29 +859,29 @@ pub mod verify {
         }
     }
 
-    pub open(super) spec fn raw_events<E: TypedEvent>(history: History<E>) -> Seq<E> {
+    pub closed spec fn raw_events<E: TypedEvent>(history: History<E>) -> Seq<E> {
         history.events@
     }
 
-    pub open(super) spec fn store_of<E: TypedEvent>(history: History<E>) -> Arc<Store<E>> {
+    pub closed spec fn store_of<E: TypedEvent>(history: History<E>) -> Arc<Store<E>> {
         history.store
     }
 
-    pub open(super) spec fn initialized_history<E: TypedEvent>(history: History<E>, store: Arc<Store<E>>) -> bool {
+    pub closed spec fn initialized_history<E: TypedEvent>(history: History<E>, store: Arc<Store<E>>) -> bool {
         history.numeric.revision == 0 && history.store == store
     }
 
-    pub open(super) spec fn empty_history<E: TypedEvent>(history: History<E>, store: Arc<Store<E>>) -> bool {
+    pub closed spec fn empty_history<E: TypedEvent>(history: History<E>, store: Arc<Store<E>>) -> bool {
         initialized_history(history, store) && history.events@ == Seq::<E>::empty()
             && history.numeric.events@ == Seq::<Event>::empty()
     }
 
-    pub open(super) spec fn checkpoint_matches<E: TypedEvent>(history: History<E>, checkpoint: Checkpoint) -> bool {
+    pub closed spec fn checkpoint_matches<E: TypedEvent>(history: History<E>, checkpoint: Checkpoint) -> bool {
         checkpoint.store_id == books::store_id(*history.store)
             && checkpoint.history == history.numeric.id && checkpoint.len == history.events@.len()
     }
 
-    pub open(super) spec fn rollback_result<E: TypedEvent>(before: History<E>, after: History<E>,
+    pub closed spec fn rollback_result<E: TypedEvent>(before: History<E>, after: History<E>,
         checkpoint: Checkpoint, result: Result<(), HistoryError>) -> bool {
         history_wf(after) && owner_frame(before, after) && after.maps@ == before.maps@
         && (result is Err ==> state_frame(before, after))
@@ -873,11 +901,11 @@ pub mod verify {
             ==> books::event_encoded::<E>(maps, raw[i], numeric[i])
     }
 
-    pub open(super) spec fn history_maps<E: TypedEvent>(history: History<E>) -> books::ComponentMaps<E> {
+    pub closed spec fn history_maps<E: TypedEvent>(history: History<E>) -> books::ComponentMaps<E> {
         history.maps@
     }
 
-    pub open(super) spec fn history_wf<E: TypedEvent>(history: History<E>) -> bool {
+    pub closed spec fn history_wf<E: TypedEvent>(history: History<E>) -> bool {
         books::store_wf(*history.store)
         && history.registration@.id() == books::registry_id::<E>(&*history.store)
         && history.registration@.key() == history.numeric.id
@@ -907,7 +935,7 @@ pub mod verify {
         raw_events(history).map(|i: int, event: E| raw_event(event))
     }
 
-    pub open(super) spec fn owner_frame<E: TypedEvent>(before: History<E>, after: History<E>) -> bool {
+    pub closed spec fn owner_frame<E: TypedEvent>(before: History<E>, after: History<E>) -> bool {
         after.store == before.store && after.numeric.id == before.numeric.id
             && after.lifecycle@.id() == before.lifecycle@.id()
             && after.global_registration@.id() == before.global_registration@.id()
@@ -915,13 +943,13 @@ pub mod verify {
             && after.global_registration@.value() == before.global_registration@.value()
     }
 
-    pub open(super) spec fn state_frame<E: TypedEvent>(before: History<E>, after: History<E>) -> bool {
+    pub closed spec fn state_frame<E: TypedEvent>(before: History<E>, after: History<E>) -> bool {
         owner_frame(before, after) && after.events@ == before.events@
             && after.numeric.events@ == before.numeric.events@
             && after.numeric.revision == before.numeric.revision
     }
 
-    pub open(super) spec fn push_result<E: TypedEvent>(
+    pub closed spec fn push_result<E: TypedEvent>(
         before: History<E>, after: History<E>, event: E, result: Result<(), HistoryError>,
     ) -> bool {
         history_wf(after) && owner_frame(before, after)
@@ -1044,7 +1072,7 @@ pub mod verify {
         }
     }
 
-    pub open(super) spec fn truncate_result<E: TypedEvent>(
+    pub closed spec fn truncate_result<E: TypedEvent>(
         before: History<E>, after: History<E>, len: usize, result: Result<(), HistoryError>,
     ) -> bool {
         history_wf(before) && history_wf(after) && owner_frame(before, after) && after.maps@ == before.maps@
@@ -1077,7 +1105,7 @@ pub mod verify {
         lemma_stored_truncate_result_facts(before.numeric, after.numeric, len, result);
     }
 
-    pub open(super) spec fn clone_result<E: TypedEvent>(before: History<E>, after: History<E>) -> bool {
+    pub closed spec fn clone_result<E: TypedEvent>(before: History<E>, after: History<E>) -> bool {
         history_wf(after) && after.store == before.store && after.numeric.id > before.numeric.id
         && after.events@ == before.events@ && after.numeric.events@ == before.numeric.events@
         && after.numeric.revision == 0 && after.maps@ == before.maps@
@@ -1108,6 +1136,163 @@ pub mod verify {
             source_receipt, target_receipt,
         );
     }
+
+    // Private unfolding facts keep native proofs local while public storage contracts stay opaque.
+    pub(crate) broadcast proof fn lemma_stored_events_representation(stored: &StoredHistory)
+        ensures #[trigger] stored_events(stored) == {
+            stored.events@
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_raw_events_representation<E: TypedEvent>(history: History<E>)
+        ensures #[trigger] raw_events(history) == {
+            history.events@
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_store_of_representation<E: TypedEvent>(history: History<E>)
+        ensures #[trigger] store_of(history) == {
+            history.store
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_initialized_history_representation<E: TypedEvent>(history: History<E>, store: Arc<Store<E>>)
+        ensures #[trigger] initialized_history(history, store) <==> {
+            history.numeric.revision == 0 && history.store == store
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_empty_history_representation<E: TypedEvent>(history: History<E>, store: Arc<Store<E>>)
+        ensures #[trigger] empty_history(history, store) <==> {
+            initialized_history(history, store) && history.events@ == Seq::<E>::empty()
+            && history.numeric.events@ == Seq::<Event>::empty()
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_checkpoint_matches_representation<E: TypedEvent>(history: History<E>, checkpoint: Checkpoint)
+        ensures #[trigger] checkpoint_matches(history, checkpoint) <==> {
+            checkpoint.store_id == books::store_id(*history.store)
+            && checkpoint.history == history.numeric.id && checkpoint.len == history.events@.len()
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_rollback_result_representation<E: TypedEvent>(before: History<E>, after: History<E>,
+        checkpoint: Checkpoint, result: Result<(), HistoryError>)
+        ensures #[trigger] rollback_result(before, after, checkpoint, result) <==> {
+            history_wf(after) && owner_frame(before, after) && after.maps@ == before.maps@
+            && (result is Err ==> state_frame(before, after))
+            && if checkpoint.store_id != books::store_id(*before.store) || checkpoint.history != before.numeric.id {
+            result == Err(HistoryError::WrongCheckpointOwner) && state_frame(before, after)
+            } else if checkpoint.len > before.events@.len() {
+            result == Err(HistoryError::CheckpointBeyondHistory) && state_frame(before, after)
+            } else {
+            truncate_result(before, after, checkpoint.len, result)
+            }
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_history_maps_representation<E: TypedEvent>(history: History<E>)
+        ensures #[trigger] history_maps(history) == {
+            history.maps@
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_history_wf_representation<E: TypedEvent>(history: History<E>)
+        ensures #[trigger] history_wf(history) <==> {
+            books::store_wf(*history.store)
+            && history.registration@.id() == books::registry_id::<E>(&*history.store)
+            && history.registration@.key() == history.numeric.id
+            && history.events@.len() == history.numeric.events@.len()
+            && history.lifecycle@.wf() && history.lifecycle@.state() == history.numeric@
+            && history.lifecycle@.id() == history.registration@.value()
+            && history.global_registration@.id() == crate::store::verify::history_authority()
+            && history.global_registration@.key() == history.numeric.id
+            && history.global_registration@.value() == (crate::store::HistoryIssuer::Typed {
+            store: books::registry_id::<E>(&*history.store),
+            lifecycle: history.lifecycle@.id(),
+            })
+            && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> books::maps_wf::<E>(history.maps@)
+            && books::snapshot_published::<E>(books::registry_id::<E>(&history.store), history.maps@)
+            && correspondence(history.events@, history.numeric.events@, history.maps@))
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_owner_frame_representation<E: TypedEvent>(before: History<E>, after: History<E>)
+        ensures #[trigger] owner_frame(before, after) <==> {
+            after.store == before.store && after.numeric.id == before.numeric.id
+            && after.lifecycle@.id() == before.lifecycle@.id()
+            && after.global_registration@.id() == before.global_registration@.id()
+            && after.global_registration@.key() == before.global_registration@.key()
+            && after.global_registration@.value() == before.global_registration@.value()
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_state_frame_representation<E: TypedEvent>(before: History<E>, after: History<E>)
+        ensures #[trigger] state_frame(before, after) <==> {
+            owner_frame(before, after) && after.events@ == before.events@
+            && after.numeric.events@ == before.numeric.events@
+            && after.numeric.revision == before.numeric.revision
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_push_result_representation<E: TypedEvent>(
+        before: History<E>, after: History<E>, event: E, result: Result<(), HistoryError>,
+    )
+        ensures #[trigger] push_result(before, after, event, result) <==> {
+            history_wf(after) && owner_frame(before, after)
+            && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> junco_core::verify::history_specs::no_invariant_failure(result))
+            && after.numeric.revision == before.numeric.revision
+            && junco_core::verify::history_specs::history_mutation(before.numeric@, after.numeric@)
+            && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> books::maps_extend::<E>(before.maps@, after.maps@))
+            && match result {
+            Err(_) => state_frame(before, after),
+            Ok(()) => after.events@ == before.events@.push(event)
+            && after.numeric.events@.len() > 0
+            && stored_append_result(before.numeric, after.numeric,
+            seq![after.numeric.events@.last()], result),
+            }
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_truncate_result_representation<E: TypedEvent>(
+        before: History<E>, after: History<E>, len: usize, result: Result<(), HistoryError>,
+    )
+        ensures #[trigger] truncate_result(before, after, len, result) <==> {
+            history_wf(before) && history_wf(after) && owner_frame(before, after) && after.maps@ == before.maps@
+            && stored_truncate_result(before.numeric, after.numeric, len, result)
+            && if result is Err || len >= before.events@.len() {
+            state_frame(before, after)
+            } else {
+            after.events@ == before.events@.take(len as int)
+            }
+        },
+    {}
+
+    pub(crate) broadcast proof fn lemma_clone_result_representation<E: TypedEvent>(before: History<E>, after: History<E>)
+        ensures #[trigger] clone_result(before, after) <==> {
+            history_wf(after) && after.store == before.store && after.numeric.id > before.numeric.id
+            && after.events@ == before.events@ && after.numeric.events@ == before.numeric.events@
+            && after.numeric.revision == 0 && after.maps@ == before.maps@
+        },
+    {}
+
+    pub(crate) broadcast group group_history_representation {
+        lemma_stored_events_representation,
+        lemma_raw_events_representation,
+        lemma_store_of_representation,
+        lemma_initialized_history_representation,
+        lemma_empty_history_representation,
+        lemma_checkpoint_matches_representation,
+        lemma_rollback_result_representation,
+        lemma_history_maps_representation,
+        lemma_history_wf_representation,
+        lemma_owner_frame_representation,
+        lemma_state_frame_representation,
+        lemma_push_result_representation,
+        lemma_truncate_result_representation,
+        lemma_clone_result_representation,
+    }
+
 
     pub(crate) fn independently_constructed_foreign_rollback_client<E: TypedEvent, F: TypedEvent>()
         -> (result: Result<(History<F>, Ghost<History<F>>, Result<(), HistoryError>), HistoryError>)

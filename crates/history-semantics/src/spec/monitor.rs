@@ -2,10 +2,12 @@
 //! Resource ownership, compiled caches, revisions, and stores remain behind Validator::wf.
 
 use crate::validator::{Decision, Validator};
+use crate::policy::PolicyDecision;
 use history_syntax::{Event, Rule};
 use junco_core::error::HistoryError;
 use junco_core::event::Request;
-use junco_core::spec::semantics::{least_violation, policy_denies, rule_violated};
+use junco_core::spec::hypotheses::monitor_hypotheses;
+use junco_core::spec::semantics::{least_violation, policy_denies, rule_violated, rule_wf};
 use vstd::prelude::*;
 
 verus! {
@@ -18,10 +20,78 @@ pub struct ValidatorView<E: Event> {
     pub history: Seq<E>,
 }
 
+impl<E: Event> View for Validator<E> {
+    type V = ValidatorView<E>;
+
+    closed spec fn view(&self) -> ValidatorView<E> {
+        ValidatorView {
+            rules: crate::compiled_rule::verify::compiled_sources(self.rules@),
+            history: history_store::history::verify::raw_events(self.history),
+        }
+    }
+}
+
 impl<E: Event> Validator<E> {
-    /// Opaque compiled/store invariant; public preservation and revealing lemmas accompany the API.
+    /// Opaque compiled/store invariant, including the safety of every committed prefix.
     pub closed spec fn wf(&self) -> bool {
-        crate::validator::verify::validator_wf(*self)
+        history_store::history::verify::history_wf(self.history)
+            && crate::compiled_rule::verify::compiled_table_wf(self.rules@,
+                history_store::history::verify::store_of(self.history))
+            && (monitor_hypotheses::<E>() ==> trace_safe(self@)
+                && forall|i: int| 0 <= i < self@.rules.len()
+                    ==> rule_wf(#[trigger] self@.rules[i]))
+    }
+}
+
+/// Public consequences of the opaque invariant, requiring no compiled-state accessors.
+pub proof fn lemma_validator_wf<E: Event>(validator: Validator<E>)
+    requires validator.wf(),
+    ensures monitor_hypotheses::<E>() ==> trace_safe(validator@)
+        && forall|i: int| 0 <= i < validator@.rules.len()
+            ==> rule_wf(#[trigger] validator@.rules[i]),
+{
+    reveal(Validator::wf);
+}
+
+pub(crate) proof fn lemma_validator_representation<E: Event>(validator: Validator<E>)
+    ensures validator@ == (ValidatorView {
+            rules: crate::compiled_rule::verify::compiled_sources(validator.rules@),
+            history: history_store::history::verify::raw_events(validator.history),
+        }),
+        validator.wf() <==> history_store::history::verify::history_wf(validator.history)
+            && crate::compiled_rule::verify::compiled_table_wf(validator.rules@,
+                history_store::history::verify::store_of(validator.history))
+            && (monitor_hypotheses::<E>() ==> trace_safe(validator@)
+                && forall|i: int| 0 <= i < validator@.rules.len()
+                    ==> rule_wf(#[trigger] validator@.rules[i])),
+{}
+
+/// Ordered selection shared by the monitor and both read-only policy facades.
+pub open spec fn selected_rule<E: Event>(rules: Seq<Rule<E>>, history: Seq<E>,
+    candidate: E, selected: Option<int>) -> bool {
+    match selected {
+        Some(index) => least_violation(rules, history, candidate, index),
+        None => !policy_denies(rules, candidate, history),
+    }
+}
+
+/// The executable first-violation query implements canonical ordered selection.
+pub open spec fn selection_spec<E: Event>(rules: Seq<Rule<E>>, history: Seq<E>,
+    candidate: E, result: Result<Option<usize>, HistoryError>) -> bool {
+    match result {
+        Ok(Some(index)) => selected_rule(rules, history, candidate, Some(index as int)),
+        Ok(None) => selected_rule(rules, history, candidate, None),
+        Err(error) => !(error is Invariant),
+    }
+}
+
+/// Read-only policy decisions use the same least-source selection as `check_step`.
+pub open spec fn policy_decision_spec<E: Event>(rules: Seq<Rule<E>>, history: Seq<E>,
+    candidate: E, selected: int, result: Result<PolicyDecision, HistoryError>) -> bool {
+    match result {
+        Ok(PolicyDecision::Grant) => selected_rule(rules, history, candidate, None),
+        Ok(PolicyDecision::Deny { .. }) => selected_rule(rules, history, candidate, Some(selected)),
+        Err(error) => !(error is Invariant),
     }
 }
 
@@ -68,10 +138,65 @@ pub open spec fn finish_spec<E: Event>(rules: Seq<Rule<E>>, state: ValidatorView
     state.rules == rules && state.history == Seq::<E>::empty()
 }
 
+/// Rule registration appends one well-formed source on success and is atomic on error.
+pub open spec fn add_rule_spec<E: Event>(before: Seq<Rule<E>>, after: Seq<Rule<E>>,
+    source: Rule<E>, succeeded: bool) -> bool {
+    if succeeded { after == before.push(source) && rule_wf(source) } else { after == before }
+}
+
 /// Every committed event was permitted by every rule against its own strict prefix.
 pub open spec fn trace_safe<E: Event>(state: ValidatorView<E>) -> bool {
     forall|j: int, i: int| 0 <= j < state.history.len() && 0 <= i < state.rules.len()
         ==> !#[trigger] rule_violated(state.rules[i], state.history[j], state.history.subrange(0, j))
+}
+
+/// Appending a permitted event preserves the safety of every committed prefix.
+pub proof fn lemma_trace_safe_append<E: Event>(before: ValidatorView<E>, candidate: E)
+    requires trace_safe(before), !policy_denies(before.rules, candidate, before.history),
+    ensures trace_safe(ValidatorView { rules: before.rules, history: before.history.push(candidate) }),
+{
+    let history = before.history.push(candidate);
+    assert forall|j: int, i: int| 0 <= j < history.len() && 0 <= i < before.rules.len()
+        implies !#[trigger] rule_violated(before.rules[i], history[j], history.subrange(0, j)) by {
+        if j < before.history.len() {
+            assert(history.subrange(0, j) =~= before.history.subrange(0, j));
+        } else {
+            assert(j == before.history.len());
+            assert(history.subrange(0, j) =~= before.history);
+        }
+    }
+}
+
+/// Truncating a safe trace preserves safety, including after an owned rollback.
+pub proof fn lemma_trace_safe_prefix<E: Event>(before: ValidatorView<E>, prefix: Seq<E>)
+    requires trace_safe(before), prefix.is_prefix_of(before.history),
+    ensures trace_safe(ValidatorView { rules: before.rules, history: prefix }),
+{
+    assert forall|j: int, i: int| 0 <= j < prefix.len() && 0 <= i < before.rules.len()
+        implies !#[trigger] rule_violated(before.rules[i], prefix[j], prefix.subrange(0, j)) by {
+        assert(prefix[j] == before.history[j]);
+        assert(prefix.subrange(0, j) =~= before.history.subrange(0, j));
+    }
+}
+
+/// The monitor step relation preserves committed-trace safety on every outcome.
+pub proof fn lemma_check_step_trace_safe<E: Event, M>(before: ValidatorView<E>, after: ValidatorView<E>,
+    request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>)
+    requires trace_safe(before), validator_frame(before, after), check_step(before, after, request, result),
+    ensures trace_safe(after),
+{
+    if let Ok(Decision::Grant(_)) = result {
+        lemma_trace_safe_append(before, request.event);
+    }
+}
+
+/// An owned-prefix rollback preserves committed-trace safety.
+pub proof fn lemma_rollback_trace_safe<E: Event>(before: ValidatorView<E>, after: ValidatorView<E>,
+    prefix: Seq<E>, result: Result<(), HistoryError>)
+    requires trace_safe(before), validator_frame(before, after), rollback_spec(before, after, prefix, result),
+    ensures trace_safe(after),
+{
+    if result is Ok { lemma_trace_safe_prefix(before, prefix); }
 }
 
 }

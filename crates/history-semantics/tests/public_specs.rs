@@ -10,17 +10,19 @@ use history_semantics::policy::trace::verify as trace;
 use history_semantics::policy::{CompiledPolicy, PolicyDecision, TracePolicy, TraceRule};
 use history_semantics::runtime::{RuleRuntime, verify as runtime};
 use history_semantics::validator::{Decision, Validator, verify as validator};
+use history_semantics::spec::monitor;
 use history_store::history::{History, verify as history};
 use history_store::store::{HistoryStore, verify as records};
 use history_store::typed::{Store, share_store, verify as books};
-use history_syntax::event::specs::{EventSpec, arity, event_view, projection_laws};
-use history_syntax::verify::dsl::{HeadView, RegexView, TestView};
+use history_syntax::spec::events::{EventSpec, arity, event_view, projection_laws};
+use history_syntax::spec::events::{HeadView, RegexView, TestView};
 use history_syntax::{Component, Event, Head, MAX_ARITY, RegexExpr, Rule, RuleMode};
 use junco_core::event::Request;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex};
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
 use junco_core::verify::{dsl, history_specs};
+use junco_core::spec::semantics;
 use junco_core::{CompileError, HistoryError};
 use vstd::prelude::*;
 use vstd::view::DeepView;
@@ -56,7 +58,7 @@ fn vec_history<E: Event>(events: Vec<E>) -> (result: Result<History<E>, HistoryE
 // Scoped native sources cannot manufacture structural or scope errors.
 fn scoped_production_compile<E: Event>(source: Rule<E>)
     -> (result: Result<CompiledRule<E>, CompileError>)
-    requires books::native_obligations::<E>(), dsl::head_scoped(source.head@),
+    requires junco_core::spec::hypotheses::monitor_hypotheses::<E>(), dsl::head_scoped(source.head@),
         dsl::regex_scoped(source.tail@, source.head@),
     ensures history_specs::no_internal_compile_error(result),
         !(result matches Err(CompileError::VariableComponentConflict { .. })),
@@ -71,19 +73,19 @@ fn scoped_production_compile<E: Event>(source: Rule<E>)
 fn compiled_truth_table<E: Event>(
     head: Head<E>, mode: RuleMode, universal: bool, events: Vec<E>, candidate: &E,
 ) -> (result: Result<(History<E>, CompiledRule<E>, Result<Option<bool>, HistoryError>), CompileError>)
-    requires books::native_obligations::<E>(),
+    requires junco_core::spec::hypotheses::monitor_hypotheses::<E>(),
     ensures result matches Ok((value, rule, answer)) ==>
         history::raw_events(value) == events@
-        && compiled::source_rule(rule) == (Rule { mode, head,
+        && history_semantics::compiled_rule::source_rule(rule) == (Rule { mode, head,
             tail: if universal { RegexExpr::All } else { RegexExpr::Empty } })
         && answer != Err(HistoryError::WrongHistoryOwner)
         && history_specs::no_invariant_failure(answer)
         && (answer matches Ok(option) ==>
-            option == (if dsl::head_matches(head@, event_view(*candidate)) {
+            option == (if semantics::head_matches(head@, *candidate) {
                 Some(universal)
             } else { None }))
-        && (answer is Ok ==> dsl::rule_violated(compiled::source_rule(rule), *candidate, events@)
-            == (dsl::head_matches(head@, event_view(*candidate))
+        && (answer is Ok ==> semantics::rule_violated(history_semantics::compiled_rule::source_rule(rule), *candidate, events@)
+            == (semantics::head_matches(head@, *candidate)
                 && match mode { RuleMode::Require => !universal, RuleMode::Forbid => universal })),
 {
     let store = Arc::new(Store::<E>::new()?);
@@ -104,7 +106,7 @@ fn compiled_truth_table<E: Event>(
     proof {
         compiled::lemma_decision_result_facts(before, rule, value, *candidate, answer);
         if answer is Ok {
-            assert(answer == Ok(dsl::rule_evaluation(original, *candidate, events@)));
+            assert(answer == Ok((if semantics::head_matches(original.head@, *candidate) { Some(semantics::lang(original.tail@, original.head@, *candidate, events@)) } else { None })));
         }
     }
     Ok((value, rule, answer))
@@ -112,28 +114,28 @@ fn compiled_truth_table<E: Event>(
 
 fn five_decision_cases<E: Event>(mismatch: Head<E>, require_all: Head<E>, forbid_all: Head<E>,
     require_empty: Head<E>, forbid_empty: Head<E>, candidate: &E) -> Result<(), CompileError>
-    requires books::native_obligations::<E>(),
-        !dsl::head_matches(mismatch@, event_view(*candidate)),
-        dsl::head_matches(require_all@, event_view(*candidate)),
-        dsl::head_matches(forbid_all@, event_view(*candidate)),
-        dsl::head_matches(require_empty@, event_view(*candidate)),
-        dsl::head_matches(forbid_empty@, event_view(*candidate)),
+    requires junco_core::spec::hypotheses::monitor_hypotheses::<E>(),
+        !semantics::head_matches(mismatch@, *candidate),
+        semantics::head_matches(require_all@, *candidate),
+        semantics::head_matches(forbid_all@, *candidate),
+        semantics::head_matches(require_empty@, *candidate),
+        semantics::head_matches(forbid_empty@, *candidate),
 {
     let (value, rule, answer) = compiled_truth_table(mismatch, RuleMode::Require, false, Vec::new(), candidate)?;
     assert(answer is Ok ==> answer == Ok(None));
-    assert(answer is Ok ==> !dsl::rule_violated(compiled::source_rule(rule), *candidate, history::raw_events(value)));
+    assert(answer is Ok ==> !semantics::rule_violated(history_semantics::compiled_rule::source_rule(rule), *candidate, history::raw_events(value)));
     let (value, rule, answer) = compiled_truth_table(require_all, RuleMode::Require, true, Vec::new(), candidate)?;
     assert(answer is Ok ==> answer == Ok(Some(true)));
-    assert(answer is Ok ==> !dsl::rule_violated(compiled::source_rule(rule), *candidate, history::raw_events(value)));
+    assert(answer is Ok ==> !semantics::rule_violated(history_semantics::compiled_rule::source_rule(rule), *candidate, history::raw_events(value)));
     let (value, rule, answer) = compiled_truth_table(forbid_all, RuleMode::Forbid, true, Vec::new(), candidate)?;
     assert(answer is Ok ==> answer == Ok(Some(true)));
-    assert(answer is Ok ==> dsl::rule_violated(compiled::source_rule(rule), *candidate, history::raw_events(value)));
+    assert(answer is Ok ==> semantics::rule_violated(history_semantics::compiled_rule::source_rule(rule), *candidate, history::raw_events(value)));
     let (value, rule, answer) = compiled_truth_table(require_empty, RuleMode::Require, false, Vec::new(), candidate)?;
     assert(answer is Ok ==> answer == Ok(Some(false)));
-    assert(answer is Ok ==> dsl::rule_violated(compiled::source_rule(rule), *candidate, history::raw_events(value)));
+    assert(answer is Ok ==> semantics::rule_violated(history_semantics::compiled_rule::source_rule(rule), *candidate, history::raw_events(value)));
     let (value, rule, answer) = compiled_truth_table(forbid_empty, RuleMode::Forbid, false, Vec::new(), candidate)?;
     assert(answer is Ok ==> answer == Ok(Some(false)));
-    assert(answer is Ok ==> !dsl::rule_violated(compiled::source_rule(rule), *candidate, history::raw_events(value)));
+    assert(answer is Ok ==> !semantics::rule_violated(history_semantics::compiled_rule::source_rule(rule), *candidate, history::raw_events(value)));
     Ok(())
 }
 
@@ -141,9 +143,9 @@ fn five_decision_cases<E: Event>(mismatch: Head<E>, require_all: Head<E>, forbid
 fn empty_policy<E: Event>(events: Vec<E>, candidate: &E)
     -> (result: Result<(CompiledPolicy<E, ()>, Result<PolicyDecision, HistoryError>), CompileError>)
     ensures result matches Ok((state, answer)) ==>
-        policy::policy_sources(state) == Seq::<Rule<E>>::empty()
-        && policy::policy_context_calls(state) == 0
-        && policy::policy_diagnostic_calls(state) == 0
+        history_semantics::policy::evaluate::policy_sources(state) == Seq::<Rule<E>>::empty()
+        && history_semantics::policy::evaluate::policy_context_calls(state) == 0
+        && history_semantics::policy::evaluate::policy_diagnostic_calls(state) == 0
         && (answer is Ok ==> answer == Ok(PolicyDecision::Grant)),
 {
     let store = Arc::new(Store::<E>::new()?);
@@ -167,26 +169,26 @@ fn trace_first_diagnostic<E: Event + 'static,
     first_head: Head<E>, second_head: Head<E>, events: Vec<E>, candidate: &E,
     first_diagnostic: D0, second_diagnostic: D1,
 ) -> (result: Result<(History<E>, TracePolicy<E>, Result<PolicyDecision, HistoryError>), CompileError>)
-    requires books::native_obligations::<E>(),
-        dsl::head_matches(first_head@, event_view(*candidate)),
-        dsl::head_matches(second_head@, event_view(*candidate)),
+    requires junco_core::spec::hypotheses::monitor_hypotheses::<E>(),
+        semantics::head_matches(first_head@, *candidate),
+        semantics::head_matches(second_head@, *candidate),
         forall|argument: &E| call_requires(first_diagnostic, (argument,)),
         forall|argument: &E| call_requires(second_diagnostic, (argument,)),
     ensures result matches Ok((value, state, answer)) ==>
         history::raw_events(value) == events@
-        && trace::trace_sources(state) == seq![
+        && history_semantics::policy::trace::trace_sources(state) == seq![
             Rule { mode: RuleMode::Forbid, head: first_head, tail: RegexExpr::All },
             Rule { mode: RuleMode::Require, head: second_head, tail: RegexExpr::Empty }]
-        && trace::trace_diagnostic_ids(state) == seq![
+        && history_semantics::policy::trace::trace_diagnostic_ids(state) == seq![
             trace::trace_callback_identity(first_diagnostic), trace::trace_callback_identity(second_diagnostic)]
         && answer != Err(HistoryError::WrongHistoryOwner)
         && match answer {
-            Err(_) => trace::trace_context_calls(state) == 0 && trace::trace_diagnostic_calls(state) == 0,
+            Err(_) => history_semantics::policy::trace::trace_context_calls(state) == 0 && history_semantics::policy::trace::trace_diagnostic_calls(state) == 0,
             Ok(PolicyDecision::Grant) => false,
             Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) =>
-                trace::trace_context_calls(state) == 1 && trace::trace_diagnostic_calls(state) == 1
-                && trace::trace_selected_index(state) == 0
-                && trace::trace_selected_diagnostic_id(state) == trace::trace_callback_identity(first_diagnostic)
+                history_semantics::policy::trace::trace_context_calls(state) == 1 && history_semantics::policy::trace::trace_diagnostic_calls(state) == 1
+                && history_semantics::policy::trace::trace_selected_index(state) == 0
+                && history_semantics::policy::trace::trace_selected_diagnostic_id(state) == trace::trace_callback_identity(first_diagnostic)
                 && diagnostic_output(trace::trace_callback_identity(first_diagnostic), *candidate,
                     failed_precondition@, allowed_fixes.deep_view())
                 && exists|argument: &E| *argument == *candidate
@@ -206,14 +208,10 @@ fn trace_first_diagnostic<E: Event + 'static,
     proof {
         assert(first_source.tail@ == RegexView::All);
         assert(second_source.tail@ == RegexView::Empty);
-        assert(dsl::lang(first_source.tail@, first_head@, event_view(*candidate),
-            events@.map(|i: int, event: E| event_view(event))));
-        assert(!dsl::lang(second_source.tail@, second_head@, event_view(*candidate),
-            events@.map(|i: int, event: E| event_view(event))));
-        assert(dsl::rule_evaluation(first_source, *candidate, events@) == Some(true));
-        assert(dsl::rule_evaluation(second_source, *candidate, events@) == Some(false));
-        assert(dsl::rule_violated(first_source, *candidate, events@));
-        assert(dsl::rule_violated(second_source, *candidate, events@));
+        assert(semantics::lang(first_source.tail@, first_head@, *candidate, events@));
+        assert(!semantics::lang(second_source.tail@, second_head@, *candidate, events@));
+        assert(semantics::rule_violated(first_source, *candidate, events@));
+        assert(semantics::rule_violated(second_source, *candidate, events@));
     }
     let first = TraceRule::new(first, first_diagnostic);
     let second = TraceRule::new(second, second_diagnostic);
@@ -230,17 +228,17 @@ fn trace_first_diagnostic<E: Event + 'static,
     let ghost items = rules@;
     let mut state = TracePolicy::new(store, rules)?;
     proof {
-        assert(trace::trace_sources(state)
+        assert(history_semantics::policy::trace::trace_sources(state)
             == items.map(|i: int, item: TraceRule<E>| trace::trace_rule_source(item)));
-        assert(trace::trace_diagnostic_ids(state)
+        assert(history_semantics::policy::trace::trace_diagnostic_ids(state)
             == items.map(|i: int, item: TraceRule<E>| trace::trace_rule_diagnostic_id(item)));
-        assert(trace::trace_sources(state) =~= seq![first_source, second_source]);
-        assert(trace::trace_diagnostic_ids(state) =~= seq![
+        assert(history_semantics::policy::trace::trace_sources(state) =~= seq![first_source, second_source]);
+        assert(history_semantics::policy::trace::trace_diagnostic_ids(state) =~= seq![
             trace::trace_callback_identity(first_diagnostic), trace::trace_callback_identity(second_diagnostic)]);
-        assert(trace::trace_context_calls(state) == 0);
-        assert(trace::trace_diagnostic_calls(state) == 0);
-        assert(trace::trace_store(state) == store);
-        assert(books::same_store_owner(trace::trace_store(state), history::store_of(value)));
+        assert(history_semantics::policy::trace::trace_context_calls(state) == 0);
+        assert(history_semantics::policy::trace::trace_diagnostic_calls(state) == 0);
+        assert(history_semantics::policy::trace::trace_store(state) == store);
+        assert(books::same_store_owner(history_semantics::policy::trace::trace_store(state), history::store_of(value)));
     }
     let ghost before = state;
     let ghost raw_before = history::raw_events(value);
@@ -249,19 +247,19 @@ fn trace_first_diagnostic<E: Event + 'static,
         trace::lemma_trace_decision_result_facts(before, state, value, *candidate, answer);
         assert(history::raw_events(value) == raw_before);
         if let Ok(PolicyDecision::Grant) = answer {
-            assert(!dsl::rule_violated(trace::trace_sources(before)[0], *candidate, events@));
+            assert(!semantics::rule_violated(history_semantics::policy::trace::trace_sources(before)[0], *candidate, events@));
             assert(false);
         }
         if let Ok(PolicyDecision::Deny { ref failed_precondition, ref allowed_fixes }) = answer {
-            let index = trace::trace_selected_index(state) as int;
-            assert(junco_core::spec::semantics::least_violation(trace::trace_sources(before), history_store::history::verify::raw_events(value), *candidate, index));
+            let index = history_semantics::policy::trace::trace_selected_index(state) as int;
+            assert(junco_core::spec::semantics::least_violation(history_semantics::policy::trace::trace_sources(before), history_store::history::verify::raw_events(value), *candidate, index));
             assert(0 <= index < 2);
             if index != 0 {
                 assert(0 <= 0 < index);
-                assert(!dsl::rule_violated(trace::trace_sources(before)[0], *candidate, events@));
+                assert(!semantics::rule_violated(history_semantics::policy::trace::trace_sources(before)[0], *candidate, events@));
                 assert(false);
             }
-            assert(trace::trace_selected_index(state) == 0);
+            assert(history_semantics::policy::trace::trace_selected_index(state) == 0);
             assert(diagnostic_output(trace::trace_rule_diagnostic_id(first_rule), *candidate,
                 failed_precondition@, allowed_fixes.deep_view()));
             let output = (*failed_precondition, *allowed_fixes);
@@ -275,16 +273,16 @@ fn trace_first_diagnostic<E: Event + 'static,
 
 fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: Request<E, M>)
     -> (result: Result<(Validator<E>, Result<Decision<E, M>, HistoryError>), CompileError>)
-    requires books::native_obligations::<E>(), dsl::head_matches(head@, event_view(request.event)),
+    requires junco_core::spec::hypotheses::monitor_hypotheses::<E>(), semantics::head_matches(head@, request.event),
     ensures result matches Ok((state, answer)) ==>
         match answer {
             Ok(Decision::Grant(grant)) => universal && grant.event == request.event
                 && grant.metadata == request.metadata
-                && history::raw_events(validator::validator_history(state)) == seq![request.event],
+                && (state)@.history == seq![request.event],
             Ok(Decision::Denied(denial)) => !universal && denial.event == request.event
                 && denial.mode == RuleMode::Require
-                && history::raw_events(validator::validator_history(state)) == Seq::<E>::empty(),
-            Err(_) => history::raw_events(validator::validator_history(state)) == Seq::<E>::empty(),
+                && (state)@.history == Seq::<E>::empty(),
+            Err(_) => (state)@.history == Seq::<E>::empty(),
         },
 {
     let store = Arc::new(Store::<E>::new()?);
@@ -293,37 +291,32 @@ fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: R
     let rule = Rule::new(RuleMode::Require, head, tail);
     let ghost source = rule;
     builder.add_rule(rule)?;
-    proof { assert(validator::builder_sources(builder) =~= seq![source]); }
+    proof { assert((builder)@ =~= seq![source]); }
     let mut state = builder.finish()?;
     let ghost before = state;
     proof {
-        validator::lemma_validator_wf(state);
-        history::lemma_empty_history(validator::validator_history(state), store);
-        assert(validator::validator_sources(before) == seq![source]);
-        assert(history::raw_events(validator::validator_history(before)) == Seq::<E>::empty());
+        monitor::lemma_validator_wf(state);
+        assert((before)@.rules == seq![source]);
+        assert((before)@.history == Seq::<E>::empty());
         assert(source.tail@ == if universal { RegexView::All } else { RegexView::Empty });
-        assert(dsl::lang(source.tail@, head@, event_view(request.event),
-            Seq::<E>::empty().map(|i: int, event: E| event_view(event))) == universal);
-        assert(dsl::rule_evaluation(source, request.event, Seq::<E>::empty()) == Some(universal));
-        assert(dsl::rule_violated(source, request.event, Seq::<E>::empty()) == !universal);
+        assert(semantics::lang(source.tail@, head@, request.event, Seq::<E>::empty()) == universal);
+        assert(semantics::rule_violated(source, request.event, Seq::<E>::empty()) == !universal);
     }
     let answer = state.check(request);
     proof {
-        validator::lemma_check_result_facts(before, state, request, answer);
+        validator::lemma_check_storage(before, state, request, answer);
         match answer {
             Ok(Decision::Grant(_)) => {
-                assert(!dsl::rule_violated(validator::validator_sources(before)[0], request.event,
-                    history::raw_events(validator::validator_history(before))));
+                assert(!semantics::rule_violated((before)@.rules[0], request.event,
+                    (before)@.history));
                 assert(universal);
             },
             Ok(Decision::Denied(ref denial)) => {
-                let index = choose|index: int| validator::denial_at(before, request, *denial, index)
-                    && (books::native_obligations::<E>() ==>
-                        denial.mode == validator::validator_sources(before)[index].mode
-                            && junco_core::spec::semantics::least_violation(validator::validator_sources(before),
-                                history_store::history::verify::raw_events(validator::validator_history(before)), request.event, index));
-                assert(junco_core::spec::semantics::least_violation(validator::validator_sources(before),
-                    history_store::history::verify::raw_events(validator::validator_history(before)), request.event, index));
+                let index = choose|index: int|
+                    semantics::least_violation(before@.rules, before@.history, request.event, index)
+                        && denial.mode == before@.rules[index].mode;
+                assert(junco_core::spec::semantics::least_violation((before)@.rules,
+                    (before)@.history, request.event, index));
                 assert(index == 0);
                 assert(denial.mode == RuleMode::Require);
                 assert(!universal);
@@ -338,26 +331,26 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
     -> (result: Result<(History<E>, TracePolicy<E>, Result<PolicyDecision, HistoryError>), CompileError>)
     ensures result matches Ok((value, state, answer)) ==>
         history::raw_events(value) == events@
-        && trace::trace_sources(state) == rules@.map(|i: int, item: TraceRule<E>| trace::trace_rule_source(item))
-        && trace::trace_diagnostic_ids(state) == rules@.map(|i: int, item: TraceRule<E>| trace::trace_rule_diagnostic_id(item))
+        && history_semantics::policy::trace::trace_sources(state) == rules@.map(|i: int, item: TraceRule<E>| trace::trace_rule_source(item))
+        && history_semantics::policy::trace::trace_diagnostic_ids(state) == rules@.map(|i: int, item: TraceRule<E>| trace::trace_rule_diagnostic_id(item))
         && match answer {
-            Err(_) => trace::trace_context_calls(state) == 0 && trace::trace_diagnostic_calls(state) == 0,
-            Ok(PolicyDecision::Grant) => trace::trace_context_calls(state) == 0
-                && trace::trace_diagnostic_calls(state) == 0
-                && (books::native_obligations::<E>() ==> forall|i: int| 0 <= i < rules@.len() ==>
-                    !dsl::rule_violated(trace::trace_rule_source(rules@[i]), *candidate, events@)),
+            Err(_) => history_semantics::policy::trace::trace_context_calls(state) == 0 && history_semantics::policy::trace::trace_diagnostic_calls(state) == 0,
+            Ok(PolicyDecision::Grant) => history_semantics::policy::trace::trace_context_calls(state) == 0
+                && history_semantics::policy::trace::trace_diagnostic_calls(state) == 0
+                && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> forall|i: int| 0 <= i < rules@.len() ==>
+                    !semantics::rule_violated(trace::trace_rule_source(rules@[i]), *candidate, events@)),
             Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) =>
-                trace::trace_context_calls(state) == 1 && trace::trace_diagnostic_calls(state) == 1
-                && trace::trace_selected_index(state) < rules@.len()
-                && trace::trace_selected_diagnostic_id(state)
-                    == trace::trace_rule_diagnostic_id(rules@[trace::trace_selected_index(state) as int])
-                && diagnostic_output(trace::trace_selected_diagnostic_id(state), *candidate,
+                history_semantics::policy::trace::trace_context_calls(state) == 1 && history_semantics::policy::trace::trace_diagnostic_calls(state) == 1
+                && history_semantics::policy::trace::trace_selected_index(state) < rules@.len()
+                && history_semantics::policy::trace::trace_selected_diagnostic_id(state)
+                    == trace::trace_rule_diagnostic_id(rules@[history_semantics::policy::trace::trace_selected_index(state) as int])
+                && diagnostic_output(history_semantics::policy::trace::trace_selected_diagnostic_id(state), *candidate,
                     failed_precondition@, allowed_fixes.deep_view())
-                && (books::native_obligations::<E>() ==>
-                    dsl::rule_violated(trace::trace_rule_source(rules@[trace::trace_selected_index(state) as int]),
+                && (junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
+                    semantics::rule_violated(trace::trace_rule_source(rules@[history_semantics::policy::trace::trace_selected_index(state) as int]),
                         *candidate, events@)
-                    && forall|i: int| 0 <= i < trace::trace_selected_index(state) ==>
-                        !dsl::rule_violated(trace::trace_rule_source(rules@[i]), *candidate, events@)),
+                    && forall|i: int| 0 <= i < history_semantics::policy::trace::trace_selected_index(state) ==>
+                        !semantics::rule_violated(trace::trace_rule_source(rules@[i]), *candidate, events@)),
         },
 {
     let store = Arc::new(Store::<E>::new()?);
@@ -371,13 +364,13 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
     let mut state = TracePolicy::new(store, rules)?;
     proof {
         assert(history::raw_events(value) == events@);
-        assert(trace::trace_sources(state)
+        assert(history_semantics::policy::trace::trace_sources(state)
             == items.map(|i: int, item: TraceRule<E>| trace::trace_rule_source(item)));
-        assert(trace::trace_diagnostic_ids(state)
+        assert(history_semantics::policy::trace::trace_diagnostic_ids(state)
             == items.map(|i: int, item: TraceRule<E>| trace::trace_rule_diagnostic_id(item)));
-        assert(trace::trace_sources(state).len() == items.len());
-        assert(trace::trace_context_calls(state) == 0);
-        assert(trace::trace_diagnostic_calls(state) == 0);
+        assert(history_semantics::policy::trace::trace_sources(state).len() == items.len());
+        assert(history_semantics::policy::trace::trace_context_calls(state) == 0);
+        assert(history_semantics::policy::trace::trace_diagnostic_calls(state) == 0);
     }
     let ghost before = state;
     let ghost raw_before = history::raw_events(value);
@@ -387,27 +380,27 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
         assert(history::raw_events(value) == raw_before);
         match answer {
             Ok(PolicyDecision::Grant) => {
-                if books::native_obligations::<E>() {
+                if junco_core::spec::hypotheses::monitor_hypotheses::<E>() {
                     assert forall|i: int| 0 <= i < items.len() implies
-                        !dsl::rule_violated(trace::trace_rule_source(items[i]), *candidate, events@) by {
-                        assert(trace::trace_sources(before)[i] == trace::trace_rule_source(items[i]));
-                        assert(!dsl::rule_violated(trace::trace_sources(before)[i], *candidate,
+                        !semantics::rule_violated(trace::trace_rule_source(items[i]), *candidate, events@) by {
+                        assert(history_semantics::policy::trace::trace_sources(before)[i] == trace::trace_rule_source(items[i]));
+                        assert(!semantics::rule_violated(history_semantics::policy::trace::trace_sources(before)[i], *candidate,
                             history::raw_events(value)));
                     }
                 }
             },
             Ok(PolicyDecision::Deny { .. }) => {
-                let index = trace::trace_selected_index(state) as int;
+                let index = history_semantics::policy::trace::trace_selected_index(state) as int;
                 assert(0 <= index < items.len());
-                assert(trace::trace_diagnostic_ids(before)[index] == trace::trace_rule_diagnostic_id(items[index]));
-                if books::native_obligations::<E>() {
-                    assert(junco_core::spec::semantics::least_violation(trace::trace_sources(before), history_store::history::verify::raw_events(value), *candidate, index));
-                    assert(trace::trace_sources(before)[index] == trace::trace_rule_source(items[index]));
-                    assert(dsl::rule_violated(trace::trace_rule_source(items[index]), *candidate, events@));
+                assert(history_semantics::policy::trace::trace_diagnostic_ids(before)[index] == trace::trace_rule_diagnostic_id(items[index]));
+                if junco_core::spec::hypotheses::monitor_hypotheses::<E>() {
+                    assert(junco_core::spec::semantics::least_violation(history_semantics::policy::trace::trace_sources(before), history_store::history::verify::raw_events(value), *candidate, index));
+                    assert(history_semantics::policy::trace::trace_sources(before)[index] == trace::trace_rule_source(items[index]));
+                    assert(semantics::rule_violated(trace::trace_rule_source(items[index]), *candidate, events@));
                     assert forall|i: int| 0 <= i < index implies
-                        !dsl::rule_violated(trace::trace_rule_source(items[i]), *candidate, events@) by {
-                        assert(trace::trace_sources(before)[i] == trace::trace_rule_source(items[i]));
-                        assert(!dsl::rule_violated(trace::trace_sources(before)[i], *candidate,
+                        !semantics::rule_violated(trace::trace_rule_source(items[i]), *candidate, events@) by {
+                        assert(history_semantics::policy::trace::trace_sources(before)[i] == trace::trace_rule_source(items[i]));
+                        assert(!semantics::rule_violated(history_semantics::policy::trace::trace_sources(before)[i], *candidate,
                             history::raw_events(value)));
                     }
                 }
@@ -421,14 +414,14 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
 fn last_state_change_helper<E: Event>(
     setter: history_syntax::TestExpr<E>, stable: history_syntax::TestExpr<E>,
     head: Ghost<HeadView<E::Component>>,
-    candidate: Ghost<Seq<E::Component>>,
-    word: Ghost<Seq<Seq<E::Component>>>,
+    candidate: Ghost<E>,
+    word: Ghost<Seq<E>>,
 ) -> (tail: RegexExpr<E>)
     ensures tail@ == RegexView::Concat(seq![RegexView::All, RegexView::Test(setter@),
         RegexView::Star(Box::new(RegexView::Test(stable@)))]),
-        dsl::lang(tail@, head@, candidate@, word@) <==> exists|i: int| 0 <= i < word@.len()
-            && dsl::test_sem(setter@, head@, candidate@, word@[i])
-            && forall|j: int| i < j < word@.len() ==> dsl::test_sem(stable@, head@, candidate@, word@[j]),
+        semantics::lang(tail@, head@, candidate@, word@) <==> exists|i: int| 0 <= i < word@.len()
+            && semantics::test_sem(setter@, head@, candidate@, word@[i])
+            && forall|j: int| i < j < word@.len() ==> semantics::test_sem(stable@, head@, candidate@, word@[j]),
 {
     let ghost setter_view = setter@;
     let ghost stable_view = stable@;
@@ -437,41 +430,41 @@ fn last_state_change_helper<E: Event>(
     tail
 }
 
-// These are component-language facts: arbitrary native Event, Hash, and callback laws are irrelevant.
-proof fn last_state_change_cases<C: PartialEq>(
-    setter: TestView<C>, stable: TestView<C>, head: HeadView<C>,
-    candidate: Seq<C>, set: Seq<C>, kept: Seq<C>, broken: Seq<C>,
+// These event-language facts do not need native Hash or callback laws.
+proof fn last_state_change_cases<E: Event>(
+    setter: TestView<E::Component>, stable: TestView<E::Component>, head: HeadView<E::Component>,
+    candidate: E, set: E, kept: E, broken: E,
 )
-    requires dsl::test_sem(setter, head, candidate, set),
-        dsl::test_sem(stable, head, candidate, kept),
-        !dsl::test_sem(setter, head, candidate, broken),
-        !dsl::test_sem(stable, head, candidate, broken),
+    requires semantics::test_sem(setter, head, candidate, set),
+        semantics::test_sem(stable, head, candidate, kept),
+        !semantics::test_sem(setter, head, candidate, broken),
+        !semantics::test_sem(stable, head, candidate, broken),
     ensures
-        !dsl::lang(RegexView::Concat(seq![RegexView::All, RegexView::Test(setter),
+        !semantics::lang(RegexView::Concat(seq![RegexView::All, RegexView::Test(setter),
             RegexView::Star(Box::new(RegexView::Test(stable)))]), head, candidate, seq![]),
-        dsl::lang(RegexView::Concat(seq![RegexView::All, RegexView::Test(setter),
+        semantics::lang(RegexView::Concat(seq![RegexView::All, RegexView::Test(setter),
             RegexView::Star(Box::new(RegexView::Test(stable)))]), head, candidate, seq![set, kept]),
-        !dsl::lang(RegexView::Concat(seq![RegexView::All, RegexView::Test(setter),
+        !semantics::lang(RegexView::Concat(seq![RegexView::All, RegexView::Test(setter),
             RegexView::Star(Box::new(RegexView::Test(stable)))]), head, candidate, seq![set, broken]),
-        dsl::lang(RegexView::Concat(seq![RegexView::All, RegexView::Test(TestView::True),
+        semantics::lang(RegexView::Concat(seq![RegexView::All, RegexView::Test(TestView::True),
             RegexView::Star(Box::new(RegexView::Test(TestView::True)))]), head, candidate, seq![set, kept]),
 {
     dsl::lemma_last_state_change_lang(setter, stable, head, candidate, seq![]);
     dsl::lemma_last_state_change_lang(setter, stable, head, candidate, seq![set, kept]);
-    assert(exists|i: int| 0 <= i < 2 && dsl::test_sem(setter, head, candidate, seq![set, kept][i])
-        && forall|j: int| i < j < 2 ==> dsl::test_sem(stable, head, candidate, seq![set, kept][j])) by {
-        assert(dsl::test_sem(setter, head, candidate, seq![set, kept][0]));
+    assert(exists|i: int| 0 <= i < 2 && semantics::test_sem(setter, head, candidate, seq![set, kept][i])
+        && forall|j: int| i < j < 2 ==> semantics::test_sem(stable, head, candidate, seq![set, kept][j])) by {
+        assert(semantics::test_sem(setter, head, candidate, seq![set, kept][0]));
     }
     dsl::lemma_last_state_change_lang(setter, stable, head, candidate, seq![set, broken]);
     assert forall|i: int| 0 <= i < 2 implies
-        !(dsl::test_sem(setter, head, candidate, seq![set, broken][i])
-            && forall|j: int| i < j < 2 ==> dsl::test_sem(stable, head, candidate, seq![set, broken][j])) by {
-        if i == 0 { assert(!dsl::test_sem(stable, head, candidate, seq![set, broken][1])); }
+        !(semantics::test_sem(setter, head, candidate, seq![set, broken][i])
+            && forall|j: int| i < j < 2 ==> semantics::test_sem(stable, head, candidate, seq![set, broken][j])) by {
+        if i == 0 { assert(!semantics::test_sem(stable, head, candidate, seq![set, broken][1])); }
     }
     dsl::lemma_last_state_change_lang(TestView::True, TestView::True, head, candidate, seq![set, kept]);
-    assert(exists|i: int| 0 <= i < 2 && dsl::test_sem(TestView::True, head, candidate, seq![set, kept][i])
-        && forall|j: int| i < j < 2 ==> dsl::test_sem(TestView::True, head, candidate, seq![set, kept][j])) by {
-        assert(dsl::test_sem(TestView::True, head, candidate, seq![set, kept][0]));
+    assert(exists|i: int| 0 <= i < 2 && semantics::test_sem(TestView::True, head, candidate, seq![set, kept][i])
+        && forall|j: int| i < j < 2 ==> semantics::test_sem(TestView::True, head, candidate, seq![set, kept][j])) by {
+        assert(semantics::test_sem(TestView::True, head, candidate, seq![set, kept][0]));
     }
 }
 

@@ -9,7 +9,7 @@
 use crate::compile::verify as numeric;
 use crate::compiled_rule::CompiledRule;
 use crate::compiled_rule::verify as typed;
-use crate::policy::evaluate::{policy_decision_result, verify as policy};
+use crate::policy::evaluate::{policy_storage_result, verify as policy};
 use crate::policy::rule::verify::{policy_rule_diagnostic, policy_rule_source};
 use crate::policy::{CompiledPolicy, PolicyDecision, PolicyRule};
 use crate::runtime::{RuleRuntime, verify as cache};
@@ -27,7 +27,8 @@ use junco_core::flat::FlatPair;
 use junco_core::kernel::verify as graph;
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
-use junco_core::verify::dsl;
+use junco_core::spec::semantics;
+use crate::spec::monitor;
 use vstd::prelude::*;
 use vstd::std_specs::iter::IteratorSpec;
 
@@ -66,7 +67,7 @@ pub(crate) fn shared_store_owner_decision_client<E: Event>(
 ) -> (result: Result<(CompiledRule<E>, History<E>, Result<Option<bool>, HistoryError>), CompileError>)
     requires books::store_wf(*store),
     ensures result matches Ok((compiled, history, answer)) ==>
-        typed::decision_requires(compiled, history)
+        crate::compiled_rule::decision_requires(compiled, history)
             && books::same_store_owner(compiled.store, raw::store_of(history))
             && answer != Err(HistoryError::WrongHistoryOwner),
 {
@@ -88,7 +89,7 @@ pub(crate) fn independent_store_owner_decision_client<E: Event>(
     rule: Rule<E>, candidate: &E,
 ) -> (result: Result<(CompiledRule<E>, History<E>, Result<Option<bool>, HistoryError>), CompileError>)
     ensures result matches Ok((compiled, history, answer)) ==>
-        typed::decision_requires(compiled, history)
+        crate::compiled_rule::decision_requires(compiled, history)
             && !books::same_store_owner(compiled.store, raw::store_of(history))
             && answer == Err(HistoryError::WrongHistoryOwner),
 {
@@ -122,8 +123,8 @@ pub(crate) fn public_compiled_decision<E: Event>(
     store: Arc<Store<E>>, rule: Rule<E>, history: &History<E>, candidate: &E,
 ) -> (result: Result<Option<bool>, CompileError>)
     requires books::store_wf(*store), raw::history_wf(*history),
-    ensures books::native_obligations::<E>() ==> (result matches Ok(answer)
-        ==> answer == dsl::rule_evaluation(rule, *candidate, raw::raw_events(*history))),
+    ensures junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> (result matches Ok(answer)
+        ==> answer == (if semantics::head_matches(rule.head@, *candidate) { Some(semantics::lang(rule.tail@, rule.head@, *candidate, raw::raw_events(*history))) } else { None })),
 {
     let ghost source = rule;
     let mut compiled = CompiledRule::new(store, rule)?;
@@ -140,8 +141,8 @@ pub(crate) fn retained_history_lifecycle<E: Event>(
 ) -> (result: Result<Option<bool>, CompileError>)
     requires books::store_wf(*store), raw::history_wf(*old(history)),
     ensures raw::history_wf(*final(history)),
-        books::native_obligations::<E>() ==> (result matches Ok(answer)
-            ==> answer == dsl::rule_evaluation(rule, *candidate, raw::raw_events(*final(history)))),
+        junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==> (result matches Ok(answer)
+            ==> answer == (if semantics::head_matches(rule.head@, *candidate) { Some(semantics::lang(rule.tail@, rule.head@, *candidate, raw::raw_events(*final(history)))) } else { None })),
 {
     let ghost source = rule;
     let mut compiled = CompiledRule::new(store, rule)?;
@@ -160,9 +161,9 @@ pub(crate) fn retained_history_lifecycle<E: Event>(
     let accepted = compiled.accepts_history(&fork, candidate)?;
     proof {
         assert(raw::raw_word(*history) =~= raw::raw_events(*history).map(
-            |i: int, event: E| history_syntax::event::specs::event_view(event)));
+            |i: int, event: E| history_syntax::spec::events::event_view(event)));
         assert(raw::raw_word(fork) =~= raw::raw_events(fork).map(
-            |i: int, event: E| history_syntax::event::specs::event_view(event)));
+            |i: int, event: E| history_syntax::spec::events::event_view(event)));
     }
     Ok(accepted)
 }
@@ -174,10 +175,10 @@ pub(crate) fn compiled_cached_decision<E: Event, L: Limits>(
     compiled: &mut CompiledRule<E>, history: &History<E>, candidate: &E,
     limits: &mut L, world: &mut ObservationWorld,
 ) -> (result: Result<Option<bool>, HistoryError>)
-    requires typed::decision_requires(*old(compiled), *history),
-    ensures typed::decision_result(*old(compiled), *final(compiled), *history, *candidate, result),
-        books::native_obligations::<E>() ==>
-            typed::dsl_result(typed::source_rule(*old(compiled)), *history, *candidate, result),
+    requires crate::compiled_rule::decision_requires(*old(compiled), *history),
+    ensures crate::compiled_rule::decision_result(*old(compiled), *final(compiled), *history, *candidate, result),
+        junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
+            typed::dsl_result(crate::compiled_rule::source_rule(*old(compiled)), *history, *candidate, result),
 {
     compiled.accepts_history_with_limits(history, candidate, limits, world)
 }
@@ -186,8 +187,11 @@ pub(crate) fn compiled_cached_decision<E: Event, L: Limits>(
 pub(crate) fn validator_check_client<E: Event, M>(
     state: &mut Validator<E>, request: Request<E, M>,
 ) -> (result: Result<Decision<E, M>, HistoryError>)
-    requires validator::validator_wf(*old(state)),
-    ensures validator::check_result(*old(state), *final(state), request, result),
+    requires (*old(state)).wf(),
+    ensures final(state).wf(), monitor::validator_frame(old(state)@, final(state)@),
+        crate::validator::check_storage(*old(state), *final(state), request, result),
+        junco_core::spec::hypotheses::monitor_hypotheses::<E>()
+            ==> monitor::check_step(old(state)@, final(state)@, request, result),
 {
     state.check(request)
 }
@@ -195,8 +199,11 @@ pub(crate) fn validator_check_client<E: Event, M>(
 pub(crate) fn compiled_policy_decide_client<E: Event, C, F: FnOnce() -> C>(
     state: &mut CompiledPolicy<E, C>, history: &History<E>, candidate: &E, context: F,
 ) -> (result: Result<PolicyDecision, HistoryError>)
-    requires policy::policy_wf(*old(state)), raw::history_wf(*history), call_requires(context, ()),
-    ensures policy_decision_result(*old(state), *final(state), *history, *candidate, result),
+    requires crate::policy::evaluate::policy_wf(*old(state)), raw::history_wf(*history), call_requires(context, ()),
+    ensures policy_storage_result(*old(state), *final(state), *history, *candidate, result),
+        junco_core::spec::hypotheses::monitor_hypotheses::<E>() ==>
+            monitor::policy_decision_spec(crate::policy::evaluate::policy_sources(*old(state)), raw::raw_events(*history),
+                *candidate, crate::policy::evaluate::policy_selected_index(*final(state)) as int, result),
 {
     state.decide(history, candidate, context)
 }
@@ -205,9 +212,9 @@ pub(crate) fn validator_from_rules_client<E: Event>(
     store: Arc<Store<E>>, rules: Vec<Rule<E>>,
 ) -> (result: Result<Validator<E>, CompileError>)
     requires books::store_wf(*store),
-    ensures result matches Ok(state) ==> validator::validator_wf(state)
-        && validator::validator_sources(state) == rules@
-        && raw::empty_history(validator::validator_history(state), store),
+    ensures result matches Ok(state) ==> (state).wf()
+        && (state)@.rules == rules@
+        && raw::empty_history((state).history, store),
 {
     let ghost original = rules@;
     let count = rules.len();
@@ -215,9 +222,9 @@ pub(crate) fn validator_from_rules_client<E: Event>(
     let mut remaining = rules.into_iter();
     let mut index: usize = 0;
     while index < count
-        invariant count == original.len(), index <= original.len(), validator::builder_wf(builder),
-            validator::builder_store(builder) == store,
-            validator::builder_sources(builder) == original.take(index as int),
+        invariant count == original.len(), index <= original.len(), (builder).wf(),
+            (builder).store_spec() == store,
+            (builder)@ == original.take(index as int),
             remaining.remaining() == original.skip(index as int),
             remaining.obeys_prophetic_iter_laws(),
         decreases original.len() - index,
@@ -228,7 +235,7 @@ pub(crate) fn validator_from_rules_client<E: Event>(
             None => { proof { assert(false); } },
         }
         index += 1;
-        proof { assert(validator::builder_sources(builder) =~= original.take(index as int)); }
+        proof { assert((builder)@ =~= original.take(index as int)); }
     }
     let state = builder.finish()?;
     proof { assert(original.take(original.len() as int) =~= original); }
@@ -239,11 +246,11 @@ pub(crate) fn compiled_policy_from_vec_client<E: Event, C>(
     store: Arc<Store<E>>, rules: Vec<PolicyRule<E, C>>,
 ) -> (result: Result<CompiledPolicy<E, C>, CompileError>)
     requires books::store_wf(*store),
-    ensures result matches Ok(state) ==> policy::policy_wf(state)
-        && policy::policy_store(state) == store
-        && policy::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
-        && policy::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
-        && policy::policy_trace_empty(state),
+    ensures result matches Ok(state) ==> crate::policy::evaluate::policy_wf(state)
+        && crate::policy::evaluate::policy_store(state) == store
+        && crate::policy::evaluate::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
+        && crate::policy::evaluate::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
+        && crate::policy::evaluate::policy_trace_empty(state),
 {
     CompiledPolicy::new(store, rules)
 }
@@ -251,11 +258,11 @@ pub(crate) fn compiled_policy_from_vec_client<E: Event, C>(
 pub(crate) fn validator_require_empty_then_forbid_all_client<E: Event, M>(
     store: Arc<Store<E>>, request: Request<E, M>, head: Head<E>, second_head: Head<E>,
 ) -> (result: Result<(Validator<E>, Decision<E, M>), CompileError>)
-    requires books::store_wf(*store), books::native_obligations::<E>(), dsl::head_matches(head@, history_syntax::event::specs::event_view(request.event)), second_head == head,
-    ensures result matches Ok((state, decision)) ==> validator::validator_wf(state)
-        && validator::validator_sources(state) == seq![Rule { mode: RuleMode::Require, head: head, tail: RegexExpr::Empty }, Rule { mode: RuleMode::Forbid, head: second_head, tail: RegexExpr::All }]
-        && raw::raw_events(validator::validator_history(state)) == Seq::<E>::empty()
-        && junco_core::spec::semantics::least_violation(validator::validator_sources(state), raw::raw_events(validator::validator_history(state)), request.event, 0)
+    requires books::store_wf(*store), junco_core::spec::hypotheses::monitor_hypotheses::<E>(), semantics::head_matches(head@, request.event), second_head == head,
+    ensures result matches Ok((state, decision)) ==> (state).wf()
+        && (state)@.rules == seq![Rule { mode: RuleMode::Require, head: head, tail: RegexExpr::Empty }, Rule { mode: RuleMode::Forbid, head: second_head, tail: RegexExpr::All }]
+        && (state)@.history == Seq::<E>::empty()
+        && junco_core::spec::semantics::least_violation((state)@.rules, (state)@.history, request.event, 0)
         && decision is Denied && (decision matches Decision::Denied(denial) ==> denial.mode == RuleMode::Require && denial.event == request.event),
 {
     let mut rules = Vec::new();
@@ -264,22 +271,22 @@ pub(crate) fn validator_require_empty_then_forbid_all_client<E: Event, M>(
     let mut state = validator_from_rules_client(store, rules)?;
     let ghost before = state;
     proof {
-        raw::lemma_empty_history(validator::validator_history(state), store);
-        assert(junco_core::spec::semantics::least_violation(validator::validator_sources(state), raw::raw_events(validator::validator_history(state)), request.event, 0));
+        raw::lemma_empty_history((state).history, store);
+        assert(junco_core::spec::semantics::least_violation((state)@.rules, (state)@.history, request.event, 0));
     }
     let decision = validator_check_client(&mut state, request)?;
-    proof { raw::lemma_history_frame_facts(validator::validator_history(before), validator::validator_history(state)); }
+    proof { raw::lemma_history_frame_facts((before).history, (state).history); }
     Ok((state, decision))
 }
 
 pub(crate) fn validator_forbid_all_then_require_empty_client<E: Event, M>(
     store: Arc<Store<E>>, request: Request<E, M>, head: Head<E>, second_head: Head<E>,
 ) -> (result: Result<(Validator<E>, Decision<E, M>), CompileError>)
-    requires books::store_wf(*store), books::native_obligations::<E>(), dsl::head_matches(head@, history_syntax::event::specs::event_view(request.event)), second_head == head,
-    ensures result matches Ok((state, decision)) ==> validator::validator_wf(state)
-        && validator::validator_sources(state) == seq![Rule { mode: RuleMode::Forbid, head: head, tail: RegexExpr::All }, Rule { mode: RuleMode::Require, head: second_head, tail: RegexExpr::Empty }]
-        && raw::raw_events(validator::validator_history(state)) == Seq::<E>::empty()
-        && junco_core::spec::semantics::least_violation(validator::validator_sources(state), raw::raw_events(validator::validator_history(state)), request.event, 0)
+    requires books::store_wf(*store), junco_core::spec::hypotheses::monitor_hypotheses::<E>(), semantics::head_matches(head@, request.event), second_head == head,
+    ensures result matches Ok((state, decision)) ==> (state).wf()
+        && (state)@.rules == seq![Rule { mode: RuleMode::Forbid, head: head, tail: RegexExpr::All }, Rule { mode: RuleMode::Require, head: second_head, tail: RegexExpr::Empty }]
+        && (state)@.history == Seq::<E>::empty()
+        && junco_core::spec::semantics::least_violation((state)@.rules, (state)@.history, request.event, 0)
         && decision is Denied && (decision matches Decision::Denied(denial) ==> denial.mode == RuleMode::Forbid && denial.event == request.event),
 {
     let mut rules = Vec::new();
@@ -288,21 +295,21 @@ pub(crate) fn validator_forbid_all_then_require_empty_client<E: Event, M>(
     let mut state = validator_from_rules_client(store, rules)?;
     let ghost before = state;
     proof {
-        raw::lemma_empty_history(validator::validator_history(state), store);
-        assert(junco_core::spec::semantics::least_violation(validator::validator_sources(state), raw::raw_events(validator::validator_history(state)), request.event, 0));
+        raw::lemma_empty_history((state).history, store);
+        assert(junco_core::spec::semantics::least_violation((state)@.rules, (state)@.history, request.event, 0));
     }
     let decision = validator_check_client(&mut state, request)?;
-    proof { raw::lemma_history_frame_facts(validator::validator_history(before), validator::validator_history(state)); }
+    proof { raw::lemma_history_frame_facts((before).history, (state).history); }
     Ok((state, decision))
 }
 
 pub(crate) fn validator_require_all_and_forbid_empty_client<E: Event, M>(
     store: Arc<Store<E>>, request: Request<E, M>, head: Head<E>, second_head: Head<E>,
 ) -> (result: Result<(Validator<E>, Decision<E, M>), CompileError>)
-    requires books::store_wf(*store), books::native_obligations::<E>(), dsl::head_matches(head@, history_syntax::event::specs::event_view(request.event)), second_head == head,
-    ensures result matches Ok((state, decision)) ==> validator::validator_wf(state)
-        && validator::validator_sources(state) == seq![Rule { mode: RuleMode::Require, head: head, tail: RegexExpr::All }, Rule { mode: RuleMode::Forbid, head: second_head, tail: RegexExpr::Empty }]
-        && raw::raw_events(validator::validator_history(state)) == seq![request.event]
+    requires books::store_wf(*store), junco_core::spec::hypotheses::monitor_hypotheses::<E>(), semantics::head_matches(head@, request.event), second_head == head,
+    ensures result matches Ok((state, decision)) ==> (state).wf()
+        && (state)@.rules == seq![Rule { mode: RuleMode::Require, head: head, tail: RegexExpr::All }, Rule { mode: RuleMode::Forbid, head: second_head, tail: RegexExpr::Empty }]
+        && (state)@.history == seq![request.event]
         && decision is Grant && (decision matches Decision::Grant(grant) ==> grant.event == request.event && grant.metadata == request.metadata),
 {
     let mut rules = Vec::new();
@@ -311,14 +318,14 @@ pub(crate) fn validator_require_all_and_forbid_empty_client<E: Event, M>(
     let mut state = validator_from_rules_client(store, rules)?;
     let ghost before = state;
     proof {
-        raw::lemma_empty_history(validator::validator_history(state), store);
-        assert forall|i: int| 0 <= i < validator::validator_sources(state).len() implies
-            !dsl::rule_violated(validator::validator_sources(state)[i], request.event, raw::raw_events(validator::validator_history(state))) by {}
+        raw::lemma_empty_history((state).history, store);
+        assert forall|i: int| 0 <= i < (state)@.rules.len() implies
+            !semantics::rule_violated((state)@.rules[i], request.event, (state)@.history) by {}
     }
     let decision = validator_check_client(&mut state, request)?;
     proof {
         if decision is Grant {
-            raw::lemma_push_result(validator::validator_history(before), validator::validator_history(state), request.event, Ok(()));
+            raw::lemma_push_result((before).history, (state).history, request.event, Ok(()));
         }
     }
     Ok((state, decision))
@@ -327,10 +334,10 @@ pub(crate) fn validator_require_all_and_forbid_empty_client<E: Event, M>(
 pub(crate) fn validator_head_mismatch_client<E: Event, M>(
     store: Arc<Store<E>>, request: Request<E, M>, head: Head<E>,
 ) -> (result: Result<(Validator<E>, Decision<E, M>), CompileError>)
-    requires books::store_wf(*store), books::native_obligations::<E>(), !dsl::head_matches(head@, history_syntax::event::specs::event_view(request.event)),
-    ensures result matches Ok((state, decision)) ==> validator::validator_wf(state)
-        && validator::validator_sources(state) == seq![Rule { mode: RuleMode::Require, head: head, tail: RegexExpr::Empty }]
-        && raw::raw_events(validator::validator_history(state)) == seq![request.event]
+    requires books::store_wf(*store), junco_core::spec::hypotheses::monitor_hypotheses::<E>(), !semantics::head_matches(head@, request.event),
+    ensures result matches Ok((state, decision)) ==> (state).wf()
+        && (state)@.rules == seq![Rule { mode: RuleMode::Require, head: head, tail: RegexExpr::Empty }]
+        && (state)@.history == seq![request.event]
         && decision is Grant && (decision matches Decision::Grant(grant) ==> grant.event == request.event && grant.metadata == request.metadata),
 {
     let mut rules = Vec::new();
@@ -338,14 +345,14 @@ pub(crate) fn validator_head_mismatch_client<E: Event, M>(
     let mut state = validator_from_rules_client(store, rules)?;
     let ghost before = state;
     proof {
-        raw::lemma_empty_history(validator::validator_history(state), store);
-        assert forall|i: int| 0 <= i < validator::validator_sources(state).len() implies
-            !dsl::rule_violated(validator::validator_sources(state)[i], request.event, raw::raw_events(validator::validator_history(state))) by {}
+        raw::lemma_empty_history((state).history, store);
+        assert forall|i: int| 0 <= i < (state)@.rules.len() implies
+            !semantics::rule_violated((state)@.rules[i], request.event, (state)@.history) by {}
     }
     let decision = validator_check_client(&mut state, request)?;
     proof {
         if decision is Grant {
-            raw::lemma_push_result(validator::validator_history(before), validator::validator_history(state), request.event, Ok(()));
+            raw::lemma_push_result((before).history, (state).history, request.event, Ok(()));
         }
     }
     Ok((state, decision))
@@ -354,24 +361,24 @@ pub(crate) fn validator_head_mismatch_client<E: Event, M>(
 pub(crate) fn validator_empty_table_client<E: Event, M>(
     store: Arc<Store<E>>, request: Request<E, M>,
 ) -> (result: Result<(Validator<E>, Decision<E, M>), CompileError>)
-    requires books::store_wf(*store), books::native_obligations::<E>(),
-    ensures result matches Ok((state, decision)) ==> validator::validator_wf(state)
-        && validator::validator_sources(state) == seq![]
-        && raw::raw_events(validator::validator_history(state)) == seq![request.event]
+    requires books::store_wf(*store), junco_core::spec::hypotheses::monitor_hypotheses::<E>(),
+    ensures result matches Ok((state, decision)) ==> (state).wf()
+        && (state)@.rules == seq![]
+        && (state)@.history == seq![request.event]
         && decision is Grant && (decision matches Decision::Grant(grant) ==> grant.event == request.event && grant.metadata == request.metadata),
 {
     let mut rules = Vec::new();
     let mut state = validator_from_rules_client(store, rules)?;
     let ghost before = state;
     proof {
-        raw::lemma_empty_history(validator::validator_history(state), store);
-        assert forall|i: int| 0 <= i < validator::validator_sources(state).len() implies
-            !dsl::rule_violated(validator::validator_sources(state)[i], request.event, raw::raw_events(validator::validator_history(state))) by {}
+        raw::lemma_empty_history((state).history, store);
+        assert forall|i: int| 0 <= i < (state)@.rules.len() implies
+            !semantics::rule_violated((state)@.rules[i], request.event, (state)@.history) by {}
     }
     let decision = validator_check_client(&mut state, request)?;
     proof {
         if decision is Grant {
-            raw::lemma_push_result(validator::validator_history(before), validator::validator_history(state), request.event, Ok(()));
+            raw::lemma_push_result((before).history, (state).history, request.event, Ok(()));
         }
     }
     Ok((state, decision))
@@ -380,11 +387,11 @@ pub(crate) fn validator_empty_table_client<E: Event, M>(
 pub(crate) fn compiled_policy_require_empty_then_forbid_all_client<E: Event, C, F: FnOnce() -> C>(
     store: Arc<Store<E>>, rules: Vec<PolicyRule<E, C>>, history: &History<E>, candidate: &E, context: F, head: Ghost<Head<E>>, second_head: Ghost<Head<E>>,
 ) -> (result: Result<(CompiledPolicy<E, C>, PolicyDecision), CompileError>)
-    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::Empty }, Rule { mode: RuleMode::Forbid, head: second_head@, tail: RegexExpr::All }], dsl::head_matches(head@@, history_syntax::event::specs::event_view(*candidate)), second_head@ == head@,
+    requires books::store_wf(*store), raw::history_wf(*history), junco_core::spec::hypotheses::monitor_hypotheses::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::Empty }, Rule { mode: RuleMode::Forbid, head: second_head@, tail: RegexExpr::All }], semantics::head_matches(head@@, *candidate), second_head@ == head@,
         call_requires(context, ()),
-    ensures result matches Ok((state, decision)) ==> policy::policy_wf(state)
-        && policy::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
-        && policy::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
+    ensures result matches Ok((state, decision)) ==> crate::policy::evaluate::policy_wf(state)
+        && crate::policy::evaluate::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
+        && crate::policy::evaluate::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
         && decision is Deny && policy::policy_trace(state).calls.len() == 1
         && policy::policy_trace(state).context_calls == 1 && policy::policy_trace(state).diagnostic_calls == 1
         && policy::policy_trace(state).calls[0].index == 0
@@ -394,14 +401,14 @@ pub(crate) fn compiled_policy_require_empty_then_forbid_all_client<E: Event, C, 
     let mut state = compiled_policy_from_vec_client(store, rules)?;
     let ghost before = state;
     proof {
-        assert(junco_core::spec::semantics::least_violation(policy::policy_sources(state), raw::raw_events(*history), *candidate, 0));
+        assert(junco_core::spec::semantics::least_violation(crate::policy::evaluate::policy_sources(state), raw::raw_events(*history), *candidate, 0));
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
     proof {
         if decision is Deny {
             let index = policy::policy_trace(state).calls.last().index;
             assert(index == 0) by {
-                if index > 0 { assert(!dsl::rule_violated(policy::policy_sources(before)[0], *candidate, raw::raw_events(*history))); }
+                if index > 0 { assert(!semantics::rule_violated(crate::policy::evaluate::policy_sources(before)[0], *candidate, raw::raw_events(*history))); }
             }
         }
     }
@@ -411,11 +418,11 @@ pub(crate) fn compiled_policy_require_empty_then_forbid_all_client<E: Event, C, 
 pub(crate) fn compiled_policy_forbid_all_then_require_empty_client<E: Event, C, F: FnOnce() -> C>(
     store: Arc<Store<E>>, rules: Vec<PolicyRule<E, C>>, history: &History<E>, candidate: &E, context: F, head: Ghost<Head<E>>, second_head: Ghost<Head<E>>,
 ) -> (result: Result<(CompiledPolicy<E, C>, PolicyDecision), CompileError>)
-    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Forbid, head: head@, tail: RegexExpr::All }, Rule { mode: RuleMode::Require, head: second_head@, tail: RegexExpr::Empty }], dsl::head_matches(head@@, history_syntax::event::specs::event_view(*candidate)), second_head@ == head@,
+    requires books::store_wf(*store), raw::history_wf(*history), junco_core::spec::hypotheses::monitor_hypotheses::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Forbid, head: head@, tail: RegexExpr::All }, Rule { mode: RuleMode::Require, head: second_head@, tail: RegexExpr::Empty }], semantics::head_matches(head@@, *candidate), second_head@ == head@,
         call_requires(context, ()),
-    ensures result matches Ok((state, decision)) ==> policy::policy_wf(state)
-        && policy::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
-        && policy::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
+    ensures result matches Ok((state, decision)) ==> crate::policy::evaluate::policy_wf(state)
+        && crate::policy::evaluate::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
+        && crate::policy::evaluate::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
         && decision is Deny && policy::policy_trace(state).calls.len() == 1
         && policy::policy_trace(state).context_calls == 1 && policy::policy_trace(state).diagnostic_calls == 1
         && policy::policy_trace(state).calls[0].index == 0
@@ -425,14 +432,14 @@ pub(crate) fn compiled_policy_forbid_all_then_require_empty_client<E: Event, C, 
     let mut state = compiled_policy_from_vec_client(store, rules)?;
     let ghost before = state;
     proof {
-        assert(junco_core::spec::semantics::least_violation(policy::policy_sources(state), raw::raw_events(*history), *candidate, 0));
+        assert(junco_core::spec::semantics::least_violation(crate::policy::evaluate::policy_sources(state), raw::raw_events(*history), *candidate, 0));
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
     proof {
         if decision is Deny {
             let index = policy::policy_trace(state).calls.last().index;
             assert(index == 0) by {
-                if index > 0 { assert(!dsl::rule_violated(policy::policy_sources(before)[0], *candidate, raw::raw_events(*history))); }
+                if index > 0 { assert(!semantics::rule_violated(crate::policy::evaluate::policy_sources(before)[0], *candidate, raw::raw_events(*history))); }
             }
         }
     }
@@ -442,18 +449,18 @@ pub(crate) fn compiled_policy_forbid_all_then_require_empty_client<E: Event, C, 
 pub(crate) fn compiled_policy_require_all_and_forbid_empty_client<E: Event, C, F: FnOnce() -> C>(
     store: Arc<Store<E>>, rules: Vec<PolicyRule<E, C>>, history: &History<E>, candidate: &E, context: F, head: Ghost<Head<E>>, second_head: Ghost<Head<E>>,
 ) -> (result: Result<(CompiledPolicy<E, C>, PolicyDecision), CompileError>)
-    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::All }, Rule { mode: RuleMode::Forbid, head: second_head@, tail: RegexExpr::Empty }], dsl::head_matches(head@@, history_syntax::event::specs::event_view(*candidate)), second_head@ == head@,
+    requires books::store_wf(*store), raw::history_wf(*history), junco_core::spec::hypotheses::monitor_hypotheses::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::All }, Rule { mode: RuleMode::Forbid, head: second_head@, tail: RegexExpr::Empty }], semantics::head_matches(head@@, *candidate), second_head@ == head@,
         call_requires(context, ()),
-    ensures result matches Ok((state, decision)) ==> policy::policy_wf(state)
-        && policy::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
-        && policy::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
-        && decision is Grant && policy::policy_trace_empty(state)
+    ensures result matches Ok((state, decision)) ==> crate::policy::evaluate::policy_wf(state)
+        && crate::policy::evaluate::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
+        && crate::policy::evaluate::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
+        && decision is Grant && crate::policy::evaluate::policy_trace_empty(state)
         && policy::policy_trace(state).context_calls == 0 && policy::policy_trace(state).diagnostic_calls == 0,
 {
     let mut state = compiled_policy_from_vec_client(store, rules)?;
     proof {
-        assert forall|i: int| 0 <= i < policy::policy_sources(state).len() implies
-            !dsl::rule_violated(policy::policy_sources(state)[i], *candidate, raw::raw_events(*history)) by {}
+        assert forall|i: int| 0 <= i < crate::policy::evaluate::policy_sources(state).len() implies
+            !semantics::rule_violated(crate::policy::evaluate::policy_sources(state)[i], *candidate, raw::raw_events(*history)) by {}
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
     Ok((state, decision))
@@ -462,18 +469,18 @@ pub(crate) fn compiled_policy_require_all_and_forbid_empty_client<E: Event, C, F
 pub(crate) fn compiled_policy_head_mismatch_client<E: Event, C, F: FnOnce() -> C>(
     store: Arc<Store<E>>, rules: Vec<PolicyRule<E, C>>, history: &History<E>, candidate: &E, context: F, head: Ghost<Head<E>>,
 ) -> (result: Result<(CompiledPolicy<E, C>, PolicyDecision), CompileError>)
-    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::Empty }], !dsl::head_matches(head@@, history_syntax::event::specs::event_view(*candidate)),
+    requires books::store_wf(*store), raw::history_wf(*history), junco_core::spec::hypotheses::monitor_hypotheses::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![Rule { mode: RuleMode::Require, head: head@, tail: RegexExpr::Empty }], !semantics::head_matches(head@@, *candidate),
         call_requires(context, ()),
-    ensures result matches Ok((state, decision)) ==> policy::policy_wf(state)
-        && policy::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
-        && policy::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
-        && decision is Grant && policy::policy_trace_empty(state)
+    ensures result matches Ok((state, decision)) ==> crate::policy::evaluate::policy_wf(state)
+        && crate::policy::evaluate::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
+        && crate::policy::evaluate::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
+        && decision is Grant && crate::policy::evaluate::policy_trace_empty(state)
         && policy::policy_trace(state).context_calls == 0 && policy::policy_trace(state).diagnostic_calls == 0,
 {
     let mut state = compiled_policy_from_vec_client(store, rules)?;
     proof {
-        assert forall|i: int| 0 <= i < policy::policy_sources(state).len() implies
-            !dsl::rule_violated(policy::policy_sources(state)[i], *candidate, raw::raw_events(*history)) by {}
+        assert forall|i: int| 0 <= i < crate::policy::evaluate::policy_sources(state).len() implies
+            !semantics::rule_violated(crate::policy::evaluate::policy_sources(state)[i], *candidate, raw::raw_events(*history)) by {}
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
     Ok((state, decision))
@@ -482,18 +489,18 @@ pub(crate) fn compiled_policy_head_mismatch_client<E: Event, C, F: FnOnce() -> C
 pub(crate) fn compiled_policy_empty_table_client<E: Event, C, F: FnOnce() -> C>(
     store: Arc<Store<E>>, rules: Vec<PolicyRule<E, C>>, history: &History<E>, candidate: &E, context: F,
 ) -> (result: Result<(CompiledPolicy<E, C>, PolicyDecision), CompileError>)
-    requires books::store_wf(*store), raw::history_wf(*history), books::native_obligations::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![],
+    requires books::store_wf(*store), raw::history_wf(*history), junco_core::spec::hypotheses::monitor_hypotheses::<E>(), rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item)) == seq![],
         call_requires(context, ()),
-    ensures result matches Ok((state, decision)) ==> policy::policy_wf(state)
-        && policy::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
-        && policy::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
-        && decision is Grant && policy::policy_trace_empty(state)
+    ensures result matches Ok((state, decision)) ==> crate::policy::evaluate::policy_wf(state)
+        && crate::policy::evaluate::policy_sources(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
+        && crate::policy::evaluate::policy_diagnostic_ids(state) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
+        && decision is Grant && crate::policy::evaluate::policy_trace_empty(state)
         && policy::policy_trace(state).context_calls == 0 && policy::policy_trace(state).diagnostic_calls == 0,
 {
     let mut state = compiled_policy_from_vec_client(store, rules)?;
     proof {
-        assert forall|i: int| 0 <= i < policy::policy_sources(state).len() implies
-            !dsl::rule_violated(policy::policy_sources(state)[i], *candidate, raw::raw_events(*history)) by {}
+        assert forall|i: int| 0 <= i < crate::policy::evaluate::policy_sources(state).len() implies
+            !semantics::rule_violated(crate::policy::evaluate::policy_sources(state)[i], *candidate, raw::raw_events(*history)) by {}
     }
     let decision = compiled_policy_decide_client(&mut state, history, candidate, context)?;
     Ok((state, decision))
