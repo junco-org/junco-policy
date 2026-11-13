@@ -92,29 +92,6 @@ pub(crate) proof fn lemma_assignment_set(count: nat, before: Seq<u64>, after: Se
     }
 }
 
-/// A strictly increasing sequence of test ids has at most `u32::MAX + 1` members.
-pub(crate) proof fn lemma_test_ids_count(ids: Seq<TestId>)
-    requires model::strictly_increasing(model::test_ids(ids)),
-    ensures ids.len() <= u32::MAX as nat + 1,
-{
-    if ids.len() > 0 {
-        let last = ids.len() as int - 1;
-        lemma_test_ids_rank(ids, last);
-        TestId::lemma_view(ids[last]);
-    }
-}
-
-proof fn lemma_test_ids_rank(ids: Seq<TestId>, i: int)
-    requires model::strictly_increasing(model::test_ids(ids)), 0 <= i < ids.len(),
-    ensures ids[i]@ >= i,
-    decreases i,
-{
-    if i > 0 {
-        lemma_test_ids_rank(ids, i - 1);
-        assert(model::test_ids(ids)[i - 1] < model::test_ids(ids)[i]);
-    }
-}
-
 pub(crate) proof fn lemma_truth_realizes(g: model::Graph, ids: Seq<TestId>, atoms: Seq<Atom>,
     letter: Letter, words: Seq<u64>)
     requires truth_bits(atoms, letter, words), ids.len() == atoms.len(),
