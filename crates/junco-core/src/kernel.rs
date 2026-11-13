@@ -87,6 +87,10 @@ macro_rules! id {
 
             #[verus_spec(result => ensures
                                                 self@ > usize::MAX || no_invariant_failure(result),
+                                                self@ > usize::MAX || match result {
+                                                    Ok(_) => true,
+                                                    Err(error) => crate::spec::semantics::resource_error(error),
+                                                },
                                                 match result {
                                                     Ok(index) => index as nat == self@,
                                                     Err(error) => self@ > usize::MAX as nat && error is Invariant,
@@ -100,6 +104,10 @@ macro_rules! id {
             }
             #[verus_spec(result => ensures
                                                 no_invariant_failure(result),
+                                                match result {
+                                                    Ok(_) => true,
+                                                    Err(error) => crate::spec::semantics::resource_error(error),
+                                                },
                                                 match result {
                                                     Ok(id) => id@ == index as nat,
                                                     Err(error) => index as nat > u32::MAX as nat && error is GraphIndex,
@@ -475,6 +483,9 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            final(self).errors_are_resource() == old(self).errors_are_resource(),
+            old(self).errors_are_resource() && old(self).valid_store() ==>
+                (r matches Err(error) ==> crate::spec::semantics::resource_error(error)),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
@@ -484,6 +495,9 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            final(self).errors_are_resource() == old(self).errors_are_resource(),
+            old(self).errors_are_resource() && old(self).valid_store() ==>
+                (r matches Err(error) ==> crate::spec::semantics::resource_error(error)),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
@@ -494,6 +508,9 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            final(self).errors_are_resource() == old(self).errors_are_resource(),
+            old(self).errors_are_resource() && old(self).valid_store() ==>
+                (r matches Err(error) ==> crate::spec::semantics::resource_error(error)),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
@@ -504,6 +521,9 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            final(self).errors_are_resource() == old(self).errors_are_resource(),
+            old(self).errors_are_resource() && old(self).valid_store() ==>
+                (r matches Err(error) ==> crate::spec::semantics::resource_error(error)),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             old(self).errors_are_non_invariant() && old(self).valid_store() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() && old(self).valid_store() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
@@ -515,6 +535,8 @@ pub trait KernelStore: KernelStoreSpec {
     fn test(&self, id: TestId) -> (r: KernelResult<TestView<'_>>)
         ensures r matches Ok(v) ==> id@ < self.graph().tests.len()
             && v@ == self.graph().tests[id@ as int],
+            self.errors_are_resource() && self.valid_store() && id@ < self.graph().tests.len() ==>
+                r is Ok && (r matches Err(error) ==> crate::spec::semantics::resource_error(error)),
             self.errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             self.errors_are_non_invariant() && self.valid_store() && id@ < self.graph().tests.len()
                 ==> r is Ok && no_invariant_failure(r),
@@ -523,6 +545,8 @@ pub trait KernelStore: KernelStoreSpec {
     fn regex(&self, id: RegexId) -> (r: KernelResult<RegexView<'_>>)
         ensures r matches Ok(v) ==> id@ < self.graph().regexes.len()
             && v@ == self.graph().regexes[id@ as int],
+            self.errors_are_resource() && self.valid_store() && id@ < self.graph().regexes.len() ==>
+                r is Ok && (r matches Err(error) ==> crate::spec::semantics::resource_error(error)),
             self.errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             self.errors_are_non_invariant() && self.valid_store() && id@ < self.graph().regexes.len()
                 ==> r is Ok && no_invariant_failure(r),
@@ -531,6 +555,8 @@ pub trait KernelStore: KernelStoreSpec {
     fn transition(&self, id: TransitionId) -> (r: KernelResult<TransitionView<'_>>)
         ensures r matches Ok(v) ==> id@ < self.graph().transitions.len()
             && v@ == self.graph().transitions[id@ as int],
+            self.errors_are_resource() && self.valid_store() && id@ < self.graph().transitions.len() ==>
+                r is Ok && (r matches Err(error) ==> crate::spec::semantics::resource_error(error)),
             self.errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             self.errors_are_non_invariant() && self.valid_store() && id@ < self.graph().transitions.len()
                 ==> r is Ok && no_invariant_failure(r),
@@ -542,6 +568,9 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            final(self).errors_are_resource() == old(self).errors_are_resource(),
+            old(self).errors_are_resource() ==>
+                (r matches Err(error) ==> crate::spec::semantics::resource_error(error)),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             old(self).errors_are_non_invariant() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
@@ -559,6 +588,9 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            final(self).errors_are_resource() == old(self).errors_are_resource(),
+            old(self).errors_are_resource() ==>
+                (r matches Err(error) ==> crate::spec::semantics::resource_error(error)),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             old(self).errors_are_non_invariant() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
@@ -575,6 +607,9 @@ pub trait KernelStore: KernelStoreSpec {
             final(self).errors_are_non_owner() == old(self).errors_are_non_owner(),
             final(self).errors_are_non_invariant() == old(self).errors_are_non_invariant(),
             final(self).errors_are_non_invalid_policy() == old(self).errors_are_non_invalid_policy(),
+            final(self).errors_are_resource() == old(self).errors_are_resource(),
+            old(self).errors_are_resource() ==>
+                (r matches Err(error) ==> crate::spec::semantics::resource_error(error)),
             old(self).errors_are_non_owner() ==> r != Err(HistoryError::WrongHistoryOwner),
             old(self).errors_are_non_invariant() ==> no_invariant_failure(r),
             old(self).errors_are_non_invalid_policy() ==> !(r matches Err(HistoryError::InvalidPolicy { .. })),
@@ -612,6 +647,11 @@ impl AtomSet {
         final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
         final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
         final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+        final(store).errors_are_resource() == old(store).errors_are_resource(),
+        old(store).errors_are_resource() && old(store).valid_store()
+            && atom_ids_wf(old(store).graph(), ids@) && index < ids@.len()
+            && previous == (if index == 0 { None } else { Some(ids@[index as int - 1]) })
+            ==> (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         old(store).errors_are_non_invariant() && old(store).valid_store()
             && atom_ids_wf(old(store).graph(), ids@) && index < ids@.len()
             && previous == (if index == 0 { None } else { Some(ids@[index as int - 1]) })
@@ -641,7 +681,7 @@ impl AtomSet {
             None => return Err(HistoryError::invalid_atom_set()),
         };
         proof! {
-            if store.errors_are_non_invariant() && store.valid_store()
+            if (store.errors_are_non_invariant() || store.errors_are_resource()) && store.valid_store()
                 && atom_ids_wf(store.graph(), ids@) && index < ids@.len()
                 && previous == (if index == 0 { None } else { Some(ids@[index as int - 1]) }) {
                 assert(id@ < store.graph().tests.len());
@@ -670,6 +710,10 @@ impl AtomSet {
         final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
         final(store).errors_are_non_invariant() == old(store).errors_are_non_invariant(),
         final(store).errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+        final(store).errors_are_resource() == old(store).errors_are_resource(),
+        old(store).errors_are_resource() && old(store).valid_store()
+            && atom_ids_wf(old(store).graph(), ids@)
+            ==> (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         old(store).errors_are_non_invariant() && old(store).valid_store()
             && atom_ids_wf(old(store).graph(), ids@) ==> no_invariant_failure(result),
         old(store).errors_are_non_invalid_policy() && old(store).valid_store()
@@ -687,6 +731,10 @@ impl AtomSet {
                 store.errors_are_non_owner() == old(store).errors_are_non_owner(),
                 store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
                 store.errors_are_non_invalid_policy() == old(store).errors_are_non_invalid_policy(),
+                store.errors_are_resource() == old(store).errors_are_resource(),
+                old(store).errors_are_resource() && old(store).valid_store()
+                    && atom_ids_wf(old(store).graph(), ids@)
+                    ==> (state matches Err(error) ==> crate::spec::semantics::resource_error(error)),
                 old(store).errors_are_non_invariant() && old(store).valid_store()
                     && atom_ids_wf(old(store).graph(), ids@) ==> no_invariant_failure(state),
                 old(store).errors_are_non_invalid_policy() && old(store).valid_store()
@@ -749,6 +797,8 @@ impl TestId {
             ==> result is Ok && no_invariant_failure(result),
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().tests.len()
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        store.errors_are_resource() && store.valid_store() && self@ < store.graph().tests.len()
+            ==> result is Ok && (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         match result {
         Ok(head) => self@ < store.graph().tests.len() && head@ == test_node_head(store.graph().tests[self@ as int]),
         Err(_) => true,
@@ -775,6 +825,8 @@ impl RegexId {
             ==> result is Ok && no_invariant_failure(result),
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().regexes.len()
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        store.errors_are_resource() && store.valid_store() && self@ < store.graph().regexes.len()
+            ==> result is Ok && (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         match result {
         Ok(head) => self@ < store.graph().regexes.len() && head@ == regex_node_head(store.graph().regexes[self@ as int].kind),
         Err(_) => true,
@@ -802,6 +854,8 @@ impl TransitionId {
             ==> result is Ok && no_invariant_failure(result),
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().transitions.len()
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        store.errors_are_resource() && store.valid_store() && self@ < store.graph().transitions.len()
+            ==> result is Ok && (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         match result {
         Ok(head) => self@ < store.graph().transitions.len() && head@ == transition_node_head(store.graph().transitions[self@ as int]),
         Err(_) => true,
@@ -838,6 +892,9 @@ impl TestId {
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().tests.len()
             && test_node_child(store.graph().tests[self@ as int], index as nat) is Some
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        store.errors_are_resource() && store.valid_store() && self@ < store.graph().tests.len()
+            && test_node_child(store.graph().tests[self@ as int], index as nat) is Some
+            ==> result is Ok && (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         match result {
         Ok(child) => self@ < store.graph().tests.len() && test_node_child(store.graph().tests[self@ as int], index as nat) == Some(child@),
         Err(_) => true,
@@ -867,6 +924,9 @@ impl RegexId {
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().regexes.len()
             && regex_node_child(store.graph().regexes[self@ as int].kind, index as nat) is Some
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        store.errors_are_resource() && store.valid_store() && self@ < store.graph().regexes.len()
+            && regex_node_child(store.graph().regexes[self@ as int].kind, index as nat) is Some
+            ==> result is Ok && (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         match result {
         Ok(child) => self@ < store.graph().regexes.len() && regex_node_child(store.graph().regexes[self@ as int].kind, index as nat) == Some(child@),
         Err(_) => true,
@@ -898,6 +958,9 @@ impl TransitionId {
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().transitions.len()
             && transition_node_child(store.graph().transitions[self@ as int], index as nat) is Some
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        store.errors_are_resource() && store.valid_store() && self@ < store.graph().transitions.len()
+            && transition_node_child(store.graph().transitions[self@ as int], index as nat) is Some
+            ==> result is Ok && (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         match result {
         Ok(child) => self@ < store.graph().transitions.len() && transition_node_child(store.graph().transitions[self@ as int], index as nat) == Some(child@),
         Err(_) => true,
@@ -927,6 +990,9 @@ impl TransitionId {
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().transitions.len()
             && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) is Some
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
+        store.errors_are_resource() && store.valid_store() && self@ < store.graph().transitions.len()
+            && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) is Some
+            ==> result is Ok && (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         match result {
         Ok(child) => self@ < store.graph().transitions.len() && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) == Some(child@),
         Err(_) => true,

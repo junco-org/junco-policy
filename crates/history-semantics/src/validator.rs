@@ -115,9 +115,13 @@ impl<E: Event> ValidatorBuilder<E> {
     }
 
     /// Compiles and appends one complete source rule.
-    /// Native event laws exclude internal invariant failures, not resource errors.
+    /// Under the event laws, a well-formed, correctly tagged rule of the event arity has only resource-error exits.
     #[verus_spec(result => requires old(self).wf(),
         ensures event_obligations::<E>() ==> no_invariant_compile_failure(result),
+            event_obligations::<E>() && sem::rule_wf(source@)
+                && source@.head.len() == history_syntax::spec::events::arity::<E>()
+                && sem::rule_constants_tagged::<E>(source@)
+                ==> (result is Ok || (result matches Err(CompileError::Runtime(error)) && sem::resource_error(error))),
             match result {
             Err(_) => final(self).wf() && final(self).rules() == old(self).rules(),
             Ok(borrow) => mut_ref_current(borrow).wf()
@@ -205,6 +209,7 @@ impl<E: Event> Validator<E> {
         ensures final(self).wf(),
             check_frame(old(self)@, final(self)@, request, result),
             event_obligations::<E>() ==> check_step(old(self)@, request, result),
+            event_obligations::<E>() ==> (result matches Err(error) ==> sem::resource_error(error)),
             result matches Ok(Decision::Denied(denial)) ==> verify::denial_message(denial),
             raw::owner_frame(verify::validator_history(*old(self)), verify::validator_history(*final(self))))]
     pub fn check<M>(&mut self, request: Request<E, M>) -> Result<Decision<E, M>, HistoryError> {
@@ -215,6 +220,7 @@ impl<E: Event> Validator<E> {
         ensures final(self).wf(),
             check_frame(old(self)@, final(self)@, request, result),
             event_obligations::<E>() ==> check_step(old(self)@, request, result),
+            event_obligations::<E>() ==> (result matches Err(error) ==> sem::resource_error(error)),
             result matches Ok(Decision::Denied(denial)) ==> verify::denial_message(denial),
             raw::owner_frame(verify::validator_history(*old(self)), verify::validator_history(*final(self))))]
     fn check_with<M, L: Limits>(
@@ -271,10 +277,11 @@ impl<E: Event> Validator<E> {
     }
 
     /// Evaluates without committing: the state is unchanged and, under the event laws, the
-    /// answer is R5 `permits_result`. Operational errors cannot be internal invariant failures.
+    /// answer is `permits_result`; errors are operational resource failures.
     #[verus_spec(result => requires old(self).wf(),
         ensures final(self).wf(), final(self)@ == old(self)@, no_invariant_failure(result),
             event_obligations::<E>() ==> permits_result(old(self)@, *candidate, result),
+            event_obligations::<E>() ==> (result matches Err(error) ==> sem::resource_error(error)),
             raw::owner_frame(verify::validator_history(*old(self)), verify::validator_history(*final(self))))]
     pub fn permits(&mut self, candidate: &E) -> Result<bool, HistoryError> {
         proof_decl! { let ghost entry = *self; }
@@ -294,6 +301,7 @@ impl<E: Event> Validator<E> {
 
     #[verus_spec(result => requires verify::validator_wf(*old(self)),
         ensures no_invariant_failure(result),
+            event_obligations::<E>() ==> (result matches Err(error) ==> sem::resource_error(error)),
             verify::validator_frame(*old(self), *final(self)), final(self).history == old(self).history,
             result matches Ok(Some(index)) ==> index < final(self).rules@.len(),
             crate::compiled_rule::verify::ordered_result(verify::validator_sources(*old(self)), old(self).history, *candidate, result))]
@@ -303,6 +311,7 @@ impl<E: Event> Validator<E> {
 
     #[verus_spec(result => requires verify::validator_wf(*old(self)),
         ensures no_invariant_failure(result),
+            event_obligations::<E>() ==> (result matches Err(error) ==> sem::resource_error(error)),
             verify::validator_frame(*old(self), *final(self)), final(self).history == old(self).history,
             result matches Ok(Some(index)) ==> index < final(self).rules@.len(),
             crate::compiled_rule::verify::ordered_result(verify::validator_sources(*old(self)), old(self).history, *candidate, result))]

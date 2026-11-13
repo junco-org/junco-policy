@@ -48,7 +48,7 @@ fn present<T>(value: Option<T>, message: &'static str) -> KernelResult<T> {
 #[verus_spec(outcome => ensures outcome == match result {
     Ok(value) => Ok(value),
     Err(_) => Err(HistoryError::AllocationFailed),
-})]
+}, outcome matches Err(error) ==> junco_core::spec::semantics::resource_error(error))]
 pub fn allocation<T>(result: Result<T, impl core::fmt::Debug>) -> KernelResult<T> {
     match result {
         Ok(value) => Ok(value),
@@ -61,7 +61,7 @@ pub fn allocation<T>(result: Result<T, impl core::fmt::Debug>) -> KernelResult<T
     Ok(value) => Ok(value),
     Err(AllocErr::Exhausted) => Err(HistoryError::ArenaExhausted),
     Err(_) => Err(HistoryError::AllocationFailed),
-})]
+}, outcome matches Err(error) ==> junco_core::spec::semantics::resource_error(error))]
 fn arena<T>(result: Result<T, AllocErr>) -> KernelResult<T> {
     match result {
         Ok(value) => Ok(value),
@@ -105,7 +105,7 @@ const _: () = assert!(
 #[verus_spec(result => ensures match result {
     Ok(bytes) => bytes as int == len * vstd::layout::size_of::<T>(),
     Err(error) => error is GraphIndex,
-})]
+}, result matches Err(error) ==> junco_core::spec::semantics::resource_error(error))]
 pub fn sequence_bytes<T>(len: usize) -> KernelResult<usize> {
     vstd::layout::layout_for_type_is_valid::<T>();
     len.checked_mul(size_of::<T>())
@@ -1455,7 +1455,8 @@ impl CanonicalStore {
     #[verus_spec(result => ensures match result {
         Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
         Err(error) => error is GraphBudget || error is GraphIndex || error is ArenaExhausted || error is AllocationFailed,
-    }, no_invariant_failure(result))]
+    }, no_invariant_failure(result),
+        result matches Err(error) ==> junco_core::spec::semantics::resource_error(error))]
     pub fn new() -> KernelResult<Self> {
         proof! {
             #[cfg(target_pointer_width = "64")]
@@ -1472,7 +1473,9 @@ impl CanonicalStore {
         Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
         Err(error) => error is GraphBudget || error is GraphIndex || error is ArenaExhausted || error is AllocationFailed
             || error is Invariant,
-    }, verify::construction_layout(budget) ==> no_invariant_failure(result))]
+    }, verify::construction_layout(budget) ==> no_invariant_failure(result),
+        verify::construction_layout(budget) ==>
+            (result matches Err(error) ==> junco_core::spec::semantics::resource_error(error)))]
     pub fn with_budget(budget: usize) -> KernelResult<Self> {
         Self::from_storage(ArenaStorage::with_capacity(budget)?, budget)
     }
@@ -1483,6 +1486,7 @@ impl CanonicalStore {
             Ok(store) => model::graph_wf(store.graph()) && store.valid_store(),
             Err(error) => error is GraphBudget || error is GraphIndex || error is ArenaExhausted || error is AllocationFailed,
         },
+        result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
     )]
     fn from_storage(storage: ArenaStorage, budget: usize) -> KernelResult<Self> {
         proof_decl! { let ghost initial_graph = storage.graph(); }
@@ -1517,6 +1521,7 @@ impl CanonicalStore {
             Ok(()) => model::graph_wf(final(self).graph()),
             Err(error) => error is GraphBudget || error is GraphIndex || error is ArenaExhausted || error is AllocationFailed,
         },
+        result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
     )]
     fn intern_constants(&mut self) -> KernelResult<()> {
         // Each interner preserves these predicates through its checked contract.
@@ -1572,7 +1577,7 @@ impl CanonicalStore {
             && total as int <= self.budget() as int,
         Err(error) => error matches HistoryError::GraphBudget { limit } && limit as nat == self.budget()
             && self.charged() + bytes > self.budget(),
-    })]
+    }, result matches Err(error) ==> junco_core::spec::semantics::resource_error(error))]
     pub fn projected(&self, bytes: usize) -> KernelResult<usize> {
         let total = self
             .bytes
@@ -1630,6 +1635,7 @@ impl CanonicalStore {
             },
             result matches Err(error) ==> error is GraphBudget || error is GraphIndex
                 || error is ArenaExhausted || error is AllocationFailed,
+            result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
             result matches Err(error) ==> error is ArenaExhausted ==>
@@ -1683,6 +1689,7 @@ impl CanonicalStore {
             },
             result matches Err(error) ==> error is GraphBudget || error is GraphIndex
                 || error is ArenaExhausted || error is AllocationFailed,
+            result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
             result matches Err(error) ==> error is ArenaExhausted ==>
@@ -1742,6 +1749,7 @@ impl CanonicalStore {
             },
             result matches Err(error) ==> error is GraphBudget || error is GraphIndex
                 || error is ArenaExhausted || error is AllocationFailed,
+            result matches Err(error) ==> junco_core::spec::semantics::resource_error(error),
             final(self).storage.capacity() == old(self).storage.capacity(),
             result is Ok ==> final(self).storage.slack() >= old(self).storage.slack(),
             result matches Err(error) ==> error is ArenaExhausted ==>
@@ -2749,6 +2757,7 @@ pub mod verify {
                     open spec fn errors_are_non_owner(&self) -> bool { true }
                     open spec fn errors_are_non_invariant(&self) -> bool { true }
                     open spec fn errors_are_non_invalid_policy(&self) -> bool { true }
+                    open spec fn errors_are_resource(&self) -> bool { true }
                     #[verifier::prophetic]
                     open spec fn restoration(&self) -> (model::Graph, bool) {
                         let restored = mut_ref_future(self.store);

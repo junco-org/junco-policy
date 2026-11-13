@@ -36,6 +36,8 @@ use junco_core::kernel::{KernelResult, RegexId};
 use junco_core::limits::Limits;
 use junco_core::observation::ObservationWorld;
 #[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics::resource_error;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs as language;
 #[cfg(verus_keep_ghost)]
 use verify::*;
@@ -63,6 +65,8 @@ pub mod verify {
             && (junco_core::flat::verify::structural_wf(template) ==> language::no_invariant_failure(result))
             && (junco_core::flat::verify::structural_wf(template)
                 ==> !(result matches Err(HistoryError::InvalidPolicy { .. })))
+            && (junco_core::flat::verify::structural_wf(template)
+                ==> (result matches Err(error) ==> resource_error(error)))
             && (result matches Ok(runtime) ==> runtime_wf(runtime)
             && runtime.store == store
             && runtime.cursors@ == Seq::<HistoryCursor>::empty()
@@ -114,6 +118,9 @@ pub mod verify {
         result != Err(HistoryError::WrongHistoryOwner)
             && (batch_size > 0 && start.consumed <= target_len
                 && target_len <= stored@.events.len() ==> language::no_invariant_failure(result))
+            && (batch_size > 0 && start.consumed <= target_len
+                && target_len <= stored@.events.len()
+                ==> (result matches Err(error) ==> resource_error(error)))
             && runtime_wf(after) && after.store == before.store && progress::pair_frame(before.pair, after.pair)
             && after.snapshots@ == before.snapshots@.insert((stored.id(), stored.revision()), history_store::store::verify::events_view(history_store::history::verify::stored_events(&stored)))
             && batch_matches_snapshot(after.pair, cursor, stored.id(), stored.revision(), bindings, after.snapshots@)
@@ -221,6 +228,8 @@ pub mod verify {
             result != Err(HistoryError::WrongHistoryOwner),
             batch_size > 0 && cursor_consumed(start) <= target_len && target_len <= stored@.events.len()
                 ==> language::no_invariant_failure(result),
+            batch_size > 0 && cursor_consumed(start) <= target_len && target_len <= stored@.events.len()
+                ==> (result matches Err(error) ==> resource_error(error)),
             after.spec_store() == before.spec_store(),
             after.spec_snapshots() == before.spec_snapshots().insert(
                 (stored.id(), stored.revision()), stored@.events),
@@ -493,7 +502,8 @@ impl RuleRuntime {
     #[verus_spec(result => ensures constructor_result(result, *store, *template),
         result != Err(HistoryError::WrongHistoryOwner),
         junco_core::flat::verify::structural_wf(*template) ==> language::no_invariant_failure(result)
-            && !(result matches Err(HistoryError::InvalidPolicy { .. }))) ]
+            && !(result matches Err(HistoryError::InvalidPolicy { .. }))
+            && (result matches Err(error) ==> resource_error(error))) ]
     pub fn new<L: Limits>(
         store: &Arc<HistoryStore>,
         template: &junco_core::flat::FlatPair<u64>,
@@ -557,6 +567,7 @@ impl RuleRuntime {
             final(self).spec_store() == old(self).spec_store(),
             result != Err(HistoryError::WrongHistoryOwner),
             language::no_invariant_failure(result),
+            result matches Err(error) ==> resource_error(error),
             result is Err ==> final(self).cursors@ == old(self).cursors@,
             final(self).snapshots@ == old(self).snapshots@
                 || final(self).snapshots@ == old(self).snapshots@.insert((stored.id(), stored.revision()),
@@ -902,6 +913,8 @@ impl BatchCursor {
             result != Err(HistoryError::WrongHistoryOwner),
             batch_size > 0 && old(self).consumed <= target_len && target_len <= events@.len()
                 ==> language::no_invariant_failure(result),
+            batch_size > 0 && old(self).consumed <= target_len && target_len <= events@.len()
+                ==> (result matches Err(error) ==> resource_error(error)),
             result is Err ==> final(self).consumed == old(self).consumed
                 && final(self).residual == old(self).residual,
             result is Ok ==> old(self).consumed <= final(self).consumed

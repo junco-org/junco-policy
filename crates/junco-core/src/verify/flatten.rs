@@ -46,6 +46,23 @@ pub open spec fn head_coordinates_wf<E: Event>(head: SourceHead<E>) -> bool {
     }
 }
 
+pub(crate) proof fn lemma_rule_head_coordinates<E: Event>(
+    rule: history_syntax::spec::events::RuleView<E::Component>,
+)
+    requires rule.head.len() == arity::<E>(), dsl::rule_constants_tagged::<E>(rule),
+    ensures head_coordinates_wf::<E>(rule.head),
+{
+    assert forall|i: int| 0 <= i < rule.head.len() implies match #[trigger] rule.head[i] {
+        PatternView::Constant(value) => E::coordinate_spec(value) == i,
+        _ => true,
+    } by {
+        if let PatternView::Constant(value) = rule.head[i] {
+            assert(crate::spec::questions::head_constants(rule.head)[i].contains(value));
+            assert(crate::spec::questions::rule_constants(rule)[i].contains(value));
+        }
+    }
+}
+
 pub open spec fn atom_coordinates_wf<E: Event>(atom: AtomView<E::Component>) -> bool {
     atom.component < arity::<E>() && match atom.pattern {
         PatternView::Constant(value) => E::coordinate_spec(value) == atom.component,

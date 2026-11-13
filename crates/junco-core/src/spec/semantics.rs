@@ -4,6 +4,7 @@
 //! Component equality is `PartialEqSpec::eq_spec`, not representation equality. Connecting
 //! native projections/equality to this model remains conditional on their respective contracts.
 
+use history_syntax::event::specs::EventSpec;
 use history_syntax::spec::events::{
     AtomView, HeadView, PatternView, RegexView, RuleView, TestView, event_view,
 };
@@ -14,6 +15,24 @@ use vstd::std_specs::cmp::PartialEqSpec;
 verus! {
 
 broadcast use {vstd::std_specs::vec::group_vec_axioms, vstd::seq::group_seq_lemmas};
+
+/// Operational resource failures, never malformed input, ownership errors or invariant failures.
+pub open spec fn resource_error(error: crate::errors::HistoryError) -> bool {
+    matches!(error, crate::errors::HistoryError::GraphBudget { .. }
+        | crate::errors::HistoryError::GraphIndex
+        | crate::errors::HistoryError::AllocationFailed
+        | crate::errors::HistoryError::ArenaExhausted
+        | crate::errors::HistoryError::IdExhausted { .. }
+        | crate::errors::HistoryError::RevisionExhausted
+        | crate::errors::HistoryError::Limit(_))
+}
+
+/// Every source constant has the tag of the coordinate where it is compared.
+pub open spec fn rule_constants_tagged<E: Event>(rule: RuleView<E::Component>) -> bool {
+    forall|i: int, value: E::Component| 0 <= i < rule.head.len()
+        && #[trigger] crate::spec::questions::rule_constants(rule)[i].contains(value)
+        ==> E::coordinate_spec(value) == i
+}
 
 // ----- heads, scoping, and tails over component tuples -----
 
