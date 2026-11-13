@@ -88,6 +88,12 @@ impl RuleId {
 
     /// The issuing analyzer's owner id.
     pub closed spec fn owner(&self) -> u64 { self.1 }
+
+    /// A rule id's view (the index used by R6's `ids_of`) is its `index()`.
+    pub proof fn lemma_view_is_index(&self)
+        ensures self@ == self.index(),
+    {
+    }
 }
 
 /// Every id was issued by `a` and names one of its rules (decision 7).

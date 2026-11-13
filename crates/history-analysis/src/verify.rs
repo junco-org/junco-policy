@@ -2531,8 +2531,9 @@ pub(crate) mod table {
 }
 
 verus! {
-/// What the analyzer assumes about its event type: exactly R4's `event_obligations`.
-pub open(crate) spec fn analyzer_obligations<E: Event>() -> bool {
+/// What the analyzer assumes about its event type: exactly R4's `event_obligations` (open so
+/// external clients discharge it through R4's witnesses).
+pub open spec fn analyzer_obligations<E: Event>() -> bool {
     junco_core::spec::hypotheses::event_obligations::<E>()
 }
 }
