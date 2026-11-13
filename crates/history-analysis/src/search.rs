@@ -18,6 +18,8 @@ use alloc::vec::Vec;
 use history_semantics::SymbolicLanguage;
 use junco_core::HistoryError;
 use junco_core::kernel::{Primitive, RegexId, Term, TransitionId};
+#[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics::resource_error;
 use smallvec::SmallVec;
 
 use crate::constraint::{
@@ -73,9 +75,9 @@ pub(crate) struct Refutation {
 
 /// Searches breadth-first for a history in `language` under some valuation satisfying
 /// `constraint`.
-/// The success contract applies to every well-formed input. Internal errors are additionally
-/// excluded when the initial language's primitives use representable constant IDs and compare
-/// variables only with their own coordinate; the same property is preserved for queued residuals.
+/// The success contract applies to every well-formed input. Errors are additionally restricted
+/// to resource exhaustion when the initial language's primitives use representable constant IDs
+/// and compare variables only with their own coordinate; queued residuals preserve this property.
 #[verus_verify]
 #[verus_spec(result => requires facade::language_wf(*old(language)),
     crate::verify::constraint_wf(constraint),
@@ -87,6 +89,9 @@ pub(crate) struct Refutation {
     ensures facade::primitives_search_safe(symbolic::regex_primitives(
             model::lift_regex(facade::graph(*old(language)),facade::root(*old(language)))))
             ==> junco_core::verify::history_specs::no_invariant_failure(result),
+        facade::primitives_search_safe(symbolic::regex_primitives(
+            model::lift_regex(facade::graph(*old(language)),facade::root(*old(language)))))
+            ==> (result matches Err(error) ==> resource_error(error)),
         result matches Ok(outcome) ==> search_result(crate::verify::ndomains(*universes),
         paper_search::Item { constraint:implementation::constraint_of(constraint@),
             state:model::lift_regex(facade::graph(*old(language)),facade::root(*old(language))) },outcome_view(outcome))
@@ -187,6 +192,8 @@ impl Search<'_> {
         requires running(*old(self),0,old(self).start@,old(self).vocabulary@),search_obligations(),
         ensures facade::primitives_search_safe(symbolic::regex_primitives(old(self).start@.state))
                 ==> junco_core::verify::history_specs::no_invariant_failure(result),
+            facade::primitives_search_safe(symbolic::regex_primitives(old(self).start@.state))
+                ==> (result matches Err(error) ==> resource_error(error)),
             result matches Ok(outcome) ==> search_result(crate::verify::ndomains(*old(self).universes),old(self).start@,outcome_view(outcome))
             && refutation_ready(outcome,*old(self).universes,old(self).vocabulary@),
     {
@@ -276,6 +283,8 @@ impl Search<'_> {
             !paper_search::nullable_state(trace(*old(self),index as nat).nodes[index as int].item.state),
         ensures facade::primitives_search_safe(symbolic::regex_primitives(old(self).start@.state))
                 ==> junco_core::verify::history_specs::no_invariant_failure(result),
+            facade::primitives_search_safe(symbolic::regex_primitives(old(self).start@.state))
+                ==> (result matches Err(error) ==> resource_error(error)),
             result matches Ok(_) ==> running(*final(self),index as nat+1,old(self).start@,old(self).vocabulary@)
             && final(self).start@ == old(self).start@ && final(self).vocabulary@ == old(self).vocabulary@
             && *final(self).universes == *old(self).universes,
@@ -561,6 +570,7 @@ impl Search<'_> {
         forall|j: int| 0 <= j < old(self).items@.len()
             ==> depth(old(self).items@,j) <= insertion_depth(old(self).items@,parent),
         ensures junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> resource_error(error),
             result matches Ok(_) ==> state_wf(*final(self))
             && queue_order(*final(self))
             && edges_wf(*final(self))
@@ -795,6 +805,9 @@ impl Search<'_> {
         residual@ < facade::graph(*old(language)).regexes.len()
             && facade::residual_search_safe(*old(language),residual)
             ==> junco_core::verify::history_specs::no_invariant_failure(result),
+        residual@ < facade::graph(*old(language)).regexes.len()
+            && facade::residual_search_safe(*old(language),residual)
+            ==> (result matches Err(error) ==> resource_error(error)),
         result matches Ok((t, atoms)) ==> (forall|arity: nat|
             1 <= arity <= history_syntax::MAX_ARITY
                 && paper_search::atoms_bounded(facade::residual_primitives(*final(language),residual),arity)
@@ -886,7 +899,8 @@ fn derive_atoms(
 
 #[verus_verify]
 #[verus_spec(result => ensures result.is_ok() == atom_valid(primitive),
-    atom_valid(primitive) ==> junco_core::verify::history_specs::no_invariant_failure(result))]
+    atom_valid(primitive) ==> junco_core::verify::history_specs::no_invariant_failure(result),
+    atom_valid(primitive) ==> (result matches Err(error) ==> resource_error(error)))]
 fn validate_atom(primitive: Primitive) -> Result<(), HistoryError> {
     let Primitive::Eq { field, term } = primitive;
     match term {

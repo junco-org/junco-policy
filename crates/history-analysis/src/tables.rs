@@ -11,6 +11,8 @@ use junco_core::HistoryError;
 use junco_core::flat::verify as flat;
 use junco_core::flat::{FlatHead, FlatPair, FlatRegex, FlatTerm, FlatTest};
 #[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics::resource_error;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::no_invariant_failure;
 #[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::{EventView, Subst};
@@ -62,6 +64,7 @@ impl Tables {
     #[verus_spec(result => requires dag(old(self)@), dag(*source),
         source.root < source.regexes@.len(),
         ensures no_invariant_failure(result),
+            result matches Err(error) ==> resource_error(error),
             dag(final(self)@), frame(old(self)@, final(self)@),
             forall|index: nat, theta: Subst, word: Seq<EventView>| index < old(self).regexes@.len()
                 ==> numeric::source_regex(old(self)@, index, theta, word)
@@ -173,6 +176,7 @@ impl Tables {
     #[verus_spec(result => requires dag(old(self)@), dag(*source),
         source.root < source.regexes@.len(),
         ensures no_invariant_failure(result),
+            result matches Err(error) ==> resource_error(error),
             result matches Ok(root) ==> root < final(self).regexes@.len()
                 && dag(final(self)@)
                 && frame(old(self)@, final(self)@)
@@ -226,6 +230,7 @@ impl Tables {
     #[verus_spec(result => requires dag(old(self)@),
         flat::regex_wf(regex, old(self).regexes@.len(), old(self).tests@.len()),
         ensures no_invariant_failure(result),
+            result matches Err(error) ==> resource_error(error),
             dag(final(self)@), final(self).tests@ == old(self).tests@,
             frame(old(self)@, final(self)@),
             result matches Ok(id) ==> id as nat == old(self).regexes@.len()
@@ -272,6 +277,7 @@ impl Tables {
     #[verus_spec(result => requires dag(self@), left < self.regexes@.len(),
         right < self.regexes@.len(),
         ensures no_invariant_failure(result),
+            result matches Err(error) ==> resource_error(error),
             result matches Ok(pair) ==> dag(pair) && pair.root < pair.regexes@.len()
                 && frame(self@, pair)
                 && pair.tests@ == self.tests@
@@ -327,6 +333,7 @@ impl Tables {
 
 #[verus_verify]
 #[verus_spec(result => ensures no_invariant_failure(result),
+    result matches Err(error) ==> resource_error(error),
     result matches Ok(id) ==> id as nat == length as nat,
     result matches Err(error) ==> error is GraphIndex && length > u32::MAX)]
 fn index(length: usize) -> Result<u32, HistoryError> {
@@ -338,6 +345,7 @@ fn index(length: usize) -> Result<u32, HistoryError> {
 
 #[verus_verify]
 #[verus_spec(result => ensures no_invariant_failure(result),
+    result matches Err(error) ==> resource_error(error),
     result matches Ok(value) ==> value as nat == id as nat + by as nat,
     result matches Err(error) ==> error is GraphIndex && id as nat + by as nat > u32::MAX)]
 fn offset(id: u32, by: u32) -> Result<u32, HistoryError> {
@@ -349,6 +357,7 @@ fn offset(id: u32, by: u32) -> Result<u32, HistoryError> {
 
 #[verus_verify]
 #[verus_spec(result => ensures no_invariant_failure(result),
+    result matches Err(error) ==> resource_error(error),
     result matches Ok(values) ==> shifted(ids@, values@, by as nat))]
 fn shift(ids: &[u32], by: u32) -> Result<Vec<u32>, HistoryError> {
     let mut values = Vec::new();
@@ -367,6 +376,7 @@ fn shift(ids: &[u32], by: u32) -> Result<Vec<u32>, HistoryError> {
 
 #[verus_verify]
 #[verus_spec(result => ensures no_invariant_failure(result),
+    result matches Err(error) ==> resource_error(error),
     result matches Ok(copied) ==> test_shift(*test, copied, by as nat))]
 fn copy_test(test: &FlatTest<u64>, by: u32) -> Result<FlatTest<u64>, HistoryError> {
     Ok(match test {
@@ -390,6 +400,7 @@ fn copy_test(test: &FlatTest<u64>, by: u32) -> Result<FlatTest<u64>, HistoryErro
 
 #[verus_verify]
 #[verus_spec(result => ensures no_invariant_failure(result),
+    result matches Err(error) ==> resource_error(error),
     result matches Ok(copied) ==>
         regex_shift(*regex, copied, tests as nat, regexes as nat))]
 fn copy_regex(regex: &FlatRegex, tests: u32, regexes: u32) -> Result<FlatRegex, HistoryError> {

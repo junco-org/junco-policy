@@ -18,6 +18,8 @@ use history_semantics::{normalize_verify as norm, symbolic_language_verify as fa
 use junco_core::HistoryError;
 use junco_core::kernel::{RegexId, RegexKindView, RegexView};
 #[cfg(verus_keep_ghost)]
+use junco_core::spec::semantics::resource_error;
+#[cfg(verus_keep_ghost)]
 use junco_core::verify::history_specs::Regex;
 #[cfg(verus_keep_ghost)]
 use junco_core::{kernel::verify as model, observation::SmallVecSpecFns};
@@ -53,6 +55,8 @@ impl Decomposition {
         ensures *final(language) == *old(language),
             residual@ < facade::graph(*final(language)).regexes.len()
                 ==> junco_core::verify::history_specs::no_invariant_failure(result),
+            residual@ < facade::graph(*final(language)).regexes.len()
+                ==> (result matches Err(error) ==> resource_error(error)),
             result matches Ok(d) ==> residual@ < facade::graph(*final(language)).regexes.len()
                 && decomposition_of(facade::graph(*final(language)), facade::abs(*final(language),residual),d))]
     pub(crate) fn of(
@@ -186,6 +190,7 @@ impl Decomposition {
         memo_wf(*old(simulation),*old(language)),memo_obligations(),
         ensures *final(language) == *old(language),memo_wf(*final(simulation),*final(language)),
             junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> resource_error(error),
             result == Ok(true) ==> forall|q: Regex<model::Test>|
                 decomposition_of(facade::graph(*final(language)),q,*self) ==> paper::dead(semantic_le(),q))]
     pub(crate) fn dead(
@@ -234,6 +239,8 @@ impl Decomposition {
     ensures *final(language) == *old(language),
         residual@ < facade::graph(*final(language)).regexes.len()
             ==> junco_core::verify::history_specs::no_invariant_failure(result),
+        residual@ < facade::graph(*final(language)).regexes.len()
+            ==> (result matches Err(error) ==> resource_error(error)),
         result matches Ok(root) ==>
         residual@ < facade::graph(*final(language)).regexes.len()
         && root_matches(root,facade::graph(*final(language)).regexes[residual@ as int].kind)
@@ -270,6 +277,8 @@ fn node(language: &mut SymbolicLanguage, residual: RegexId) -> Result<Root, Hist
     ensures *final(language) == *old(language),
         residual@ < facade::graph(*final(language)).regexes.len()
             ==> junco_core::verify::history_specs::no_invariant_failure(result),
+        residual@ < facade::graph(*final(language)).regexes.len()
+            ==> (result matches Err(error) ==> resource_error(error)),
         result matches Ok(child) ==>
         residual@ < facade::graph(*final(language)).regexes.len()
         && match child {
@@ -297,6 +306,8 @@ fn complemented(
     ensures *final(language) == *old(language),
         residual@ < facade::graph(*final(language)).regexes.len()
             ==> junco_core::verify::history_specs::no_invariant_failure(result),
+        residual@ < facade::graph(*final(language)).regexes.len()
+            ==> (result matches Err(error) ==> resource_error(error)),
         result matches Ok(values) ==>
         residual@ < facade::graph(*final(language)).regexes.len()
         && valid(facade::graph(*final(language)),values.view())
@@ -463,6 +474,7 @@ impl Antichain {
         memo_wf(*old(simulation),*old(language)),memo_obligations(),
         ensures *final(language) == *old(language),memo_wf(*final(simulation),*final(language)),
             junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> resource_error(error),
             result == Ok(true) ==> raw_subsumes(*self,facade::graph(*final(language)),*constraints,
                 constraints@[constraint as int],*state),
             result == Ok(true) ==> forall|q: Regex<model::Test>,domains: encoding::NDomains,nodes: Seq<paper_search::Node>|
@@ -544,6 +556,7 @@ impl Antichain {
         memo_wf(*old(simulation),*old(language)),memo_obligations(),
         ensures *final(language) == *old(language),memo_wf(*final(simulation),*final(language)),
             junco_core::verify::history_specs::no_invariant_failure(result),
+            result matches Err(error) ==> resource_error(error),
             result == Ok(true) ==> raw_subsumes(*self,facade::graph(*final(language)),*constraints,constraint@,*state))]
     fn group_subsumes(
         &self,
