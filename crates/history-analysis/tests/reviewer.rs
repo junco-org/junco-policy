@@ -26,9 +26,9 @@ use junco_core::event::Request;
 use junco_core::spec::hypotheses::{event_obligations, hash_coherent};
 use junco_core::spec::questions::{
     CexView, DomainsView, FreshChoice, InclusionView, admissible, always_denies, capacity_for,
-    cex_has_instance, covers, domains_wf, every_instance, forbid_all, fresh_capacity, in_domains,
-    instantiates, minimal_in_case, never_denies, refines, rule_constants, same_profile, shortest,
-    tails_included,
+    cex_has_instance, covers, domains_wf, every_instance, forbid_all, fresh_capacity, fresh_used,
+    in_domains, instantiates, minimal_in_case, never_denies, refines, rule_constants, same_profile,
+    shortest, tails_included,
 };
 use junco_core::spec::semantics::{
     head_matches, history_view, lang, least_violation, policy_denies, policy_permits, rule_violated,
@@ -104,6 +104,46 @@ pub proof fn theorem_a2_real_counterexamples<E: Event>()
             assert(fails(c, h));
         }
     }
+}
+
+/// A returned counterexample needs capacity only at undeclared coordinates.
+pub proof fn theorem_counterexample_has_instance<E: Event>(
+    a: AnalyzerView<E::Component>, cex: CexView<E::Component>, fails: spec_fn(E, Seq<E>) -> bool,
+)
+    requires counterexample_spec::<E>(a, cex, fails),
+        forall|i: int| 0 <= i < arity::<E>() && a.domains[i] is None
+            ==> fresh_capacity::<E>(a.domains, a.known, i, fresh_used(cex, i).len()),
+    ensures cex_has_instance::<E>(a.domains, a.known, cex),
+{
+}
+
+/// A fresh value at a declared coordinate cannot masquerade as a refutation.
+pub proof fn theorem_declared_fresh_rejected<E: Event>(
+    a: AnalyzerView<E::Component>, cex: CexView<E::Component>, i: int, n: nat,
+    fails: spec_fn(E, Seq<E>) -> bool,
+)
+    requires 0 <= i < arity::<E>(), a.domains[i] is Some, fresh_used(cex, i).contains(n),
+    ensures !counterexample_spec::<E>(a, cex, fails),
+{
+    if counterexample_spec::<E>(a, cex, fails) {
+        assert(fresh_used(cex, i) =~= ISet::empty());
+    }
+}
+
+/// Port of attempt A's declared-coordinate lemma to the public counterexample contract.
+pub proof fn lemma_declared_coordinate_zero<E: Event>(
+    a: AnalyzerView<E::Component>, cex: CexView<E::Component>, coordinate: int,
+    fails: spec_fn(E, Seq<E>) -> bool,
+)
+    requires counterexample_spec::<E>(a, cex, fails),
+        0 <= coordinate < arity::<E>(), a.domains[coordinate] is Some,
+    ensures fresh_used(cex, coordinate).len() == 0,
+        fresh_capacity::<E>(a.domains, a.known, coordinate, fresh_used(cex, coordinate).len()),
+{
+    assert(fresh_used(cex, coordinate) =~= ISet::empty());
+    let empty = Seq::<E::Component>::empty();
+    assert(empty.len() == 0);
+    assert(fresh_capacity::<E>(a.domains, a.known, coordinate, 0));
 }
 
 // ----- A3: refinement and redundancy -----

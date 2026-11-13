@@ -30,6 +30,10 @@ import from them. The flow is strictly downward: R1 → R2 → R3/R4 → R5/R6 �
   types take it by axiom (`history_analysis::verify::key_axioms`, listed in TRUST.md).
 - `AnalyzerView::known` is fixed by the contracts (`new`, `add_rule`, `tail_included`; see R6's
   header), so capacity is relative to exactly the constants of the inputs.
+- `counterexample_spec` excludes fresh values at declared coordinates. Its instance guarantee
+  requires `undeclared_capacity` only at undeclared coordinates; declared coordinates need no
+  spare values. `theorem_counterexample_has_instance` and `theorem_declared_fresh_rejected`
+  in `crates/history-analysis/tests/reviewer.rs` expose these two guarantees.
 
 ## Reading order for a reviewer
 
