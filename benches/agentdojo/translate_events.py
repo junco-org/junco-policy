@@ -87,6 +87,9 @@ def translate(source):
 
     return {
         **{field: source[field] for field in FIELDS},
+        # Preserve explicit labels only; legacy logs remain mode-unknown.
+        "policy_mode": source.get("policy_mode"),
+        "run_kind": source.get("run_kind"),
         "events": events,
         "policy_decisions": translated_decisions,
     }

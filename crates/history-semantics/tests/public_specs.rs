@@ -746,4 +746,41 @@ fn retained_raw_observations<L: Limits>(arity: usize, events: &[history_store::s
         previous.value().events.is_prefix_of(later.snapshot_view().value().events));
     Ok(())
 }
+
+// These clients can use only the public policy contracts, never the compiled entry/log fields.
+fn checked_policy_client<E: Event, C, F: FnOnce(&History<E>) -> C>(
+    state: &mut CompiledPolicy<E, C>, value: &mut History<E>, candidate: &E, context: F,
+) -> (result: Result<PolicyDecision, HistoryError>)
+    requires policy::policy_wf(*old(state)), history::history_wf(*old(value)),
+        junco_core::spec::hypotheses::event_obligations::<E>(),
+        policy::policy_store(*old(state)) == history::store_of(*old(value)),
+        forall|argument: &History<E>| *argument == *old(value) ==> call_requires(context, (argument,)),
+    ensures policy::policy_check_result(*old(state), *final(state), *old(value), *final(value), *candidate, result),
+        policy::policy_check_context_result(*final(state), *old(value), context, result),
+        history_semantics::spec::monitor::policy_step(policy::policy_view(*old(state), *old(value)),
+            *candidate, policy::policy_selected_index(*final(state)), result),
+        match result {
+            Ok(PolicyDecision::Grant) => history::raw_events(*final(value)) == history::raw_events(*old(value)).push(*candidate),
+            _ => history::raw_events(*final(value)) == history::raw_events(*old(value)),
+        },
+{
+    state.check(value, candidate, context)
+}
+
+fn checked_trace_client<E: Event + 'static>(
+    state: &mut TracePolicy<E>, value: &mut History<E>, candidate: &E,
+) -> (result: Result<PolicyDecision, HistoryError>)
+    requires trace::trace_wf(*old(state)), history::history_wf(*old(value)),
+        junco_core::spec::hypotheses::event_obligations::<E>(),
+        trace::trace_store(*old(state)) == history::store_of(*old(value)),
+    ensures trace::trace_check_result(*old(state), *final(state), *old(value), *final(value), *candidate, result),
+        history_semantics::spec::monitor::policy_step(trace::trace_view(*old(state), *old(value)),
+            *candidate, trace::trace_selected_index(*final(state)), result),
+        match result {
+            Ok(PolicyDecision::Grant) => history::raw_events(*final(value)) == history::raw_events(*old(value)).push(*candidate),
+            _ => history::raw_events(*final(value)) == history::raw_events(*old(value)),
+        },
+{
+    state.check(value, candidate)
+}
 }

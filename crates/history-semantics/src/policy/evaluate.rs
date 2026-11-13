@@ -102,6 +102,10 @@ pub open(crate) spec fn policy_decision_result<E: Event, C>(before: CompiledPoli
         && no_invariant_failure(result)
         && ((result == Err(HistoryError::WrongHistoryOwner))
             == !books::same_store_owner(before.store, history_store::history::verify::store_of(history)))
+        && (junco_core::spec::hypotheses::event_obligations::<E>()
+            && (result is Ok || verify::policy_store(before) == history_store::history::verify::store_of(history)) ==>
+                crate::spec::monitor::policy_step(
+                    verify::policy_view(before, history), candidate, verify::policy_selected_index(after), result))
         && match result {
             Err(_) => after.callback_trace@ == before.callback_trace@,
             Ok(PolicyDecision::Grant) => after.callback_trace@ == before.callback_trace@
@@ -240,6 +244,56 @@ pub mod verify {
         after.callback_trace@ == before.callback_trace@
     }
 
+    /// Public event-level view shared with the monitor specification.
+    pub open spec fn policy_view<E: Event, C>(policy: CompiledPolicy<E, C>, history: History<E>)
+        -> crate::spec::monitor::ValidatorView<E> {
+        crate::spec::monitor::ValidatorView {
+            rules: sem::rule_views(policy_sources(policy)),
+            history: history_store::history::verify::raw_events(history),
+        }
+    }
+
+    /// Authorization, persistent policy frame, and exact caller-owned history commit.
+    pub open spec fn policy_check_result<E: Event, C>(
+        before: CompiledPolicy<E, C>, after: CompiledPolicy<E, C>,
+        history_before: History<E>, history_after: History<E>, candidate: E,
+        result: Result<PolicyDecision, HistoryError>,
+    ) -> bool {
+        policy_wf(after) && policy_frame(before, after)
+            && policy_store(after) == policy_store(before)
+            && policy_sources(after) == policy_sources(before)
+            && policy_diagnostic_ids(after) == policy_diagnostic_ids(before)
+            && history_store::history::verify::history_wf(history_after)
+            && history_store::history::verify::owner_frame(history_before, history_after)
+            && no_invariant_failure(result)
+            && ((result == Err(HistoryError::WrongHistoryOwner))
+                == !books::same_store_owner(policy_store(before), history_store::history::verify::store_of(history_before)))
+            && crate::spec::monitor::policy_commit_frame(
+                policy_view(before, history_before), policy_view(after, history_after), candidate, result)
+            && (junco_core::spec::hypotheses::event_obligations::<E>()
+                && (result is Ok || policy_store(before) == history_store::history::verify::store_of(history_before)) ==>
+                    crate::spec::monitor::policy_step(
+                        policy_view(before, history_before), candidate, policy_selected_index(after), result))
+            && match result {
+                Ok(PolicyDecision::Grant) => policy_callbacks_frame(before, after)
+                    && policy_context_calls(after) == policy_context_calls(before)
+                    && policy_diagnostic_calls(after) == policy_diagnostic_calls(before),
+                _ => policy_decision_result(before, after, history_before, candidate, result),
+            }
+    }
+
+    /// The context callback observes the original history, and only on denial.
+    pub open spec fn policy_check_context_result<E: Event, C, F: FnOnce(&History<E>) -> C>(
+        after: CompiledPolicy<E, C>, history_before: History<E>, context: F,
+        result: Result<PolicyDecision, HistoryError>,
+    ) -> bool {
+        result matches Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) ==>
+            exists|argument: &History<E>, value: C| *argument == history_before
+                && call_ensures(context, (argument,), value)
+                && diagnostic_output(policy_selected_diagnostic_id(after),
+                    value, failed_precondition@, allowed_fixes.deep_view())
+    }
+
     /// Constructor and retained-state facts needed by public decision clients.
     pub proof fn lemma_policy_wf<E: Event, C>(policy: CompiledPolicy<E, C>)
         requires policy_wf(policy),
@@ -261,6 +315,10 @@ pub mod verify {
             no_invariant_failure(result),
             (result == Err(HistoryError::WrongHistoryOwner))
                 == !books::same_store_owner(policy_store(before), history_store::history::verify::store_of(history)),
+            junco_core::spec::hypotheses::event_obligations::<E>()
+                && (result is Ok || policy_store(before) == history_store::history::verify::store_of(history)) ==>
+                    crate::spec::monitor::policy_step(
+                        policy_view(before, history), candidate, policy_selected_index(after), result),
             match result {
                 Err(_) => policy_callbacks_frame(before, after)
                     && policy_context_calls(after) == policy_context_calls(before)
@@ -281,6 +339,7 @@ pub mod verify {
             },
     {
         lemma_policy_entries_frame_facts(before.rules@, after.rules@);
+        reveal(policy_decision_result);
         if let Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) = result {
             let call = after.callback_trace@.calls.last();
             let appended = DiagnosticCall {
@@ -393,6 +452,13 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         store: Arc<Store<E>>,
         iterator: I,
     ) -> Result<Self, CompileError> {
+        proof! {
+            reveal(policy_wf);
+            reveal(policy_store);
+            reveal(policy_sources);
+            reveal(policy_diagnostic_ids);
+            reveal(policy_trace_empty);
+        }
         proof_decl! { let ghost original_iterator = iterator; }
         proof_decl! { let ghost mut yielded: Seq<PolicyRule<E, C>> = Seq::empty(); }
         let mut compiled = Vec::new();
@@ -499,6 +565,10 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         call_requires(context, ()),
         ensures policy_decision_result(*old(self), *final(self), *history, *probe, result),
             policy_context_result(*final(self), context, result),
+            junco_core::spec::hypotheses::event_obligations::<E>()
+                && (result is Ok || policy_store(*old(self)) == history_store::history::verify::store_of(*history)) ==>
+                    crate::spec::monitor::policy_step(
+                        policy_view(*old(self), *history), *probe, policy_selected_index(*final(self)), result),
             no_invariant_failure(result))]
     pub fn decide(
         &mut self,
@@ -515,11 +585,71 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         )
     }
 
+    /// Decides against the pre-commit history and appends exactly once on grant.
+    /// Denials and operational errors preserve the original events. Diagnostic context is lazy.
+    #[verus_spec(result => requires policy_wf(*old(self)),
+        history_store::history::verify::history_wf(*old(history)),
+        forall|argument: &History<E>| *argument == *old(history) ==> call_requires(context, (argument,)),
+        ensures policy_check_result(*old(self), *final(self), *old(history), *final(history), *candidate, result),
+            policy_check_context_result(*final(self), *old(history), context, result))]
+    pub fn check(
+        &mut self,
+        history: &mut History<E>,
+        candidate: &E,
+        context: impl FnOnce(&History<E>) -> C,
+    ) -> Result<PolicyDecision, HistoryError> {
+        proof_decl! { let ghost before = *self; }
+        proof_decl! { let ghost history_before = *history; }
+        proof_decl! { let ghost original_context = context; }
+        let borrowed: &History<E> = history;
+        let lazy_context = verus_exec_expr! {
+            || -> (value: C)
+                ensures call_ensures(original_context, (borrowed,), value),
+            { context(borrowed) }
+        };
+        proof_decl! { let ghost actual_context = lazy_context; }
+        let result = self.decide(borrowed, candidate, lazy_context);
+        proof! {
+            history_store::history::verify::lemma_history_frame_facts(history_before, *history);
+            lemma_policy_decision_result_facts(before, *self, history_before, *candidate, result);
+            lemma_policy_context_result_facts(*self, actual_context, result);
+            if let Ok(PolicyDecision::Deny { ref failed_precondition, ref allowed_fixes }) = result {
+                let value = choose|value: C| call_ensures(actual_context, (), value)
+                    && diagnostic_output(policy_selected_diagnostic_id(*self),
+                        value, failed_precondition@, allowed_fixes.deep_view());
+                assert(call_ensures(original_context, (borrowed,), value));
+                assert(policy_check_context_result(*self, history_before, original_context, result));
+            }
+        }
+        match result {
+            Ok(PolicyDecision::Grant) => {
+                let pushed = history.push(*candidate);
+                proof! {
+                    history_store::history::verify::lemma_push_result(history_before, *history, *candidate, pushed);
+                    history_store::history::verify::lemma_history_frame_facts(history_before, *history);
+                    reveal(policy_decision_result);
+                    reveal(policy_callbacks_frame);
+                    reveal(policy_context_calls);
+                    reveal(policy_diagnostic_calls);
+                    reveal(policy_selected_index);
+                    reveal(policy_store);
+                }
+                pushed?;
+                Ok(PolicyDecision::Grant)
+            }
+            other => other,
+        }
+    }
+
     #[verus_verify]
     #[verus_spec(result => requires verify::policy_wf(*old(self)), history_store::history::verify::history_wf(*history),
         call_requires(context, ()),
         ensures policy_decision_result(*old(self), *final(self), *history, *probe, result),
             policy_context_result(*final(self), context, result),
+            junco_core::spec::hypotheses::event_obligations::<E>()
+                && (result is Ok || policy_store(*old(self)) == history_store::history::verify::store_of(*history)) ==>
+                    crate::spec::monitor::policy_step(
+                        policy_view(*old(self), *history), *probe, policy_selected_index(*final(self)), result),
             no_invariant_failure(result))]
     pub(super) fn decide_with_limits<L: Limits>(
         &mut self,
@@ -529,6 +659,16 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         limits: &mut L,
         world: &mut ObservationWorld,
     ) -> Result<PolicyDecision, HistoryError> {
+        proof! {
+            reveal(policy_wf);
+            reveal(policy_frame);
+            reveal(policy_store);
+            reveal(policy_sources);
+            reveal(policy_diagnostic_ids);
+            reveal(policy_selected_index);
+            reveal(policy_decision_result);
+            reveal(policy_context_result);
+        }
         proof_decl! { let ghost entry = *self; }
         proof_decl! { let ghost original_context = context; }
         let index = self.first_violation_with(history, probe, limits, world)?;
@@ -588,7 +728,10 @@ impl<E: Event, C> CompiledPolicy<E, C> {
             (result == Err(HistoryError::WrongHistoryOwner))
                 == !books::same_store_owner(old(self).store, history_store::history::verify::store_of(*history)),
             result matches Ok(Some(index)) ==> index < final(self).rules@.len(),
-            crate::compiled_rule::verify::ordered_result(verify::policy_sources(*old(self)), *history, *probe, result))]
+            crate::compiled_rule::verify::ordered_result(verify::policy_sources(*old(self)), *history, *probe, result),
+            junco_core::spec::hypotheses::event_obligations::<E>()
+                && policy_store(*old(self)) == history_store::history::verify::store_of(*history) ==>
+                    (result matches Err(error) ==> sem::resource_error(error)))]
     fn first_violation_with<L: Limits>(
         &mut self,
         history: &History<E>,
@@ -596,6 +739,12 @@ impl<E: Event, C> CompiledPolicy<E, C> {
         limits: &mut L,
         world: &mut ObservationWorld,
     ) -> Result<Option<usize>, HistoryError> {
+        proof! {
+            reveal(policy_wf);
+            reveal(policy_frame);
+            reveal(policy_store);
+            reveal(policy_sources);
+        }
         proof_decl! { let ghost entry = *self; }
         if !CompiledRule::same_owner(&self.store, history.store()) {
             return Err(HistoryError::WrongHistoryOwner);
@@ -607,6 +756,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
             self.callback_trace@ == entry.callback_trace@,
             history_store::history::verify::history_wf(*history),
             books::same_store_owner(entry.store, history_store::history::verify::store_of(*history)),
+            entry.store == history_store::history::verify::store_of(*history),
             junco_core::spec::hypotheses::event_obligations::<E>() ==>
                 forall|j: int| 0 <= j < index ==> !sem::rule_violated(
                     verify::policy_sources(entry)[j]@, *probe, history_store::history::verify::raw_events(*history)),

@@ -397,12 +397,17 @@ Verus verifies `verus-bumpalo` and `hashconsius` as dependencies at the revision
 
 ## Unverified glue
 
-- The root crate `src/` is not verified. `RulePolicy::check` (`src/policy/rules.rs`) adds to
-  the verified `TracePolicy`/`History`: a `could_fire` head filter selecting the rules compiled
-  for each event; one `TracePolicy` per distinct event of a batch; decide-then-append of
-  granted events; audit mode, which also appends denied events; and error-to-deny (compile or
-  history errors become `Deny`). The verified `check_step` covers each `TracePolicy::decide`,
-  not this composition.
+- The root crate `src/` is not verified. `RulePolicy::check` (`src/policy/rules.rs`) retains a
+  `could_fire` head filter, one compiled `TracePolicy` per distinct event, native orchestration
+  and error-to-deny conversion. Enforcement calls the verified `TracePolicy::check` operation,
+  which decides and appends grants together; `LockPolicy::check` delegates to the corresponding
+  `CompiledPolicy::check`. Their public `policy_step`/`policy_commit_frame` contracts govern
+  these calls, not the entire root composition. Explicit audit mode instead uses noncommitting
+  `decide` and appends denied events in unverified code; its histories are not trace safe.
+- AgentDojo's tool dispatch, reader/taint classification, guard handling, model/provider calls,
+  scoring and mode-aware logging are unverified glue. Default enforcement skips denied tools;
+  `--audit` intentionally executes them. Event-only replay does not measure utility or attack
+  success; deny-prefix scorer results are counterfactual, not adaptive enforcement results.
 - The root event types `LockEvent`, `FlowEvent`, `AgentEvent` implement `Event` by hand in the
   unverified crate; `event_laws` (R1) is a hypothesis for them, stated at each impl.
 - User `Hash`/`Eq` code runs under the store lock; a panic there unwinds through the lock and

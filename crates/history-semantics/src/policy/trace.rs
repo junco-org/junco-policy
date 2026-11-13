@@ -58,31 +58,31 @@ pub mod verify {
     pub open spec fn trace_rule_diagnostic_id<E: Event>(item: TraceRule<E>) -> int {
         trace_diagnostic_identity(trace_rule_diagnostic(item))
     }
-    pub open(super) spec fn trace_wf<E: Event>(policy: TracePolicy<E>) -> bool {
+    pub closed spec fn trace_wf<E: Event>(policy: TracePolicy<E>) -> bool {
         super::super::evaluate::verify::policy_wf(policy.compiled)
     }
-    pub open(super) spec fn trace_store<E: Event>(policy: TracePolicy<E>) -> Arc<Store<E>> {
+    pub closed spec fn trace_store<E: Event>(policy: TracePolicy<E>) -> Arc<Store<E>> {
         super::super::evaluate::verify::policy_store(policy.compiled)
     }
-    pub open(super) spec fn trace_sources<E: Event>(policy: TracePolicy<E>) -> Seq<Rule<E>> {
+    pub closed spec fn trace_sources<E: Event>(policy: TracePolicy<E>) -> Seq<Rule<E>> {
         super::super::evaluate::verify::policy_sources(policy.compiled)
     }
-    pub open(super) spec fn trace_diagnostic_ids<E: Event>(policy: TracePolicy<E>) -> Seq<int> {
+    pub closed spec fn trace_diagnostic_ids<E: Event>(policy: TracePolicy<E>) -> Seq<int> {
         super::super::evaluate::verify::policy_diagnostic_ids(policy.compiled)
     }
-    pub open(super) spec fn trace_context_calls<E: Event>(policy: TracePolicy<E>) -> nat {
+    pub closed spec fn trace_context_calls<E: Event>(policy: TracePolicy<E>) -> nat {
         super::super::evaluate::verify::policy_context_calls(policy.compiled)
     }
-    pub open(super) spec fn trace_diagnostic_calls<E: Event>(policy: TracePolicy<E>) -> nat {
+    pub closed spec fn trace_diagnostic_calls<E: Event>(policy: TracePolicy<E>) -> nat {
         super::super::evaluate::verify::policy_diagnostic_calls(policy.compiled)
     }
-    pub open(super) spec fn trace_selected_index<E: Event>(policy: TracePolicy<E>) -> nat {
+    pub closed spec fn trace_selected_index<E: Event>(policy: TracePolicy<E>) -> nat {
         super::super::evaluate::verify::policy_selected_index(policy.compiled)
     }
-    pub open(super) spec fn trace_selected_diagnostic_id<E: Event>(policy: TracePolicy<E>) -> int {
+    pub closed spec fn trace_selected_diagnostic_id<E: Event>(policy: TracePolicy<E>) -> int {
         super::super::evaluate::verify::policy_selected_diagnostic_id(policy.compiled)
     }
-    pub open(super) spec fn trace_selected_source<E: Event>(policy: TracePolicy<E>) -> Rule<E> {
+    pub closed spec fn trace_selected_source<E: Event>(policy: TracePolicy<E>) -> Rule<E> {
         super::super::evaluate::verify::policy_selected_source(policy.compiled)
     }
     pub closed spec fn trace_frame<E: Event>(before: TracePolicy<E>, after: TracePolicy<E>) -> bool {
@@ -91,6 +91,18 @@ pub mod verify {
     pub closed spec fn trace_callbacks_frame<E: Event>(before: TracePolicy<E>, after: TracePolicy<E>) -> bool {
         super::super::evaluate::verify::policy_callbacks_frame(before.compiled, after.compiled)
     }
+
+    // Keep facade representation facts available to its implementation, not public clients.
+    pub(super) proof fn lemma_trace_representation<E: Event>(policy: TracePolicy<E>)
+        ensures
+            trace_wf(policy) == super::super::evaluate::verify::policy_wf(policy.compiled),
+            trace_store(policy) == super::super::evaluate::verify::policy_store(policy.compiled),
+            trace_sources(policy) == super::super::evaluate::verify::policy_sources(policy.compiled),
+            trace_diagnostic_ids(policy) == super::super::evaluate::verify::policy_diagnostic_ids(policy.compiled),
+            trace_context_calls(policy) == super::super::evaluate::verify::policy_context_calls(policy.compiled),
+            trace_diagnostic_calls(policy) == super::super::evaluate::verify::policy_diagnostic_calls(policy.compiled),
+            trace_selected_index(policy) == super::super::evaluate::verify::policy_selected_index(policy.compiled),
+    {}
 
     /// Exposes constructor readiness without exposing the compiled policy field.
     pub proof fn lemma_trace_wf<E: Event>(policy: TracePolicy<E>)
@@ -112,6 +124,9 @@ pub mod verify {
             && trace_diagnostic_ids(after) == trace_diagnostic_ids(before)
             && ((result == Err(HistoryError::WrongHistoryOwner))
                 == !history_store::typed::verify::same_store_owner(trace_store(before), history_store::history::verify::store_of(history)))
+            && (junco_core::spec::hypotheses::event_obligations::<E>()
+                && (result is Ok || trace_store(before) == history_store::history::verify::store_of(history)) ==>
+                    crate::spec::monitor::policy_step(trace_view(before, history), candidate, trace_selected_index(after), result))
             && match result {
                 Err(_) => trace_context_calls(after) == trace_context_calls(before)
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before),
@@ -161,6 +176,9 @@ pub mod verify {
             no_invariant_failure(result),
             (result == Err(HistoryError::WrongHistoryOwner))
                 == !history_store::typed::verify::same_store_owner(trace_store(before), history_store::history::verify::store_of(history)),
+            junco_core::spec::hypotheses::event_obligations::<E>()
+                && (result is Ok || trace_store(before) == history_store::history::verify::store_of(history)) ==>
+                    crate::spec::monitor::policy_step(trace_view(before, history), candidate, trace_selected_index(after), result),
             match result {
                 Err(_) => trace_callbacks_frame(before, after)
                     && trace_context_calls(after) == trace_context_calls(before)
@@ -186,6 +204,45 @@ pub mod verify {
     {
         super::super::evaluate::verify::lemma_policy_decision_result_facts(
             before.compiled, after.compiled, history, candidate, result);
+    }
+
+    /// The source-ordered rules and real events consumed by the monitor semantics.
+    pub open spec fn trace_view<E: Event>(policy: TracePolicy<E>, history: History<E>)
+        -> crate::spec::monitor::ValidatorView<E> {
+        crate::spec::monitor::ValidatorView {
+            rules: sem::rule_views(trace_sources(policy)),
+            history: history_store::history::verify::raw_events(history),
+        }
+    }
+
+    /// Exact commit frame and semantic outcome of an external-history trace check.
+    pub open spec fn trace_check_result<E: Event>(
+        before: TracePolicy<E>, after: TracePolicy<E>,
+        history_before: History<E>, history_after: History<E>, candidate: E,
+        result: Result<PolicyDecision, HistoryError>,
+    ) -> bool {
+        trace_wf(after) && trace_frame(before, after)
+            && trace_store(after) == trace_store(before)
+            && trace_sources(after) == trace_sources(before)
+            && trace_diagnostic_ids(after) == trace_diagnostic_ids(before)
+            && history_store::history::verify::history_wf(history_after)
+            && history_store::history::verify::owner_frame(history_before, history_after)
+            && no_invariant_failure(result)
+            && ((result == Err(HistoryError::WrongHistoryOwner))
+                == !history_store::typed::verify::same_store_owner(
+                    trace_store(before), history_store::history::verify::store_of(history_before)))
+            && crate::spec::monitor::policy_commit_frame(
+                trace_view(before, history_before), trace_view(after, history_after), candidate, result)
+            && (junco_core::spec::hypotheses::event_obligations::<E>()
+                && (result is Ok || trace_store(before) == history_store::history::verify::store_of(history_before)) ==>
+                    crate::spec::monitor::policy_step(
+                        trace_view(before, history_before), candidate, trace_selected_index(after), result))
+            && match result {
+                Ok(PolicyDecision::Deny { .. }) => trace_decision_result(before, after, history_before, candidate, result),
+                _ => trace_callbacks_frame(before, after)
+                    && trace_context_calls(after) == trace_context_calls(before)
+                    && trace_diagnostic_calls(after) == trace_diagnostic_calls(before),
+            }
     }
     }
 }
@@ -387,7 +444,9 @@ impl<E: Event + 'static> TracePolicy<E> {
                     =~= items.map(|i: int, item: TraceRule<E>| trace_rule_diagnostic_id(item)));
             }
         }
-        Ok(Self { compiled })
+        let policy = Self { compiled };
+        proof! { lemma_trace_representation(policy); }
+        Ok(policy)
     }
 
     /// Decides against the unchanged external history, using the candidate as the actual context.
@@ -396,12 +455,17 @@ impl<E: Event + 'static> TracePolicy<E> {
     /// Operational errors cannot be internal invariant failures.
     #[verus_spec(result => requires trace_wf(*old(self)), history_store::history::verify::history_wf(*history),
         ensures trace_decision_result(*old(self), *final(self), *history, *candidate, result),
+            junco_core::spec::hypotheses::event_obligations::<E>()
+                && (result is Ok || trace_store(*old(self)) == history_store::history::verify::store_of(*history)) ==>
+                    crate::spec::monitor::policy_step(
+                        trace_view(*old(self), *history), *candidate, trace_selected_index(*final(self)), result),
             no_invariant_failure(result))]
     pub fn decide(
         &mut self,
         history: &History<E>,
         candidate: &E,
     ) -> Result<PolicyDecision, HistoryError> {
+        proof! { lemma_trace_representation(*self); }
         proof_decl! { let ghost before = *self; }
         let context =
             verus_exec_expr! { || -> (value: E) ensures value == *candidate { *candidate } };
@@ -409,6 +473,7 @@ impl<E: Event + 'static> TracePolicy<E> {
         proof! { assert(call_requires(context, ())); }
         let result = self.compiled.decide(history, candidate, context);
         proof! {
+            lemma_trace_representation(*self);
             if let Ok(PolicyDecision::Deny { ref failed_precondition, ref allowed_fixes }) = result {
                 let value = choose|value: E| call_ensures(actual_context, (), value)
                     && diagnostic_output(super::evaluate::verify::policy_trace(self.compiled).calls.last().diagnostic_id,
@@ -420,5 +485,36 @@ impl<E: Event + 'static> TracePolicy<E> {
             lemma_trace_decision_result(before, *self, *history, *candidate, result);
         }
         result
+    }
+
+    /// Decides using the candidate as context, committing exactly one event on grant.
+    /// A denial or resource/input error leaves the caller's original events unchanged.
+    #[verus_spec(result => requires trace_wf(*old(self)),
+        history_store::history::verify::history_wf(*old(history)),
+        ensures trace_check_result(*old(self), *final(self), *old(history), *final(history), *candidate, result))]
+    pub fn check(
+        &mut self,
+        history: &mut History<E>,
+        candidate: &E,
+    ) -> Result<PolicyDecision, HistoryError> {
+        proof_decl! { let ghost before = *self; }
+        proof_decl! { let ghost history_before = *history; }
+        let result = self.decide(history, candidate);
+        proof! {
+            lemma_trace_decision_result_facts(before, *self, history_before, *candidate, result);
+            history_store::history::verify::lemma_history_frame_facts(history_before, *history);
+        }
+        match result {
+            Ok(PolicyDecision::Grant) => {
+                let pushed = history.push(*candidate);
+                proof! {
+                    history_store::history::verify::lemma_push_result(history_before, *history, *candidate, pushed);
+                    history_store::history::verify::lemma_history_frame_facts(history_before, *history);
+                }
+                pushed?;
+                Ok(PolicyDecision::Grant)
+            }
+            other => other,
+        }
     }
 }

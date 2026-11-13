@@ -276,8 +276,8 @@ fn lock_context<P: Display, R: Display>(
 
 /// Compiled ownership-lock trace policy reusable across candidate decisions.
 ///
-/// [`LockPolicy::decide`] accepts an externally owned committed [`History`] in the same store.
-/// Decisions do not append events; the caller records successful operations explicitly.
+/// [`LockPolicy::check`] decides and commits grants to an externally owned [`History`] in the
+/// same store. [`LockPolicy::decide`] is explicitly noncommitting for read-only queries.
 pub struct LockPolicy<P, R>
 where
     P: Copy + Debug + Eq + Hash,
@@ -308,6 +308,18 @@ where
     ) -> Result<PolicyDecision, HistoryError> {
         let claims = &mut self.claims;
         self.compiled.decide(history, candidate, || {
+            lock_context(claims.claims(history, candidate.resource), candidate)
+        })
+    }
+
+    /// Decides and commits through the verified policy operation; denials leave history unchanged.
+    pub fn check(
+        &mut self,
+        history: &mut History<LockEvent<P, R>>,
+        candidate: &LockEvent<P, R>,
+    ) -> Result<PolicyDecision, HistoryError> {
+        let claims = &mut self.claims;
+        self.compiled.check(history, candidate, |history| {
             lock_context(claims.claims(history, candidate.resource), candidate)
         })
     }

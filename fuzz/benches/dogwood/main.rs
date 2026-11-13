@@ -60,7 +60,8 @@ use history_store::{History, Store};
 use junco_policy::{Action, LockEvent, LockPolicy};
 use lock_policy_harness::{
     Agent, BYTES_PER_EVENT, BYTES_PER_TRACE, DETERMINISTIC_SEED, MAX_AGENT_NUMBER, MAX_FILE_NUMBER,
-    PooledPath, SEEDED_TRACE_COUNT, check, entropy, granted_history, validate_trace,
+    PooledPath, SEEDED_TRACE_COUNT, check, check_and_commit, entropy, granted_history,
+    validate_trace,
 };
 
 /// Four lock actions over agent principals and path resources.
@@ -523,7 +524,10 @@ fn replay(criterion: &mut Criterion) {
         let mut prefix = junco.history();
         for (index, (event, (request, response))) in events.iter().zip(&dogwood_events).enumerate()
         {
-            assert!(check(&mut junco.policy, &prefix, event).expect("decision"));
+            assert!(
+                check_and_commit(&mut junco.policy, &mut prefix, event)
+                    .expect("decision and commit")
+            );
             assert!(
                 authorizer
                     .is_authorized(request)
@@ -532,7 +536,6 @@ fn replay(criterion: &mut Criterion) {
                 "dogwood denies granted event {index} at length {length}"
             );
             assert!(authorizer.is_authorized(response).is_none());
-            prefix.push(*event).expect("append");
         }
         let (_, violated) = Verimon::spawn().run(&verimon_log);
         assert!(
@@ -547,8 +550,10 @@ fn replay(criterion: &mut Criterion) {
                 || History::new(Arc::clone(&junco.store)).expect("history"),
                 |mut history| {
                     for event in events {
-                        assert!(check(&mut junco.policy, &history, event).expect("decision"));
-                        history.push(*event).expect("append");
+                        assert!(
+                            check_and_commit(&mut junco.policy, &mut history, event)
+                                .expect("decision and commit")
+                        );
                     }
                     history.len()
                 },
@@ -638,7 +643,8 @@ fn fuzz(criterion: &mut Criterion) {
         for (index, ((event, expected), (request, response, _))) in
             trace.iter().zip(dogwood_trace).enumerate()
         {
-            let got = check(&mut junco.policy, &history, event).expect("decision");
+            let got = check_and_commit(&mut junco.policy, &mut history, event)
+                .expect("decision and commit");
             assert_eq!(
                 got, *expected,
                 "trace {trace_index} step {index}: junco for {event:?}"
@@ -651,9 +657,7 @@ fn fuzz(criterion: &mut Criterion) {
                 got, *expected,
                 "trace {trace_index} step {index}: dogwood {got} != junco {expected} for {event:?}"
             );
-            if *expected {
-                history.push(*event).expect("append");
-            } else {
+            if !*expected {
                 denied += 1;
             }
             if let Some(response) = response {
@@ -690,11 +694,9 @@ fn fuzz(criterion: &mut Criterion) {
             |histories| {
                 for (trace, mut history) in traces.iter().zip(histories) {
                     for (event, expected) in trace {
-                        let granted = check(&mut junco.policy, &history, event).expect("decision");
+                        let granted = check_and_commit(&mut junco.policy, &mut history, event)
+                            .expect("decision and commit");
                         assert_eq!(granted, *expected);
-                        if granted {
-                            history.push(*event).expect("append");
-                        }
                     }
                 }
             },

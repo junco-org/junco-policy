@@ -69,9 +69,9 @@ impl fmt::Display for PooledPath {
     }
 }
 
-/// Runs one candidate through a retained lock policy; `true` means grant.
+/// Decides one candidate without committing; `true` means grant.
 ///
-/// This is the single operation the benchmark times and the trace validator gates history on.
+/// Decision-only benchmarks time this operation; enforcing traces use [`check_and_commit`].
 pub fn check(
     policy: &mut LockPolicy<Agent, PooledPath>,
     history: &History<LockEvent<Agent, PooledPath>>,
@@ -79,6 +79,17 @@ pub fn check(
 ) -> Result<bool, HistoryError> {
     policy
         .decide(history, candidate)
+        .map(|decision| matches!(decision, PolicyDecision::Grant))
+}
+
+/// Decides and commits a granted event through the verified policy operation.
+pub fn check_and_commit(
+    policy: &mut LockPolicy<Agent, PooledPath>,
+    history: &mut History<LockEvent<Agent, PooledPath>>,
+    candidate: &LockEvent<Agent, PooledPath>,
+) -> Result<bool, HistoryError> {
+    policy
+        .check(history, candidate)
         .map(|decision| matches!(decision, PolicyDecision::Grant))
 }
 
@@ -118,8 +129,7 @@ pub fn granted_history(
                 history.len()
             );
         };
-        if check(&mut policy, &history, &candidate.event)? {
-            history.push(candidate.event)?;
+        if check_and_commit(&mut policy, &mut history, &candidate.event)? {
             generator.record_grant(&candidate);
         }
     }
@@ -152,9 +162,8 @@ pub fn validate_trace(data: &[u8]) -> Result<ValidatedTrace, PolicyError> {
         let Some(candidate) = generator.next_candidate() else {
             break;
         };
-        match policy.decide(&trace.history, &candidate.event)? {
+        match policy.check(&mut trace.history, &candidate.event)? {
             PolicyDecision::Grant => {
-                trace.history.push(candidate.event)?;
                 generator.record_grant(&candidate);
             }
             PolicyDecision::Deny {

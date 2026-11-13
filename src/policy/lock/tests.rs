@@ -224,7 +224,7 @@ fn foreign_edits_require_a_fresh_read_even_after_release() {
 }
 
 #[test]
-fn retained_policy_matches_cold_decisions_across_history_updates() {
+fn retained_policy_commits_exactly_grants_and_matches_cold_decisions() {
     let store = store();
     let mut policy = LockPolicy::new(store.clone()).unwrap();
     let mut history = History::new(store).unwrap();
@@ -241,13 +241,15 @@ fn retained_policy_matches_cold_decisions_across_history_updates() {
         on_x(Who::Other, Action::Edit),
     ];
 
+    let mut expected_history = Vec::new();
     for candidate in candidates {
         let expected = cold(&history, &candidate);
-        let actual = policy.decide(&history, &candidate).unwrap();
+        let actual = policy.check(&mut history, &candidate).unwrap();
         assert_eq!(actual, expected);
         if actual == PolicyDecision::Grant {
-            history.push(candidate).unwrap();
+            expected_history.push(candidate);
         }
+        assert_eq!(history.as_slice(), expected_history.as_slice());
     }
 }
 
