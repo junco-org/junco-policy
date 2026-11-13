@@ -111,7 +111,7 @@ pub open(crate) spec fn policy_decision_result<E: Event, C>(before: CompiledPoli
                 let index = call.index as int;
                 after.callback_trace@.calls.len() == before.callback_trace@.calls.len() + 1
                     && 0 <= index < verify::policy_sources(before).len()
-                    && (history_store::typed::verify::native_obligations::<E>() ==>
+                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
                         sem::least_violation(sem::rule_views(verify::policy_sources(before)), candidate,
                             history_store::history::verify::raw_events(history), index))
                     && after.callback_trace@.calls == before.callback_trace@.calls.push(DiagnosticCall {
@@ -269,13 +269,13 @@ pub mod verify {
                     && policy_context_calls(after) == policy_context_calls(before)
                     && policy_diagnostic_calls(after) == policy_diagnostic_calls(before)
                     && compiled::ordered_result(policy_sources(before), history, candidate, Ok(None))
-                    && (books::native_obligations::<E>() ==> forall|i: int| 0 <= i < policy_sources(before).len() ==>
+                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==> forall|i: int| 0 <= i < policy_sources(before).len() ==>
                         !sem::rule_violated(policy_sources(before)[i]@, candidate,
                             history_store::history::verify::raw_events(history))),
                 Ok(PolicyDecision::Deny { .. }) => policy_selected_index(after) < policy_sources(before).len()
                     && policy_selected_source(after) == policy_sources(before)[policy_selected_index(after) as int]
                     && policy_selected_diagnostic_id(after) == policy_diagnostic_ids(before)[policy_selected_index(after) as int]
-                    && (books::native_obligations::<E>() ==> sem::least_violation(sem::rule_views(policy_sources(before)),
+                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==> sem::least_violation(sem::rule_views(policy_sources(before)),
                         candidate, history_store::history::verify::raw_events(history), policy_selected_index(after) as int))
                     && (policy_wf(before) ==> policy_context_calls(after) == policy_context_calls(before) + 1
                         && policy_diagnostic_calls(after) == policy_diagnostic_calls(before) + 1),
@@ -328,7 +328,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     /// Keeps arbitrary conversions streaming; exact input facts require their conversion law.
     /// Native event laws exclude internal invariant failures while preserving resource errors.
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures books::native_obligations::<E>() ==> no_invariant_compile_failure(result),
+        ensures junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_compile_failure(result),
             result matches Ok(policy) ==> policy_wf(policy) && policy_store(policy) == store
             && policy_trace_empty(policy)
             && forall|items: Seq<PolicyRule<E, C>>|
@@ -370,7 +370,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     /// Compiles every source rule in order and preserves its paired diagnostic.
     #[verus_verify]
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures books::native_obligations::<E>() ==> no_invariant_compile_failure(result),
+        ensures junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_compile_failure(result),
             result matches Ok(policy) ==> policy_wf(policy) && policy_store(policy) == store
             && policy_sources(policy) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_source(item))
             && policy_diagnostic_ids(policy) == rules@.map(|i: int, item: PolicyRule<E, C>| policy_rule_diagnostic(item))
@@ -383,7 +383,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
     #[verus_verify]
     #[cfg_attr(verus_keep_ghost, verifier::exec_allows_no_decreases_clause)]
     #[verus_spec(result => requires books::store_wf(*store),
-        ensures books::native_obligations::<E>() ==> no_invariant_compile_failure(result),
+        ensures junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_compile_failure(result),
             result matches Ok(policy) ==> policy_wf(policy) && policy.store == store
             && policy.callback_trace@.calls == Seq::<DiagnosticCall<E>>::empty()
             && (iterator.obeys_prophetic_iter_laws() ==>
@@ -449,7 +449,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                 Err(error) =>
                 {
                     #[cfg_attr(verus_keep_ghost, verus_spec(invariant books::store_wf(*store),
-                        books::native_obligations::<E>() ==> no_invariant_compile_failure::<CompiledRule<E>>(Err(error))))]
+                        junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_compile_failure::<CompiledRule<E>>(Err(error))))]
                     loop {
                         match remaining.next() {
                             Some(pending) => {
@@ -555,7 +555,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                     assert(verify::policy_wf(*self));
                     assert(verify::policy_frame(entry, *self));
                     assert(index < verify::policy_sources(entry).len());
-                    assert(books::native_obligations::<E>() ==> sem::least_violation(
+                    assert(junco_core::spec::hypotheses::event_obligations::<E>() ==> sem::least_violation(
                         sem::rule_views(verify::policy_sources(entry)), *probe,
                         history_store::history::verify::raw_events(*history), index as int));
                     let ghost observed_decision = decision;
@@ -608,7 +608,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
             self.callback_trace@ == entry.callback_trace@,
             history_store::history::verify::history_wf(*history),
             books::same_store_owner(entry.store, history_store::history::verify::store_of(*history)),
-            history_store::typed::verify::native_obligations::<E>() ==>
+            junco_core::spec::hypotheses::event_obligations::<E>() ==>
                 forall|j: int| 0 <= j < index ==> !sem::rule_violated(
                     verify::policy_sources(entry)[j]@, *probe, history_store::history::verify::raw_events(*history)),
             decreases self.rules@.len() - index))]
@@ -620,7 +620,7 @@ impl<E: Event, C> CompiledPolicy<E, C> {
                 .accepts_history_with_limits(history, probe, limits, world);
             let mode = rule.runtime.mode();
             proof! {
-                if history_store::typed::verify::native_obligations::<E>() {
+                if junco_core::spec::hypotheses::event_obligations::<E>() {
                     crate::compiled_rule::verify::lemma_dsl_violation(rule.runtime, *history, *probe, answer, mode);
                 }
                 verify::lemma_policy_entries_frame_facts(entry.rules@, before.rules@);

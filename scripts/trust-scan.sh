@@ -41,6 +41,8 @@ KINDS = [
      "`assume(p)`: adds `p` as a fact without proof"),
     ("exec_allows_no_decreases_clause",
      "an executable function whose termination is not proved (its loops/recursion have no `decreases`)"),
+    ("axiom",
+     "`axiom fn`: a proof fact stated without a body; justified in a comment beside it"),
 ]
 KIND_NAMES = [k for k, _ in KINDS]
 
@@ -90,6 +92,7 @@ ATTR_KIND = re.compile(
 )
 CALL_KIND = re.compile(r"(?<![\w.:])(admit|assume)\s*\(")
 ASSUME_SPEC = re.compile(r"\bassume_specification\b")
+AXIOM_FN = re.compile(r"\baxiom\s+fn\s+(\w+)")
 
 def describe(text):
     """A short name for the declaration starting at `text`."""
@@ -130,6 +133,8 @@ def scan(top, path, raw, findings):
     for m in CALL_KIND.finditer(code):
         line = line_of(m.start())
         findings.append((crate, m.group(1), path, line, src[line - 1].strip()[:110]))
+    for m in AXIOM_FN.finditer(code):
+        findings.append((crate, "axiom", path, line_of(m.start()), "fn " + m.group(1)))
     # One pass over items: attribute blocks and the `{`-nesting of their declarations.
     stack, seg_start, block, i, n = [], 0, [], 0, len(code)
     while i < n:

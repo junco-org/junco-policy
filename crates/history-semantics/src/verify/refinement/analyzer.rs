@@ -45,8 +45,8 @@
 //! `history-analysis/src/verify/search_exec.rs`), so every search trace is bounded independently
 //! of the budget.
 use super::semantics::*;
-use history_store::typed::verify::eq_equivalence;
 use history_syntax::spec::events::{HeadView, RegexView, RuleView};
+use junco_core::spec::hypotheses::eq_equivalence;
 use junco_core::spec::semantics as tdsl;
 use junco_core::spec::semantics::rule_wf;
 use vstd::prelude::*;
@@ -356,7 +356,7 @@ pub open spec fn tail_included_ok<C: PartialEq>(
 }
 
 /// Existence of admissible choices: with infinite types at the unrestricted components whose
-/// `eq_spec` is an equivalence (implied by `books::native_obligations`, see
+/// `eq_spec` is an equivalence (implied by `event_obligations`, see
 /// `history_store::typed::verify::lemma_native_obligations_eq_equivalence`), every counterexample
 /// has an admissible instantiation, so `every_instance` is not vacuous.
 pub open spec fn stmt_choice_exists<C: PartialEq>() -> bool {

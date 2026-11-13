@@ -15,6 +15,7 @@ Counted kinds:
 - `admit`: `admit()`: closes a proof obligation without proof.
 - `assume`: `assume(p)`: adds `p` as a fact without proof.
 - `exec_allows_no_decreases_clause`: an executable function whose termination is not proved (its loops/recursion have no `decreases`).
+- `axiom`: `axiom fn`: a proof fact stated without a body; justified in a comment beside it.
 
 An `external_body` attribute on an external type specification makes that type opaque and
 is reported once, with the type. Not counted: `external_derive` (derived trait impls that
@@ -37,46 +38,55 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 | `admit` | 0 | 0 | 0 | 0 | 0 | 0 |
 | `assume` | 0 | 0 | 0 | 0 | 0 | 0 |
 | `exec_allows_no_decreases_clause` | 0 | 1 | 1 | 0 | 0 | 2 |
-| **total** | **11** | **15** | **47** | **5** | **27** | **105** |
+| `axiom` | 5 | 0 | 0 | 3 | 0 | 8 |
+| **total** | **16** | **15** | **47** | **8** | **27** | **113** |
 
 ## `crates/history-analysis`
 
 ### `external_body` (11)
 
 - `crates/history-analysis/src/native.rs:12`: `struct NativeMap<K: Eq + Hash, V: Copy>`
-- `crates/history-analysis/src/native.rs:35`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn new`
-- `crates/history-analysis/src/native.rs:42`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn lookup`
-- `crates/history-analysis/src/native.rs:55`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn insert_fresh`
-- `crates/history-analysis/src/native.rs:67`: `struct NativeSet<K: Eq + Hash>`
-- `crates/history-analysis/src/native.rs:76`: `impl<K: Eq + Hash> NativeSet<K> :: fn new`
-- `crates/history-analysis/src/native.rs:83`: `impl<K: Eq + Hash> NativeSet<K> :: fn insert`
-- `crates/history-analysis/src/native.rs:96`: `struct NativeGroups<K: Eq + Hash, V>`
-- `crates/history-analysis/src/native.rs:106`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn new`
-- `crates/history-analysis/src/native.rs:113`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn get`
-- `crates/history-analysis/src/native.rs:124`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn push`
+- `crates/history-analysis/src/native.rs:23`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn new`
+- `crates/history-analysis/src/native.rs:30`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn lookup`
+- `crates/history-analysis/src/native.rs:43`: `impl<K: Eq + Hash, V: Copy> NativeMap<K, V> :: fn insert_fresh`
+- `crates/history-analysis/src/native.rs:55`: `struct NativeSet<K: Eq + Hash>`
+- `crates/history-analysis/src/native.rs:64`: `impl<K: Eq + Hash> NativeSet<K> :: fn new`
+- `crates/history-analysis/src/native.rs:71`: `impl<K: Eq + Hash> NativeSet<K> :: fn insert`
+- `crates/history-analysis/src/native.rs:84`: `struct NativeGroups<K: Eq + Hash, V>`
+- `crates/history-analysis/src/native.rs:94`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn new`
+- `crates/history-analysis/src/native.rs:101`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn get`
+- `crates/history-analysis/src/native.rs:112`: `impl<K: Eq + Hash, V> NativeGroups<K, V> :: fn push`
+
+### `axiom` (5)
+
+- `crates/history-analysis/src/verify/key_axioms.rs:19`: `fn axiom_regex_id_key_model`
+- `crates/history-analysis/src/verify/key_axioms.rs:23`: `fn axiom_test_id_key_model`
+- `crates/history-analysis/src/verify/key_axioms.rs:27`: `fn axiom_pair_key_model`
+- `crates/history-analysis/src/verify/key_axioms.rs:31`: `fn axiom_regex_id_smallvec_key_model`
+- `crates/history-analysis/src/verify/key_axioms.rs:36`: `fn axiom_constraint_key_model`
 
 ## `crates/history-semantics`
 
 ### `external_body` (14)
 
-- `crates/history-semantics/src/compiled_rule.rs:424`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
-- `crates/history-semantics/src/policy/evaluate.rs:67`: `fn render_denial`
-- `crates/history-semantics/src/policy/evaluate.rs:158`: `fn unpack_policy_rule`
+- `crates/history-semantics/src/compiled_rule.rs:420`: `impl<E: Event> CompiledRule<E> :: fn same_owner`
+- `crates/history-semantics/src/policy/evaluate.rs:69`: `fn render_denial`
+- `crates/history-semantics/src/policy/evaluate.rs:161`: `fn unpack_policy_rule`
 - `crates/history-semantics/src/policy/rule.rs:23`: `struct PolicyRule<E: Event, C>`
 - `crates/history-semantics/src/policy/rule.rs:35`: `struct NativeDiagnostic<C>`
 - `crates/history-semantics/src/policy/rule.rs:67`: `fn diagnostic_from_fn`
 - `crates/history-semantics/src/policy/rule.rs:92`: `fn pack_policy_rule`
-- `crates/history-semantics/src/policy/trace.rs:36`: `struct NativeTraceDiagnostic<E>`
-- `crates/history-semantics/src/policy/trace.rs:198`: `fn store_trace_diagnostic`
-- `crates/history-semantics/src/policy/trace.rs:223`: `fn pack_trace_rule`
-- `crates/history-semantics/src/policy/trace.rs:231`: `fn unpack_trace_rule`
-- `crates/history-semantics/src/policy/trace.rs:242`: `fn forward_trace_diagnostic`
-- `crates/history-semantics/src/policy/trace.rs:276`: `struct TraceRule<E: Event>`
-- `crates/history-semantics/src/policy/trace.rs:305`: `impl<E: Event> Clone for TraceRule<E> :: fn clone`
+- `crates/history-semantics/src/policy/trace.rs:38`: `struct NativeTraceDiagnostic<E>`
+- `crates/history-semantics/src/policy/trace.rs:197`: `fn store_trace_diagnostic`
+- `crates/history-semantics/src/policy/trace.rs:222`: `fn pack_trace_rule`
+- `crates/history-semantics/src/policy/trace.rs:230`: `fn unpack_trace_rule`
+- `crates/history-semantics/src/policy/trace.rs:241`: `fn forward_trace_diagnostic`
+- `crates/history-semantics/src/policy/trace.rs:275`: `struct TraceRule<E: Event>`
+- `crates/history-semantics/src/policy/trace.rs:304`: `impl<E: Event> Clone for TraceRule<E> :: fn clone`
 
 ### `exec_allows_no_decreases_clause` (1)
 
-- `crates/history-semantics/src/policy/evaluate.rs:381`: `impl<E: Event, C> CompiledPolicy<E, C> :: fn from_iterator`
+- `crates/history-semantics/src/policy/evaluate.rs:384`: `impl<E: Event, C> CompiledPolicy<E, C> :: fn from_iterator`
 
 ## `crates/history-store`
 
@@ -110,20 +120,20 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 - `crates/history-store/src/store.rs:1818`: `impl<'a> NativeRecordReadGuard<'a> :: fn acquire`
 - `crates/history-store/src/store.rs:1827`: `impl<'a> NativeRecordReadGuard<'a> :: fn cell`
 - `crates/history-store/src/store.rs:1891`: `impl HistoryStore :: fn new`
-- `crates/history-store/src/typed.rs:114`: `struct NativeStoreIds`
-- `crates/history-store/src/typed.rs:120`: `impl NativeStoreIds :: fn new`
-- `crates/history-store/src/typed.rs:127`: `impl NativeStoreIds :: fn with_state`
-- `crates/history-store/src/typed.rs:414`: `struct NativeBooks<E: Event>`
-- `crates/history-store/src/typed.rs:421`: `impl<E: Event> NativeBooks<E> :: fn new`
-- `crates/history-store/src/typed.rs:433`: `impl<E: Event> NativeBooks<E> :: fn with_books`
-- `crates/history-store/src/typed.rs:475`: `fn share_store`
-- `crates/history-store/src/typed.rs:485`: `fn borrow_store`
-- `crates/history-store/src/typed.rs:493`: `fn process_store_ids_ref`
+- `crates/history-store/src/typed.rs:116`: `struct NativeStoreIds`
+- `crates/history-store/src/typed.rs:122`: `impl NativeStoreIds :: fn new`
+- `crates/history-store/src/typed.rs:129`: `impl NativeStoreIds :: fn with_state`
+- `crates/history-store/src/typed.rs:416`: `struct NativeBooks<E: Event>`
+- `crates/history-store/src/typed.rs:423`: `impl<E: Event> NativeBooks<E> :: fn new`
+- `crates/history-store/src/typed.rs:435`: `impl<E: Event> NativeBooks<E> :: fn with_books`
+- `crates/history-store/src/typed.rs:477`: `fn share_store`
+- `crates/history-store/src/typed.rs:487`: `fn borrow_store`
+- `crates/history-store/src/typed.rs:495`: `fn process_store_ids_ref`
 - `crates/history-store/src/typed/map.rs:12`: `struct NativeMap<K: Copy + Eq + Hash>`
-- `crates/history-store/src/typed/map.rs:33`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn new`
-- `crates/history-store/src/typed/map.rs:40`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn lookup`
-- `crates/history-store/src/typed/map.rs:53`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn reserve_one`
-- `crates/history-store/src/typed/map.rs:64`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn insert_fresh`
+- `crates/history-store/src/typed/map.rs:22`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn new`
+- `crates/history-store/src/typed/map.rs:29`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn lookup`
+- `crates/history-store/src/typed/map.rs:42`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn reserve_one`
+- `crates/history-store/src/typed/map.rs:53`: `impl<K: Copy + Eq + Hash> NativeMap<K> :: fn insert_fresh`
 
 ### `external_type_specification` (2)
 
@@ -154,6 +164,12 @@ Also not scanned: the verified helper crates `verus-bumpalo` and `hashconsius`, 
 
 - `crates/history-syntax/src/event.rs:253`: `trait ExArity: sealed::Sealed (with external_trait_extension)`
 - `crates/history-syntax/src/event.rs:273`: `trait ExEvent: Copy + Debug + Eq + Hash (with external_trait_extension)`
+
+### `axiom` (3)
+
+- `crates/history-syntax/src/verify/key_axioms.rs:15`: `fn axiom_component2_key_model`
+- `crates/history-syntax/src/verify/key_axioms.rs:19`: `fn axiom_component3_key_model`
+- `crates/history-syntax/src/verify/key_axioms.rs:23`: `fn axiom_component4_key_model`
 
 ## `crates/junco-core`
 

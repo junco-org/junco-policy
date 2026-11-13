@@ -1,7 +1,7 @@
 //! Executable search trace, retained cases, and finite-state resource bounds.
 
 use crate::constraint::{Atom, ConstraintId, ConstraintTable, Letter, Universes};
-use crate::native::{key_obligations, members};
+use crate::native::members;
 use crate::search::{Item, Search};
 use crate::verify::{atom_set, atoms_wf, ndomains, table_wf};
 use history_semantics::symbolic_verify as symbolic;
@@ -12,6 +12,7 @@ use history_semantics::verify::{
 use history_semantics::{SymbolicLanguage, symbolic_language_verify as facade};
 use junco_core::kernel::{RegexId, TestId, verify as model};
 use junco_core::observation::SmallVecSpecFns;
+use junco_core::spec::hypotheses::key_laws;
 use junco_core::verify::history_specs::{self as language, EventView, Regex, Subst};
 use vstd::prelude::*;
 
@@ -19,7 +20,7 @@ verus! {
 broadcast use model::group_kernel_views;
 
 pub(crate) open spec fn search_obligations() -> bool {
-    key_obligations::<(ConstraintId, RegexId)>() && key_obligations::<crate::constraint::Constraint>()
+    key_laws::<(ConstraintId, RegexId)>() && key_laws::<crate::constraint::Constraint>()
         && crate::verify::simulation_exec::memo_obligations()
         && crate::verify::prune_exec::parts_key_obligations()
 }

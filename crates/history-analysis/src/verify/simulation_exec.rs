@@ -1,6 +1,6 @@
 //! Semantic invariants for the executable simulation memo.
 
-use crate::native::{key_obligations, representatives};
+use crate::native::representatives;
 use crate::simulation::{Node, Simulation, TestNode};
 use history_semantics::verify::refinement::pruning as paper;
 use history_semantics::{
@@ -9,6 +9,7 @@ use history_semantics::{
 use junco_core::kernel::verify as model;
 use junco_core::kernel::{RegexId, TestId};
 use junco_core::observation::SmallVecSpecFns;
+use junco_core::spec::hypotheses::key_laws;
 use junco_core::verify::history_specs::{self as language, Regex};
 use vstd::prelude::*;
 use vstd::std_specs::cmp::PartialEqSpec;
@@ -17,7 +18,7 @@ verus! {
 broadcast use junco_core::kernel::verify::group_kernel_views;
 
 pub(crate) open spec fn memo_obligations() -> bool {
-    key_obligations::<(RegexId, RegexId)>() && key_obligations::<(TestId, TestId)>()
+    key_laws::<(RegexId, RegexId)>() && key_laws::<(TestId, TestId)>()
 }
 
 pub(crate) open spec fn semantic_le() -> spec_fn(Regex<model::Test>, Regex<model::Test>) -> bool {

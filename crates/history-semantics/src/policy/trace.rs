@@ -117,7 +117,7 @@ pub mod verify {
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before),
                 Ok(PolicyDecision::Grant) => trace_context_calls(after) == trace_context_calls(before)
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before)
-                    && (history_store::typed::verify::native_obligations::<E>() ==>
+                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
                         forall|i: int| 0 <= i < trace_sources(before).len() ==>
                             !sem::rule_violated(trace_sources(before)[i]@, candidate,
                                 history_store::history::verify::raw_events(history))),
@@ -126,7 +126,7 @@ pub mod verify {
                         && trace_diagnostic_calls(after) == trace_diagnostic_calls(before) + 1
                         && trace_selected_index(after) < trace_sources(before).len()
                         && trace_selected_diagnostic_id(after) == trace_diagnostic_ids(before)[trace_selected_index(after) as int]
-                        && (history_store::typed::verify::native_obligations::<E>() ==>
+                        && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
                             sem::least_violation(sem::rule_views(trace_sources(before)), candidate,
                                 history_store::history::verify::raw_events(history), trace_selected_index(after) as int))
                         && diagnostic_output(super::super::evaluate::verify::policy_trace(after.compiled).calls.last().diagnostic_id,
@@ -169,7 +169,7 @@ pub mod verify {
                 Ok(PolicyDecision::Grant) => trace_callbacks_frame(before, after)
                     && trace_context_calls(after) == trace_context_calls(before)
                     && trace_diagnostic_calls(after) == trace_diagnostic_calls(before)
-                    && (history_store::typed::verify::native_obligations::<E>() ==> forall|i: int|
+                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==> forall|i: int|
                         0 <= i < trace_sources(before).len() ==>
                             !sem::rule_violated(trace_sources(before)[i]@, candidate,
                                 history_store::history::verify::raw_events(history))),
@@ -179,7 +179,7 @@ pub mod verify {
                         && trace_selected_index(after) < trace_sources(before).len()
                         && trace_selected_source(after) == trace_sources(before)[trace_selected_index(after) as int]
                         && trace_selected_diagnostic_id(after) == trace_diagnostic_ids(before)[trace_selected_index(after) as int]
-                        && (history_store::typed::verify::native_obligations::<E>() ==>
+                        && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
                             sem::least_violation(sem::rule_views(trace_sources(before)), candidate,
                                 history_store::history::verify::raw_events(history), trace_selected_index(after) as int))
                         && diagnostic_output(trace_selected_diagnostic_id(after), candidate,
@@ -338,7 +338,7 @@ impl<E: Event + 'static> TracePolicy<E> {
     /// Exact source and diagnostic order require the input's `into_iter_yields` law.
     /// Native event laws exclude internal invariant failures, not ordinary compile/resource errors.
     #[verus_spec(result => requires history_store::typed::verify::store_wf(*store),
-        ensures history_store::typed::verify::native_obligations::<E>() ==> no_invariant_compile_failure(result),
+        ensures junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_compile_failure(result),
             result matches Ok(policy) ==> trace_wf(policy) && trace_store(policy) == store
             && trace_context_calls(policy) == 0 && trace_diagnostic_calls(policy) == 0
             && forall|items: Seq<TraceRule<E>>| junco_core::verify::history_specs::into_iter_yields(rules, items) ==>

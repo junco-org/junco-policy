@@ -60,7 +60,7 @@ fn vec_history<E: Event>(events: Vec<E>) -> (result: Result<History<E>, HistoryE
 // Scoped native sources cannot manufacture structural or scope errors.
 fn scoped_production_compile<E: Event>(source: Rule<E>)
     -> (result: Result<CompiledRule<E>, CompileError>)
-    requires books::native_obligations::<E>(), dsl::head_scoped(source.head@),
+    requires junco_core::spec::hypotheses::event_obligations::<E>(), dsl::head_scoped(source.head@),
         dsl::regex_scoped(source.tail@, source.head@),
     ensures history_specs::no_invariant_compile_failure(result),
         !(result matches Err(CompileError::VariableComponentConflict { .. })),
@@ -75,7 +75,7 @@ fn scoped_production_compile<E: Event>(source: Rule<E>)
 fn compiled_truth_table<E: Event>(
     head: Head<E>, mode: RuleMode, universal: bool, events: Vec<E>, candidate: &E,
 ) -> (result: Result<(History<E>, CompiledRule<E>, Result<Option<bool>, HistoryError>), CompileError>)
-    requires books::native_obligations::<E>(),
+    requires junco_core::spec::hypotheses::event_obligations::<E>(),
     ensures result matches Ok((value, rule, answer)) ==>
         history::raw_events(value) == events@
         && compiled::source_rule(rule) == (Rule { mode, head,
@@ -116,7 +116,7 @@ fn compiled_truth_table<E: Event>(
 
 fn five_decision_cases<E: Event>(mismatch: Head<E>, require_all: Head<E>, forbid_all: Head<E>,
     require_empty: Head<E>, forbid_empty: Head<E>, candidate: &E) -> Result<(), CompileError>
-    requires books::native_obligations::<E>(),
+    requires junco_core::spec::hypotheses::event_obligations::<E>(),
         !dsl::head_matches(mismatch@, event_view(*candidate)),
         dsl::head_matches(require_all@, event_view(*candidate)),
         dsl::head_matches(forbid_all@, event_view(*candidate)),
@@ -171,7 +171,7 @@ fn trace_first_diagnostic<E: Event + 'static,
     first_head: Head<E>, second_head: Head<E>, events: Vec<E>, candidate: &E,
     first_diagnostic: D0, second_diagnostic: D1,
 ) -> (result: Result<(History<E>, TracePolicy<E>, Result<PolicyDecision, HistoryError>), CompileError>)
-    requires books::native_obligations::<E>(),
+    requires junco_core::spec::hypotheses::event_obligations::<E>(),
         dsl::head_matches(first_head@, event_view(*candidate)),
         dsl::head_matches(second_head@, event_view(*candidate)),
         forall|argument: &E| call_requires(first_diagnostic, (argument,)),
@@ -279,7 +279,7 @@ fn trace_first_diagnostic<E: Event + 'static,
 
 fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: Request<E, M>)
     -> (result: Result<(Validator<E>, Result<Decision<E, M>, HistoryError>), CompileError>)
-    requires books::native_obligations::<E>(), dsl::head_matches(head@, event_view(request.event)),
+    requires junco_core::spec::hypotheses::event_obligations::<E>(), dsl::head_matches(head@, event_view(request.event)),
     ensures result matches Ok((state, answer)) ==>
         match answer {
             Ok(Decision::Grant(grant)) => universal && grant.event == request.event
@@ -322,7 +322,7 @@ fn validator_transaction<E: Event, M>(head: Head<E>, universal: bool, request: R
             },
             Ok(Decision::Denied(ref denial)) => {
                 let index = choose|index: int| validator::denial_at(before, request, *denial, index)
-                    && (books::native_obligations::<E>() ==>
+                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
                         denial.mode == validator::validator_sources(before)[index].mode
                             && dsl::least_violation(dsl::rule_views(validator::validator_sources(before)),
                                 request.event, history::raw_events(validator::validator_history(before)), index));
@@ -348,7 +348,7 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
             Err(_) => trace::trace_context_calls(state) == 0 && trace::trace_diagnostic_calls(state) == 0,
             Ok(PolicyDecision::Grant) => trace::trace_context_calls(state) == 0
                 && trace::trace_diagnostic_calls(state) == 0
-                && (books::native_obligations::<E>() ==> forall|i: int| 0 <= i < rules@.len() ==>
+                && (junco_core::spec::hypotheses::event_obligations::<E>() ==> forall|i: int| 0 <= i < rules@.len() ==>
                     !dsl::rule_violated(trace::trace_rule_source(rules@[i])@, *candidate, events@)),
             Ok(PolicyDecision::Deny { failed_precondition, allowed_fixes }) =>
                 trace::trace_context_calls(state) == 1 && trace::trace_diagnostic_calls(state) == 1
@@ -357,7 +357,7 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
                     == trace::trace_rule_diagnostic_id(rules@[trace::trace_selected_index(state) as int])
                 && diagnostic_output(trace::trace_selected_diagnostic_id(state), *candidate,
                     failed_precondition@, allowed_fixes.deep_view())
-                && (books::native_obligations::<E>() ==>
+                && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
                     dsl::rule_violated(trace::trace_rule_source(rules@[trace::trace_selected_index(state) as int])@,
                         *candidate, events@)
                     && forall|i: int| 0 <= i < trace::trace_selected_index(state) ==>
@@ -391,7 +391,7 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
         assert(history::raw_events(value) == raw_before);
         match answer {
             Ok(PolicyDecision::Grant) => {
-                if books::native_obligations::<E>() {
+                if junco_core::spec::hypotheses::event_obligations::<E>() {
                     assert forall|i: int| 0 <= i < items.len() implies
                         !dsl::rule_violated(trace::trace_rule_source(items[i])@, *candidate, events@) by {
                         assert(trace::trace_sources(before)[i] == trace::trace_rule_source(items[i]));
@@ -404,7 +404,7 @@ fn trace_observations<E: Event + 'static>(rules: Vec<TraceRule<E>>, events: Vec<
                 let index = trace::trace_selected_index(state) as int;
                 assert(0 <= index < items.len());
                 assert(trace::trace_diagnostic_ids(before)[index] == trace::trace_rule_diagnostic_id(items[index]));
-                if books::native_obligations::<E>() {
+                if junco_core::spec::hypotheses::event_obligations::<E>() {
                     assert(dsl::least_violation(dsl::rule_views(trace::trace_sources(before)), *candidate, history::raw_events(value), index));
                     assert(trace::trace_sources(before)[index] == trace::trace_rule_source(items[index]));
                     assert(dsl::rule_violated(trace::trace_rule_source(items[index])@, *candidate, events@));

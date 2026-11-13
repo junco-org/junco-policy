@@ -120,7 +120,7 @@ pub mod verify {
             && decision::runtime_represents(compiled.template, compiled.runtime)
             && observations_wf(books::registry_id(&compiled.store),
                 compiled.runtime.snapshots@, compiled.observations@)
-            && (books::native_obligations::<E>() ==> books::maps_wf::<E>(compiled.maps@)
+            && (junco_core::spec::hypotheses::event_obligations::<E>() ==> books::maps_wf::<E>(compiled.maps@)
                 && books::snapshot_published::<E>(books::registry_id(&compiled.store), compiled.maps@)
                 && compiled_source::<E>(compiled.source@, compiled.mode, compiled.template,
                     compiled.maps@, source::component_equality::<E>(), books::domain::<E>()))
@@ -187,7 +187,7 @@ pub mod verify {
 
     pub open spec fn ordered_result<E: Event>(sources: Seq<Rule<E>>, history: History<E>, candidate: E,
         result: Result<Option<usize>, HistoryError>) -> bool {
-        books::native_obligations::<E>() ==> match result {
+        junco_core::spec::hypotheses::event_obligations::<E>() ==> match result {
             Ok(Some(index)) => dsl::least_violation(dsl::rule_views(sources), candidate, raw::raw_events(history), index as int),
             Ok(None) => forall|j: int| 0 <= j < sources.len() ==> !dsl::rule_violated(sources[j]@, candidate, raw::raw_events(history)),
             Err(_) => true,
@@ -227,13 +227,13 @@ pub mod verify {
     { reveal(CompiledRule::mode_spec); }
 
     pub proof fn lemma_compiled_source_mode<E: Event>(compiled: CompiledRule<E>, mode: RuleMode)
-        requires compiled_wf(compiled), books::native_obligations::<E>(), mode == compiled.mode_spec(),
+        requires compiled_wf(compiled), junco_core::spec::hypotheses::event_obligations::<E>(), mode == compiled.mode_spec(),
         ensures mode == source_rule(compiled).mode,
     { reveal(CompiledRule::mode_spec); }
 
     pub proof fn lemma_dsl_violation<E: Event>(compiled: CompiledRule<E>, history: History<E>, candidate: E,
         result: Result<Option<bool>, HistoryError>, mode: RuleMode)
-        requires compiled_wf(compiled), books::native_obligations::<E>(),
+        requires compiled_wf(compiled), junco_core::spec::hypotheses::event_obligations::<E>(),
             dsl_result(source_rule(compiled), history, candidate, result), mode == compiled.mode_spec(),
         ensures result matches Ok(answer) ==> dsl::rule_violated(source_rule(compiled)@, candidate, raw::raw_events(history))
             == match answer { None => false, Some(accepted) => match mode {
@@ -248,7 +248,7 @@ pub mod verify {
         compiled_structure_frame(before, after) && after.maps@ == before.maps@
             && no_invariant_failure(result)
             && (result is Err ==> after.runtime.cursors@ == before.runtime.cursors@)
-            && (books::native_obligations::<E>() ==> dsl_result(before.source@, history, candidate, result))
+            && (junco_core::spec::hypotheses::event_obligations::<E>() ==> dsl_result(before.source@, history, candidate, result))
             && ((result == Err(HistoryError::WrongHistoryOwner))
                 == !books::same_store_owner(before.store, raw::store_of(history)))
     }
@@ -266,8 +266,8 @@ pub mod verify {
             raw::history_wf(history) ==> decision_requires(after, history),
             (result == Err(HistoryError::WrongHistoryOwner))
                 == !books::same_store_owner(compiled_store(before), raw::store_of(history)),
-            books::native_obligations::<E>() ==> dsl_result(source_rule(before), history, candidate, result),
-            books::native_obligations::<E>() ==> match result {
+            junco_core::spec::hypotheses::event_obligations::<E>() ==> dsl_result(source_rule(before), history, candidate, result),
+            junco_core::spec::hypotheses::event_obligations::<E>() ==> match result {
                 Ok(answer) => answer == dsl::rule_evaluation(
                     source_rule(before)@, candidate, raw::raw_events(history)),
                 Err(_) => true,
@@ -288,7 +288,7 @@ pub mod verify {
 
     pub(crate) proof fn lemma_typed_result<E: Event>(compiled: CompiledRule<E>, history: History<E>, candidate: E,
         request: history_store::store::Event, maps: books::ComponentMaps<E>, result: Result<Option<bool>, HistoryError>)
-        requires compiled_wf(compiled), raw::history_wf(history), books::native_obligations::<E>(),
+        requires compiled_wf(compiled), raw::history_wf(history), junco_core::spec::hypotheses::event_obligations::<E>(),
             books::maps_wf::<E>(maps), books::maps_extend::<E>(compiled.maps@, maps),
             books::maps_extend::<E>(raw::history_maps(history), maps), books::event_encoded::<E>(maps, candidate, request),
             numeric_result(compiled.template, request, *history.numeric(), result),
@@ -355,11 +355,11 @@ impl<E: Event> CompiledRule<E> {
         ensures result matches Ok((mode, numeric, maps)) ==> mode == rule.mode
             && junco_core::flat::verify::structural_wf(numeric)
             && books::snapshot_published::<E>(books::registry_id(store), maps@)
-            && (books::native_obligations::<E>() ==> books::maps_wf::<E>(maps@)
+            && (junco_core::spec::hypotheses::event_obligations::<E>() ==> books::maps_wf::<E>(maps@)
                 && compiled_source::<E>(*rule, mode, numeric, maps@,
                     source::component_equality::<E>(), books::domain::<E>())),
-            books::native_obligations::<E>() ==> no_invariant_compile_failure(result),
-            books::native_obligations::<E>() && dsl::head_scoped(rule.head@)
+            junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_compile_failure(result),
+            junco_core::spec::hypotheses::event_obligations::<E>() && dsl::head_scoped(rule.head@)
                 && dsl::regex_scoped(rule.tail@, rule.head@)
                 ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
                     && !(result matches Err(CompileError::UnboundVariable { .. }))
@@ -369,7 +369,7 @@ impl<E: Event> CompiledRule<E> {
         proof_decl! { let ghost flattened = flat; }
         proof! {
             books::lemma_empty_snapshot::<E>(store);
-            if books::native_obligations::<E>() {
+            if junco_core::spec::hypotheses::event_obligations::<E>() {
                 books::lemma_native_obligations_projection::<E>();
                 books::lemma_empty_maps_wf::<E>();
                 assert(encoding::constants_in_domain(flat.source, books::domain::<E>()));
@@ -379,7 +379,7 @@ impl<E: Event> CompiledRule<E> {
             verus_exec_expr! { Ghost(books::empty_maps::<E>()) });
         let numeric = result?;
         proof! {
-            if books::native_obligations::<E>() {
+            if junco_core::spec::hypotheses::event_obligations::<E>() {
                 assert(source::flattened::<E>(*rule, flattened));
                 assert(compiled_source::<E>(*rule, flat.mode, numeric, maps@,
                     source::component_equality::<E>(), books::domain::<E>()));
@@ -431,8 +431,8 @@ impl<E: Event> CompiledRule<E> {
     /// Native event laws exclude internal failures; scoped sources also exclude scope/validation diagnostics.
     #[verus_spec(result => requires books::store_wf(*store),
         ensures result matches Ok(compiled) ==> constructed(compiled, rule, store),
-            books::native_obligations::<E>() ==> no_invariant_compile_failure(result),
-            books::native_obligations::<E>() && dsl::head_scoped(rule.head@)
+            junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_compile_failure(result),
+            junco_core::spec::hypotheses::event_obligations::<E>() && dsl::head_scoped(rule.head@)
                 && dsl::regex_scoped(rule.tail@, rule.head@)
                 ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
                     && !(result matches Err(CompileError::UnboundVariable { .. }))
@@ -443,8 +443,8 @@ impl<E: Event> CompiledRule<E> {
 
     #[verus_spec(result => requires books::store_wf(*store),
         ensures result matches Ok(compiled) ==> constructed(compiled, rule, store),
-            books::native_obligations::<E>() ==> no_invariant_compile_failure(result),
-            books::native_obligations::<E>() && dsl::head_scoped(rule.head@)
+            junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_compile_failure(result),
+            junco_core::spec::hypotheses::event_obligations::<E>() && dsl::head_scoped(rule.head@)
                 && dsl::regex_scoped(rule.tail@, rule.head@)
                 ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
                     && !(result matches Err(CompileError::UnboundVariable { .. }))
@@ -460,8 +460,8 @@ impl<E: Event> CompiledRule<E> {
 
     #[verus_spec(result => requires books::store_wf(*store),
         ensures result matches Ok(compiled) ==> constructed(compiled, rule, store),
-            books::native_obligations::<E>() ==> no_invariant_compile_failure(result),
-            books::native_obligations::<E>() && dsl::head_scoped(rule.head@)
+            junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_compile_failure(result),
+            junco_core::spec::hypotheses::event_obligations::<E>() && dsl::head_scoped(rule.head@)
                 && dsl::regex_scoped(rule.tail@, rule.head@)
                 ==> !(result matches Err(CompileError::VariableComponentConflict { .. }))
                     && !(result matches Err(CompileError::UnboundVariable { .. }))
@@ -620,7 +620,7 @@ impl<E: Event> CompiledRule<E> {
             other => other,
         };
         proof! {
-            if books::native_obligations::<E>() {
+            if junco_core::spec::hypotheses::event_obligations::<E>() {
                 lemma_typed_result(entry, *history, *candidate, request, _maps@, result);
             }
         }

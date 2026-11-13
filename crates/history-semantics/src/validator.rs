@@ -76,7 +76,7 @@ impl<E: Event> ValidatorBuilder<E> {
     /// Compiles and appends one complete source rule.
     /// Native event laws exclude internal invariant failures, not resource errors.
     #[verus_spec(result => requires verify::builder_wf(*old(self)),
-        ensures history_store::typed::verify::native_obligations::<E>() ==> no_invariant_compile_failure(result),
+        ensures junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_compile_failure(result),
             match result {
             Err(_) => verify::builder_wf(*final(self))
                 && verify::builder_store(*final(self)) == verify::builder_store(*old(self))
@@ -109,7 +109,7 @@ impl<E: Event> ValidatorBuilder<E> {
 
     /// Creates the empty committed history in the rules' store.
     #[verus_spec(result => requires verify::builder_wf(self),
-        ensures history_store::typed::verify::native_obligations::<E>() ==> no_invariant_failure(result),
+        ensures junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_failure(result),
             result matches Ok(validator) ==> verify::validator_wf(validator)
             && verify::validator_sources(validator) == verify::builder_sources(self)
             && history_store::history::verify::empty_history(verify::validator_history(validator), verify::builder_store(self)))]
@@ -144,14 +144,14 @@ impl<E: Event> Validator<E> {
     /// Native event laws exclude internal invariant failures while retaining resource errors.
     #[verus_spec(result => requires verify::validator_wf(*old(self)),
         ensures verify::check_result(*old(self), *final(self), request, result),
-            history_store::typed::verify::native_obligations::<E>() ==> no_invariant_failure(result))]
+            junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_failure(result))]
     pub fn check<M>(&mut self, request: Request<E, M>) -> Result<Decision<E, M>, HistoryError> {
         self.check_with(request, &mut Unmetered, &mut ObservationWorld)
     }
 
     #[verus_spec(result => requires verify::validator_wf(*old(self)),
         ensures verify::check_result(*old(self), *final(self), request, result),
-            history_store::typed::verify::native_obligations::<E>() ==> no_invariant_failure(result))]
+            junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_failure(result))]
     fn check_with<M, L: Limits>(
         &mut self,
         request: Request<E, M>,
@@ -173,7 +173,7 @@ impl<E: Event> Validator<E> {
             proof! {
                 crate::compiled_rule::verify::lemma_compiled_sources_frame(entry.rules@, self.rules@);
                 crate::compiled_rule::verify::lemma_compiled_mode_frame(entry.rules@, self.rules@, index as int);
-                if history_store::typed::verify::native_obligations::<E>() {
+                if junco_core::spec::hypotheses::event_obligations::<E>() {
                     crate::compiled_rule::verify::lemma_compiled_source_mode(self.rules@[index as int], mode);
                 }
             }
@@ -204,7 +204,7 @@ impl<E: Event> Validator<E> {
         ensures no_invariant_failure(result),
             verify::validator_frame(*old(self), *final(self)),
             history_store::history::verify::state_frame(verify::validator_history(*old(self)), verify::validator_history(*final(self))),
-            result matches Ok(permitted) ==> (history_store::typed::verify::native_obligations::<E>() ==>
+            result matches Ok(permitted) ==> (junco_core::spec::hypotheses::event_obligations::<E>() ==>
                 permitted == (forall|i: int| 0 <= i < verify::validator_sources(*old(self)).len() ==>
                     !sem::rule_violated(verify::validator_sources(*old(self))[i]@, *candidate,
                         history_store::history::verify::raw_events(verify::validator_history(*old(self)))))))]
@@ -239,7 +239,7 @@ impl<E: Event> Validator<E> {
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
             index <= self.rules@.len(), verify::validator_wf(*self), verify::validator_frame(entry, *self),
             entry == *old(self), self.history == entry.history,
-            history_store::typed::verify::native_obligations::<E>() ==>
+            junco_core::spec::hypotheses::event_obligations::<E>() ==>
                 forall|j: int| 0 <= j < index ==> !sem::rule_violated(
                     verify::validator_sources(entry)[j]@, *candidate, history_store::history::verify::raw_events(entry.history)),
             decreases self.rules@.len() - index))]
@@ -249,7 +249,7 @@ impl<E: Event> Validator<E> {
             let answer = rule.accepts_history_with_limits(&self.history, candidate, limits, world);
             let mode = rule.mode();
             proof! {
-                if history_store::typed::verify::native_obligations::<E>() {
+                if junco_core::spec::hypotheses::event_obligations::<E>() {
                     crate::compiled_rule::verify::lemma_dsl_violation(*rule, self.history, *candidate, answer, mode);
                 }
                 assert forall|j: int| 0 <= j < entry.rules@.len() implies
@@ -363,7 +363,7 @@ pub mod verify {
     pub open(crate) spec fn denial_at<E: Event, M>(before: Validator<E>, request: Request<E,M>, denial: Denial<E>, index: int) -> bool {
         0 <= index < before.rules@.len() && denial.mode == before.rules@[index].mode_spec()
             && denial.event == request.event
-            && (books::native_obligations::<E>() ==> denial.mode == validator_sources(before)[index].mode
+            && (junco_core::spec::hypotheses::event_obligations::<E>() ==> denial.mode == validator_sources(before)[index].mode
                 && sem::least_violation(sem::rule_views(validator_sources(before)), request.event, raw::raw_events(before.history), index))
             && denial.message@ == match denial.mode {
                 RuleMode::Require => "committed history does not satisfy required past-regex rule"@,
@@ -373,7 +373,7 @@ pub mod verify {
     pub open(crate) spec fn check_result<E: Event, M>(before: Validator<E>, after: Validator<E>,
         request: Request<E, M>, result: Result<Decision<E, M>, HistoryError>) -> bool {
         validator_frame(before, after)
-            && (books::native_obligations::<E>() ==> no_invariant_failure(result))
+            && (junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_failure(result))
             && match result {
             Err(_) => raw::state_frame(before.history, after.history),
             Ok(Decision::Denied(denial)) => denial.event == request.event
@@ -381,7 +381,7 @@ pub mod verify {
                 && exists|index: int| #[trigger] denial_at(before, request, denial, index),
             Ok(Decision::Grant(grant)) => grant.event == request.event && grant.metadata == request.metadata
                 && raw::push_result(before.history, after.history, request.event, Ok(()))
-                && (books::native_obligations::<E>() ==> forall|index: int|
+                && (junco_core::spec::hypotheses::event_obligations::<E>() ==> forall|index: int|
                     0 <= index < validator_sources(before).len() ==>
                         !sem::rule_violated(validator_sources(before)[index]@, request.event, raw::raw_events(before.history))),
         }
@@ -397,7 +397,7 @@ pub mod verify {
             raw::history_wf(validator_history(after)),
             raw::owner_frame(validator_history(before), validator_history(after)),
             raw::store_of(validator_history(after)) == raw::store_of(validator_history(before)),
-            books::native_obligations::<E>() ==> no_invariant_failure(result),
+            junco_core::spec::hypotheses::event_obligations::<E>() ==> no_invariant_failure(result),
             match result {
                 Err(_) => raw::state_frame(validator_history(before), validator_history(after))
                     && raw::raw_events(validator_history(after)) == raw::raw_events(validator_history(before)),
@@ -405,14 +405,14 @@ pub mod verify {
                     && raw::state_frame(validator_history(before), validator_history(after))
                     && raw::raw_events(validator_history(after)) == raw::raw_events(validator_history(before))
                     && exists|index: int| denial_at(before, request, denial, index)
-                        && (books::native_obligations::<E>() ==>
+                        && (junco_core::spec::hypotheses::event_obligations::<E>() ==>
                             denial.mode == validator_sources(before)[index].mode
                                 && sem::least_violation(sem::rule_views(validator_sources(before)),
                                     request.event, raw::raw_events(validator_history(before)), index)),
                 Ok(Decision::Grant(grant)) => grant.event == request.event && grant.metadata == request.metadata
                     && raw::push_result(validator_history(before), validator_history(after), request.event, Ok(()))
                     && raw::raw_events(validator_history(after)) == raw::raw_events(validator_history(before)).push(request.event)
-                    && (books::native_obligations::<E>() ==> forall|index: int|
+                    && (junco_core::spec::hypotheses::event_obligations::<E>() ==> forall|index: int|
                         0 <= index < validator_sources(before).len() ==>
                             !sem::rule_violated(validator_sources(before)[index]@,
                                 request.event, raw::raw_events(validator_history(before)))),

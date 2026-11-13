@@ -349,7 +349,7 @@ impl ConstraintTable {
     }
 
     #[verus_spec(result => requires table_wf(*old(self)), constraint_wf(constraint),
-        crate::native::key_obligations::<Constraint>(),
+        junco_core::spec::hypotheses::key_laws::<Constraint>(),
         ensures table_wf(*final(self)),
             junco_core::verify::history_specs::no_invariant_failure(result),
             result matches Ok(id) ==> id < final(self).constraints@.len()

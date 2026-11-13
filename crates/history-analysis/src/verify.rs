@@ -1,6 +1,7 @@
 //! Ghost views and contracts linking the executable analyzer to the frozen refinement layers.
 
 pub(crate) mod constraint_unique;
+pub mod key_axioms;
 pub(crate) mod policy_bridge;
 pub(crate) mod policy_case_profile;
 pub(crate) mod policy_firing;
@@ -2059,8 +2060,8 @@ pub(crate) proof fn lemma_letters_contract(g: Constraint, operands: Operands, un
 }
 
 pub(crate) proof fn lemma_constraint_key_obligations()
-    requires crate::native::hash_coherent::<Constraint>(),
-    ensures crate::native::key_obligations::<Constraint>(),
+    requires junco_core::spec::hypotheses::hash_coherent::<Constraint>(),
+    ensures junco_core::spec::hypotheses::key_laws::<Constraint>(),
 {}
 }
 
@@ -2536,7 +2537,7 @@ verus! {
 /// Native Eq/hash correspondence and event projection laws required by analyzer proofs.
 pub open(crate) spec fn analyzer_obligations<E: Event>() -> bool {
     1 <= history_syntax::spec::events::arity::<E>() <= history_syntax::MAX_ARITY
-        && E::obeys_projection_spec() && crate::native::key_obligations::<E::Component>()
+        && E::obeys_projection_spec() && junco_core::spec::hypotheses::key_laws::<E::Component>()
         && search_exec::search_obligations()
 }
 }

@@ -1,7 +1,7 @@
 //! Required/excluded decomposition and antichain domination contracts.
 
 use crate::constraint::ConstraintTable;
-use crate::native::{groups, key_obligations};
+use crate::native::groups;
 use crate::prune::{Antichain, Decomposition, Entry, Root};
 use crate::verify::simulation_exec::semantic_le;
 use alloc::boxed::Box;
@@ -10,6 +10,7 @@ use history_semantics::verify::refinement::{
 };
 use junco_core::kernel::{RegexId, verify as model};
 use junco_core::observation::SmallVecSpecFns;
+use junco_core::spec::hypotheses::key_laws;
 use junco_core::verify::history_specs::Regex;
 use smallvec::SmallVec;
 use vstd::prelude::*;
@@ -21,7 +22,7 @@ broadcast use model::group_kernel_views;
 
 /// Native equality and hashing must identify the same ordered parts represented by the view.
 pub open spec fn parts_key_obligations() -> bool {
-    key_obligations::<SmallVec<[RegexId; 4]>>()
+    key_laws::<SmallVec<[RegexId; 4]>>()
         && forall|a: SmallVec<[RegexId; 4]>, b: SmallVec<[RegexId; 4]>|
             #[trigger] a.eq_spec(&b) ==> a.view() == b.view()
 }
