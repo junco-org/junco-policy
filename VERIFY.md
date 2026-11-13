@@ -43,15 +43,13 @@ contracts against real implementations; it is not a proof of those assumptions.
 
 ## Verification evidence baseline
 
-This is a **Main-reported pre-reviewer baseline at `e525e20`**, not a verification run
-performed while editing this guide. Main reports that the full original eleven-configuration
-gate passed with zero errors, including the no-default configurations below. This is not
-the final thirteen-configuration gate with the new reviewer targets. The integration owner
-replaces this table with final observed results after integration.
-That snapshot predates the narrowing of internal-key introductions to hashing-only
-assumptions; its green result is not final approval of the revised trust boundary.
+The original eleven rows below are a **Main-reported pre-reviewer baseline at `e525e20`**;
+the two reviewer rows are Track T's directly exercised results on that source plus its public
+clients. This is not the final thirteen-configuration gate. The integration owner replaces
+this table after integration. All these observations predate the narrowing of internal-key
+introductions to hashing-only assumptions and are not final approval of that trust boundary.
 
-| Configuration (`cargo verus verify --locked ...`) | Reported baseline |
+| Configuration (`cargo verus verify --locked ...`) | Evidence before final integration |
 |---|---|
 | `-p history-syntax --no-default-features` | 63 verified, 0 errors |
 | `-p history-syntax --features serde,std` | 63 verified, 0 errors |
@@ -64,13 +62,32 @@ assumptions; its green result is not final approval of the revised trust boundar
 | `-p history-semantics --features runtime,std,cache --test public_specs` | 21 verified, 0 errors |
 | `-p history-analysis --no-default-features --features runtime` | 626 verified, 0 errors |
 | `-p history-analysis --no-default-features --features runtime,std` | 626 verified, 0 errors |
-| `-p history-semantics --features runtime,std,cache --test reviewer` | Final integration result not yet recorded |
-| `-p history-analysis --no-default-features --features runtime,std --test reviewer` | Final integration result not yet recorded |
+| `-p history-semantics --features runtime,std,cache --test reviewer` | Track T: 4 verified, 0 errors |
+| `-p history-analysis --no-default-features --features runtime,std --test reviewer` | Track T: 9 verified, 0 errors |
 
 The same handoff reports 198 workspace tests across 25 suites, two explicit instrumentation
 counter tests, eight fuzz tests, and workspace/fuzz formatting and clippy passing; spec-check
 reported 18 passing earlier at the same reduced assumed-spec boundary. These are historical
 reported observations, not newly exercised checks or final reviewer-target evidence.
+
+Track T also directly ran the affected-package native batch: **71 tests passed across ten
+suites** (including zero-test ghost/doc suites), clippy `--all-targets -- -D warnings`
+passed, and affected-package `cargo fmt -- --check` passed. This includes the permanent
+`public_monitor_grant_and_denial` and `public_queries_have_both_verdicts` smoke cases:
+the latter constructs two registered rules and exercises all four query families, including
+both `Holds` and `Counterexample`. The S1 capacity-at-bool regression remains a proof client,
+because erased `known`/capacity cannot honestly be checked by native Rust.
+
+The native batch used:
+
+```sh
+cargo test --locked -p history-semantics -p history-analysis --no-default-features \
+  --features history-semantics/runtime,history-semantics/std,history-semantics/cache,history-analysis/runtime,history-analysis/std
+cargo clippy --locked -p history-semantics -p history-analysis --no-default-features \
+  --features history-semantics/runtime,history-semantics/std,history-semantics/cache,history-analysis/runtime,history-analysis/std \
+  --all-targets -- -D warnings
+cargo fmt -p history-semantics -p history-analysis -- --check
+```
 
 ## Reviewer map and semantic definition counts
 
@@ -195,9 +212,9 @@ projections, and component key laws: native equality obeys `eq_spec`, modeled eq
 reflexive/symmetric/transitive, and `hash_coherent` supplies stable coherent hashing and
 faithful external-container behavior. The analyzer adds surjectivity: every well-tagged
 tuple is some real event. Surjectivity is deliberately not required for monitor soundness.
-Rules require scoped variables, correct arity and correctly tagged literals; borrowed tail
-queries require the corresponding head/tails well-formedness. Stateful calls use opaque
-`wf`; native rule ids are owner checked, and semantic index validity does not replace that
+Successful rule registration ensures scoped variables, correct arity and correctly tagged
+literals; successful borrowed-tail queries ensure the corresponding head/tails well-formedness.
+Stateful calls use opaque `wf`; native rule ids are owner checked, and semantic index validity does not replace that
 runtime check. Allocation and vocabulary/index limits remain fallible, not hidden assumptions
 of infinite resources. Abstract successor/search theorems also state component-local atoms,
 valid starting constraints and the finite-items termination premise; implementation links
