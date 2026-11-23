@@ -765,19 +765,20 @@ fn opt(regex: RegexExpr<Char>) -> RegexExpr<Char> {
 
 /// `re.+`: one or more.
 fn plus(regex: RegexExpr<Char>) -> RegexExpr<Char> {
-    RegexExpr::concat([regex.clone(), RegexExpr::star(regex)])
+    RegexExpr::concat([RegexExpr::star(regex.clone()), regex])
 }
 
-/// `(_ re.loop lo hi)`: `lo` copies followed by `hi - lo` nested optional copies.
+/// `(_ re.loop lo hi)`: keep the required copies on the right, where derivatives start.
 fn repeat(regex: RegexExpr<Char>, lo: usize, hi: usize) -> RegexExpr<Char> {
-    let mut tail = RegexExpr::epsilon();
+    let mut prefix = RegexExpr::epsilon();
     for _ in lo..hi {
-        tail = opt(RegexExpr::concat([regex.clone(), tail]));
+        prefix = opt(RegexExpr::concat([prefix, regex.clone()]));
     }
     RegexExpr::concat(
-        (0..lo)
-            .map(|_| regex.clone())
-            .chain((lo < hi).then_some(tail)),
+        (lo < hi)
+            .then_some(prefix)
+            .into_iter()
+            .chain(std::iter::repeat_n(regex, lo)),
     )
 }
 

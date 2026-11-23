@@ -35,8 +35,9 @@ the SMT query asks for a string in the left language but not the right language.
 - A character is the action of `Char(u8)`; its principal and resource are both `()`.
 - A range or union of ranges becomes one `Test(Or[Eq atoms])` over the representatives inside it.
 - Nested `re.union` and `re.++` chains are flattened. Empty-string terms drop out of concatenations.
-- Bounded loops use a right-nested optional tail of depth `hi - lo`, so a derivative of the
-  loop is one term rather than a union.
+- Repetitions put mandatory copies on the right, where the analyzer takes its derivative.
+  For a bounded loop, the optional prefix starts at `P₀ = ε` and grows as `Pₖ₊₁ = ε ∪ Pₖ·r`.
+  It accepts zero through `k` copies of `r`; no characters within a copy are reversed.
 
 | SMT-LIB | `history_syntax` |
 | --- | --- |
@@ -44,9 +45,9 @@ the SMT query asks for a string in the left language but not the right language.
 | `re.union` | `RegexExpr::union`, merging range children into one character test |
 | `re.range` | One character-class test over representative actions |
 | `re.*` | `RegexExpr::star` |
-| `re.+ r` | `r · r*` |
+| `re.+ r` | `r* · r` |
 | `re.opt r` | `ε ∪ r` |
-| `(_ re.loop lo hi) r` | `r^lo · (ε ∪ r·(ε ∪ r·…))`, with `hi - lo` optional copies |
+| `(_ re.loop lo hi) r` | `P_{hi-lo} · r^lo` |
 | `str.to_re ""` | `RegexExpr::epsilon()` |
 
 The dataset's 29 distinct ranges partition all 256 bytes into 47 classes that no range splits.
