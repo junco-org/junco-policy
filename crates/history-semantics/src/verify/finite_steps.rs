@@ -3,7 +3,7 @@
 //! its action by an expansion whose abstract run (`verify::finite_machine::arun`) is below the
 //! action's abstract effect ([`xeffect`]). With the frame rule this bounds the class of the
 //! result of `Action::run` by the abstract effect of the original action ([`run_bound`]), which
-//! gives the class bounds of the transition constructors `intersect`, `not`, `append`, and
+//! gives the class bounds of the transition constructors `intersect`, `not`, `prepend`, and
 //! `if_then_else`. (N4′) for `r_cat` on normal forms is [`lemma_cat_inline`].
 use crate::normalize::verify::{self as norm, ActionShape, ChildShape};
 use crate::verify::finite_collect::*;
@@ -23,15 +23,15 @@ broadcast use junco_core::kernel::verify::group_kernel_views;
 
 // ===== the invariant =====
 
-/// A task over normal-form transitions and suffixes.
+/// A task over normal-form transitions and prefixes.
 pub open spec fn xnf_task(g: model::Graph, a: ActionShape) -> bool {
     match a {
         ActionShape::Clean(id, _) => nf_sum(g, id),
         ActionShape::Not(id) => nf_sum(g, id),
-        ActionShape::Append(id, r) => nf_sum(g, id) && r < g.regexes.len() && regex_nf(model::lift_regex(g, r)),
+        ActionShape::Prepend(id, r) => nf_sum(g, id) && r < g.regexes.len() && regex_nf(model::lift_regex(g, r)),
         ActionShape::Pair(a, b) => nf_sum(g, a) && nf_sum(g, b),
         ActionShape::Fold(terms, _) => all_nf(g, terms),
-        ActionShape::AppendResult(r) => r < g.regexes.len() && regex_nf(model::lift_regex(g, r)),
+        ActionShape::PrependResult(r) => r < g.regexes.len() && regex_nf(model::lift_regex(g, r)),
         _ => true,
     }
 }
@@ -77,7 +77,7 @@ pub open spec fn push_av(g: model::Graph, task: ActionShape) -> AV {
     match task {
         ActionShape::Clean(id, _) => av_of(g, id),
         ActionShape::Not(id) => av_neg(av_of(g, id)),
-        ActionShape::Append(id, r) => av_app(av_of(g, id), model::lift_regex(g, r)),
+        ActionShape::Prepend(id, r) => av_prepend(av_of(g, id), model::lift_regex(g, r)),
         ActionShape::Pair(a, b) => av_meet(seq![av_of(g, a), av_of(g, b)]),
         ActionShape::Fold(terms, _) => av_meet(avs(g, terms)),
         _ => av_of(g, 0),
@@ -95,16 +95,16 @@ pub open spec fn ite_bound(g: model::Graph, out: nat, a: nat, b: nat) -> bool {
     nf_sum(g, out) && av_le(av_of(g, out), av_if(av_of(g, a), av_of(g, b)))
 }
 
-/// `N(w ys)`.
-pub open spec fn cat_front(w: R, ys: Seq<R>) -> R {
-    r_cat(seq![w] + ys)
+/// `N(ys w)`.
+pub open spec fn cat_back(w: R, ys: Seq<R>) -> R {
+    r_cat(ys.push(w))
 }
 
-/// The class bound of `append(t, s)` with lifted suffix `ys`: constants and `N(w ys)` for members
+/// The class bound of `prepend(t, s)` with lifted prefix `ys`: constants and `N(ys w)` for members
 /// `w` of `t`'s class.
-pub open spec fn app_bound(g: model::Graph, out: nat, t: nat, ys: Seq<R>) -> bool {
+pub open spec fn prepend_bound(g: model::Graph, out: nat, t: nat, ys: Seq<R>) -> bool {
     &&& nf_sum(g, out)
-    &&& forall|v: R| #[trigger] tcls(g, out, v) ==> rconst(v) || exists|w: R| tcls(g, t, w) && v == #[trigger] cat_front(w, ys)
+    &&& forall|v: R| #[trigger] tcls(g, out, v) ==> rconst(v) || exists|w: R| tcls(g, t, w) && v == #[trigger] cat_back(w, ys)
 }
 
 /// A typed configuration.
@@ -293,7 +293,7 @@ pub proof fn lemma_xnf_task_stable(a: model::Graph, b: model::Graph, t: ActionSh
     match t {
         ActionShape::Clean(id, _) => { lemma_nf_sum_stable(a, b, id); },
         ActionShape::Not(id) => { lemma_nf_sum_stable(a, b, id); },
-        ActionShape::Append(id, r) => { lemma_nf_sum_stable(a, b, id); lemma_regex_nf_stable(a, b, r); },
+        ActionShape::Prepend(id, r) => { lemma_nf_sum_stable(a, b, id); lemma_regex_nf_stable(a, b, r); },
         ActionShape::Pair(x, y) => { lemma_nf_sum_stable(a, b, x); lemma_nf_sum_stable(a, b, y); },
         ActionShape::Fold(terms, _) => {
             lemma_all_nf_stable(a, b, terms);
@@ -301,7 +301,7 @@ pub proof fn lemma_xnf_task_stable(a: model::Graph, b: model::Graph, t: ActionSh
                 assert forall|k: int| 0 <= k < terms.len() implies #[trigger] terms[k] < b.transitions.len() by {}
             }
         },
-        ActionShape::AppendResult(r) => { lemma_regex_nf_stable(a, b, r); },
+        ActionShape::PrependResult(r) => { lemma_regex_nf_stable(a, b, r); },
         _ => {},
     }
 }
@@ -564,9 +564,9 @@ pub proof fn lemma_not_cls(g: model::Graph, t: nat, k: nat)
     assert forall|v: R| #[trigger] ycls(g, t, v) by { lemma_ycls(g, t, v); }
 }
 
-/// An append node's class: constants and `N(w s)` for members `w` of its body's class.
-pub proof fn lemma_append_cls(g: model::Graph, t: nat, k: nat, rs: Seq<nat>)
-    requires model::graph_wf(g), t < g.transitions.len(), g.transitions[t as int] == model::TransitionNode::Append(k, rs),
+/// A prepend node's class: constants and `N(s w)` for members `w` of its body's class.
+pub proof fn lemma_prepend_cls(g: model::Graph, t: nat, k: nat, rs: Seq<nat>)
+    requires model::graph_wf(g), t < g.transitions.len(), g.transitions[t as int] == model::TransitionNode::Prepend(k, rs),
     ensures forall|v: R| #[trigger] tcls(g, t, v) <==> (rconst(v) || exists|w: R| tcls(g, k, w) && v == #[trigger] ccat(g, w, rs)),
         forall|v: R| #[trigger] ycls(g, t, v), k < t,
 {
@@ -635,7 +635,7 @@ pub proof fn lemma_nf_children(g: model::Graph, t: nat)
         model::TransitionNode::Union(cs) => all_nf(g, cs),
         model::TransitionNode::Intersect(cs) => all_nf(g, cs) && forall|i: int| 0 <= i < cs.len() ==> nf_lit(g, #[trigger] cs[i]),
         model::TransitionNode::Not(k) => nf_lit(g, k) && nf_sum(g, k),
-        model::TransitionNode::Append(k, rs) => nf_prod(g, k) && nf_sum(g, k) && nats_nf(g, rs) && model::bounded(rs, g.regexes.len()),
+        model::TransitionNode::Prepend(k, rs) => nf_prod(g, k) && nf_sum(g, k) && nats_nf(g, rs) && model::bounded(rs, g.regexes.len()),
         model::TransitionNode::Const(r) => r < g.regexes.len() && regex_nf(model::lift_regex(g, r)),
     },
 {
@@ -646,7 +646,7 @@ pub proof fn lemma_nf_children(g: model::Graph, t: nat)
             }
         },
         model::TransitionNode::Not(k) => { lemma_nf_weaken(g, k); },
-        model::TransitionNode::Append(k, rs) => { lemma_nf_weaken(g, k); },
+        model::TransitionNode::Prepend(k, rs) => { lemma_nf_weaken(g, k); },
         _ => {},
     }
 }
@@ -750,22 +750,22 @@ pub proof fn lemma_cat_inline(xs: Seq<R>, ys: Seq<R>, zs: Seq<R>)
     }
 }
 
-/// `N(w N(ys)) = N(w ys)`.
+/// `N(N(ys) w) = N(ys w)`.
 pub proof fn lemma_cat_nest(w: R, ys: Seq<R>)
     requires regex_nf(w), all_rnf(ys),
-    ensures r_cat(seq![w, r_cat(ys)]) == r_cat(seq![w] + ys),
+    ensures r_cat(seq![r_cat(ys), w]) == r_cat(ys.push(w)),
 {
     assert(all_rnf(seq![w])) by { assert forall|i: int| 0 <= i < 1 implies regex_nf(#[trigger] seq![w][i]) by {} }
     assert(all_rnf(Seq::<R>::empty()));
-    lemma_cat_inline(seq![w], ys, Seq::empty());
-    assert(seq![w] + seq![r_cat(ys)] + Seq::<R>::empty() =~= seq![w, r_cat(ys)]);
-    assert(seq![w] + ys + Seq::<R>::empty() =~= seq![w] + ys);
+    lemma_cat_inline(Seq::empty(), ys, seq![w]);
+    assert(Seq::<R>::empty() + seq![r_cat(ys)] + seq![w] =~= seq![r_cat(ys), w]);
+    assert(Seq::<R>::empty() + ys + seq![w] =~= ys.push(w));
 }
 
-/// `N(w ε) = w`.
+/// `N(ε w) = w`.
 pub proof fn lemma_cat_eps(w: R)
     requires regex_nf(w),
-    ensures r_cat(seq![w, Regex::Epsilon]) == w,
+    ensures r_cat(seq![Regex::Epsilon, w]) == w,
 {
     theorem_impl_contract();
     lemma_models_agree();
@@ -774,29 +774,29 @@ pub proof fn lemma_cat_eps(w: R)
     assert(!pre().has_empty(Seq::<R>::empty()));
     assert(r_cat(Seq::<R>::empty()) == Regex::<model::Test>::Epsilon);
     lemma_cat_nest(w, Seq::empty());
-    assert(seq![w] + Seq::<R>::empty() =~= seq![w]);
+    assert(Seq::<R>::empty().push(w) =~= seq![w]);
     lemma_cat_single(m_impl(), w);
 }
 
-/// `N(N(w ys) z) = N(w N(ys z))`.
+/// `N(z N(ys w)) = N(N(z ys) w)`.
 pub proof fn lemma_cat_shift(w: R, ys: Seq<R>, z: R)
     requires regex_nf(w), all_rnf(ys), regex_nf(z),
-    ensures r_cat(seq![r_cat(seq![w] + ys), z]) == r_cat(seq![w, r_cat(ys.push(z))]),
+    ensures r_cat(seq![z, r_cat(ys.push(w))]) == r_cat(seq![r_cat(seq![z] + ys), w]),
 {
-    let ws = seq![w];
     let zs = seq![z];
+    let ws = seq![w];
     assert(all_rnf(ws)) by { assert forall|i: int| 0 <= i < 1 implies regex_nf(#[trigger] ws[i]) by {} }
     assert(all_rnf(zs)) by { assert forall|i: int| 0 <= i < 1 implies regex_nf(#[trigger] zs[i]) by {} }
     assert(all_rnf(Seq::<R>::empty()));
-    lemma_all_rnf_concat(ws, ys);
-    lemma_all_rnf_concat(ys, zs);
-    assert(ys.push(z) =~= ys + zs);
-    lemma_cat_inline(Seq::empty(), ws + ys, zs);
-    assert(Seq::<R>::empty() + seq![r_cat(ws + ys)] + zs =~= seq![r_cat(seq![w] + ys), z]);
-    assert(Seq::<R>::empty() + (ws + ys) + zs =~= ws + ys + zs);
-    lemma_cat_inline(ws, ys + zs, Seq::empty());
-    assert(ws + seq![r_cat(ys + zs)] + Seq::<R>::empty() =~= seq![w, r_cat(ys.push(z))]);
-    assert(ws + (ys + zs) + Seq::<R>::empty() =~= ws + ys + zs);
+    lemma_all_rnf_concat(ys, ws);
+    lemma_all_rnf_concat(zs, ys);
+    assert(ys.push(w) =~= ys + ws);
+    lemma_cat_inline(zs, ys + ws, Seq::empty());
+    assert(zs + seq![r_cat(ys + ws)] + Seq::<R>::empty() =~= seq![z, r_cat(ys.push(w))]);
+    assert(zs + (ys + ws) + Seq::<R>::empty() =~= zs + ys + ws);
+    lemma_cat_inline(Seq::empty(), zs + ys, ws);
+    assert(Seq::<R>::empty() + seq![r_cat(zs + ys)] + ws =~= seq![r_cat(zs + ys), w]);
+    assert(Seq::<R>::empty() + (zs + ys) + ws =~= zs + ys + ws);
 }
 
 /// A list state is the normal form of its elements.

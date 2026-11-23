@@ -189,8 +189,8 @@ impl CompiledPair {
         Ok(answer)
     }
     verus! {
-    /// Folds `events` into `residual`: the result denotes `events⁻¹ L(residual)`
-    /// under `bindings`. Errors publish no residual.
+    /// Folds chronological `events` from right to left. The result accepts `w`
+    /// exactly when `residual` accepts `w · events` under `bindings`.
     #[allow(
         clippy::indexing_slicing,
         reason = "The loop condition and invariant bound the event index."
@@ -219,47 +219,49 @@ impl CompiledPair {
             hide(model::lift_regex);
             hide(model::lift_transition);
             hide(model::test_holds);
+            hide(symbolic::verify::derivative_cache_wf);
+            hide(atom_cache_wf);
+            hide(guard_cache_wf);
+            hide(successor_entries_wf);
         proof_decl! { let ghost entry = *self; let ghost from = residual; }
         let mut residual = residual;
         proof! {
             lemma_fold_start(*self, bindings@, from);
-            assert(history_store::store::verify::events_view(events@).take(0) =~= Seq::<EventView>::empty());
-            assert(history_store::store::verify::events_view(events@).take(events@.len() as int) =~= history_store::store::verify::events_view(events@));
+            assert(history_store::store::verify::events_view(events@).skip(events@.len() as int) =~= Seq::<EventView>::empty());
+            assert(history_store::store::verify::events_view(events@).skip(0) =~= history_store::store::verify::events_view(events@));
         }
         let mut failure = None;
-        let mut index = 0;
+        let mut remaining = events.len();
         #[cfg_attr(verus_keep_ghost, verus_spec(
             invariant pair_wf(entry), pair_wf(*self), pair_frame(entry, *self),
                 failure matches Some(error) ==> error != HistoryError::WrongHistoryOwner
                     && !(error is Invariant) && !(error is InvalidPolicy),
                 failure matches Some(error) ==> resource_error(error),
-                index <= events@.len(),
-                residual_folds(*self, bindings@, from, history_store::store::verify::events_view(events@).take(index as int), residual),
-                history_store::store::verify::events_view(events@).take(events@.len() as int) == history_store::store::verify::events_view(events@),
+                remaining <= events@.len(),
+                residual_folds(*self, bindings@, from, history_store::store::verify::events_view(events@).skip(remaining as int), residual),
+                history_store::store::verify::events_view(events@).skip(0) == history_store::store::verify::events_view(events@),
             ensures pair_wf(*self), pair_frame(entry, *self),
                 failure matches Some(error) ==> error != HistoryError::WrongHistoryOwner
                     && !(error is Invariant) && !(error is InvalidPolicy),
                 failure matches Some(error) ==> resource_error(error),
                 failure is Some || residual_folds(*self, bindings@, from, history_store::store::verify::events_view(events@), residual),
-            decreases events@.len() - index,
+            decreases remaining,
         ))]
-        while index < events.len() {
-            let event = &events[index];
+        while remaining > 0 {
+            let event = &events[remaining - 1];
             proof_decl! {
                 let ghost before = *self;
-                let ghost done = history_store::store::verify::events_view(events@).take(index as int);
+                let ghost done = history_store::store::verify::events_view(events@).skip(remaining as int);
             }
             proof! {
-                model::lemma_graph_wf_elim(entry.store.graph());
-                model::lemma_lift_stable_under_extends(entry.store.graph(), before.store.graph());
-                assert(history_store::store::verify::events_view(events@).take(index as int + 1) =~= done.push(event@));
+                assert(history_store::store::verify::events_view(events@).skip(remaining as int - 1) =~= seq![event@] + done);
             }
             loop_try!(limits.checkpoint().map_err(HistoryError::from), failure);
             let constants = self.store.constants();
             if residual == constants.all || residual == constants.empty {
                 proof! {
-                    lemma_fold_absorbing(*self, bindings@, from, done, history_store::store::verify::events_view(events@).skip(index as int), residual);
-                    assert(done + history_store::store::verify::events_view(events@).skip(index as int) =~= history_store::store::verify::events_view(events@));
+                    lemma_fold_absorbing(*self, bindings@, from, done, history_store::store::verify::events_view(events@).take(remaining as int), residual);
+                    assert(history_store::store::verify::events_view(events@).take(remaining as int) + done =~= history_store::store::verify::events_view(events@));
                 }
                 break;
             }
@@ -309,7 +311,7 @@ impl CompiledPair {
                         self.work.guard_hits = self.work.guard_hits.saturating_add(1);
                     }
                     proof! { lemma_fold_step(*self, bindings@, from, done, residual, transition, *event, residual); }
-                    index = index.saturating_add(1);
+                    remaining -= 1;
                     continue;
                 }
             }
@@ -319,7 +321,7 @@ impl CompiledPair {
             let successor = loop_try!(successor_result, failure);
             proof! { lemma_fold_step(*self, bindings@, from, done, residual, transition, *event, successor); }
             residual = successor;
-            index = index.saturating_add(1);
+            remaining -= 1;
         }
         if let Some(error) = failure {
             return Err(error);
@@ -1404,7 +1406,7 @@ impl CompiledPair {
                             proof! { assert(walk_supported(base, root@, work.view().last())); }
                         }
                         TransitionView::Not(child)
-                        | TransitionView::Append {
+                        | TransitionView::Prepend {
                             transition: child, ..
                         } => {
                             work.push(Walk::Transition(child));
@@ -1669,7 +1671,7 @@ pub(crate) mod verify {
             if id < g.transitions.len() { match g.transitions[id as int] {
                 model::TransitionNode::If(_, a, b) => seq![a, b],
                 model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => cs,
-                model::TransitionNode::Not(t) | model::TransitionNode::Append(t, _) => seq![t],
+                model::TransitionNode::Not(t) | model::TransitionNode::Prepend(t, _) => seq![t],
                 _ => Seq::empty(),
             } } else { Seq::empty() }
         }
@@ -2050,7 +2052,7 @@ pub(crate) mod verify {
                         + (if b < id { transition_walk_node_work(g, b) } else { 0 }),
                     model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) =>
                         1 + transition_walk_children_work(g, cs, id),
-                    model::TransitionNode::Not(c) | model::TransitionNode::Append(c, _) =>
+                    model::TransitionNode::Not(c) | model::TransitionNode::Prepend(c, _) =>
                         1 + (if c < id { transition_walk_node_work(g, c) } else { 0 }),
                     _ => 1,
                 }
@@ -2099,7 +2101,12 @@ pub(crate) mod verify {
             requires id@ < g.transitions.len(), g.transitions[id@ as int] is Union || g.transitions[id@ as int] is Intersect,
             ensures walk_task_work(g, Walk::Transition(id)) == 1 + walk_task_work(g, Walk::TransitionChildren(id, 0)),
         {
-            assert(transition_edges(g, id@).skip(0) =~= transition_edges(g, id@));
+            let cs = transition_edges(g, id@);
+            assert(cs.skip(0) =~= cs);
+            assert(transition_walk_node_work(g, id@) == 1 + transition_walk_children_work(g, cs, id@));
+            if cs.len() == 0 {
+                assert(transition_walk_children_work(g, cs, id@) == 1);
+            }
         }
 
         pub(super) proof fn lemma_test_walk_start(g: model::Graph, id: TestId)
@@ -2376,46 +2383,34 @@ pub(crate) mod verify {
                 == norm::transition_lang(pair.store.graph(), bindings, transition, event@, word)
     }
 
-    pub open(crate) spec fn residual_after_prefix(
-        pair: CompiledPair, history: Seq<EventView>, bindings: Subst, count: nat, residual: RegexId,
+    pub open(crate) spec fn residual_after_suffix(
+        pair: CompiledPair, history: Seq<EventView>, bindings: Subst, target: nat, count: nat, residual: RegexId,
     ) -> bool {
-        count <= history.len() && residual@ < pair.store.graph().regexes.len()
-            && forall|word: Seq<EventView>| model::regex_lang(pair.store.graph(), bindings, residual@, word)
-                == model::regex_lang(pair.store.graph(), bindings, pair.root@,
-                    history.take(count as int) + word)
+        count <= target <= history.len() && residual_folds(pair, bindings, pair.root,
+            history.subrange(target - count, target as int), residual)
     }
 
-    pub(crate) proof fn lemma_residual_after_prefix_frame(
+    pub(crate) proof fn lemma_residual_after_suffix_frame(
         before: CompiledPair, after: CompiledPair, history: Seq<EventView>,
-        bindings: Subst, count: nat, residual: RegexId,
+        bindings: Subst, target: nat, count: nat, residual: RegexId,
     )
         requires pair_wf(before), pair_wf(after), pair_frame(before, after),
-            residual_after_prefix(before, history, bindings, count, residual),
-        ensures residual_after_prefix(after, history, bindings, count, residual),
+            residual_after_suffix(before, history, bindings, target, count, residual),
+        ensures residual_after_suffix(after, history, bindings, target, count, residual),
     {
-        hide(language::numeric_lang); hide(model::lift_regex); hide(model::lift_transition); hide(model::test_holds);
-        model::lemma_graph_wf_elim(before.store.graph());
-        model::lemma_lift_regex_stable(before.store.graph(), after.store.graph(), before.root@);
-        model::lemma_lift_regex_stable(before.store.graph(), after.store.graph(), residual@);
-        assert forall|word: Seq<EventView>| model::regex_lang(after.store.graph(), bindings, residual@, word)
-            == model::regex_lang(after.store.graph(), bindings, after.root@,
-                history.take(count as int) + word) by {
-            assert(model::regex_lang(before.store.graph(), bindings, residual@, word)
-                == model::regex_lang(before.store.graph(), bindings, before.root@,
-                    history.take(count as int) + word));
-        }
+        lemma_fold_frame(before, after, bindings, before.root, history.subrange(target - count, target as int), residual);
     }
 
-    pub(crate) proof fn lemma_residual_after_prefix_history_extends(
+    pub(crate) proof fn lemma_residual_after_suffix_history_extends(
         pair: CompiledPair, before: Seq<EventView>, after: Seq<EventView>,
-        bindings: Subst, count: nat, residual: RegexId,
+        bindings: Subst, target: nat, count: nat, residual: RegexId,
     )
         requires before.is_prefix_of(after),
-            residual_after_prefix(pair, before, bindings, count, residual),
-        ensures residual_after_prefix(pair, after, bindings, count, residual),
+            residual_after_suffix(pair, before, bindings, target, count, residual),
+        ensures residual_after_suffix(pair, after, bindings, target, count, residual),
     {
         hide(language::numeric_lang); hide(model::lift_regex); hide(model::lift_transition); hide(model::test_holds);
-        assert(before.take(count as int) =~= after.take(count as int));
+        assert(before.subrange(target - count, target as int) =~= after.subrange(target - count, target as int));
     }
 
 
@@ -2730,7 +2725,7 @@ pub(crate) mod verify {
     ) -> bool {
         from@ < pair.store.graph().regexes.len() && to@ < pair.store.graph().regexes.len()
             && forall|word: Seq<EventView>| model::regex_lang(pair.store.graph(), bindings, to@, word)
-                == model::regex_lang(pair.store.graph(), bindings, from@, events + word)
+                == model::regex_lang(pair.store.graph(), bindings, from@, word + events)
     }
 
     pub(super) proof fn lemma_fold_start(pair: CompiledPair, bindings: Subst, from: RegexId)
@@ -2738,12 +2733,12 @@ pub(crate) mod verify {
         ensures residual_folds(pair, bindings, from, Seq::empty(), from),
     {
         assert forall|word: Seq<EventView>| model::regex_lang(pair.store.graph(), bindings, from@, word)
-            == model::regex_lang(pair.store.graph(), bindings, from@, Seq::<EventView>::empty() + word) by {
-            assert(Seq::<EventView>::empty() + word =~= word);
+            == model::regex_lang(pair.store.graph(), bindings, from@, word + Seq::<EventView>::empty()) by {
+            assert(word + Seq::<EventView>::empty() =~= word);
         }
     }
 
-    pub(super) proof fn lemma_fold_frame(before: CompiledPair, after: CompiledPair, bindings: Subst, from: RegexId, events: Seq<EventView>, to: RegexId)
+    pub(crate) proof fn lemma_fold_frame(before: CompiledPair, after: CompiledPair, bindings: Subst, from: RegexId, events: Seq<EventView>, to: RegexId)
         requires pair_wf(before), pair_frame(before, after), residual_folds(before, bindings, from, events, to),
         ensures residual_folds(after, bindings, from, events, to),
     {
@@ -2752,9 +2747,9 @@ pub(crate) mod verify {
         model::lemma_lift_regex_stable(before.store.graph(), after.store.graph(), from@);
         model::lemma_lift_regex_stable(before.store.graph(), after.store.graph(), to@);
         assert forall|word: Seq<EventView>| model::regex_lang(after.store.graph(), bindings, to@, word)
-            == model::regex_lang(after.store.graph(), bindings, from@, events + word) by {
+            == model::regex_lang(after.store.graph(), bindings, from@, word + events) by {
             assert(model::regex_lang(before.store.graph(), bindings, to@, word)
-                == model::regex_lang(before.store.graph(), bindings, from@, events + word));
+                == model::regex_lang(before.store.graph(), bindings, from@, word + events));
         }
     }
 
@@ -2763,18 +2758,18 @@ pub(crate) mod verify {
             language::event_wf(bindings, bindings.len()),
             symbolic::verify::derivative_correct(pair.store.graph(), residual@, transition),
             instantiation_result(pair, transition, bindings, event, successor),
-        ensures residual_folds(pair, bindings, from, events.push(event@), successor),
+        ensures residual_folds(pair, bindings, from, seq![event@] + events, successor),
     {
         assert forall|word: Seq<EventView>| model::regex_lang(pair.store.graph(), bindings, successor@, word)
-            == model::regex_lang(pair.store.graph(), bindings, from@, events.push(event@) + word) by {
-            assert(events.push(event@) + word =~= events + (seq![event@] + word));
+            == model::regex_lang(pair.store.graph(), bindings, from@, word + (seq![event@] + events)) by {
+            assert(word + (seq![event@] + events) =~= word.push(event@) + events);
         }
     }
 
     pub(super) proof fn lemma_fold_absorbing(pair: CompiledPair, bindings: Subst, from: RegexId, events: Seq<EventView>, rest: Seq<EventView>, residual: RegexId)
         requires pair_wf(pair), residual_folds(pair, bindings, from, events, residual),
             residual@ == pair.store.graph().constants.all || residual@ == pair.store.graph().constants.empty,
-        ensures residual_folds(pair, bindings, from, events + rest, residual),
+        ensures residual_folds(pair, bindings, from, rest + events, residual),
     {
         // Keep recursive semantics opaque: absorption only needs their established equalities.
         hide(pair_wf); hide(model::regex_lang);
@@ -2782,14 +2777,14 @@ pub(crate) mod verify {
         assert(model::graph_wf(pair.store.graph())) by { reveal(pair_wf); }
         lemma_absorbing_language(pair, bindings, residual);
         assert forall|word: Seq<EventView>| model::regex_lang(pair.store.graph(), bindings, residual@, word)
-            == model::regex_lang(pair.store.graph(), bindings, from@, (events + rest) + word) by {
+            == model::regex_lang(pair.store.graph(), bindings, from@, word + (rest + events)) by {
             assert(model::regex_lang(pair.store.graph(), bindings, residual@, word)
                 == (residual@ == pair.store.graph().constants.all));
-            assert(model::regex_lang(pair.store.graph(), bindings, residual@, rest + word)
+            assert(model::regex_lang(pair.store.graph(), bindings, residual@, word + rest)
                 == (residual@ == pair.store.graph().constants.all));
-            assert(model::regex_lang(pair.store.graph(), bindings, residual@, rest + word)
-                == model::regex_lang(pair.store.graph(), bindings, from@, events + (rest + word)));
-            vstd::seq_lib::lemma_concat_associative(events, rest, word);
+            assert(model::regex_lang(pair.store.graph(), bindings, residual@, word + rest)
+                == model::regex_lang(pair.store.graph(), bindings, from@, (word + rest) + events));
+            vstd::seq_lib::lemma_concat_associative(word, rest, events);
         }
     }
 
@@ -2913,7 +2908,7 @@ mod tests {
         let source = template(vec![
             FlatRegex::All,
             FlatRegex::Test(0),
-            FlatRegex::Concat(vec![0, 1]),
+            FlatRegex::Concat(vec![1, 0]),
         ]);
         let (alice, bob) = events();
         let bindings = crate::runtime::RuleRuntime::bindings(&source, &alice).unwrap();
@@ -2926,13 +2921,33 @@ mod tests {
             )
             .unwrap();
             pair.work.skip_guards = skip_guards;
-            assert!(decide(&mut pair, &[bob, bob, bob, alice], &bindings));
+            assert!(decide(&mut pair, &[alice, bob, bob, bob], &bindings));
             assert_eq!(pair.work.guard_hits, hits);
             assert_eq!(pair.work.event_classes, classes);
             assert_eq!(pair.work_events(), 4);
             pair.reset_work_events();
             assert_eq!(pair.work_events(), 0);
         }
+    }
+
+    #[test]
+    fn final_event_settles_cold_all_then_test() {
+        let source = template(vec![
+            FlatRegex::All,
+            FlatRegex::Test(0),
+            FlatRegex::Concat(vec![0, 1]),
+        ]);
+        let mut pair = CompiledPair::compile(
+            &source,
+            MAX_GRAPH_BYTES,
+            &mut Unmetered,
+            &mut ObservationWorld,
+        )
+        .unwrap();
+        let (alice, bob) = events();
+        let bindings = crate::runtime::RuleRuntime::bindings(&source, &alice).unwrap();
+        assert!(decide(&mut pair, &[bob, bob, bob, alice], &bindings));
+        assert_eq!(pair.work_events(), 1);
     }
 
     #[cfg(feature = "cache")]

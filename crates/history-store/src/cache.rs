@@ -119,6 +119,8 @@ pub struct HistoryCursor {
     pub history: usize,
     pub bindings: junco_core::kernel::Bindings,
     pub revision: u64,
+    /// Exclusive right endpoint of the chronological history being matched.
+    pub target_len: usize,
     pub consumed: usize,
     pub residual: junco_core::kernel::RegexId,
 }
@@ -183,8 +185,8 @@ impl CursorCache {
         requires cursor_cache_wf(old(self)@),
         ensures final(self)@ == published_cursors(old(self)@, cursor),
             cursor_cache_wf(final(self)@),
-            longer_cached_prefix(old(self)@, cursor) ==> final(self)@ == old(self)@,
-            !longer_cached_prefix(old(self)@, cursor) ==> final(self)@.len() > 0 && final(self)@[0] == cursor,
+            longer_cached_suffix(old(self)@, cursor) ==> final(self)@ == old(self)@,
+            !longer_cached_suffix(old(self)@, cursor) ==> final(self)@.len() > 0 && final(self)@[0] == cursor,
             forall|i: int| 0 <= i < final(self)@.len() ==> final(self)@[i] == cursor || old(self)@.contains(final(self)@[i]),
     )]
     pub fn publish(&mut self, cursor: HistoryCursor) {
@@ -198,12 +200,15 @@ impl CursorCache {
                 }
             }
             if let Some(old) = self.entries.get(position) {
-                if old.revision == cursor.revision && old.consumed > cursor.consumed {
-                    proof! { assert(longer_cached_prefix(entry, cursor)); }
+                if old.revision == cursor.revision
+                    && old.target_len == cursor.target_len
+                    && old.consumed > cursor.consumed
+                {
+                    proof! { assert(longer_cached_suffix(entry, cursor)); }
                     return;
                 }
             }
-            proof! { assert(!longer_cached_prefix(entry, cursor)); }
+            proof! { assert(!longer_cached_suffix(entry, cursor)); }
             self.entries.remove(position);
             proof! {
                 entry.remove_ensures(position as int);
@@ -211,7 +216,7 @@ impl CursorCache {
                 lemma_kept_cursors(entry, cursor);
             }
         } else {
-            proof! { assert(!longer_cached_prefix(entry, cursor)); }
+            proof! { assert(!longer_cached_suffix(entry, cursor)); }
             if self.entries.len() >= HISTORY_CACHE_CAPACITY {
                 self.entries.pop();
             }
@@ -273,9 +278,10 @@ pub mod verify {
             cursors.len() <= HISTORY_CACHE_CAPACITY
                 && (forall|i: int, j: int| 0 <= i < j < cursors.len() ==> !cursor_key_eq(cursors[i], cursors[j]))
         }
-        pub open spec fn longer_cached_prefix(cursors: Seq<HistoryCursor>, cursor: HistoryCursor) -> bool {
+        pub open spec fn longer_cached_suffix(cursors: Seq<HistoryCursor>, cursor: HistoryCursor) -> bool {
             exists|i: int| 0 <= i < cursors.len() && cursor_key_eq(cursors[i], cursor)
-                && cursors[i].revision == cursor.revision && cursors[i].consumed > cursor.consumed
+                && cursors[i].revision == cursor.revision && cursors[i].target_len == cursor.target_len
+                && cursors[i].consumed > cursor.consumed
         }
         pub open spec fn kept_cursors(cursors: Seq<HistoryCursor>, cursor: HistoryCursor) -> Seq<HistoryCursor> {
             if exists|i: int| 0 <= i < cursors.len() && cursor_key_eq(cursors[i], cursor) {
@@ -285,7 +291,7 @@ pub mod verify {
             else { cursors }
         }
         pub open spec fn published_cursors(cursors: Seq<HistoryCursor>, cursor: HistoryCursor) -> Seq<HistoryCursor> {
-            if longer_cached_prefix(cursors, cursor) { cursors }
+            if longer_cached_suffix(cursors, cursor) { cursors }
             else { seq![cursor] + kept_cursors(cursors, cursor) }
         }
         pub proof fn lemma_kept_cursors(cursors: Seq<HistoryCursor>, cursor: HistoryCursor)
@@ -332,7 +338,7 @@ mod tests {
     use junco_core::limits::Unmetered;
 
     #[test]
-    fn publication_evicts_replaces_and_retains_longer_prefix() -> Result<(), HistoryError> {
+    fn publication_evicts_replaces_and_retains_longer_pinned_suffix() -> Result<(), HistoryError> {
         let store = HistoryStore::new(3);
         let graph = CanonicalStore::new()?;
         let mut cache = CursorCache::new(&mut Unmetered, &mut ObservationWorld)?;
@@ -343,6 +349,7 @@ mod tests {
                 history: history.index(),
                 bindings: Bindings::new(&[0; 3]),
                 revision: 0,
+                target_len: 3,
                 consumed: 3,
                 residual: graph.constants().all,
             });
@@ -359,6 +366,7 @@ mod tests {
             history: handles[8].index(),
             bindings: Bindings::new(&[0; 3]),
             revision: 0,
+            target_len: 5,
             consumed: 5,
             residual: graph.constants().epsilon,
         };
@@ -383,9 +391,13 @@ mod tests {
             assert_eq!(old.history, new.history);
             assert_eq!(old.bindings, new.bindings);
             assert_eq!(old.revision, new.revision);
+            assert_eq!(old.target_len, new.target_len);
             assert_eq!(old.consumed, new.consumed);
             assert_eq!(old.residual, new.residual);
         }
+        cache.publish(HistoryCursor { target_len: 6, consumed: 1, ..replacement });
+        assert_eq!(cache.entries()[0].target_len, 6);
+        assert_eq!(cache.entries()[0].consumed, 1);
         Ok(())
     }
 }

@@ -7,13 +7,13 @@
 //! sets ([`iapply`], [`irun`]; a stack entry is a `finite_machine::AV` whose `x` component is the
 //! set): an unfinished task pushes the values of its transition ([`vav`]), a finished set node
 //! applies the model's set constructor to members of its operands ([`set_av`]), `Not` applies
-//! `r_not` ([`not_av`]) and `Append` applies `ccat` ([`cat_av`]). The concrete stack is the
+//! `r_not` ([`not_av`]) and `Prepend` applies `ccat` ([`cat_av`]). The concrete stack is the
 //! stack of singletons of the lifted values ([`lits`]). Every concrete step stays below
 //! (`finite_machine::aref`) the abstract run of the configuration it came from ([`istep`]), so
 //! the loop keeps the abstract run below the values of the root ([`iinv`]).
 use crate::normalize::verify as norm;
 use crate::symbolic::verify::{
-    child_interp_tasks, interp_append_ids, interp_tasks_wf, transition_children, transition_suffix,
+    child_interp_tasks, interp_prepend_ids, interp_tasks_wf, transition_children, transition_prefix,
 };
 use crate::verify::finite_collect::*;
 use crate::verify::finite_impl::*;
@@ -71,7 +71,7 @@ pub open spec fn iapply(g: model::Graph, task: Task, s: Seq<AV>) -> Option<Seq<A
             model::TransitionNode::Intersect(cs) => if cs.len() > s.len() { None }
                 else { Some(s.take(s.len() - cs.len()).push(set_av(s.skip(s.len() - cs.len()), true))) },
             model::TransitionNode::Not(_) => if s.len() == 0 { None } else { Some(s.drop_last().push(not_av(s.last()))) },
-            model::TransitionNode::Append(_, rs) => if s.len() == 0 { None }
+            model::TransitionNode::Prepend(_, rs) => if s.len() == 0 { None }
                 else { Some(s.drop_last().push(cat_av(g, s.last(), rs))) },
             _ => Some(s.push(vav(g, task.0@))),
         }
@@ -227,7 +227,7 @@ pub proof fn lemma_iapply_mono(g: model::Graph, task: Task, s1: Seq<AV>, s2: Seq
                     lemma_stack_le_push(s1.drop_last(), s2.drop_last(), not_av(s1.last()), not_av(s2.last()));
                 }
             },
-            model::TransitionNode::Append(_, rs) => {
+            model::TransitionNode::Prepend(_, rs) => {
                 if s2.len() > 0 {
                     let n = s1.len() as int;
                     assert(av_le(s1[n - 1], s2[n - 1]));
@@ -331,8 +331,8 @@ pub proof fn lemma_cat_av_stable(a: model::Graph, b: model::Graph, x: AV, rs: Se
     }
     let la = model::lift_regexes(a, rs);
     assert forall|w: R| #[trigger] ccat(a, w, rs) == ccat(b, w, rs) by {
-        assert(ccat(a, w, rs) == r_cat(seq![w] + la));
-        assert(ccat(b, w, rs) == r_cat(seq![w] + la));
+        assert(ccat(a, w, rs) == r_cat(la.push(w)));
+        assert(ccat(b, w, rs) == r_cat(la.push(w)));
     }
     assert forall|v: R| #[trigger] (cat_av(a, x, rs).x)(v) == (cat_av(b, x, rs).x)(v) by {
         if (cat_av(a, x, rs).x)(v) {
@@ -355,7 +355,7 @@ pub proof fn lemma_iapply_stable(a: model::Graph, b: model::Graph, task: Task, s
     let t = task.0@;
     lemma_node_stable(a, b, t);
     lemma_vav_stable(a, b, t);
-    if let model::TransitionNode::Append(_, rs) = a.transitions[t as int] {
+    if let model::TransitionNode::Prepend(_, rs) = a.transitions[t as int] {
         model::lemma_graph_transition_wf(a, t);
         if s.len() > 0 { lemma_cat_av_stable(a, b, s.last(), rs); }
     }
@@ -552,12 +552,12 @@ pub proof fn lemma_istep_if(b: model::Graph, a: model::Graph, this: TransitionId
     lemma_istep_close(a, pending, (this, finish), prior, e, prior);
 }
 
-/// Unfinished `Not(k)` / `Append(k, rs)`: finish task, then `k`.
+/// Unfinished `Not(k)` / `Prepend(k, rs)`: finish task, then `k`.
 pub proof fn lemma_istep_unary(b: model::Graph, a: model::Graph, this: TransitionId, finish: bool,
     pending: Seq<Task>, prior: Seq<RegexId>, inner: TransitionId)
     requires model::graph_wf(b), model::graph_wf(a), model::graph_extends(b, a), this@ < b.transitions.len(), !finish,
         b.transitions[this@ as int] == model::TransitionNode::Not(inner@)
-            || b.transitions[this@ as int] == model::TransitionNode::Append(inner@, transition_suffix(b, this)),
+            || b.transitions[this@ as int] == model::TransitionNode::Prepend(inner@, transition_prefix(b, this)),
         ipre(b, pending.push((this, finish)), prior),
     ensures istep(a, pending.push((this, finish)), pending.push((this, true)).push((inner, false)), prior, prior),
 {
@@ -578,7 +578,7 @@ pub proof fn lemma_istep_unary(b: model::Graph, a: model::Graph, this: Transitio
     assert(l.push(vav(a, k)).last() == vav(a, k));
     let pushed = match a.transitions[t as int] {
         model::TransitionNode::Not(_) => not_av(vav(a, k)),
-        model::TransitionNode::Append(_, rs) => cat_av(a, vav(a, k), rs),
+        model::TransitionNode::Prepend(_, rs) => cat_av(a, vav(a, k), rs),
         _ => vav(a, t),
     };
     assert(irun(a, e, l) == Some(l.push(pushed)));
@@ -591,10 +591,10 @@ pub proof fn lemma_istep_unary(b: model::Graph, a: model::Graph, this: Transitio
                     assert((tv(a))(k, w) == tval(a, k, w));
                     assert(negs(tv(a), t, k, v));
                 },
-                model::TransitionNode::Append(_, rs) => {
+                model::TransitionNode::Prepend(_, rs) => {
                     let w = choose|w: R| (vav(a, k).x)(w) && v == #[trigger] ccat(a, w, rs);
                     assert((tv(a))(k, w) == tval(a, k, w));
-                    assert(apps(a, tv(a), t, k, rs, v));
+                    assert(prepends(a, tv(a), t, k, rs, v));
                 },
                 _ => {},
             }
@@ -644,12 +644,12 @@ pub proof fn lemma_istep_not(b: model::Graph, a: model::Graph, this: TransitionI
     lemma_istep_close(a, pending, (this, true), prior, Seq::empty(), v1);
 }
 
-/// Finished `Append(k, rs)`: replace the top value `w` by `N(w rs)`.
-pub proof fn lemma_istep_append(b: model::Graph, a: model::Graph, this: TransitionId,
+/// Finished `Prepend(k, rs)`: replace the top value `w` by `N(rs w)`.
+pub proof fn lemma_istep_prepend(b: model::Graph, a: model::Graph, this: TransitionId,
     pending: Seq<Task>, prior: Seq<RegexId>, xs: Seq<RegexId>, out: RegexId)
     requires model::graph_wf(b), model::graph_wf(a), model::graph_extends(b, a), this@ < b.transitions.len(),
-        b.transitions[this@ as int] is Append, prior.len() > 0,
-        norm::regex_ids_valid(b, xs), model::regex_ids(xs) == seq![prior.last()@] + transition_suffix(b, this),
+        b.transitions[this@ as int] is Prepend, prior.len() > 0,
+        norm::regex_ids_valid(b, xs), model::regex_ids(xs) == transition_prefix(b, this).push(prior.last()@),
         out@ < a.regexes.len(), norm::regex_concat_result(b, a, xs, out@),
         ipre(b, pending.push((this, true)), prior),
     ensures istep(a, pending.push((this, true)), pending, prior, prior.drop_last().push(out)),
@@ -662,13 +662,13 @@ pub proof fn lemma_istep_append(b: model::Graph, a: model::Graph, this: Transiti
     lemma_node_stable(b, a, t);
     lemma_nf_children(a, t);
     model::lemma_graph_transition_wf(b, t);
-    let rs = transition_suffix(b, this);
+    let rs = transition_prefix(b, this);
     let l = lits(a, prior);
     let n = prior.len() as int;
     let head = prior.last();
     assert(prior[n - 1] == head);
     lemma_concat_link(b, a, xs, out@);
-    interp_append_ids(b, xs, head, rs);
+    interp_prepend_ids(b, xs, head, rs);
     assert(lifts(b, xs) =~= crate::symbolic::verify::lifted_values(b, xs));
     model::lemma_lift_regex_stable(b, a, head@);
     assert(model::lift_regexes(b, rs) =~= model::lift_regexes(a, rs)) by {

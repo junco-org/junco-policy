@@ -722,8 +722,8 @@ impl Search<'_> {
         proof! { lemma_letter_chain_len(self.items@, index as int); }
         #[cfg_attr(verus_keep_ghost, verus_spec(invariant
             current <= index, index < self.items@.len(), parents_wf(self.items@),
-            letter_chain(self.items@, current as int).map_values(|l: Letter| l@)
-                + letters@.map_values(|l: Letter| l@).reverse()
+            letters@.map_values(|l: Letter| l@)
+                + letter_chain(self.items@, current as int).map_values(|l: Letter| l@)
                 == letter_chain(self.items@, index as int).map_values(|l: Letter| l@),
             decreases current))]
         while self.items[current].parent.is_some() {
@@ -734,36 +734,16 @@ impl Search<'_> {
             letters.push(letter);
             proof! {
                 assert(letter_chain(self.items@, current as int).map_values(|l: Letter| l@)
-                    == letter_chain(self.items@, parent as int).map_values(|l: Letter| l@).push(letter@));
+                    =~= seq![letter@] + letter_chain(self.items@, parent as int).map_values(|l: Letter| l@));
+                assert(letters@.map_values(|l: Letter| l@)
+                    + letter_chain(self.items@, parent as int).map_values(|l: Letter| l@)
+                    =~= letter_chain(self.items@, index as int).map_values(|l: Letter| l@));
             }
             current = parent;
         }
         proof! { assert(letter_chain(self.items@, current as int) == Seq::<Letter>::empty()); }
-        proof_decl! { let ghost backwards = letters@; let ghost start = index as int; }
-        let count = letters.len();
-        let mut index = 0;
-        #[cfg_attr(verus_keep_ghost, verus_spec(invariant
-            index <= count / 2, count == backwards.len(), letters@.len() == count,
-            backwards.map_values(|l: Letter| l@).reverse()
-                == letter_chain(self.items@, start).map_values(|l: Letter| l@),
-            forall|i: int| 0 <= i < count ==> letters@[i]
-                == backwards[if i < index || count - index <= i { count - 1 - i } else { i }],
-            decreases count / 2 - index))]
-        while index < count / 2 {
-            let other = count - 1 - index;
-            // The empty vectors allocate nothing; three verified swaps move each letter intact.
-            let mut temporary = Letter {
-                classes: Vec::new(),
-                registers: Vec::new(),
-            };
-            letters.set_and_swap(index, &mut temporary);
-            letters.set_and_swap(other, &mut temporary);
-            letters.set_and_swap(index, &mut temporary);
-            index += 1;
-        }
+        proof_decl! { let ghost start = index as int; }
         proof! {
-            assert(letters@ =~= backwards.reverse());
-            assert(letters@.map_values(|l: Letter| l@) =~= backwards.map_values(|l: Letter| l@).reverse());
             lemma_chain_assignments_views(letters@,letter_chain(self.items@,start),
                 alphabet_chain(self.items@,self.alphabets@,start));
         }

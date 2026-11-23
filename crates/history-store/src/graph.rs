@@ -160,9 +160,9 @@ pub(crate) enum TransitionNode {
     Union(usize),
     Intersect(usize),
     Not(TransitionId),
-    Append {
+    Prepend {
         transition: TransitionId,
-        suffix: usize,
+        prefix: usize,
     },
 }
 
@@ -300,7 +300,7 @@ vstd::prelude::verus! {
                 TransitionNode::Union(s) => hashconsius::spec_mix(2, s as u64),
                 TransitionNode::Intersect(s) => hashconsius::spec_mix(3, s as u64),
                 TransitionNode::Not(id) => hashconsius::spec_mix(4, id@ as u64),
-                TransitionNode::Append { transition, suffix } => hashconsius::spec_mix(hashconsius::spec_mix(5, transition@ as u64), suffix as u64),
+                TransitionNode::Prepend { transition, prefix } => hashconsius::spec_mix(hashconsius::spec_mix(5, transition@ as u64), prefix as u64),
             } }
         fn hash(&self) -> (h: u64)
             ensures h == Self::spec_hash(self@),
@@ -312,7 +312,7 @@ vstd::prelude::verus! {
                 TransitionNode::Union(s) => hashconsius::mix(2, s as u64),
                 TransitionNode::Intersect(s) => hashconsius::mix(3, s as u64),
                 TransitionNode::Not(id) => hashconsius::mix(4, id.get() as u64),
-                TransitionNode::Append { transition, suffix } => hashconsius::mix(hashconsius::mix(5, transition.get() as u64), suffix as u64),
+                TransitionNode::Prepend { transition, prefix } => hashconsius::mix(hashconsius::mix(5, transition.get() as u64), prefix as u64),
             }
         }
         fn key_eq(&self, other: &Self) -> (b: bool)
@@ -322,7 +322,7 @@ vstd::prelude::verus! {
                 (TransitionNode::If { test: a, then_transition: b, else_transition: c }, TransitionNode::If { test: d, then_transition: e, else_transition: f }) => a == d && b == e && c == f,
                 (TransitionNode::Union(a), TransitionNode::Union(b)) | (TransitionNode::Intersect(a), TransitionNode::Intersect(b)) => a == b,
                 (TransitionNode::Not(a), TransitionNode::Not(b)) => a == b,
-                (TransitionNode::Append { transition: a, suffix: b }, TransitionNode::Append { transition: c, suffix: d }) => a == c && b == d,
+                (TransitionNode::Prepend { transition: a, prefix: b }, TransitionNode::Prepend { transition: c, prefix: d }) => a == c && b == d,
                 _ => false,
             } }
     }
@@ -782,9 +782,9 @@ impl ArenaTables {
                 "invalid transition children",
             )?),
             TransitionNode::Not(id) => TransitionView::Not(id),
-            TransitionNode::Append { transition, suffix } => TransitionView::Append {
+            TransitionNode::Prepend { transition, prefix } => TransitionView::Prepend {
                 transition,
-                suffix: present(self.regex_ids.slices.get(suffix), "invalid append suffix")?,
+                prefix: present(self.regex_ids.slices.get(prefix), "invalid prepend prefix")?,
             },
         })
     }
@@ -886,14 +886,14 @@ impl ArenaTables {
                     _ => TransitionNode::Intersect(slot),
                 }
             }
-            TransitionView::Append { transition, suffix } => {
-                let Some(slot) = self.regex_ids.find(suffix) else {
-                    proof! { verify::lemma_missing_append_suffix(self, transition@, suffix@); }
+            TransitionView::Prepend { transition, prefix } => {
+                let Some(slot) = self.regex_ids.find(prefix) else {
+                    proof! { verify::lemma_missing_prepend_prefix(self, transition@, prefix@); }
                     return Ok(None);
                 };
-                TransitionNode::Append {
+                TransitionNode::Prepend {
                     transition,
-                    suffix: slot,
+                    prefix: slot,
                 }
             }
         };
@@ -1122,16 +1122,16 @@ impl ArenaTables {
                 TransitionNode::Intersect(slot)
             }
             TransitionView::Not(id) => TransitionNode::Not(id),
-            TransitionView::Append { transition, suffix } => {
-                let slot = arena(self.regex_ids.intern(suffix))?;
-                proof! { verify::lemma_pool_bytes_push(before.regex_ids@, suffix@); }
+            TransitionView::Prepend { transition, prefix } => {
+                let slot = arena(self.regex_ids.intern(prefix))?;
+                proof! { verify::lemma_pool_bytes_push(before.regex_ids@, prefix@); }
                 proof! {
                     assert(verify::pool_bytes(self.regex_ids@) <= verify::pool_bytes(before.regex_ids@)
-                        + verify::mul_bytes(suffix@.len(), vstd::layout::size_of::<RegexId>()));
+                        + verify::mul_bytes(prefix@.len(), vstd::layout::size_of::<RegexId>()));
                 }
-                TransitionNode::Append {
+                TransitionNode::Prepend {
                     transition,
-                    suffix: slot,
+                    prefix: slot,
                 }
             }
         };
@@ -1767,7 +1767,7 @@ impl CanonicalStore {
             TransitionView::Union(ids) | TransitionView::Intersect(ids) => {
                 sequence_bytes::<TransitionId>(ids.len())?
             }
-            TransitionView::Append { suffix, .. } => sequence_bytes::<RegexId>(suffix.len())?,
+            TransitionView::Prepend { prefix, .. } => sequence_bytes::<RegexId>(prefix.len())?,
             _ => 0,
         };
         let bytes = size_of::<TransitionNode>()
@@ -2073,26 +2073,37 @@ mod storage_tests {
             })?;
             let and = store.intern_test(TestView::And(&[a, b]))?;
             let r = store.intern_regex(RegexKindView::Test(a), false)?;
+            let s = store.intern_regex(RegexKindView::Test(b), false)?;
             let epsilon = store.constants().epsilon;
             let union = store.intern_regex(RegexKindView::Union(&[r, epsilon]), true)?;
             let transition_epsilon = store.constants().transition_epsilon;
-            let append = TransitionView::Append {
+            let prepend = TransitionView::Prepend {
                 transition: transition_epsilon,
-                suffix: &[r],
+                prefix: &[r, s],
             };
-            let t = store.intern_transition(append)?;
+            let t = store.intern_transition(prepend)?;
+            for prefix in [&[s, r][..], &[r, r, s][..]] {
+                let other = TransitionView::Prepend {
+                    transition: transition_epsilon,
+                    prefix,
+                };
+                let id = store.intern_transition(other)?;
+                assert_ne!(id, t);
+                assert_eq!(store.storage.transition(id)?, other);
+                assert_eq!(store.intern_transition(other)?, id);
+            }
             assert_eq!(store.storage.test(and)?, TestView::And(&[a, b]));
             assert_eq!(
                 store.storage.regex(union)?.kind,
                 RegexKindView::Union(&[r, epsilon])
             );
-            assert_eq!(store.storage.transition(t)?, append);
+            assert_eq!(store.storage.transition(t)?, prepend);
             assert_eq!(store.intern_test(TestView::And(&[a, b]))?, and);
             assert_eq!(
                 store.intern_regex(RegexKindView::Union(&[r, epsilon]), true)?,
                 union
             );
-            assert_eq!(store.intern_transition(append)?, t);
+            assert_eq!(store.intern_transition(prepend)?, t);
             Ok(())
         })();
         outcome?;
@@ -2147,7 +2158,7 @@ pub mod verify {
             TransitionNode::Union(slot) => model::TransitionNode::Union(model::transition_ids(ids[slot as int])),
             TransitionNode::Intersect(slot) => model::TransitionNode::Intersect(model::transition_ids(ids[slot as int])),
             TransitionNode::Not(id) => model::TransitionNode::Not(id@),
-            TransitionNode::Append { transition, suffix } => model::TransitionNode::Append(transition@, model::regex_ids(regex_pools[suffix as int])),
+            TransitionNode::Prepend { transition, prefix } => model::TransitionNode::Prepend(transition@, model::regex_ids(regex_pools[prefix as int])),
         }
     }
     pub(super) open spec fn arena_test_wf(t: &ArenaTables, node: TestNode) -> bool {
@@ -2166,7 +2177,7 @@ pub mod verify {
     pub(super) open spec fn arena_transition_wf(t: &ArenaTables, node: TransitionNode) -> bool {
         match node {
             TransitionNode::Union(slot) | TransitionNode::Intersect(slot) => slot < t.transition_ids@.len(),
-            TransitionNode::Append { suffix, .. } => suffix < t.regex_ids@.len(),
+            TransitionNode::Prepend { prefix, .. } => prefix < t.regex_ids@.len(),
             _ => true,
         }
     }
@@ -2273,7 +2284,7 @@ pub mod verify {
                 model::lemma_transition_ids_eq(t.transition_ids@[x as int], t.transition_ids@[y as int]);
                 lemma_pool_slot_eq(t.transition_ids@, x, y);
             },
-            (TransitionNode::Append { transition: a, suffix: x }, TransitionNode::Append { transition: b, suffix: y }) => {
+            (TransitionNode::Prepend { transition: a, prefix: x }, TransitionNode::Prepend { transition: b, prefix: y }) => {
                 lemma_transition_id_eq(a, b);
                 model::lemma_regex_ids_eq(t.regex_ids@[x as int], t.regex_ids@[y as int]);
                 lemma_pool_slot_eq(t.regex_ids@, x, y);
@@ -2387,16 +2398,16 @@ pub mod verify {
             }
         }
     }
-    pub(super) proof fn lemma_missing_append_suffix(t: &ArenaTables, transition: nat, ids: Seq<RegexId>)
+    pub(super) proof fn lemma_missing_prepend_prefix(t: &ArenaTables, transition: nat, ids: Seq<RegexId>)
         requires tables_index_wf(t), !t.regex_ids@.contains(ids),
-        ensures !tables_graph(t).transitions.contains(model::TransitionNode::Append(transition, model::regex_ids(ids))),
+        ensures !tables_graph(t).transitions.contains(model::TransitionNode::Prepend(transition, model::regex_ids(ids))),
     {
         assert forall|i: int| 0 <= i < t.transitions@.len() implies tables_graph(t).transitions[i]
-            != model::TransitionNode::Append(transition, model::regex_ids(ids)) by {
+            != model::TransitionNode::Prepend(transition, model::regex_ids(ids)) by {
             match t.transitions@[i] {
-                TransitionNode::Append { suffix, .. } => {
-                    assert(t.regex_ids@.contains(t.regex_ids@[suffix as int]));
-                    model::lemma_regex_ids_eq(t.regex_ids@[suffix as int], ids);
+                TransitionNode::Prepend { prefix, .. } => {
+                    assert(t.regex_ids@.contains(t.regex_ids@[prefix as int]));
+                    model::lemma_regex_ids_eq(t.regex_ids@[prefix as int], ids);
                 },
                 _ => {},
             }
@@ -2419,7 +2430,7 @@ pub mod verify {
         }
         &&& forall|i: int| 0 <= i < t.transitions@.len() ==> match #[trigger] t.transitions@[i] {
             TransitionNode::Union(slot) | TransitionNode::Intersect(slot) => slot < t.transition_ids@.len(),
-            TransitionNode::Append { transition, suffix } => suffix < t.regex_ids@.len(),
+            TransitionNode::Prepend { transition, prefix } => prefix < t.regex_ids@.len(),
             _ => true,
         }
     }
@@ -2463,7 +2474,7 @@ pub mod verify {
         vstd::layout::size_of::<TransitionNode>() + match n {
             model::TransitionNode::Union(ids) | model::TransitionNode::Intersect(ids) =>
                 mul_bytes(ids.len(), vstd::layout::size_of::<TransitionId>()),
-            model::TransitionNode::Append(_, suffix) => mul_bytes(suffix.len(), vstd::layout::size_of::<RegexId>()),
+            model::TransitionNode::Prepend(_, prefix) => mul_bytes(prefix.len(), vstd::layout::size_of::<RegexId>()),
             _ => 0,
         }
     }
@@ -2711,8 +2722,8 @@ pub mod verify {
                 TransitionNode::Union(slot) | TransitionNode::Intersect(slot) => {
                     assert(before.transition_ids@[slot as int] == after.transition_ids@[slot as int]);
                 },
-                TransitionNode::Append { transition, suffix } => {
-                    assert(before.regex_ids@[suffix as int] == after.regex_ids@[suffix as int]);
+                TransitionNode::Prepend { transition, prefix } => {
+                    assert(before.regex_ids@[prefix as int] == after.regex_ids@[prefix as int]);
                 },
                 _ => {},
             }

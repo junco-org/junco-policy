@@ -31,7 +31,7 @@ pub open spec fn symbolic_derivative<L>(r: Regex<L>) -> Transition<L>
         Regex::Union(cs) => Transition::Union(Seq::new(cs.len(), |i: int| if 0 <= i < cs.len() { symbolic_derivative(cs[i]) } else { Transition::Const(Regex::Empty) })),
         Regex::Intersect(cs) => Transition::Intersect(Seq::new(cs.len(), |i: int| if 0 <= i < cs.len() { symbolic_derivative(cs[i]) } else { Transition::Const(Regex::Empty) })),
         Regex::Not(c) => Transition::Not(Box::new(symbolic_derivative(*c))),
-        Regex::Star(c) => Transition::Append(Box::new(symbolic_derivative(*c)), seq![Regex::Star(c)]),
+        Regex::Star(c) => Transition::Prepend(Box::new(symbolic_derivative(*c)), seq![Regex::Star(c)]),
         Regex::Concat(cs) => symbolic_derivative_concat(r, cs),
     }
 }
@@ -42,8 +42,8 @@ pub open spec fn symbolic_derivative_concat<L>(bound: Regex<L>, cs: Seq<Regex<L>
 {
     if cs.len() == 0 { Transition::Const(Regex::Empty) }
     else {
-        Transition::Union(seq![Transition::Append(Box::new(symbolic_derivative(cs[0])), cs.drop_first())]
-            + if language::nullable(cs[0]) { seq![symbolic_derivative_concat(bound, cs.drop_first())] } else { Seq::empty() })
+        Transition::Union(seq![Transition::Prepend(Box::new(symbolic_derivative(cs.last())), cs.drop_last())]
+            + if language::nullable(cs.last()) { seq![symbolic_derivative_concat(bound, cs.drop_last())] } else { Seq::empty() })
     }
 }
 
@@ -56,32 +56,34 @@ pub proof fn lemma_symbolic_derivative_concat_interp<L>(sem: spec_fn(L, EventVie
 {
     reveal_with_fuel(language::interp_transition, 3);
     if cs.len() > 0 {
-        let rest = cs.drop_first();
-        assert(rest.len() == cs.len() - 1);
-        assert forall|i: int| 0 <= i < rest.len() implies is_smaller_than(rest[i], bound) by {
-            assert(rest[i] == cs[i + 1]);
+        let prefix = cs.drop_last();
+        let last = cs.last();
+        assert(last == cs[cs.len() - 1]);
+        assert(prefix.len() == cs.len() - 1);
+        assert forall|i: int| 0 <= i < prefix.len() implies is_smaller_than(prefix[i], bound) by {
+            assert(prefix[i] == cs[i]);
         }
-        assert forall|i: int| 0 <= i < rest.len() implies language::interp_transition(sem, e, symbolic_derivative(rest[i])) == language::derivative(sem, e, rest[i]) by {
-            assert(rest[i] == cs[i + 1]);
+        assert forall|i: int| 0 <= i < prefix.len() implies language::interp_transition(sem, e, symbolic_derivative(prefix[i])) == language::derivative(sem, e, prefix[i]) by {
+            assert(prefix[i] == cs[i]);
         }
-        lemma_symbolic_derivative_concat_interp(sem, e, bound, rest);
-        let ts = seq![Transition::Append(Box::new(symbolic_derivative(cs[0])), rest)]
-            + if language::nullable(cs[0]) { seq![symbolic_derivative_concat(bound, rest)] } else { Seq::empty() };
-        let ds = seq![Regex::Concat(seq![language::derivative(sem, e, cs[0])] + rest)]
-            + if language::nullable(cs[0]) { seq![language::derivative_concat(sem, e, bound, rest)] } else { Seq::empty() };
+        lemma_symbolic_derivative_concat_interp(sem, e, bound, prefix);
+        let ts = seq![Transition::Prepend(Box::new(symbolic_derivative(last)), prefix)]
+            + if language::nullable(last) { seq![symbolic_derivative_concat(bound, prefix)] } else { Seq::empty() };
+        let ds = seq![Regex::Concat(prefix.push(language::derivative(sem, e, last)))]
+            + if language::nullable(last) { seq![language::derivative_concat(sem, e, bound, prefix)] } else { Seq::empty() };
         let out = language::interp_transition(sem, e, Transition::Union(ts));
         assert(out is Union);
         assert(ts.len() == ds.len());
         assert forall|i: int| 0 <= i < ts.len() implies language::interp_transition(sem, e, ts[i]) == ds[i] by {
-            assert(i == 0 || (language::nullable(cs[0]) && i == 1));
+            assert(i == 0 || (language::nullable(last) && i == 1));
             if i == 0 {
-                assert(ts[i] == Transition::Append(Box::new(symbolic_derivative(cs[0])), rest));
-                assert(ds[i] == Regex::Concat(seq![language::derivative(sem, e, cs[0])] + rest));
-                assert(language::interp_transition(sem, e, symbolic_derivative(cs[0])) == language::derivative(sem, e, cs[0]));
-                assert(language::interp_transition(sem, e, ts[i])->Concat_0 =~= seq![language::derivative(sem, e, cs[0])] + rest);
+                assert(ts[i] == Transition::Prepend(Box::new(symbolic_derivative(last)), prefix));
+                assert(ds[i] == Regex::Concat(prefix.push(language::derivative(sem, e, last))));
+                assert(language::interp_transition(sem, e, symbolic_derivative(last)) == language::derivative(sem, e, last));
+                assert(language::interp_transition(sem, e, ts[i])->Concat_0 =~= prefix.push(language::derivative(sem, e, last)));
             } else {
-                assert(ts[i] == symbolic_derivative_concat(bound, rest));
-                assert(ds[i] == language::derivative_concat(sem, e, bound, rest));
+                assert(ts[i] == symbolic_derivative_concat(bound, prefix));
+                assert(ds[i] == language::derivative_concat(sem, e, bound, prefix));
             }
         }
         assert(out->Union_0 =~= ds);
@@ -117,7 +119,7 @@ pub proof fn lemma_symbolic_derivative_interp<L>(sem: spec_fn(L, EventView) -> b
         Regex::Not(c) => lemma_symbolic_derivative_interp(sem, e, *c),
         Regex::Star(c) => {
             lemma_symbolic_derivative_interp(sem, e, *c);
-            assert(seq![language::derivative(sem, e, *c)] + seq![Regex::Star(c)] =~= seq![language::derivative(sem, e, *c), Regex::Star(c)]);
+            assert(seq![Regex::Star(c)].push(language::derivative(sem, e, *c)) =~= seq![Regex::Star(c), language::derivative(sem, e, *c)]);
         },
         Regex::Concat(cs) => {
             assert forall|i: int| 0 <= i < cs.len() implies is_smaller_than(cs[i], r) by { }
@@ -132,16 +134,16 @@ pub proof fn lemma_symbolic_derivative_interp<L>(sem: spec_fn(L, EventView) -> b
     }
 }
 
-/// Lemma One-step correctness (`lem:sderiv`), modulo language rather than normalization: the
-/// interpreted symbolic derivative has the one-event derivative language.
+/// Lemma One-step correctness (`lem:sderiv`): the residual accepts `w` iff the original
+/// expression accepts `w · e`.
 pub open spec fn stmt_symbolic_derivative_correct<L>() -> bool {
     forall|sem: spec_fn(L, EventView) -> bool, e: EventView, r: Regex<L>, w: Seq<EventView>|
         #[trigger] language::numeric_lang(sem, language::interp_transition(sem, e, symbolic_derivative(r)), w)
-            == language::numeric_lang(sem, r, seq![e] + w)
+            == language::numeric_lang(sem, r, w.push(e))
 }
 
 pub proof fn lemma_symbolic_derivative_correct<L>(sem: spec_fn(L, EventView) -> bool, e: EventView, r: Regex<L>, w: Seq<EventView>)
-    ensures language::numeric_lang(sem, language::interp_transition(sem, e, symbolic_derivative(r)), w) == language::numeric_lang(sem, r, seq![e] + w),
+    ensures language::numeric_lang(sem, language::interp_transition(sem, e, symbolic_derivative(r)), w) == language::numeric_lang(sem, r, w.push(e)),
 {
     lemma_symbolic_derivative_interp(sem, e, r);
     language::lemma_derivative_correct(sem, e, r, w);
@@ -152,17 +154,17 @@ pub proof fn theorem_symbolic_derivative_correct<L>()
 {
     assert forall|sem: spec_fn(L, EventView) -> bool, e: EventView, r: Regex<L>, w: Seq<EventView>|
         #[trigger] language::numeric_lang(sem, language::interp_transition(sem, e, symbolic_derivative(r)), w)
-            == language::numeric_lang(sem, r, seq![e] + w) by {
+            == language::numeric_lang(sem, r, w.push(e)) by {
         lemma_symbolic_derivative_correct(sem, e, r, w);
     }
 }
 
-/// The paper's state sequence q, consuming events oldest first.
+/// The paper's state sequence q, consuming a chronological word from its right end.
 pub open spec fn symbolic_run<L>(sem: spec_fn(L, EventView) -> bool, u: Seq<EventView>, r: Regex<L>) -> Regex<L>
     decreases u.len(),
 {
     if u.len() == 0 { r }
-    else { symbolic_run(sem, u.drop_first(), language::interp_transition(sem, u[0], symbolic_derivative(r))) }
+    else { symbolic_run(sem, u.drop_last(), language::interp_transition(sem, u.last(), symbolic_derivative(r))) }
 }
 
 pub proof fn lemma_symbolic_run_is_derive_word<L>(sem: spec_fn(L, EventView) -> bool, u: Seq<EventView>, r: Regex<L>)
@@ -170,8 +172,8 @@ pub proof fn lemma_symbolic_run_is_derive_word<L>(sem: spec_fn(L, EventView) -> 
     decreases u.len(),
 {
     if u.len() > 0 {
-        lemma_symbolic_derivative_interp(sem, u[0], r);
-        lemma_symbolic_run_is_derive_word(sem, u.drop_first(), language::derivative(sem, u[0], r));
+        lemma_symbolic_derivative_interp(sem, u.last(), r);
+        lemma_symbolic_run_is_derive_word(sem, u.drop_last(), language::derivative(sem, u.last(), r));
     }
 }
 
@@ -852,70 +854,6 @@ pub proof fn lemma_lang_intersect_splice<L>(sem: spec_fn(L, EventView) -> bool, 
     language::lemma_lang_intersect(sem, cs.take(i) + cs[i]->Intersect_0 + cs.skip(i + 1), w);
 }
 
-pub proof fn lemma_concat_split<L>(
-    sem: spec_fn(L, EventView) -> bool,
-    cs: Seq<Regex<L>>,
-    ds: Seq<Regex<L>>,
-    w: Seq<EventView>,
-)
-    ensures language::numeric_lang(sem, Regex::Concat(cs + ds), w) <==>
-        exists|a: Seq<EventView>, b: Seq<EventView>| w == a + b
-            && language::numeric_lang(sem, Regex::Concat(cs), a)
-            && language::numeric_lang(sem, Regex::Concat(ds), b),
-    decreases cs.len(),
-{
-    if language::numeric_lang(sem, Regex::Concat(cs + ds), w) {
-        let parts = choose|p: Seq<Seq<EventView>>| p.len() == (cs + ds).len()
-            && w == p.flatten()
-            && forall|k: int| 0 <= k < (cs + ds).len() ==>
-                language::numeric_lang(sem, (cs + ds)[k], p[k]);
-        let ap = parts.subrange(0, cs.len() as int);
-        let bp = parts.subrange(cs.len() as int, parts.len() as int);
-        assert(parts =~= ap + bp);
-        vstd::seq_lib::lemma_flatten_concat(ap, bp);
-        assert(parts.flatten() == ap.flatten() + bp.flatten());
-        assert forall|k: int| 0 <= k < cs.len() implies
-            language::numeric_lang(sem, cs[k], ap[k]) by {
-            assert(cs[k] == (cs + ds)[k]);
-            assert(ap[k] == parts[k]);
-        }
-        assert forall|k: int| 0 <= k < ds.len() implies
-            language::numeric_lang(sem, ds[k], bp[k]) by {
-            assert(ds[k] == (cs + ds)[cs.len() + k]);
-            assert(bp[k] == parts[cs.len() + k]);
-        }
-        assert(language::numeric_lang(sem, Regex::Concat(cs), ap.flatten()));
-        assert(language::numeric_lang(sem, Regex::Concat(ds), bp.flatten()));
-    }
-    if exists|a: Seq<EventView>, b: Seq<EventView>| w == a + b
-        && language::numeric_lang(sem, Regex::Concat(cs), a)
-        && language::numeric_lang(sem, Regex::Concat(ds), b) {
-        let (a, b) = choose|a: Seq<EventView>, b: Seq<EventView>| w == a + b
-            && language::numeric_lang(sem, Regex::Concat(cs), a)
-            && language::numeric_lang(sem, Regex::Concat(ds), b);
-        let ap = choose|p: Seq<Seq<EventView>>| p.len() == cs.len()
-            && a == p.flatten()
-            && forall|k: int| 0 <= k < cs.len() ==> language::numeric_lang(sem, cs[k], p[k]);
-        let bp = choose|p: Seq<Seq<EventView>>| p.len() == ds.len()
-            && b == p.flatten()
-            && forall|k: int| 0 <= k < ds.len() ==> language::numeric_lang(sem, ds[k], p[k]);
-        let parts = ap + bp;
-        vstd::seq_lib::lemma_flatten_concat(ap, bp);
-        assert(parts.flatten() == w);
-        assert forall|k: int| 0 <= k < (cs + ds).len() implies
-            language::numeric_lang(sem, (cs + ds)[k], parts[k]) by {
-            if k < cs.len() {
-                assert((cs + ds)[k] == cs[k]);
-                assert(parts[k] == ap[k]);
-            } else {
-                assert((cs + ds)[k] == ds[k - cs.len()]);
-                assert(parts[k] == bp[k - cs.len()]);
-            }
-        }
-        assert(language::numeric_lang(sem, Regex::Concat(cs + ds), w));
-    }
-}
-
 pub proof fn lemma_parts_star_nil<L>(sem: spec_fn(L, EventView) -> bool, c: Regex<L>)
     ensures language::numeric_lang(sem, Regex::Star(Box::new(c)), Seq::empty()),
 {
@@ -1080,7 +1018,7 @@ pub proof fn lemma_lang_concat_splice<L>(
     if i == 0 {
         assert(ds =~= inner + cs.drop_first());
         language::lemma_concat_uncons(sem, cs, w);
-        lemma_concat_split(sem, inner, cs.drop_first(), w);
+        language::lemma_concat_split(sem, inner, cs.drop_first(), w);
         assert(cs[0] == Regex::Concat(inner));
     } else {
         let tail = cs.drop_first();
@@ -1670,26 +1608,25 @@ pub proof fn lemma_test_complement_involutive(t: model::Test)
     }
 }
 
-/// Extend the pinned graph; graph replacement requires a fresh root association.
+/// Extend the consumed suffix to the left without moving its pinned right endpoint.
 #[verifier::spinoff_prover]
-pub proof fn lemma_batch_extends_pinned_prefix(
+pub proof fn lemma_batch_extends_pinned_suffix(
     before: model::Graph, after: model::Graph, theta: Subst,
-    root: nat, start: nat, out: nat, history: Seq<EventView>, consumed: nat, end: nat,
+    root: nat, start: nat, out: nat, history: Seq<EventView>, target: nat, consumed: nat, end: nat,
 )
     requires
         model::graph_wf(before), model::graph_wf(after), model::graph_extends(before, after),
         root < before.regexes.len(), start < before.regexes.len(), out < after.regexes.len(),
-        consumed <= end <= history.len(),
+        consumed <= end <= target <= history.len(),
         forall|word: Seq<EventView>| model::regex_lang(before, theta, start, word)
-            == model::regex_lang(before, theta, root, history.take(consumed as int) + word),
+            == model::regex_lang(before, theta, root, word + history.subrange(target - consumed, target as int)),
         forall|word: Seq<EventView>| model::regex_lang(after, theta, out, word)
-            == model::regex_lang(after, theta, start,
-                history.subrange(consumed as int, end as int) + word),
+            == model::regex_lang(after, theta, start, word + history.subrange(target - end, target - consumed)),
     ensures
         forall|word: Seq<EventView>| model::regex_lang(after, theta, out, word)
-            == model::regex_lang(before, theta, root, history.take(end as int) + word),
+            == model::regex_lang(before, theta, root, word + history.subrange(target - end, target as int)),
         language::nullable(model::lift_regex(after, out))
-            == model::regex_lang(before, theta, root, history.take(end as int)),
+            == model::regex_lang(before, theta, root, history.subrange(target - end, target as int)),
 {
     hide(language::numeric_lang);
     hide(model::lift_regex);
@@ -1703,28 +1640,29 @@ pub proof fn lemma_batch_extends_pinned_prefix(
         == model::regex_lang(before, theta, start, word) by {
         reveal(model::regex_lang);
     }
-    assert(history.take(consumed as int) + history.subrange(consumed as int, end as int)
-        =~= history.take(end as int));
+    let batch = history.subrange(target - end, target - consumed);
+    let previous = history.subrange(target - consumed, target as int);
+    let suffix = history.subrange(target - end, target as int);
+    assert(batch + previous =~= suffix);
     assert forall|word: Seq<EventView>| model::regex_lang(after, theta, out, word)
-        == model::regex_lang(before, theta, root, history.take(end as int) + word) by {
-        let suffix = history.subrange(consumed as int, end as int) + word;
+        == model::regex_lang(before, theta, root, word + suffix) by {
+        let prefix = word + batch;
         assert(model::regex_lang(after, theta, out, word)
-            == model::regex_lang(after, theta, start, suffix));
-        assert(model::regex_lang(after, theta, start, suffix)
-            == model::regex_lang(before, theta, start, suffix));
-        assert(model::regex_lang(before, theta, start, suffix)
-            == model::regex_lang(before, theta, root, history.take(consumed as int) + suffix));
-        assert(history.take(consumed as int) + suffix =~= history.take(end as int) + word);
+            == model::regex_lang(after, theta, start, prefix));
+        assert(model::regex_lang(after, theta, start, prefix)
+            == model::regex_lang(before, theta, start, prefix));
+        assert(model::regex_lang(before, theta, start, prefix)
+            == model::regex_lang(before, theta, root, prefix + previous));
+        assert(prefix + previous =~= word + suffix);
     }
     assert(model::regex_lang(after, theta, out, Seq::<EventView>::empty())
-        == model::regex_lang(before, theta, root,
-            history.take(end as int) + Seq::<EventView>::empty()));
+        == model::regex_lang(before, theta, root, Seq::<EventView>::empty() + suffix));
     language::lemma_nullable_iff_nil(model::gsem(theta), model::lift_regex(after, out));
     assert(model::regex_lang(after, theta, out, Seq::<EventView>::empty())
         == language::numeric_lang(model::gsem(theta), model::lift_regex(after, out), Seq::<EventView>::empty())) by {
         reveal(model::regex_lang);
     }
-    assert(history.take(end as int) + Seq::<EventView>::empty() =~= history.take(end as int));
+    assert(Seq::<EventView>::empty() + suffix =~= suffix);
 }
 
 }

@@ -844,7 +844,7 @@ mod tests {
         let rule = Rule::new(
             RuleMode::Require,
             head(),
-            RegexExpr::concat([read(), RegexExpr::star(read())]),
+            RegexExpr::concat([RegexExpr::star(read()), read()]),
         );
         let mut compiled = CompiledRule::new_lazy(store, rule).unwrap();
         let candidate = Probe(1, 2, 1);

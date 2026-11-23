@@ -355,6 +355,29 @@ fn counterexamples_are_shortest() {
 }
 
 #[test]
+fn counterexample_replays_read_then_edit_in_chronological_order() {
+    let left = RegexExpr::concat(
+        [Action::Read, Action::Edit].map(|a| RegexExpr::test(action_is(Comparison::Eq, a))),
+    );
+    let right = RegexExpr::empty();
+    let verdict = PolicyAnalyzer::new(finite_actions())
+        .tail_included(&head(), &left, &right)
+        .unwrap();
+    let Inclusion::Counterexample(witness) = verdict else {
+        panic!("Read · Edit is not included in the empty language");
+    };
+    let [first, second] = witness.history.as_slice() else {
+        panic!("expected a two-event witness, got {witness:?}");
+    };
+    assert_eq!(
+        [concrete(first).action, concrete(second).action],
+        [Action::Read, Action::Edit]
+    );
+    assert!(denied(&[forbid(head(), left)], &witness, concrete));
+    assert!(!denied(&[forbid(head(), right)], &witness, concrete));
+}
+
+#[test]
 fn a_register_and_a_constant_give_five_letters() {
     // `R ≐ κ_R ∨ R ≐ k`: under κ_R = k the resource is k or other; otherwise k, κ_R or other.
     let atoms = [

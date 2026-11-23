@@ -20,12 +20,12 @@
 //! | (S2) | union step | `lit_shape`/`prod_shape` (`Union` case) | literals are normalized unions of operand literals; a product is an operand's product or a literal |
 //! | (S3) | intersection step | `lit_shape`/`prod_shape` (`Intersect` case) | normalized intersections of operand literals |
 //! | (S4) | complement step | `lit_shape`/`prod_shape` (`Not` case) | literals are normalized intersections of complemented body literals; products normalized intersections of literals |
-//! | (S5) | star step | `lit_shape`/`prod_shape` (`Star` case) | `N(v p)` for products `v` of the body |
-//! | (S6) | list step | `lit_shape`/`prod_shape` (`List` case) | `N(v yᵢ₊₁⋯yₖ)` for products `v` of a non-final element, or literals/products of the final element |
+//! | (S5) | star step | `lit_shape`/`prod_shape` (`Star` case) | `N(p v)` for products `v` of the body of star `p` |
+//! | (S6) | list step | `lit_shape`/`prod_shape` (`List` case) | `N(y₁⋯yᵢ₋₁ v)` for products `v` of a non-first element, or literals/products of the first element |
 //! | (C1) | finite, rooted, with constants | `good` (first two conjuncts) | `r` is finite, contains `q`, `∅`, `ε`, `Univ` |
 //! | (C2) | closed under values | `vals_into(r, r)` | successors, literals and products of members stay in `r` |
 //! | (C3) | closed under operands | `r_ops` | operands of set states and bodies of complements stay in `r` |
-//! | (C4) | closed under list tails | `r_lists_in(r, r)` | `N(v yᵢ₊₁⋯yₖ)` for every list member and product `v` of its elements stays in `r` |
+//! | (C4) | closed under list prefixes | `r_lists_in(r, r)` | for every list in `r` and every product `v` of its element `yᵢ`, `N(y₁⋯yᵢ₋₁ v)` stays in `r` |
 //!
 //! The canonical-state abstraction maps a graph
 //! id to its lifted tree `model::lift_regex(g, id)`: within one well-formed graph, interning makes

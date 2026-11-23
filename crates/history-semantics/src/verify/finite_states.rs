@@ -262,18 +262,18 @@ impl<S> Model<S> {
         exists|l: S| #[trigger] (self.lit)((self.body)(p), l) && w == (self.nnot)(l)
     }
 
-    /// `N(v p)` for a product `v` of the body of the star `p`.
+    /// `N(p v)` for a product `v` of the body of the star `p`.
     pub open spec fn star_lit(self, p: S, w: S) -> bool {
-        exists|a: S| #[trigger] (self.prod)((self.body)(p), a) && w == self.cat2(a, p)
+        exists|a: S| #[trigger] (self.prod)((self.body)(p), a) && w == self.cat2(p, a)
     }
 
-    /// `N(v yᵢ₊₁⋯yₖ)` for a product `v` of a non-final element `yᵢ` of the list `p`, or a literal
-    /// of its final element (the nullability guards are left open).
+    /// `N(y₁⋯yᵢ₋₁ v)` for a product `v` of a non-initial element `yᵢ` of the list `p`, or a literal
+    /// of its first element (the nullability guards are left open).
     pub open spec fn list_lit(self, p: S, w: S) -> bool {
         let es = (self.elems)(p);
-        (exists|i: int, a: S| 0 <= i < es.len() - 1 && #[trigger] (self.prod)(es[i], a)
-            && w == (self.ncat)(seq![a] + es.skip(i + 1)))
-        || (self.lit)(es.last(), w)
+        (exists|i: int, a: S| 0 < i < es.len() && #[trigger] (self.prod)(es[i], a)
+            && w == (self.ncat)(es.take(i).push(a)))
+        || (self.lit)(es[0], w)
     }
 
     /// (S0), (S1).
@@ -309,7 +309,7 @@ impl<S> Model<S> {
         } else if self.k(p) == Kind::Star {
             (self.lit)(p, v)
         } else {
-            (self.lit)(p, v) || (self.prod)((self.elems)(p).last(), v)
+            (self.lit)(p, v) || (self.prod)((self.elems)(p)[0], v)
         }
     }
 
@@ -358,11 +358,11 @@ impl<S> Model<S> {
         &&& forall|p: S| r.contains(p) && self.k(p) == Kind::Not ==> r.contains(#[trigger] (self.body)(p))
     }
 
-    /// (C4) for one list `p` relative to a target set `u`: `N(v yᵢ₊₁⋯yₖ)` for the products `v`
+    /// (C4) for one list `p` relative to a target set `u`: `N(y₁⋯yᵢ₋₁ v)` for the products `v`
     /// of each element `yᵢ`.
     pub open spec fn list_in(self, p: S, u: ISet<S>) -> bool {
         forall|i: int, a: S| 0 <= i < (self.elems)(p).len() && #[trigger] (self.prod)((self.elems)(p)[i], a)
-            ==> u.contains((self.ncat)(seq![a] + (self.elems)(p).skip(i + 1)))
+            ==> u.contains((self.ncat)((self.elems)(p).take(i).push(a)))
     }
 
     /// (C4) relative to a target set `u` (`good` uses `u == r`).
@@ -424,20 +424,15 @@ impl<S> Model<S> {
 
     // ----- lists -----
 
-    /// `s_j = N(c_{j+1}⋯c_m)` in the list case.
-    pub open spec fn suffix(self, c: Seq<S>, j: int) -> S {
-        (self.ncat)(c.skip(j + 1))
-    }
-
     /// `T` in the list case.
     pub open spec fn list_terms(self, c: Seq<S>) -> ISet<S> {
         ISet::new(|y: S| exists|j: int, x: S| 0 <= j < c.len() && self.rset(c[j]).contains(x)
-            && y == #[trigger] self.cat2(x, self.suffix(c, j)))
+            && y == #[trigger] (self.ncat)(c.take(j).push(x)))
     }
 
     /// `T` in the star case.
     pub open spec fn star_terms(self, q: S) -> ISet<S> {
-        self.rset((self.body)(q)).map(|x: S| self.cat2(x, q))
+        self.rset((self.body)(q)).map(|x: S| self.cat2(q, x))
     }
 
     /// `Y = ⋃ᵢ C(oᵢ)` in the union and intersection cases.
@@ -977,16 +972,6 @@ pub proof fn lemma_cat_flat_eq<S>(m: Model<S>, xs: Seq<S>, ys: Seq<S>)
     }
 }
 
-pub proof fn lemma_no_empty_pair<S>(m: Model<S>, x: S, y: S)
-    requires x != m.empty, y != m.empty,
-    ensures !m.has_empty(seq![x, y]),
-{
-    if m.has_empty(seq![x, y]) {
-        let i = choose|i: int| 0 <= i < 2 && seq![x, y][i] == m.empty;
-        assert(i == 0 || i == 1);
-    }
-}
-
 pub proof fn lemma_no_empty_atoms<S>(m: Model<S>, xs: Seq<S>)
     requires m.atoms(xs),
     ensures !m.has_empty(xs), m.states(xs),
@@ -1033,118 +1018,60 @@ pub proof fn lemma_cat_atoms<S>(m: Model<S>, zs: Seq<S>)
     assert(m.atom(zs[0]));
 }
 
-/// `N(a z w) = N(N(a z) N(w))` for a state `a` and sequences of atoms `z`, `w`.
-pub proof fn lemma_cat_assoc<S>(m: Model<S>, a: S, z: Seq<S>, w: Seq<S>)
-    requires m.contract(), m.st(a), m.atoms(z), m.atoms(w),
-    ensures (m.ncat)(seq![a] + z + w) == m.cat2((m.ncat)(seq![a] + z), (m.ncat)(w)),
+/// Normalize an atom prefix followed by one (possibly empty, epsilon, or list) state.
+pub proof fn lemma_cat_prefix<S>(m: Model<S>, w: Seq<S>, x: S)
+    requires m.contract(), m.atoms(w), m.st(x),
+    ensures m.states(w.push(x)), m.cat_shape(w.push(x)),
+        m.has_empty(w.push(x)) == (x == m.empty),
+        m.flat(w.push(x)) == w + m.piece(x),
+        x != m.empty && x != m.epsilon ==> m.piece(x).len() >= 1,
 {
-    lemma_no_empty_atoms(m, z);
-    lemma_no_empty_atoms(m, w);
-    let az = seq![a] + z;
-    let azw = seq![a] + z + w;
-    assert(m.states(az)) by {
-        assert forall|i: int| 0 <= i < az.len() implies m.st(#[trigger] az[i]) by {
-            if i > 0 { assert(az[i] == z[i - 1]); }
+    let xs = w.push(x);
+    assert forall|i: int| 0 <= i < xs.len() implies m.st(#[trigger] xs[i]) by {
+        if i < w.len() { assert(m.atom(w[i])); }
+    }
+    if x == m.empty {
+        assert(xs[w.len() as int] == m.empty);
+    } else if m.has_empty(xs) {
+        let i = choose|i: int| 0 <= i < xs.len() && xs[i] == m.empty;
+        if i < w.len() { assert(m.atom(w[i])); }
+    }
+    lemma_flat_atoms(m, w);
+    assert(xs.drop_last() =~= w);
+    assert(xs.last() == x);
+    if m.k(x) == Kind::List { assert((m.elems)(x).len() >= 2); }
+}
+
+/// `N(w z a) = N(w N(z a))` for atom prefixes `w`, `z` and any state `a`.
+pub proof fn lemma_cat_assoc<S>(m: Model<S>, w: Seq<S>, z: Seq<S>, a: S)
+    requires m.contract(), m.st(a), m.atoms(w), m.atoms(z),
+    ensures (m.ncat)((w + z).push(a)) == (m.ncat)(w.push((m.ncat)(z.push(a)))),
+{
+    let za = z.push(a);
+    let r = (m.ncat)(za);
+    let all = (w + z).push(a);
+    let outer = w.push(r);
+    assert(m.atoms(w + z)) by {
+        assert forall|i: int| 0 <= i < (w + z).len() implies m.atom(#[trigger] (w + z)[i]) by {
+            if i < w.len() { assert((w + z)[i] == w[i]); } else { assert((w + z)[i] == z[i - w.len()]); }
         }
     }
-    assert(m.states(azw)) by {
-        assert forall|i: int| 0 <= i < azw.len() implies m.st(#[trigger] azw[i]) by {
-            if i > 0 && i <= z.len() { assert(azw[i] == z[i - 1]); }
-            if i > z.len() { assert(azw[i] == w[i - 1 - z.len()]); }
-        }
-    }
-    assert(m.cat_shape(az));
-    assert(m.cat_shape(w));
-    assert(m.cat_shape(azw));
-    let l = (m.ncat)(az);
-    let r = (m.ncat)(w);
-    let outer = seq![l, r];
-    assert(m.states(outer)) by {
-        assert forall|i: int| 0 <= i < outer.len() implies m.st(#[trigger] outer[i]) by {}
-    }
-    assert(m.cat_shape(outer));
-    if a == m.empty {
-        assert(azw[0] == m.empty);
-        assert(az[0] == m.empty);
-        assert(outer[0] == m.empty);
-    } else {
-        assert(!m.has_empty(az)) by {
-            if m.has_empty(az) {
-                let i = choose|i: int| 0 <= i < az.len() && az[i] == m.empty;
-                if i > 0 { assert(az[i] == z[i - 1]); }
-            }
-        }
-        assert(!m.has_empty(azw)) by {
-            if m.has_empty(azw) {
-                let i = choose|i: int| 0 <= i < azw.len() && azw[i] == m.empty;
-                if i > 0 && i <= z.len() { assert(azw[i] == z[i - 1]); }
-                if i > z.len() { assert(azw[i] == w[i - 1 - z.len()]); }
-            }
-        }
-        lemma_cat_piece(m, az);
-        lemma_cat_piece(m, w);
-        lemma_no_empty_pair(m, l, r);
-        lemma_flat_append(m, seq![l], seq![r]);
-        assert(seq![l] + seq![r] =~= outer);
-        lemma_flat_single(m, l);
-        lemma_flat_single(m, r);
-        lemma_flat_append(m, az, w);
-        assert(az + w =~= azw);
-        lemma_cat_flat_eq(m, azw, outer);
+    lemma_cat_prefix(m, z, a);
+    lemma_cat_prefix(m, w + z, a);
+    lemma_cat_prefix(m, w, r);
+    if a != m.empty {
+        lemma_cat_piece(m, za);
+        assert(m.flat(all) =~= m.flat(outer));
+        lemma_cat_flat_eq(m, all, outer);
     }
 }
 
-/// Shape of `N(x s)` for a state `x` and an atom sequence whose normal form is `s`.
-pub proof fn lemma_cat_pair<S>(m: Model<S>, x: S, w: Seq<S>)
-    requires m.contract(), m.st(x), m.atoms(w),
-    ensures
-        m.st(m.cat2(x, (m.ncat)(w))),
-        x == m.empty ==> m.cat2(x, (m.ncat)(w)) == m.empty,
-        x == m.epsilon ==> m.cat2(x, (m.ncat)(w)) == (m.ncat)(w),
-        x != m.empty ==> m.cat2(x, (m.ncat)(w)) == (m.ncat)(m.piece(x) + w),
-        x != m.empty && x != m.epsilon ==> m.atoms(m.piece(x)) && m.piece(x).len() >= 1,
-        m.k(x) != Kind::List && x != m.empty && x != m.epsilon ==> m.piece(x) == seq![x],
+pub proof fn lemma_atoms_take<S>(m: Model<S>, xs: Seq<S>, i: int)
+    requires m.atoms(xs), 0 <= i <= xs.len(),
+    ensures m.atoms(xs.take(i)),
 {
-    lemma_no_empty_atoms(m, w);
-    let r = (m.ncat)(w);
-    assert(m.cat_shape(w));
-    let xs = seq![x, r];
-    lemma_cat_piece(m, w);
-    assert(m.states(xs)) by {
-        assert forall|i: int| 0 <= i < xs.len() implies m.st(#[trigger] xs[i]) by {}
-    }
-    assert(m.cat_shape(xs));
-    if x == m.empty {
-        assert(xs[0] == m.empty);
-    } else {
-        lemma_no_empty_pair(m, x, r);
-        assert(m.states(seq![x]));
-        assert(!m.has_empty(seq![x])) by {
-            if m.has_empty(seq![x]) { let i = choose|i: int| 0 <= i < 1 && seq![x][i] == m.empty; }
-        }
-        lemma_flat_atoms_of(m, seq![x]);
-        lemma_flat_single(m, x);
-        lemma_flat_append(m, seq![x], seq![r]);
-        assert(seq![x] + seq![r] =~= xs);
-        lemma_flat_single(m, r);
-        lemma_flat_atoms(m, w);
-        let pw = m.piece(x) + w;
-        assert(m.atoms(m.piece(x)));
-        assert(m.atoms(pw)) by {
-            assert forall|i: int| 0 <= i < pw.len() implies m.atom(#[trigger] pw[i]) by {
-                if i < m.piece(x).len() { assert(pw[i] == m.piece(x)[i]); } else { assert(pw[i] == w[i - m.piece(x).len()]); }
-            }
-        }
-        lemma_no_empty_atoms(m, pw);
-        lemma_flat_atoms(m, pw);
-        lemma_cat_flat_eq(m, xs, pw);
-        if x == m.epsilon {
-            assert(pw =~= w);
-        } else {
-            if m.k(x) == Kind::List {
-                assert((m.elems)(x).len() >= 2);
-            }
-        }
+    assert forall|h: int| 0 <= h < xs.take(i).len() implies m.atom(#[trigger] xs.take(i)[h]) by {
+        assert(xs.take(i)[h] == xs[h]);
     }
 }
 
@@ -1164,8 +1091,8 @@ pub proof fn lemma_list_in_mono<S>(m: Model<S>, p: S, u1: ISet<S>, u2: ISet<S>)
     ensures m.list_in(p, u2),
 {
     assert forall|i: int, a: S| 0 <= i < (m.elems)(p).len() && #[trigger] (m.prod)((m.elems)(p)[i], a)
-        implies u2.contains((m.ncat)(seq![a] + (m.elems)(p).skip(i + 1))) by {
-        assert(u1.contains((m.ncat)(seq![a] + (m.elems)(p).skip(i + 1))));
+        implies u2.contains((m.ncat)((m.elems)(p).take(i).push(a))) by {
+        assert(u1.contains((m.ncat)((m.elems)(p).take(i).push(a))));
     }
 }
 
@@ -1422,12 +1349,12 @@ pub proof fn lemma_good_not<S>(m: Model<S>, q: S)
 }
 
 /// The element sequence of a member `x ∉ {∅, ε}` of `C(·)` satisfies (C4) relative to `C(·)`.
-pub proof fn lemma_piece_tails<S>(m: Model<S>, r: ISet<S>, q0: S, x: S)
+pub proof fn lemma_piece_prefixes<S>(m: Model<S>, r: ISet<S>, q0: S, x: S)
     requires m.contract(), m.good(r, q0), r.contains(x), x != m.empty, x != m.epsilon,
     ensures
         m.atoms(m.piece(x)), m.piece(x).len() >= 1,
         forall|i: int, a: S| 0 <= i < m.piece(x).len() && #[trigger] (m.prod)(m.piece(x)[i], a)
-            ==> r.contains((m.ncat)(seq![a] + m.piece(x).skip(i + 1))),
+            ==> r.contains((m.ncat)(m.piece(x).take(i).push(a))),
 {
     assert(m.st(x));
     let z = m.piece(x);
@@ -1443,24 +1370,24 @@ pub proof fn lemma_piece_tails<S>(m: Model<S>, r: ISet<S>, q0: S, x: S)
             assert forall|i: int| 0 <= i < z.len() implies m.atom(#[trigger] z[i]) by { assert(i == 0); }
         }
         assert forall|i: int, a: S| 0 <= i < z.len() && #[trigger] (m.prod)(z[i], a)
-            implies r.contains((m.ncat)(seq![a] + z.skip(i + 1))) by {
+            implies r.contains((m.ncat)(z.take(i).push(a))) by {
             assert(i == 0 && z[i] == x);
             assert(r.contains(a));
             assert(m.st(a));
-            assert(seq![a] + z.skip(1) =~= seq![a]);
+            assert(z.take(0).push(a) =~= seq![a]);
             lemma_cat_single(m, a);
         }
     }
 }
 
-/// A list whose partial successors (C4) and final-element literals and products lie in a set `u`
+/// A list whose partial successors (C4) and first-element literals and products lie in a set `u`
 /// closed under normalized unions has its successors, literals, and products in `u`, by (S6).
 pub proof fn lemma_list_vals<S>(m: Model<S>, t: S, u: ISet<S>)
     requires
         m.contract(), m.st(t), m.k(t) == Kind::List,
         m.has_consts(u), m.nset_closed(false, u), m.list_in(t, u),
-        forall|w: S| #[trigger] (m.lit)((m.elems)(t).last(), w) ==> u.contains(w),
-        forall|w: S| #[trigger] (m.prod)((m.elems)(t).last(), w) ==> u.contains(w),
+        forall|w: S| #[trigger] (m.lit)((m.elems)(t)[0], w) ==> u.contains(w),
+        forall|w: S| #[trigger] (m.prod)((m.elems)(t)[0], w) ==> u.contains(w),
     ensures
         forall|v: S| #[trigger] (m.lit)(t, v) ==> u.contains(v),
         forall|v: S| #[trigger] (m.prod)(t, v) ==> u.contains(v),
@@ -1470,9 +1397,9 @@ pub proof fn lemma_list_vals<S>(m: Model<S>, t: S, u: ISet<S>)
     assert forall|v: S| #[trigger] (m.lit)(t, v) implies u.contains(v) by {
         assert(m.lit_shape(t, v));
         assert forall|w: S| m.list_lit(t, w) implies u.contains(w) by {
-            if !(m.lit)(es.last(), w) {
-                let (i, a) = choose|i: int, a: S| 0 <= i < es.len() - 1 && #[trigger] (m.prod)(es[i], a)
-                    && w == (m.ncat)(seq![a] + es.skip(i + 1));
+            if !(m.lit)(es[0], w) {
+                let (i, a) = choose|i: int, a: S| 0 < i < es.len() && #[trigger] (m.prod)(es[i], a)
+                    && w == (m.ncat)(es.take(i).push(a));
             }
         }
         assert(m.built(false, |w: S| m.list_lit(t, w), v));
@@ -1495,46 +1422,36 @@ pub proof fn lemma_good_star<S>(m: Model<S>, q: S)
 {
     let p = (m.body)(q);
     let rp = m.rset(p);
-    let cq = |x: S| m.cat2(x, q);
+    let cq = |x: S| m.cat2(q, x);
     rp.lemma_map_finite(cq);
     let t = m.star_terms(q);
     let w = seq![q];
     assert(m.constants_ok());
     assert(m.atom(q));
     assert(m.atoms(w));
-    lemma_cat_single(m, q);
-    assert((m.ncat)(w) == q);
-    // Members of T: ∅, q, or lists `z q`.
-    assert forall|x: S| rp.contains(x) implies m.st(#[trigger] m.cat2(x, q)) && (
-        m.cat2(x, q) == m.empty && x == m.empty
-        || m.cat2(x, q) == q && x == m.epsilon
-        || (x != m.empty && x != m.epsilon && m.k(m.cat2(x, q)) == Kind::List
-            && (m.elems)(m.cat2(x, q)) == m.piece(x) + w)) by {
+    // Members of T: ∅, q, or lists starting with q.
+    assert forall|x: S| rp.contains(x) implies m.st(#[trigger] m.cat2(q, x)) && (
+        m.cat2(q, x) == m.empty && x == m.empty
+        || m.cat2(q, x) == q && x == m.epsilon
+        || (x != m.empty && x != m.epsilon && m.k(m.cat2(q, x)) == Kind::List
+            && (m.elems)(m.cat2(q, x)) == w + m.piece(x))) by {
         assert(m.st(x));
-        lemma_cat_pair(m, x, w);
-        if x != m.empty && x != m.epsilon {
-            let z = m.piece(x);
-            let zw = z + w;
-            assert(m.atoms(zw)) by {
-                assert forall|h: int| 0 <= h < zw.len() implies m.atom(#[trigger] zw[h]) by {
-                    if h < z.len() { assert(zw[h] == z[h]); } else { assert(zw[h] == w[h - z.len()]); }
-                }
-            }
-            lemma_cat_atoms(m, zw);
-        }
+        lemma_cat_prefix(m, w, x);
+        assert(w.push(x) =~= seq![q, x]);
+        if x == m.epsilon { assert(w + m.piece(x) =~= w); }
     }
     assert(t.contains(q)) by {
         assert(cq(m.epsilon) == q);
     }
-    assert forall|v: S| t.contains(v) implies exists|x: S| rp.contains(x) && v == #[trigger] m.cat2(x, q) by {}
+    assert forall|v: S| t.contains(v) implies exists|x: S| rp.contains(x) && v == #[trigger] m.cat2(q, x) by {}
     assert(m.r_states(t)) by {
         assert forall|v: S| t.contains(v) implies m.st(v) by {
-            let x = choose|x: S| rp.contains(x) && v == #[trigger] m.cat2(x, q);
+            let x = choose|x: S| rp.contains(x) && v == #[trigger] m.cat2(q, x);
         }
     }
     // No unions, intersections, or complements in T.
     assert forall|v: S| t.contains(v) implies m.k(v) != Kind::Union && m.k(v) != Kind::Intersect && m.k(v) != Kind::Not by {
-        let x = choose|x: S| rp.contains(x) && v == #[trigger] m.cat2(x, q);
+        let x = choose|x: S| rp.contains(x) && v == #[trigger] m.cat2(q, x);
     }
     assert(m.y_ok(false, t));
     assert(m.r_ops(t));
@@ -1545,7 +1462,7 @@ pub proof fn lemma_good_star<S>(m: Model<S>, q: S)
     assert forall|v: S| #[trigger] (m.lit)(q, v) implies us.contains(v) by {
         assert(m.lit_shape(q, v));
         assert forall|wv: S| m.star_lit(q, wv) implies us.contains(wv) by {
-            let a = choose|a: S| #[trigger] (m.prod)((m.body)(q), a) && wv == m.cat2(a, q);
+            let a = choose|a: S| #[trigger] (m.prod)((m.body)(q), a) && wv == m.cat2(q, a);
             assert(rp.contains(a));
             assert(t.contains(cq(a)));
         }
@@ -1561,31 +1478,32 @@ pub proof fn lemma_good_star<S>(m: Model<S>, q: S)
     }
     // (C4) for the lists of T, relative to U(T).
     assert forall|y: S| t.contains(y) && m.k(y) == Kind::List implies #[trigger] m.list_in(y, us) by {
-        let x = choose|x: S| rp.contains(x) && y == #[trigger] m.cat2(x, q);
+        let x = choose|x: S| rp.contains(x) && y == #[trigger] m.cat2(q, x);
         assert(x != m.empty && x != m.epsilon);
         let z = m.piece(x);
-        lemma_piece_tails(m, rp, p, x);
+        lemma_piece_prefixes(m, rp, p, x);
         let es = (m.elems)(y);
-        assert(es == z + w);
+        assert(es == w + z);
         assert forall|i: int, a: S| 0 <= i < es.len() && #[trigger] (m.prod)(es[i], a)
-            implies us.contains((m.ncat)(seq![a] + es.skip(i + 1))) by {
-            if i < z.len() {
-                assert(es[i] == z[i]);
-                assert(m.st(z[i]));
-                assert(m.st(a));
-                let zr = z.skip(i + 1);
-                assert(m.atoms(zr)) by {
-                    assert forall|h: int| 0 <= h < zr.len() implies m.atom(#[trigger] zr[h]) by { assert(zr[h] == z[i + 1 + h]); }
-                }
-                lemma_cat_assoc(m, a, zr, w);
-                assert(seq![a] + es.skip(i + 1) =~= seq![a] + zr + w);
-                assert(rp.contains((m.ncat)(seq![a] + zr)));
-                assert(t.contains(cq((m.ncat)(seq![a] + zr))));
-            } else {
+            implies us.contains((m.ncat)(es.take(i).push(a))) by {
+            if i == 0 {
                 assert(es[i] == q);
                 assert(m.st(a));
-                assert(seq![a] + es.skip(i + 1) =~= seq![a]);
+                assert(es.take(i).push(a) =~= seq![a]);
                 lemma_cat_single(m, a);
+            } else {
+                let k = i - 1;
+                let zr = z.take(k);
+                assert(es[i] == z[k]);
+                assert(m.st(z[k]));
+                assert(m.st(a));
+                lemma_atoms_take(m, z, k);
+                lemma_cat_assoc(m, w, zr, a);
+                assert(es.take(i) =~= w + zr);
+                let b = (m.ncat)(zr.push(a));
+                assert(rp.contains(b));
+                assert(w.push(b) =~= seq![q, b]);
+                assert(t.contains(cq(b)));
             }
         }
     }
@@ -1595,13 +1513,13 @@ pub proof fn lemma_good_star<S>(m: Model<S>, q: S)
         &&& forall|v: S| #[trigger] (m.lit)(y, v) ==> us.contains(v)
         &&& forall|v: S| #[trigger] (m.prod)(y, v) ==> us.contains(v)
     } by {
-        let x = choose|x: S| rp.contains(x) && y == #[trigger] m.cat2(x, q);
+        let x = choose|x: S| rp.contains(x) && y == #[trigger] m.cat2(q, x);
         if x == m.empty {
             lemma_base_vals(m, y);
         } else if x == m.epsilon {
         } else {
             assert(m.list_in(y, us));
-            assert((m.elems)(y).last() == q);
+            assert((m.elems)(y)[0] == q);
             lemma_list_vals(m, y, us);
         }
     }
@@ -1617,112 +1535,81 @@ pub open spec fn list_ctx<S>(m: Model<S>, q: S) -> bool {
     let c = (m.elems)(q);
     &&& m.contract() && m.st(q) && m.k(q) == Kind::List && m.atoms(c) && c.len() >= 2
     &&& forall|j: int| 0 <= j < c.len() ==> m.good(m.rset(#[trigger] c[j]), c[j])
-    &&& forall|j: int| 0 <= j < c.len() ==> #[trigger] m.atoms(c.skip(j + 1))
 }
 
-/// `T` contains `N(x s_j)` for `x ∈ C(c_j)`.
+/// `T` contains `N(c[..j] x)` for `x ∈ C(c[j])`.
 pub proof fn lemma_list_term<S>(m: Model<S>, c: Seq<S>, j: int, x: S)
     requires 0 <= j < c.len(), m.rset(c[j]).contains(x),
-    ensures m.list_terms(c).contains(m.cat2(x, m.suffix(c, j))),
+    ensures m.list_terms(c).contains((m.ncat)(c.take(j).push(x))),
 {}
 
-/// Shape of a member `N(x s_j)` of `T` with `j < m`.
+/// With a nonempty prefix a term is empty, the first child, or a list starting with it.
 pub proof fn lemma_list_term_shape<S>(m: Model<S>, q: S, j: int, x: S)
-    requires list_ctx(m, q), 0 <= j < (m.elems)(q).len() - 1, m.rset((m.elems)(q)[j]).contains(x),
+    requires list_ctx(m, q), 0 < j < (m.elems)(q).len(), m.rset((m.elems)(q)[j]).contains(x),
     ensures ({
         let c = (m.elems)(q);
-        let y = m.cat2(x, m.suffix(c, j));
+        let y = (m.ncat)(c.take(j).push(x));
         &&& m.st(y)
         &&& (x == m.empty && y == m.empty)
-            || (x == m.epsilon && j == c.len() - 2 && y == c[c.len() - 1])
-            || (x != m.empty && m.k(y) == Kind::List && (m.elems)(y) == m.piece(x) + c.skip(j + 1)
-                && (m.elems)(y).last() == c[c.len() - 1])
+            || (x == m.epsilon && j == 1 && y == c[0])
+            || (x != m.empty && m.k(y) == Kind::List && (m.elems)(y) == c.take(j) + m.piece(x)
+                && (m.elems)(y)[0] == c[0])
     }),
 {
     let c = (m.elems)(q);
-    let n = c.len() as int;
-    let w = c.skip(j + 1);
+    let w = c.take(j);
     assert(m.good(m.rset(c[j]), c[j]));
     assert(m.st(x));
-    assert(m.atoms(w));
-    lemma_cat_pair(m, x, w);
-    if x != m.empty {
-        let z = m.piece(x);
-        let es = z + w;
-        assert(m.atoms(z)) by {
-            if x == m.epsilon { assert(z =~= Seq::<S>::empty()); }
-        }
-        assert(m.atoms(es)) by {
-            assert forall|h: int| 0 <= h < es.len() implies m.atom(#[trigger] es[h]) by {
-                if h < z.len() { assert(es[h] == z[h]); } else { assert(es[h] == w[h - z.len()]); }
-            }
-        }
-        lemma_cat_atoms(m, es);
-        assert(es.last() == c[n - 1]);
-        if es.len() == 1 {
-            assert(z.len() == 0);
-            assert(x == m.epsilon) by {
-                if x != m.epsilon { assert(m.piece(x).len() >= 1); }
-            }
-            assert(w.len() == 1);
-            assert(es[0] == c[n - 1]);
-        }
-    }
+    lemma_atoms_take(m, c, j);
+    lemma_cat_prefix(m, w, x);
+    assert((w + m.piece(x))[0] == c[0]);
 }
 
-/// (C4) for a list `N(x s_j)` of `T` with `j < m`, relative to `T`.
+/// A product from the prefix stays at its original position in `T`; one from `x`
+/// stays at position `j` by (C4) for `x` and concatenation associativity.
 pub proof fn lemma_list_member<S>(m: Model<S>, q: S, j: int, x: S)
-    requires list_ctx(m, q), 0 <= j < (m.elems)(q).len() - 1, m.rset((m.elems)(q)[j]).contains(x),
-        x != m.empty, m.k(m.cat2(x, m.suffix((m.elems)(q), j))) == Kind::List,
-    ensures m.list_in(m.cat2(x, m.suffix((m.elems)(q), j)), m.list_terms((m.elems)(q))),
+    requires list_ctx(m, q), 0 < j < (m.elems)(q).len(), m.rset((m.elems)(q)[j]).contains(x),
+        x != m.empty, m.k((m.ncat)((m.elems)(q).take(j).push(x))) == Kind::List,
+    ensures m.list_in((m.ncat)((m.elems)(q).take(j).push(x)), m.list_terms((m.elems)(q))),
 {
     let c = (m.elems)(q);
-    let n = c.len() as int;
-    let w = c.skip(j + 1);
+    let w = c.take(j);
     let rx = m.rset(c[j]);
     let tt = m.list_terms(c);
-    let y = m.cat2(x, m.suffix(c, j));
+    let y = (m.ncat)(w.push(x));
     lemma_list_term_shape(m, q, j, x);
     assert(m.good(rx, c[j]));
     let z = m.piece(x);
     let es = (m.elems)(y);
-    assert(es == z + w);
+    assert(m.atom(c[0]));
+    assert(es == w + z);
     if x != m.epsilon {
-        lemma_piece_tails(m, rx, c[j], x);
+        lemma_piece_prefixes(m, rx, c[j], x);
     } else {
         assert(z =~= Seq::<S>::empty());
     }
-    assert(m.atoms(w));
+    lemma_atoms_take(m, c, j);
     assert forall|i: int, a: S| 0 <= i < es.len() && #[trigger] (m.prod)(es[i], a)
-        implies tt.contains((m.ncat)(seq![a] + es.skip(i + 1))) by {
-        if i < z.len() {
-            assert(es[i] == z[i]);
-            assert(m.atoms(z));
-            assert(m.st(z[i]));
-            assert(m.st(a));
-            let zr = z.skip(i + 1);
-            assert(m.atoms(zr)) by {
-                assert forall|h: int| 0 <= h < zr.len() implies m.atom(#[trigger] zr[h]) by { assert(zr[h] == z[i + 1 + h]); }
-            }
-            lemma_cat_assoc(m, a, zr, w);
-            assert(seq![a] + es.skip(i + 1) =~= seq![a] + zr + w);
-            assert(rx.contains((m.ncat)(seq![a] + zr)));
-            lemma_list_term(m, c, j, (m.ncat)(seq![a] + zr));
+        implies tt.contains((m.ncat)(es.take(i).push(a))) by {
+        if i < j {
+            assert(es[i] == c[i]);
+            assert(m.good(m.rset(c[i]), c[i]));
+            assert(m.rset(c[i]).contains(c[i]));
+            assert(m.rset(c[i]).contains(a));
+            assert(es.take(i) =~= c.take(i));
+            lemma_list_term(m, c, i, a);
         } else {
-            let k = j + 1 + (i - z.len());
-            assert(es[i] == c[k]);
-            assert(m.good(m.rset(c[k]), c[k]));
-            assert(m.rset(c[k]).contains(c[k]));
-            assert(m.rset(c[k]).contains(a));
+            let k = i - j;
+            let zr = z.take(k);
+            assert(es[i] == z[k]);
+            assert(m.atoms(z));
+            assert(m.st(z[k]));
             assert(m.st(a));
-            let w2 = c.skip(k + 1);
-            assert(m.atoms(w2));
-            assert(es.skip(i + 1) =~= w2);
-            lemma_cat_assoc(m, a, Seq::<S>::empty(), w2);
-            assert(seq![a] + Seq::<S>::empty() + w2 =~= seq![a] + w2);
-            assert(seq![a] + Seq::<S>::empty() =~= seq![a]);
-            lemma_cat_single(m, a);
-            lemma_list_term(m, c, k, a);
+            lemma_atoms_take(m, z, k);
+            lemma_cat_assoc(m, w, zr, a);
+            assert(es.take(i) =~= w + zr);
+            assert(rx.contains((m.ncat)(zr.push(a))));
+            lemma_list_term(m, c, j, (m.ncat)(zr.push(a)));
         }
     }
 }
@@ -1739,82 +1626,53 @@ pub proof fn lemma_good_list<S>(m: Model<S>, q: S)
     let t = m.list_terms(c);
     // T is finite.
     lemma_int_range(0, n);
-    let f = |j: int| m.rset(c[j]).map(|x: S| m.cat2(x, m.suffix(c, j)));
+    let f = |j: int| m.rset(c[j]).map(|x: S| (m.ncat)(c.take(j).push(x)));
     assert forall|j: int| set_int_range(0, n).contains(j) implies #[trigger] f(j).finite() by {
-        m.rset(c[j]).lemma_map_finite(|x: S| m.cat2(x, m.suffix(c, j)));
+        m.rset(c[j]).lemma_map_finite(|x: S| (m.ncat)(c.take(j).push(x)));
     }
     lemma_big_union_finite(set_int_range(0, n), f);
     assert(t =~= ISet::new(|x: S| exists|j: int| set_int_range(0, n).contains(j) && #[trigger] f(j).contains(x))) by {
         assert forall|y: S| t.contains(y) implies exists|j: int| set_int_range(0, n).contains(j) && #[trigger] f(j).contains(y) by {
             let (j, x) = choose|j: int, x: S| 0 <= j < c.len() && m.rset(c[j]).contains(x)
-                && y == #[trigger] m.cat2(x, m.suffix(c, j));
+                && y == #[trigger] (m.ncat)(c.take(j).push(x));
             assert(f(j).contains(y));
         }
         assert forall|y: S| (exists|j: int| set_int_range(0, n).contains(j) && #[trigger] f(j).contains(y)) implies t.contains(y) by {
             let j = choose|j: int| set_int_range(0, n).contains(j) && #[trigger] f(j).contains(y);
-            let x = choose|x: S| m.rset(c[j]).contains(x) && y == m.cat2(x, m.suffix(c, j));
-            assert(y == m.cat2(x, m.suffix(c, j)));
-        }
-    }
-    // Suffix facts.
-    assert forall|j: int| 0 <= j < n implies #[trigger] m.atoms(c.skip(j + 1)) by {
-        assert forall|h: int| 0 <= h < c.skip(j + 1).len() implies m.atom(#[trigger] c.skip(j + 1)[h]) by {
-            assert(c.skip(j + 1)[h] == c[j + 1 + h]);
+            let x = choose|x: S| m.rset(c[j]).contains(x) && y == (m.ncat)(c.take(j).push(x));
+            assert(y == (m.ncat)(c.take(j).push(x)));
         }
     }
     assert(list_ctx(m, q));
-    assert(m.suffix(c, n - 1) == m.epsilon) by {
-        assert(c.skip(n) =~= Seq::<S>::empty());
-        assert(m.states(c.skip(n)));
-        assert(m.cat_shape(c.skip(n)));
-        assert(!m.has_empty(c.skip(n)));
-    }
-    // q ∈ T.
     assert(t.contains(q)) by {
-        assert(m.good(m.rset(c[0]), c[0]));
-        assert(m.rset(c[0]).contains(c[0]));
-        assert(m.atoms(c.skip(0int + 1)));
-        assert(m.atom(c[0]));
-        lemma_cat_pair(m, c[0], c.skip(1));
-        assert(m.piece(c[0]) + c.skip(1) =~= c);
-        assert(m.fixpoints_ok());
+        assert(m.good(m.rset(c[n - 1]), c[n - 1]));
+        assert(m.rset(c[n - 1]).contains(c[n - 1]));
+        assert(c.take(n - 1).push(c[n - 1]) =~= c);
         assert((m.ncat)(c) == q);
-        assert(m.cat2(c[0], m.suffix(c, 0)) == q);
-        lemma_list_term(m, c, 0, c[0]);
+        lemma_list_term(m, c, n - 1, c[n - 1]);
     }
-    // Level-(m-1) members are C(c_m).
-    let rl = m.rset(c[n - 1]);
-    assert(m.good(rl, c[n - 1]));
-    assert forall|x: S| rl.contains(x) implies #[trigger] m.cat2(x, m.suffix(c, n - 1)) == x by {
+    // With no prefix the whole bound of the first child is contained in T.
+    let first = m.rset(c[0]);
+    assert(m.good(first, c[0]));
+    assert forall|x: S| first.contains(x) implies t.contains(x) by {
         assert(m.st(x));
-        assert(c.skip(n) =~= Seq::<S>::empty());
-        lemma_cat_pair(m, x, c.skip(n));
-        if x != m.empty && x != m.epsilon {
-            assert(m.piece(x) + c.skip(n) =~= m.piece(x));
-            lemma_cat_pair(m, x, seq![]);
-            if m.k(x) == Kind::List {
-                lemma_cat_atoms(m, m.piece(x));
-                lemma_list_unique(m, (m.ncat)(m.piece(x)), x);
-            } else {
-                lemma_cat_atoms(m, m.piece(x));
-            }
-        }
-    }
-    assert forall|x: S| rl.contains(x) implies t.contains(x) by {
-        assert(m.cat2(x, m.suffix(c, n - 1)) == x);
-        lemma_list_term(m, c, n - 1, x);
+        assert(c.take(0).push(x) =~= seq![x]);
+        lemma_cat_single(m, x);
+        lemma_list_term(m, c, 0, x);
     }
     // Classification of members of T.
-    assert forall|y: S| t.contains(y) implies m.st(y) && (rl.contains(y) || y == m.empty || (m.k(y) == Kind::List
-        && m.list_in(y, t) && (m.elems)(y).last() == c[n - 1])) by {
+    assert forall|y: S| t.contains(y) implies m.st(y) && (first.contains(y) || y == m.empty || (m.k(y) == Kind::List
+        && m.list_in(y, t) && (m.elems)(y)[0] == c[0])) by {
         let (j, x) = choose|j: int, x: S| 0 <= j < c.len() && m.rset(c[j]).contains(x)
-            && y == #[trigger] m.cat2(x, m.suffix(c, j));
-        if j == n - 1 {
-            assert(m.cat2(x, m.suffix(c, n - 1)) == x);
-            assert(m.good(m.rset(c[j]), c[j]));
+            && y == #[trigger] (m.ncat)(c.take(j).push(x));
+        if j == 0 {
+            assert(first.contains(x));
+            assert(m.st(x));
+            assert(c.take(0).push(x) =~= seq![x]);
+            lemma_cat_single(m, x);
         } else {
             lemma_list_term_shape(m, q, j, x);
-            if x != m.empty && !(x == m.epsilon && j == n - 2) {
+            if x != m.empty && !(x == m.epsilon && j == 1) {
                 lemma_list_member(m, q, j, x);
             }
         }
@@ -1823,10 +1681,10 @@ pub proof fn lemma_good_list<S>(m: Model<S>, q: S)
     assert(m.r_ops(t)) by {
         assert forall|y: S, o: S| t.contains(y) && (m.k(y) == Kind::Union || m.k(y) == Kind::Intersect)
             && #[trigger] (m.ops)(y).contains(o) implies t.contains(o) by {
-            assert(rl.contains(y));
+            assert(first.contains(y));
         }
         assert forall|y: S| t.contains(y) && m.k(y) == Kind::Not implies t.contains(#[trigger] (m.body)(y)) by {
-            assert(rl.contains(y));
+            assert(first.contains(y));
         }
     }
     assert(m.y_ok(false, t));
@@ -1835,9 +1693,9 @@ pub proof fn lemma_good_list<S>(m: Model<S>, q: S)
     let us = m.uset(false, t);
     assert(m.r_lists_in(t, t)) by {
         assert forall|y: S| t.contains(y) && m.k(y) == Kind::List implies #[trigger] m.list_in(y, t) by {
-            if rl.contains(y) {
-                assert(m.list_in(y, rl));
-                lemma_list_in_mono(m, y, rl, t);
+            if first.contains(y) {
+                assert(m.list_in(y, first));
+                lemma_list_in_mono(m, y, first, t);
             }
         }
     }
@@ -1847,17 +1705,17 @@ pub proof fn lemma_good_list<S>(m: Model<S>, q: S)
         &&& forall|v: S| #[trigger] (m.lit)(y, v) ==> us.contains(v)
         &&& forall|v: S| #[trigger] (m.prod)(y, v) ==> us.contains(v)
     } by {
-        if rl.contains(y) {
-            assert forall|v: S| #[trigger] (m.succ)(y, v) implies us.contains(v) by { assert(rl.contains(v)); }
-            assert forall|v: S| #[trigger] (m.lit)(y, v) implies us.contains(v) by { assert(rl.contains(v)); }
-            assert forall|v: S| #[trigger] (m.prod)(y, v) implies us.contains(v) by { assert(rl.contains(v)); }
+        if first.contains(y) {
+            assert forall|v: S| #[trigger] (m.succ)(y, v) implies us.contains(v) by { assert(first.contains(v)); }
+            assert forall|v: S| #[trigger] (m.lit)(y, v) implies us.contains(v) by { assert(first.contains(v)); }
+            assert forall|v: S| #[trigger] (m.prod)(y, v) implies us.contains(v) by { assert(first.contains(v)); }
         } else if y == m.empty {
             assert(m.constants_ok());
             lemma_base_vals(m, y);
         } else {
             lemma_list_in_mono(m, y, t, us);
-            assert forall|v: S| #[trigger] (m.lit)((m.elems)(y).last(), v) implies us.contains(v) by { assert(rl.contains(v)); }
-            assert forall|v: S| #[trigger] (m.prod)((m.elems)(y).last(), v) implies us.contains(v) by { assert(rl.contains(v)); }
+            assert forall|v: S| #[trigger] (m.lit)((m.elems)(y)[0], v) implies us.contains(v) by { assert(first.contains(v)); }
+            assert forall|v: S| #[trigger] (m.prod)((m.elems)(y)[0], v) implies us.contains(v) by { assert(first.contains(v)); }
             lemma_list_vals(m, y, us);
         }
     }

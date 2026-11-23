@@ -284,9 +284,9 @@ pub enum TransitionView<'a> {
     Union(&'a [TransitionId]),
     Intersect(&'a [TransitionId]),
     Not(TransitionId),
-    Append {
+    Prepend {
         transition: TransitionId,
-        suffix: &'a [RegexId],
+        prefix: &'a [RegexId],
     },
 }
 
@@ -429,13 +429,13 @@ impl PartialEq for TransitionView<'_> {
             }
             (Self::Not(a), Self::Not(b)) => a == b,
             (
-                Self::Append {
+                Self::Prepend {
                     transition: a,
-                    suffix: x,
+                    prefix: x,
                 },
-                Self::Append {
+                Self::Prepend {
                     transition: b,
-                    suffix: y,
+                    prefix: y,
                 },
             ) => {
                 proof! { lemma_regex_ids_eq(x@, y@); }
@@ -793,7 +793,7 @@ pub enum TransitionHead {
     Union(usize),
     Intersect(usize),
     Not(TransitionId),
-    Append(TransitionId, usize),
+    Prepend(TransitionId, usize),
 }
 impl TestId {
     #[verus_verify]
@@ -877,8 +877,8 @@ impl TransitionId {
             TransitionView::Union(xs) => TransitionHead::Union(xs.len()),
             TransitionView::Intersect(xs) => TransitionHead::Intersect(xs.len()),
             TransitionView::Not(inner) => TransitionHead::Not(inner),
-            TransitionView::Append { transition, suffix } => {
-                TransitionHead::Append(transition, suffix.len())
+            TransitionView::Prepend { transition, prefix } => {
+                TransitionHead::Prepend(transition, prefix.len())
             }
         })
     }
@@ -991,21 +991,21 @@ impl TransitionId {
     #[verus_spec(result => ensures
         store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         store.errors_are_non_invariant() && store.valid_store() && self@ < store.graph().transitions.len()
-            && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) is Some
+            && transition_node_prefix(store.graph().transitions[self@ as int], index as nat) is Some
             ==> result is Ok && no_invariant_failure(result),
         store.errors_are_non_invalid_policy() && store.valid_store() && self@ < store.graph().transitions.len()
-            && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) is Some
+            && transition_node_prefix(store.graph().transitions[self@ as int], index as nat) is Some
             ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
         store.errors_are_resource() && store.valid_store() && self@ < store.graph().transitions.len()
-            && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) is Some
+            && transition_node_prefix(store.graph().transitions[self@ as int], index as nat) is Some
             ==> result is Ok && (result matches Err(error) ==> crate::spec::semantics::resource_error(error)),
         match result {
-        Ok(child) => self@ < store.graph().transitions.len() && transition_node_suffix(store.graph().transitions[self@ as int], index as nat) == Some(child@),
+        Ok(child) => self@ < store.graph().transitions.len() && transition_node_prefix(store.graph().transitions[self@ as int], index as nat) == Some(child@),
         Err(_) => true,
     })]
-    pub fn suffix_child<G: KernelStore>(self, store: &G, index: usize) -> KernelResult<RegexId> {
+    pub fn prefix_child<G: KernelStore>(self, store: &G, index: usize) -> KernelResult<RegexId> {
         match store.transition(self)? {
-            TransitionView::Append { suffix, .. } => match suffix.get(index) {
+            TransitionView::Prepend { prefix, .. } => match prefix.get(index) {
                 Some(value) => Ok(*value),
                 None => Err(HistoryError::normalization_invariant()),
             },
@@ -1115,7 +1115,7 @@ pub mod verify {
     pub struct RegexNode { pub kind: RegexKindNode, pub nullable: bool }
     pub enum TransitionNode {
         Const(nat), If(nat, nat, nat), Union(Seq<nat>), Intersect(Seq<nat>),
-        Not(nat), Append(nat, Seq<nat>),
+        Not(nat), Prepend(nat, Seq<nat>),
     }
     pub struct ConstantsModel {
         pub test_true: nat, pub test_false: nat,
@@ -1130,7 +1130,7 @@ pub mod verify {
     pub enum RegexHeadNode {
         Empty, All, Epsilon, Test(nat), Union(nat), Concat(nat), Star(nat), Intersect(nat), Not(nat),
     }
-    pub enum TransitionHeadNode { Const(nat), If(nat, nat, nat), Union(nat), Intersect(nat), Not(nat), Append(nat, nat) }
+    pub enum TransitionHeadNode { Const(nat), If(nat, nat, nat), Union(nat), Intersect(nat), Not(nat), Prepend(nat, nat) }
 
     impl PartialEqSpecImpl for super::Term {
         open spec fn obeys_eq_spec() -> bool { true }
@@ -1229,7 +1229,7 @@ pub mod verify {
                 TransitionView::Union(ids) => TransitionNode::Union(transition_ids(ids@)),
                 TransitionView::Intersect(ids) => TransitionNode::Intersect(transition_ids(ids@)),
                 TransitionView::Not(t) => TransitionNode::Not(t@),
-                TransitionView::Append { transition, suffix } => TransitionNode::Append(transition@, regex_ids(suffix@)),
+                TransitionView::Prepend { transition, prefix } => TransitionNode::Prepend(transition@, regex_ids(prefix@)),
             }
         }
     }
@@ -1277,7 +1277,7 @@ pub mod verify {
                 TransitionHead::Union(n) => TransitionHeadNode::Union(*n as nat),
                 TransitionHead::Intersect(n) => TransitionHeadNode::Intersect(*n as nat),
                 TransitionHead::Not(t) => TransitionHeadNode::Not(t@),
-                TransitionHead::Append(t, n) => TransitionHeadNode::Append(t@, *n as nat),
+                TransitionHead::Prepend(t, n) => TransitionHeadNode::Prepend(t@, *n as nat),
             }
         }
     }
@@ -1301,7 +1301,7 @@ pub mod verify {
         match node {
             TransitionNode::Const(r) => TransitionHeadNode::Const(r), TransitionNode::If(t, a, b) => TransitionHeadNode::If(t, a, b),
             TransitionNode::Union(cs) => TransitionHeadNode::Union(cs.len()), TransitionNode::Intersect(cs) => TransitionHeadNode::Intersect(cs.len()),
-            TransitionNode::Not(t) => TransitionHeadNode::Not(t), TransitionNode::Append(t, rs) => TransitionHeadNode::Append(t, rs.len()),
+            TransitionNode::Not(t) => TransitionHeadNode::Not(t), TransitionNode::Prepend(t, rs) => TransitionHeadNode::Prepend(t, rs.len()),
         }
     }
     pub open spec fn test_node_child(node: TestNode, i: nat) -> Option<nat> {
@@ -1313,8 +1313,8 @@ pub mod verify {
     pub open spec fn transition_node_child(node: TransitionNode, i: nat) -> Option<nat> {
         match node { TransitionNode::Union(cs) | TransitionNode::Intersect(cs) => if i < cs.len() { Some(cs[i as int]) } else { None }, _ => None }
     }
-    pub open spec fn transition_node_suffix(node: TransitionNode, i: nat) -> Option<nat> {
-        match node { TransitionNode::Append(_, cs) => if i < cs.len() { Some(cs[i as int]) } else { None }, _ => None }
+    pub open spec fn transition_node_prefix(node: TransitionNode, i: nat) -> Option<nat> {
+        match node { TransitionNode::Prepend(_, cs) => if i < cs.len() { Some(cs[i as int]) } else { None }, _ => None }
     }
 
     pub open spec fn bounded(cs: Seq<nat>, bound: nat) -> bool {
@@ -1348,7 +1348,7 @@ pub mod verify {
             TransitionNode::If(t, a, b) => t < g.tests.len() && a < bound && b < bound,
             TransitionNode::Union(cs) | TransitionNode::Intersect(cs) => bounded(cs, bound) && strictly_increasing(cs),
             TransitionNode::Not(t) => t < bound,
-            TransitionNode::Append(t, rs) => t < bound && bounded(rs, g.regexes.len()),
+            TransitionNode::Prepend(t, rs) => t < bound && bounded(rs, g.regexes.len()),
         }
     }
     pub open spec fn transition_node_wf(g: Graph, node: TransitionNode) -> bool { transition_node_wf_at(g, node, g.transitions.len()) }
@@ -1407,7 +1407,7 @@ pub mod verify {
                 TransitionNode::Union(cs) => Transition::Union(lift_transitions(g, cs, i)),
                 TransitionNode::Intersect(cs) => Transition::Intersect(lift_transitions(g, cs, i)),
                 TransitionNode::Not(t) => Transition::Not(Box::new(if t < i { lift_transition(g, t) } else { Transition::Const(Regex::Empty) })),
-                TransitionNode::Append(t, rs) => Transition::Append(
+                TransitionNode::Prepend(t, rs) => Transition::Prepend(
                     Box::new(if t < i { lift_transition(g, t) } else { Transition::Const(Regex::Empty) }), lift_regexes(g, rs)),
             }
         }
@@ -1583,7 +1583,7 @@ pub mod verify {
                 }
                 assert(lift_transitions(a, cs, i) =~= lift_transitions(b, cs, i));
             },
-            TransitionNode::Append(t, rs) => {
+            TransitionNode::Prepend(t, rs) => {
                 lemma_lift_transition_stable(a, b, t);
                 assert forall|j: int| 0 <= j < rs.len()
                     implies lift_regexes(a, rs)[j] == lift_regexes(b, rs)[j] by {
@@ -1620,7 +1620,7 @@ pub mod verify {
         assert forall|i: int| 0 <= i < a.transitions.len()
             implies transition_node_wf_at(b, #[trigger] a.transitions[i], i as nat) by {
             match a.transitions[i] {
-                TransitionNode::Append(_, rs) => {
+                TransitionNode::Prepend(_, rs) => {
                     assert forall|j: int| 0 <= j < rs.len() implies #[trigger] rs[j] < b.regexes.len() by {}
                 },
                 _ => {},

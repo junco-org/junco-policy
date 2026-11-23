@@ -6,14 +6,14 @@
 //!   suffices: for every non-sum node, the literal class and the product class coincide; an
 //!   intersection's class is the `N(&·)` closure of its operands' classes, which covers merged
 //!   leaves; a complement's class is the closure of the complemented operand class; a
-//!   concatenation's class is `N(v s)` for the values `v` of its body's class);
+//!   concatenation's class is `N(s v)` for the values `v` of its body's class);
 //! - a *sum class* [`ycls`] bounding its value through conditionals and unions only (exact for
 //!   conditional trees of leaves, used for the constant/test case (S1));
 //! - its values [`tval`]: what `TransitionId::interpret` may return, with every normalized union,
 //!   intersection, complement, and concatenation taken in the relations of `m_impl`;
 //! - the normal form [`nf_sum`]: conditionals and unions over products, each an intersection of
 //!   literals or a literal, a literal being a normal-form leaf, a complemented literal, or a
-//!   concatenation of a product with normal-form suffixes.
+//!   concatenation of a product with normal-form prefixes.
 //! The three relations are least fixpoints of one-step equations ([`lfp`]), unfolded by
 //! [`lemma_tcls`], [`lemma_ycls`], [`lemma_tval`]. [`lemma_sum_sound`] shows that the values of
 //! a normal-form transition are normalized unions of its class; [`lemma_succ_from_class`] turns
@@ -36,9 +36,9 @@ pub open spec fn cl(inter: bool, base: spec_fn(R) -> bool, v: R) -> bool {
     m_impl().built(inter, base, v)
 }
 
-/// `N(w s₁⋯sₙ)` for the lifted suffix ids `rs`.
+/// `N(s₁⋯sₙ w)` for the lifted prefix ids `rs`.
 pub open spec fn ccat(g: model::Graph, w: R, rs: Seq<nat>) -> R {
-    r_cat(seq![w] + model::lift_regexes(g, rs))
+    r_cat(model::lift_regexes(g, rs).push(w))
 }
 
 // ===== least fixpoints =====
@@ -107,7 +107,7 @@ pub open spec fn negs(c: Rel, t: nat, k: nat, w: R) -> bool {
     exists|x: R| k < t && c(k, x) && w == #[trigger] r_not(x)
 }
 
-pub open spec fn apps(g: model::Graph, c: Rel, t: nat, k: nat, rs: Seq<nat>, v: R) -> bool {
+pub open spec fn prepends(g: model::Graph, c: Rel, t: nat, k: nat, rs: Seq<nat>, v: R) -> bool {
     exists|w: R| k < t && c(k, w) && v == #[trigger] ccat(g, w, rs)
 }
 
@@ -120,7 +120,7 @@ pub open spec fn cls_step(g: model::Graph, c: Rel, t: nat, v: R) -> bool {
             model::TransitionNode::Union(cs) => rconst(v) || kids(c, t, cs, v),
             model::TransitionNode::Intersect(cs) => cl(true, |w: R| kids(c, t, cs, w), v),
             model::TransitionNode::Not(k) => cl(true, |w: R| negs(c, t, k, w), v),
-            model::TransitionNode::Append(k, rs) => rconst(v) || apps(g, c, t, k, rs, v),
+            model::TransitionNode::Prepend(k, rs) => rconst(v) || prepends(g, c, t, k, rs, v),
         }
     }
 }
@@ -179,7 +179,7 @@ pub open spec fn val_step(g: model::Graph, c: Rel, t: nat, v: R) -> bool {
             model::TransitionNode::Intersect(cs) =>
                 exists|vs: Seq<R>| #[trigger] kid_vals(c, t, cs, vs) && (core().nset)(true, vs.to_set(), v),
             model::TransitionNode::Not(k) => negs(c, t, k, v),
-            model::TransitionNode::Append(k, rs) => apps(g, c, t, k, rs, v),
+            model::TransitionNode::Prepend(k, rs) => prepends(g, c, t, k, rs, v),
         }
     }
 }
@@ -233,7 +233,7 @@ pub proof fn lemma_steps_mono(g: model::Graph)
                     }
                     lemma_cl_mono(true, |w: R| negs(a, t, k, w), |w: R| negs(b, t, k, w), v);
                 },
-                model::TransitionNode::Append(k, rs) => {
+                model::TransitionNode::Prepend(k, rs) => {
                     if !rconst(v) {
                         let w = choose|w: R| k < t && a(k, w) && v == #[trigger] ccat(g, w, rs);
                         assert(b(k, w));
@@ -284,7 +284,7 @@ pub proof fn lemma_steps_mono(g: model::Graph)
                     let x = choose|x: R| k < t && a(k, x) && v == #[trigger] r_not(x);
                     assert(b(k, x));
                 },
-                model::TransitionNode::Append(k, rs) => {
+                model::TransitionNode::Prepend(k, rs) => {
                     let w = choose|w: R| k < t && a(k, w) && v == #[trigger] ccat(g, w, rs);
                     assert(b(k, w));
                 },
@@ -326,7 +326,7 @@ pub open spec fn nf_lit(g: model::Graph, t: nat) -> bool
     t < g.transitions.len() && match g.transitions[t as int] {
         model::TransitionNode::Const(r) => r < g.regexes.len() && regex_nf(model::lift_regex(g, r)),
         model::TransitionNode::Not(c) => c < t && nf_lit(g, c),
-        model::TransitionNode::Append(c, rs) => c < t && nf_prod(g, c)
+        model::TransitionNode::Prepend(c, rs) => c < t && nf_prod(g, c)
             && model::bounded(rs, g.regexes.len()) && nats_nf(g, rs),
         _ => false,
     }
@@ -437,9 +437,9 @@ pub proof fn lemma_ccat_nf(g: model::Graph, w: R, rs: Seq<nat>)
     requires regex_nf(w), nats_nf(g, rs),
     ensures regex_nf(ccat(g, w, rs)),
 {
-    let s = seq![w] + model::lift_regexes(g, rs);
+    let s = model::lift_regexes(g, rs).push(w);
     assert forall|i: int| 0 <= i < s.len() implies regex_nf(#[trigger] s[i]) by {
-        if i > 0 { assert(s[i] == model::lift_regex(g, rs[i - 1])); }
+        if i < rs.len() { assert(s[i] == model::lift_regex(g, rs[i])); }
     }
     lemma_cat_nf(s);
 }
@@ -481,7 +481,7 @@ pub proof fn lemma_tcls_nf(g: model::Graph, t: nat, v: R)
             }
             lemma_cl_nf(true, base, v);
         },
-        model::TransitionNode::Append(c, rs) => {
+        model::TransitionNode::Prepend(c, rs) => {
             if !rconst(v) {
                 let w = choose|w: R| c < t && (tc(g))(c, w) && v == #[trigger] ccat(g, w, rs);
                 lemma_tcls_nf(g, c, w);
@@ -539,11 +539,11 @@ pub proof fn lemma_lit_sound(g: model::Graph, t: nat, v: R)
             assert(base(v));
             lemma_cl_base(true, base, v);
         },
-        model::TransitionNode::Append(c, rs) => {
+        model::TransitionNode::Prepend(c, rs) => {
             let w = choose|w: R| c < t && (tv(g))(c, w) && v == #[trigger] ccat(g, w, rs);
             lemma_prod_sound(g, c, w);
             lemma_ccat_nf(g, w, rs);
-            assert(apps(g, tc(g), t, c, rs, v));
+            assert(prepends(g, tc(g), t, c, rs, v));
         },
         _ => {},
     }
@@ -662,7 +662,7 @@ pub proof fn lemma_trans_stable(a: model::Graph, b: model::Graph, t: nat)
             }
         },
         model::TransitionNode::Not(k) => { lemma_trans_stable(a, b, k); },
-        model::TransitionNode::Append(k, rs) => {
+        model::TransitionNode::Prepend(k, rs) => {
             lemma_trans_stable(a, b, k);
             assert forall|j: int| 0 <= j < rs.len() implies #[trigger] model::lift_regex(a, rs[j]) == model::lift_regex(b, rs[j]) by {
                 model::lemma_lift_regex_stable(a, b, rs[j]);
@@ -675,7 +675,7 @@ pub proof fn lemma_trans_stable(a: model::Graph, b: model::Graph, t: nat)
             model::TransitionNode::Const(r) => {},
             model::TransitionNode::Union(cs) => {},
             model::TransitionNode::Intersect(cs) => {},
-            model::TransitionNode::Append(k, rs) => {
+            model::TransitionNode::Prepend(k, rs) => {
                 assert(model::bounded(rs, b.regexes.len())) by {
                     assert forall|j: int| 0 <= j < rs.len() implies #[trigger] rs[j] < b.regexes.len() by {}
                 }
@@ -689,7 +689,7 @@ pub proof fn lemma_trans_stable(a: model::Graph, b: model::Graph, t: nat)
     lemma_nf_stable_node(a, b, t);
 }
 
-/// The children of `t` (in both graphs) are stable, and so are its leaf and suffixes.
+/// The children of `t` (in both graphs) are stable, and so are its leaf and prefixes.
 pub open spec fn kids_stable(a: model::Graph, b: model::Graph, t: nat) -> bool {
     &&& t < a.transitions.len() && t < b.transitions.len() && a.transitions[t as int] == b.transitions[t as int]
     &&& match a.transitions[t as int] {
@@ -699,7 +699,7 @@ pub open spec fn kids_stable(a: model::Graph, b: model::Graph, t: nat) -> bool {
         model::TransitionNode::Union(cs) => forall|i: int| 0 <= i < cs.len() ==> cs[i] < t && #[trigger] stable_at(a, b, cs[i]),
         model::TransitionNode::Intersect(cs) => forall|i: int| 0 <= i < cs.len() ==> cs[i] < t && #[trigger] stable_at(a, b, cs[i]),
         model::TransitionNode::Not(k) => k < t && stable_at(a, b, k),
-        model::TransitionNode::Append(k, rs) => k < t && stable_at(a, b, k)
+        model::TransitionNode::Prepend(k, rs) => k < t && stable_at(a, b, k)
             && model::lift_regexes(a, rs) == model::lift_regexes(b, rs)
             && model::bounded(rs, a.regexes.len()) && model::bounded(rs, b.regexes.len()),
     }
@@ -764,13 +764,13 @@ pub proof fn lemma_tcls_stable_node(a: model::Graph, b: model::Graph, t: nat)
                     lemma_cl_mono(true, |w: R| negs(tc(b), t, k, w), |w: R| negs(tc(a), t, k, w), v);
                 }
             },
-            model::TransitionNode::Append(k, rs) => {
-                if apps(a, tc(a), t, k, rs, v) {
+            model::TransitionNode::Prepend(k, rs) => {
+                if prepends(a, tc(a), t, k, rs, v) {
                     let w = choose|w: R| k < t && (tc(a))(k, w) && v == #[trigger] ccat(a, w, rs);
                     assert(tcls(a, k, w) == tcls(b, k, w));
                     assert(ccat(a, w, rs) == ccat(b, w, rs));
                 }
-                if apps(b, tc(b), t, k, rs, v) {
+                if prepends(b, tc(b), t, k, rs, v) {
                     let w = choose|w: R| k < t && (tc(b))(k, w) && v == #[trigger] ccat(b, w, rs);
                     assert(tcls(a, k, w) == tcls(b, k, w));
                     assert(ccat(a, w, rs) == ccat(b, w, rs));
@@ -844,13 +844,13 @@ pub proof fn lemma_tval_stable_node(a: model::Graph, b: model::Graph, t: nat)
                     assert(tval(a, k, x) == tval(b, k, x));
                 }
             },
-            model::TransitionNode::Append(k, rs) => {
-                if apps(a, tv(a), t, k, rs, v) {
+            model::TransitionNode::Prepend(k, rs) => {
+                if prepends(a, tv(a), t, k, rs, v) {
                     let w = choose|w: R| k < t && (tv(a))(k, w) && v == #[trigger] ccat(a, w, rs);
                     assert(tval(a, k, w) == tval(b, k, w));
                     assert(ccat(a, w, rs) == ccat(b, w, rs));
                 }
-                if apps(b, tv(b), t, k, rs, v) {
+                if prepends(b, tv(b), t, k, rs, v) {
                     let w = choose|w: R| k < t && (tv(b))(k, w) && v == #[trigger] ccat(b, w, rs);
                     assert(tval(a, k, w) == tval(b, k, w));
                     assert(ccat(a, w, rs) == ccat(b, w, rs));
@@ -872,7 +872,7 @@ pub proof fn lemma_nf_stable_node(a: model::Graph, b: model::Graph, t: nat)
     let node = a.transitions[t as int];
     match node {
         model::TransitionNode::Const(r) => {},
-        model::TransitionNode::Append(k, rs) => {
+        model::TransitionNode::Prepend(k, rs) => {
             assert(nats_nf(a, rs) == nats_nf(b, rs)) by {
                 if nats_nf(a, rs) {
                     assert forall|j: int| 0 <= j < rs.len() implies regex_nf(#[trigger] model::lift_regex(b, rs[j])) by {

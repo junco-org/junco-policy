@@ -724,23 +724,23 @@ pub proof fn lemma_shapes_mono_m(m1: Model<R>, m2: Model<R>, a: R, v: R)
             lemma_built_mono(m1, m2, true, |w: R| m1.not_lit(a, w), |w: R| m2.not_lit(a, w), v);
         } else if m1.k(a) == Kind::Star {
             assert forall|w: R| #[trigger] m1.star_lit(a, w) implies m2.star_lit(a, w) by {
-                let b = choose|b: R| #[trigger] (m1.prod)((m1.body)(a), b) && w == m1.cat2(b, a);
+                let b = choose|b: R| #[trigger] (m1.prod)((m1.body)(a), b) && w == m1.cat2(a, b);
                 assert((m2.prod)((m2.body)(a), b));
-                assert(m1.cat2(b, a) == m2.cat2(b, a));
+                assert(m1.cat2(a, b) == m2.cat2(a, b));
             }
             lemma_built_mono(m1, m2, false, |w: R| m1.star_lit(a, w), |w: R| m2.star_lit(a, w), v);
         } else {
             assert forall|w: R| #[trigger] m1.list_lit(a, w) implies m2.list_lit(a, w) by {
                 let es = (m1.elems)(a);
                 assert(es == (m2.elems)(a));
-                if exists|i: int, b: R| 0 <= i < es.len() - 1 && #[trigger] (m1.prod)(es[i], b)
-                    && w == (m1.ncat)(seq![b] + es.skip(i + 1)) {
-                    let (i, b) = choose|i: int, b: R| 0 <= i < es.len() - 1 && #[trigger] (m1.prod)(es[i], b)
-                        && w == (m1.ncat)(seq![b] + es.skip(i + 1));
+                if exists|i: int, b: R| 0 < i < es.len() && #[trigger] (m1.prod)(es[i], b)
+                    && w == (m1.ncat)(es.take(i).push(b)) {
+                    let (i, b) = choose|i: int, b: R| 0 < i < es.len() && #[trigger] (m1.prod)(es[i], b)
+                        && w == (m1.ncat)(es.take(i).push(b));
                     assert((m2.prod)(es[i], b));
                 } else {
-                    assert((m1.lit)(es.last(), w));
-                    assert((m2.lit)(es.last(), w));
+                    assert((m1.lit)(es[0], w));
+                    assert((m2.lit)(es[0], w));
                 }
             }
             lemma_built_mono(m1, m2, false, |w: R| m1.list_lit(a, w), |w: R| m2.list_lit(a, w), v);
@@ -761,8 +761,8 @@ pub proof fn lemma_shapes_mono_m(m1: Model<R>, m2: Model<R>, a: R, v: R)
         } else {
             if (m1.lit)(a, v) {
             } else {
-                assert((m1.prod)((m1.elems)(a).last(), v));
-                assert((m2.prod)((m2.elems)(a).last(), v));
+                assert((m1.prod)((m1.elems)(a)[0], v));
+                assert((m2.prod)((m2.elems)(a)[0], v));
             }
         }
     }

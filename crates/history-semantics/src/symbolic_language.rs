@@ -204,8 +204,8 @@ impl SymbolicLanguage {
         Ok(read(kernel.test(test)?))
     }
 
-    /// The derivative of `residual`, with the primitives of the positive atoms it tests in the
-    /// order of the truth bits that [`SymbolicLanguage::successor`] takes.
+    /// The right derivative of `residual`. The positive atoms are in truth-bit order for
+    /// [`SymbolicLanguage::successor`]. Drive successive derivatives with the newest event first.
     #[verus_verify]
     #[verus_spec(result => requires language_wf(*old(self)),
         ensures language_wf(*final(self)), frame(*old(self), *final(self)),
@@ -667,7 +667,7 @@ pub mod verify {
                 assert(language::interp_transition(model::gsem(theta), e1, model::lift_transition(g, id))
                     == language::interp_transition(model::gsem(theta), e2, model::lift_transition(g, id)));
             },
-            model::TransitionNode::Not(child) | model::TransitionNode::Append(child, _) => {
+            model::TransitionNode::Not(child) | model::TransitionNode::Prepend(child, _) => {
                 assert(reach::transition_edges(g, id)[0] == child);
                 assert(language::interp_transition(model::gsem(theta), e1, model::lift_transition(g, child))
                     == language::interp_transition(model::gsem(theta), e2, model::lift_transition(g, child)));
@@ -877,8 +877,8 @@ pub mod verify {
             theta.len() <= history_syntax::MAX_ARITY
             && (forall|p: model::Primitive| atom_primitives(l, t).contains(p)
                 ==> model::primitive_holds(theta, p, e1) == model::primitive_holds(theta, p, e2))
-            implies language::numeric_lang(model::gsem(theta), abs(l, q), seq![e1] + w)
-                == language::numeric_lang(model::gsem(theta), abs(l, q), seq![e2] + w) by {
+            implies language::numeric_lang(model::gsem(theta), abs(l, q), w.push(e1))
+                == language::numeric_lang(model::gsem(theta), abs(l, q), w.push(e2)) by {
             theta.lemma_cardinality_of_set();
             theta.to_set_ensures();
             let values = theta.to_set();
@@ -907,10 +907,10 @@ pub mod verify {
                 enc::lemma_test_rename(model::lift_test(g, id), theta, f, fixed.to_iset(), ISet::full(), e2);
             }
             lemma_transition_lang_atoms(g, t, ft, fe1, fe2, fw);
-            let u1 = seq![e1] + w;
-            let u2 = seq![e2] + w;
-            let v1 = seq![fe1] + fw;
-            let v2 = seq![fe2] + fw;
+            let u1 = w.push(e1);
+            let u2 = w.push(e2);
+            let v1 = fw.push(fe1);
+            let v2 = fw.push(fe2);
             assert(junco_core::verify::encoding::pointwise(u1, v1, enc::n_renamed(f, ISet::full())));
             assert(junco_core::verify::encoding::pointwise(u2, v2, enc::n_renamed(f, ISet::full())));
             enc::lemma_lang_rename(abs(l, q), theta, f, fixed.to_iset(), ISet::full(), u1, v1);

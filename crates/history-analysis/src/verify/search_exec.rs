@@ -245,7 +245,7 @@ pub(crate) open spec fn letter_chain(items: Seq<Item>, j: int) -> Seq<Letter>
     if j < 0 || j >= items.len() { Seq::empty() }
     else { match items[j].parent {
         None => Seq::empty(),
-        Some((p, l)) => if p < j { letter_chain(items, p as int).push(l) }
+        Some((p, l)) => if p < j { seq![l] + letter_chain(items, p as int) }
             else { Seq::empty() },
     } }
 }
@@ -309,9 +309,8 @@ pub(crate) open spec fn alphabet_chain(items: Seq<Item>, alphabets: Map<nat, Set
     else { match items[j].parent {
         None => Seq::empty(),
         Some((p, _)) => if p < j {
-            alphabet_chain(items, alphabets, p as int).push(
-                if alphabets.dom().contains(p as nat) { alphabets[p as nat] }
-                else { Set::empty() })
+            seq![if alphabets.dom().contains(p as nat) { alphabets[p as nat] }
+                else { Set::empty() }] + alphabet_chain(items, alphabets, p as int)
         } else { Seq::empty() },
     } }
 }
@@ -350,12 +349,12 @@ pub(crate) proof fn lemma_chain_correspondence(g: model::Graph,
     if let Some((p,l)) = items[j].parent {
         assert(depth(items,j) == depth(items,p as int) + 1);
         lemma_chain_correspondence(g,table,items,alphabets,p as int,(fuel-1) as nat);
-        let prefix = letter_chain(items,p as int);
+        let suffix = letter_chain(items,p as int);
         let fields = alphabet_chain(items,alphabets,p as int);
         let atoms = if alphabets.dom().contains(p as nat) { alphabets[p as nat] }
             else { Set::empty() };
-        assert(chain_assignments(prefix.push(l),fields.push(atoms)) =~=
-            chain_assignments(prefix,fields).push(implementation::letter_assignment(l@,atoms)));
+        assert(chain_assignments(seq![l] + suffix,seq![atoms] + fields) =~=
+            seq![implementation::letter_assignment(l@,atoms)] + chain_assignments(suffix,fields));
     }
 }
 
@@ -429,7 +428,7 @@ pub(crate) proof fn lemma_nodes_successor(g: model::Graph,table: Seq<implementat
 {
     lemma_nodes_push(g,table,items,alphabets,item);
     assert(letter_chain(items.push(item),items.len() as int)
-        == letter_chain(items.push(item),p as int).push(l));
+        == seq![l] + letter_chain(items.push(item),p as int));
     assert(impl_nodes(g,table,items.push(item),alphabets) =~=
         impl_nodes(g,table,items,alphabets).push(paper::Node {
             item:impl_item(g,table,item),depth:depth(items,p as int)+1,
@@ -1514,12 +1513,12 @@ pub(crate) proof fn lemma_resolved_successor(l: SymbolicLanguage,q: RegexId,t: j
     lemma_truth_realizes(facade::graph(l),facade::atom_ids(l,t),atoms,letter,words);
     assert forall|theta: Subst,e: EventView,w: Seq<EventView>| language::event_wf(theta,theta.len())
         && paper::realizes(theta,e,implementation::letter_assignment(letter@,atom_set(atoms))) implies
-        encoding::n_lang(theta,facade::abs(l,v),w) == encoding::n_lang(theta,facade::abs(l,q),seq![e]+w) by {
+        encoding::n_lang(theta,facade::abs(l,v),w) == encoding::n_lang(theta,facade::abs(l,q),w.push(e)) by {
         assert(symbolic::truth_words_realize(facade::graph(l),facade::atom_ids(l,t),words,theta,e));
         assert(model::regex_lang(facade::graph(l),theta,v@,w)
             == history_semantics::normalize_verify::transition_lang(facade::graph(l),theta,t,e,w));
         assert(history_semantics::normalize_verify::transition_lang(facade::graph(l),theta,t,e,w)
-            == model::regex_lang(facade::graph(l),theta,q@,seq![e]+w));
+            == model::regex_lang(facade::graph(l),theta,q@,w.push(e)));
     }
 }
 
@@ -1740,14 +1739,17 @@ pub(crate) proof fn lemma_chain_ready(s: Search<'_>,j: int,final_constraint: imp
         lemma_letter_coherent_strengthen(final_constraint,gamma,l@,s.alphabets@[p as nat]);
         let letters = letter_chain(s.items@,p as int);
         let alphabets = alphabet_chain(s.items@,s.alphabets@,p as int);
-        assert(letter_chain(s.items@,j) == letters.push(l));
-        assert(alphabet_chain(s.items@,s.alphabets@,j) == alphabets.push(s.alphabets@[p as nat]));
+        assert(letter_chain(s.items@,j) == seq![l] + letters);
+        assert(alphabet_chain(s.items@,s.alphabets@,j) == seq![s.alphabets@[p as nat]] + alphabets);
         assert forall|k: int| 0 <= k < letter_chain(s.items@,j).len() implies
             crate::verify::reconstruction::letter_coherent(final_constraint,letter_chain(s.items@,j)[k]@,
                 alphabet_chain(s.items@,s.alphabets@,j)[k])
             && letter_numeric_codes(s.vocabulary@,*s.universes,letter_chain(s.items@,j)[k]@,
                 alphabet_chain(s.items@,s.alphabets@,j)[k]) by {
-            if k < letters.len() { assert(letters.push(l)[k] == letters[k]); }
+            if k > 0 {
+                assert(letter_chain(s.items@,j)[k] == letters[k-1]);
+                assert(alphabet_chain(s.items@,s.alphabets@,j)[k] == alphabets[k-1]);
+            }
         }
     }
 }

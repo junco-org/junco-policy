@@ -3,7 +3,7 @@
 
 //! Exact numeric symbolic derivatives and iterative transition-DAG interpretation.
 //! Existing ID extension traits own cache lookup and branch execution; finish tasks
-//! precede reverse child scheduling so each LIFO traversal preserves source order.
+//! precede their dependencies on the LIFO work stack.
 //! Error provenance is conditional on store capabilities; finishing tasks require completed dependencies.
 
 use crate::WorkVec;
@@ -96,10 +96,11 @@ impl DerivativeFactors {
             old(tasks).view().is_prefix_of(final(tasks).view()),
             final(tasks).view().len() <= old(tasks).view().len() + self.count,
             result is Ok && !self.concat ==> final(tasks).view().len() == old(tasks).view().len() + self.count,
-            result is Ok ==> forall|i: nat| i < self.count && (!self.concat || #[trigger] derivative_prefix(store.graph(), self.root, i))
-                ==> old(tasks).view().len() + i < final(tasks).view().len(),
+            result is Ok && self.concat ==> forall|i: int| 0 <= i < self.count
+                && #[trigger] derivative_suffix(store.graph(), self.root, (i + 1) as nat)
+                ==> old(tasks).view().len() + self.count - 1 - i < final(tasks).view().len(),
             forall|j: int| #![trigger final(tasks).view()[j]] old(tasks).view().len() <= j < final(tasks).view().len() ==> final(tasks).view()[j].0@
-                == derivative_children_ids(store.graph(), self.root)[j - old(tasks).view().len()] && !final(tasks).view()[j].1,
+                == derivative_schedule_order(store.graph(), self.root)[j - old(tasks).view().len()] && !final(tasks).view()[j].1,
     )]
     fn schedule<G: KernelStore>(
         self,
@@ -107,84 +108,78 @@ impl DerivativeFactors {
         tasks: &mut WorkVec<(RegexId, bool)>,
     ) -> KernelResult<()> {
         proof! { model::lemma_graph_regex_wf(store.graph(), self.root@); }
-        let mut prefix = true;
+        let mut active = true;
         let mut failure = None;
-        let mut i = 0;
+        let mut k = 0;
         proof_decl! { let ghost start = tasks.view(); }
-        #[cfg_attr(verus_keep_ghost, verus_spec(invariant i <= self.count, derivative_tasks_wf(store.graph(), tasks.view()),
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant k <= self.count, derivative_tasks_wf(store.graph(), tasks.view()),
             model::graph_wf(store.graph()), derivative_factors_wf(store.graph(), self.root, self.count as nat, self.concat),
             store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
             store.errors_are_non_invariant() && store.valid_store() ==> (failure matches Some(error) ==> language::no_invariant_failure::<()>(Err(error))),
             store.errors_are_resource() && store.valid_store() ==> (failure matches Some(error) ==> resource_error(error)),
             store.errors_are_non_invalid_policy() && store.valid_store() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
             model::regex_node_wf_at(store.graph(), store.graph().regexes[self.root@ as int], self.root@),
-            prefix == derivative_prefix(store.graph(), self.root, i as nat),
             start == old(tasks).view(), start.is_prefix_of(tasks.view()),
             tasks.view().len() <= start.len() + self.count,
             forall|j: int| #![trigger tasks.view()[j]] start.len() <= j < tasks.view().len() ==> tasks.view()[j].0@
-                == derivative_children_ids(store.graph(), self.root)[j - start.len()] && !tasks.view()[j].1,
-            forall|j: nat| j < i && (!self.concat || #[trigger] derivative_prefix(store.graph(), self.root, j))
-                ==> start.len() + j < tasks.view().len(),
-            invariant_except_break failure is None, tasks.view().len() <= start.len() + i,
-                (!self.concat || prefix) ==> tasks.view().len() == start.len() + i,
-            ensures failure is None ==> i == self.count
-                && tasks.view().len() <= start.len() + self.count,
-            failure is None && !self.concat ==> tasks.view().len() == start.len() + self.count,
-            failure is None ==> forall|j: nat| j < self.count
-                && (!self.concat || #[trigger] derivative_prefix(store.graph(), self.root, j))
-                ==> start.len() + j < tasks.view().len(),
-            decreases self.count - i))]
-        while i < self.count {
-            let child = loop_try!(self.root.child(store, i), failure);
+                == derivative_schedule_order(store.graph(), self.root)[j - start.len()] && !tasks.view()[j].1,
+            invariant_except_break failure is None, tasks.view().len() == start.len() + k,
+                active == (!self.concat || derivative_suffix(store.graph(), self.root, (self.count - k) as nat)),
+            ensures failure is None ==> tasks.view().len() == start.len() + k && (k == self.count || self.concat
+                && !derivative_suffix(store.graph(), self.root, (self.count - k) as nat)),
+            decreases self.count - k))]
+        while k < self.count && active {
+            let index = if self.concat { self.count - 1 - k } else { k };
+            let child = loop_try!(self.root.child(store, index), failure);
             proof_decl! { let ghost prior = tasks.view(); }
-            if !self.concat || prefix {
-                tasks.push((child, false));
-            }
+            tasks.push((child, false));
             proof! {
+                assert(child@ == derivative_children_ids(store.graph(), self.root)[index as int]);
+                assert(child@ == derivative_schedule_order(store.graph(), self.root)[k as int]);
                 assert forall|j: int| #![trigger tasks.view()[j]] start.len() <= j < tasks.view().len() implies tasks.view()[j].0@
-                    == derivative_children_ids(store.graph(), self.root)[j - start.len()] && !tasks.view()[j].1 by {
-                    if j < prior.len() { assert(tasks.view()[j] == prior[j]); } else {
-                        assert(j == start.len() + i);
-                        assert(child@ == derivative_children_ids(store.graph(), self.root)[i as int]);
-                    }
+                    == derivative_schedule_order(store.graph(), self.root)[j - start.len()] && !tasks.view()[j].1 by {
+                    if j < prior.len() { assert(tasks.view()[j] == prior[j]); }
                 }
             }
-            let n = loop_try!(RegexId::nullable(child, store), failure);
-            prefix &= n;
-            i = i.saturating_add(1);
+            if self.concat {
+                active = loop_try!(RegexId::nullable(child, store), failure);
+                proof! { assert(active == derivative_suffix(store.graph(), self.root, index as nat)); }
+            }
+            k += 1;
         }
         if let Some(error) = failure {
             return Err(error);
         }
         proof! {
-            assert(start == old(tasks).view());
-            assert(i == self.count);
-            if !self.concat { assert(tasks.view().len() == start.len() + self.count); }
-            assert forall|j: nat| j < self.count
-                && (!self.concat || #[trigger] derivative_prefix(store.graph(), self.root, j))
-                implies old(tasks).view().len() + j < tasks.view().len() by {}
+            assert forall|i: int| self.concat && 0 <= i < self.count
+                && #[trigger] derivative_suffix(store.graph(), self.root, (i + 1) as nat) implies
+                start.len() + self.count - 1 - i < tasks.view().len() by {
+                if i < self.count - k {
+                    assert(derivative_suffix(store.graph(), self.root, (self.count - k) as nat));
+                }
+            }
         }
         Ok(())
     }
     #[verus_verify]
     #[verus_spec(result =>
-        requires model::graph_wf(store.graph()), start <= self.count,
+        requires model::graph_wf(store.graph()),
             self.root@ < store.graph().regexes.len(), self.count == derivative_children_ids(store.graph(), self.root).len(),
         ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
             store.errors_are_non_invariant() && store.valid_store() ==> language::no_invariant_failure(result),
             store.errors_are_resource() && store.valid_store() ==> (result matches Err(error) ==> resource_error(error)),
             store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-            match result { Ok(suffix) =>
-            norm::regex_ids_valid(store.graph(), suffix.view())
-            && model::regex_ids(suffix.view()) == derivative_children_ids(store.graph(), self.root).subrange(start as int, self.count as int),
+            match result { Ok(children) =>
+            norm::regex_ids_valid(store.graph(), children.view())
+            && model::regex_ids(children.view()) == derivative_children_ids(store.graph(), self.root),
             Err(_) => true },
     )]
-    fn suffix<G: KernelStore>(self, store: &G, start: usize) -> KernelResult<WorkVec<RegexId>> {
+    fn children<G: KernelStore>(self, store: &G) -> KernelResult<WorkVec<RegexId>> {
         proof! { model::lemma_graph_regex_wf(store.graph(), self.root@); }
-        let mut suffix = WorkVec::new();
+        let mut children = WorkVec::new();
         let mut failure = None;
-        let mut i = start;
-        #[cfg_attr(verus_keep_ghost, verus_spec(invariant start <= i <= self.count,
+        let mut i = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant i <= self.count,
             model::graph_wf(store.graph()), self.root@ < store.graph().regexes.len(),
             store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
             store.errors_are_non_invariant() && store.valid_store() ==> (failure matches Some(error) ==> language::no_invariant_failure::<()>(Err(error))),
@@ -192,25 +187,25 @@ impl DerivativeFactors {
             store.errors_are_non_invalid_policy() && store.valid_store() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
             self.count == derivative_children_ids(store.graph(), self.root).len(),
             model::regex_node_wf_at(store.graph(), store.graph().regexes[self.root@ as int], self.root@),
-            norm::regex_ids_valid(store.graph(), suffix.view()),
-            suffix.view().len() == i - start,
-            forall|j: int| 0 <= j < suffix.view().len() ==> suffix.view()[j]@ == derivative_children_ids(store.graph(), self.root)[start as int + j],
+            norm::regex_ids_valid(store.graph(), children.view()),
+            children.view().len() == i,
+            forall|j: int| 0 <= j < children.view().len() ==> children.view()[j]@ == derivative_children_ids(store.graph(), self.root)[j],
             ensures failure.is_none() ==> i == self.count, decreases self.count - i))]
         while i < self.count {
-            proof_decl! { let ghost prior_suffix = suffix.view(); }
+            proof_decl! { let ghost prior_children = children.view(); }
             let child = loop_try!(self.root.child(store, i), failure);
-            suffix.push(child);
+            children.push(child);
             proof! {
                 assert(child@ == derivative_children_ids(store.graph(), self.root)[i as int]);
-                assert(suffix.view() == prior_suffix.push(child));
-                assert forall|j: int| 0 <= j < suffix.view().len() implies
-                    model::regex_ids(suffix.view())[j] == derivative_children_ids(store.graph(), self.root)[start as int + j] by {
-                    if j < prior_suffix.len() {
-                        assert(suffix.view()[j] == prior_suffix[j]);
-                        assert(prior_suffix[j]@ == derivative_children_ids(store.graph(), self.root)[start as int + j]);
-                    } else { assert(suffix.view()[j] == child); assert(start + j == i); }
+                assert(children.view() == prior_children.push(child));
+                assert forall|j: int| 0 <= j < children.view().len() implies
+                    model::regex_ids(children.view())[j] == derivative_children_ids(store.graph(), self.root)[j] by {
+                    if j < prior_children.len() {
+                        assert(children.view()[j] == prior_children[j]);
+                        assert(prior_children[j]@ == derivative_children_ids(store.graph(), self.root)[j]);
+                    } else { assert(children.view()[j] == child); assert(j == i); }
                 }
-                assert(model::regex_ids(suffix.view()) =~= derivative_children_ids(store.graph(), self.root).subrange(start as int, i as int + 1));
+                assert(model::regex_ids(children.view()) =~= derivative_children_ids(store.graph(), self.root).take(i as int + 1));
             }
             i = i.saturating_add(1);
         }
@@ -218,9 +213,9 @@ impl DerivativeFactors {
             return Err(error);
         }
         proof! {
-            assert(model::regex_ids(suffix.view()) =~= derivative_children_ids(store.graph(), self.root).subrange(start as int, self.count as int));
+            assert(model::regex_ids(children.view()) =~= derivative_children_ids(store.graph(), self.root));
         }
-        Ok(suffix)
+        Ok(children)
     }
     #[verus_verify]
     #[verus_spec(result =>
@@ -228,7 +223,8 @@ impl DerivativeFactors {
             derivative_cache_wf(old(store).graph(), cache@),
             derivative_factors_wf(old(store).graph(), self.root, self.count as nat, self.concat), index < self.count,
             derivative_results(old(store).graph(), self.root, self.concat, index as nat, old(results).view()),
-            prefix == derivative_prefix(old(store).graph(), self.root, index as nat),
+            self.concat ==> model::regex_ids(old(prefix).view()) == derivative_children_ids(old(store).graph(), self.root).take(self.count - index)
+                && derivative_suffix(old(store).graph(), self.root, (self.count - index) as nat),
             fder::results_bound(old(store).graph(), self.root@, old(results).view()),
             derivative_results_vocab(old(store).graph(), self.root@, old(results).view()),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
@@ -247,7 +243,8 @@ impl DerivativeFactors {
             derivative_cache_wf(final(store).graph(), cache@),
             derivative_dependencies_complete(old(store).graph(), self.root, cache@)
                 == derivative_dependencies_complete(final(store).graph(), self.root, cache@),
-            match result { Ok(next) => next == derivative_prefix(final(store).graph(), self.root, index as nat + 1)
+            match result { Ok(next) => next == (!self.concat || derivative_suffix(final(store).graph(), self.root, (self.count - index - 1) as nat))
+                && (self.concat ==> model::regex_ids(final(prefix).view()) == derivative_children_ids(final(store).graph(), self.root).take(self.count - index - 1))
                 && derivative_results(final(store).graph(), self.root, self.concat, index as nat + 1, final(results).view())
                 && fder::results_bound(final(store).graph(), self.root@, final(results).view()), Err(_) => true },
             result is Ok ==> derivative_results_vocab(final(store).graph(), self.root@, final(results).view()),
@@ -258,66 +255,81 @@ impl DerivativeFactors {
         cache: &[Option<TransitionId>],
         index: usize,
         results: &mut WorkVec<TransitionId>,
-        prefix: bool,
+        prefix: &mut WorkVec<RegexId>,
     ) -> KernelResult<bool> {
         proof_decl! { let ghost before = store.graph(); let ghost prior_results = results.view(); }
         proof! { derivative_frame(store.graph()); model::lemma_graph_regex_wf(store.graph(), self.root@); }
         proof! { derivative_dependency_frame(store.graph(), self.root); }
         store.checkpoint()?;
-        let child = self.root.child(store, index)?;
-        if !self.concat || prefix {
+        let pos = if self.concat { self.count - 1 - index } else { index };
+        let child = if self.concat {
             proof! {
-                assert(derivative_children_ids(store.graph(), self.root)[index as int] == child@);
-                assert(derivative_dependency(store.graph(), self.root, child@));
+                norm::regex_ids_shape(prefix.view());
+                assert(prefix.view().len() == self.count - index);
             }
-            let d = RegexId::cached(cache, child)?;
-            proof! {
-                derivative_cached_bound(store.graph(), cache@, child, d);
-                lemma_regex_graph_child_vocab(store.graph(), self.root@, child@);
+            match prefix.pop() {
+                Some(child) => child,
+                None => return Err(HistoryError::symbolic_invariant()),
             }
-            if self.concat {
-                let start = match index.checked_add(1) {
-                    Some(v) => v,
-                    None => return Err(HistoryError::symbolic_invariant()),
-                };
-                let suffix = self.suffix(store, start)?;
-                proof_decl! { let ghost mid = store.graph(); }
-                results.push(TransitionId::append(d, store, &suffix)?);
-                proof! {
-                    derivative_append_factor(store.graph(), self.root, index as int, d, suffix.view(), results.view().last());
-                    derivative_results_push(store.graph(), self.root, true, index as nat, prior_results, results.view().last());
-                    fder::lemma_factor_concat2(mid, store.graph(), self.root@, index as int, d@, suffix.view(), results.view().last()@);
-                    fder::lemma_results_stable(before, store.graph(), self.root@, prior_results);
-                    fder::lemma_results_push(store.graph(), self.root@, prior_results, results.view().last());
-                    lemma_derivative_vocab_stable(mid, store.graph(), child@, d@);
-                    lemma_regex_graph_child_vocab(store.graph(), self.root@, child@);
-                    norm::lemma_guard_definition(store.graph(), d@);
-                    norm::lemma_guard_definition(store.graph(), results.view().last()@);
-                    assert(derivative_vocab(store.graph(), self.root@, results.view().last()@));
-                    lemma_derivative_results_vocab_stable(before, store.graph(), self.root@, prior_results);
-                    assert(derivative_results_vocab(store.graph(), self.root@, results.view()));
-                }
-            } else {
-                results.push(d);
-                proof! {
-                    derivative_results_push(store.graph(), self.root, false, index as nat, prior_results, d);
-                    fder::lemma_factor_set(store.graph(), self.root@, index as int, d@);
-                    fder::lemma_results_stable(before, store.graph(), self.root@, prior_results);
-                    fder::lemma_results_push(store.graph(), self.root@, prior_results, d);
-                    assert(derivative_vocab(store.graph(), self.root@, d@));
-                    assert(derivative_results_vocab(store.graph(), self.root@, results.view()));
-                }
-            }
-        }
+        } else {
+            self.root.child(store, pos)?
+        };
         proof! {
-            if self.concat && !prefix {
-                derivative_results_skip(store.graph(), self.root, index as nat, results.view());
-                fder::lemma_results_stable(before, store.graph(), self.root@, results.view());
-                lemma_derivative_results_vocab_stable(before, store.graph(), self.root@, results.view());
+            let cs = derivative_children_ids(store.graph(), self.root);
+            if self.concat {
+                norm::regex_ids_shape(old(prefix).view());
+                norm::regex_ids_shape(prefix.view());
+                assert(model::regex_ids(prefix.view()) =~= cs.take(pos as int));
+                assert(old(prefix).view()[pos as int] == child);
+                assert(model::regex_ids(old(prefix).view()) == cs.take(pos as int + 1));
+                assert(model::regex_ids(old(prefix).view())[pos as int] == child@);
+                assert(cs.take(pos as int + 1)[pos as int] == cs[pos as int]);
+                assert forall|j: int| 0 <= j < prefix.view().len() implies prefix.view()[j]@ < store.graph().regexes.len() by {
+                    assert(model::regex_ids(prefix.view())[j] == cs.take(pos as int)[j]);
+                    assert(prefix.view()[j]@ == cs[j]);
+                }
             }
+            assert(child@ == cs[pos as int]);
+            assert(cs.contains(child@));
+            assert(derivative_dependency(store.graph(), self.root, child@));
         }
-        let n = RegexId::nullable(child, store)?;
-        Ok(prefix && n)
+        let d = RegexId::cached(cache, child)?;
+        proof! {
+            derivative_cached_bound(store.graph(), cache@, child, d);
+            lemma_regex_graph_child_vocab(store.graph(), self.root@, child@);
+        }
+        if self.concat {
+            proof_decl! { let ghost mid = store.graph(); }
+            results.push(TransitionId::prepend(d, store, prefix)?);
+            proof! {
+                derivative_prepend_factor(store.graph(), self.root, pos as int, d, prefix.view(), results.view().last());
+                derivative_results_push(store.graph(), self.root, true, index as nat, prior_results, results.view().last());
+                fder::lemma_factor_concat2(mid, store.graph(), self.root@, pos as int, d@, prefix.view(), results.view().last()@);
+                fder::lemma_results_stable(before, store.graph(), self.root@, prior_results);
+                fder::lemma_results_push(store.graph(), self.root@, prior_results, results.view().last());
+                lemma_derivative_vocab_stable(mid, store.graph(), child@, d@);
+                lemma_regex_graph_child_vocab(store.graph(), self.root@, child@);
+                norm::lemma_guard_definition(store.graph(), d@);
+                norm::lemma_guard_definition(store.graph(), results.view().last()@);
+                assert(derivative_vocab(store.graph(), self.root@, results.view().last()@));
+                lemma_derivative_results_vocab_stable(before, store.graph(), self.root@, prior_results);
+                assert(derivative_results_vocab(store.graph(), self.root@, results.view()));
+            }
+            let next = RegexId::nullable(child, store)?;
+            proof! { assert(next == derivative_suffix(store.graph(), self.root, pos as nat)); }
+            Ok(next)
+        } else {
+            results.push(d);
+            proof! {
+                derivative_results_push(store.graph(), self.root, false, index as nat, prior_results, d);
+                fder::lemma_factor_set(store.graph(), self.root@, pos as int, d@);
+                fder::lemma_results_stable(before, store.graph(), self.root@, prior_results);
+                fder::lemma_results_push(store.graph(), self.root@, prior_results, d);
+                assert(derivative_vocab(store.graph(), self.root@, d@));
+                assert(derivative_results_vocab(store.graph(), self.root@, results.view()));
+            }
+            Ok(true)
+        }
     }
     verus! {
     #[verus_verify]
@@ -364,9 +376,14 @@ impl DerivativeFactors {
         proof! { derivative_frame(store.graph()); fder::lemma_results_empty(store.graph(), self.root@); }
         proof! { derivative_dependency_frame(entry, self.root); }
         let mut results = WorkVec::new();
+        let mut prefix = if self.concat { self.children(store)? } else { WorkVec::new() };
+        proof! {
+            let cs = derivative_children_ids(store.graph(), self.root);
+            assert(cs.take(self.count as int) =~= cs);
+        }
         let mut state = Ok(true);
-        scan!(state,index,self.count,state.is_ok(),prior=>self.child_step(store,cache,index,&mut results,prior);
-            invariant index <= self.count, model::graph_extends(entry, store.graph()), model::graph_wf(store.graph()), store.valid_store(),
+        let mut index = 0;
+        #[cfg_attr(verus_keep_ghost, verus_spec(invariant index <= self.count, model::graph_extends(entry, store.graph()), model::graph_wf(store.graph()), store.valid_store(),
                 store.restoration() == old(store).restoration(),
                 store.errors_are_non_owner() == old(store).errors_are_non_owner(),
                 store.errors_are_non_invariant() == old(store).errors_are_non_invariant(),
@@ -382,13 +399,21 @@ impl DerivativeFactors {
                 derivative_cache_wf(store.graph(), cache@), derivative_factors_wf(store.graph(), self.root, self.count as nat, self.concat),
                 store.graph().regexes[self.root@ as int] == entry.regexes[self.root@ as int],
                 derivative_dependencies_complete(entry, self.root, cache@) == derivative_dependencies_complete(store.graph(), self.root, cache@),
-                match state { Ok(prefix) => prefix == derivative_prefix(store.graph(), self.root, index as nat)
+                match state { Ok(active) => active == (!self.concat || derivative_suffix(store.graph(), self.root, (self.count - index) as nat))
+                    && (self.concat ==> model::regex_ids(prefix.view()) == derivative_children_ids(store.graph(), self.root).take(self.count - index))
                     && derivative_results(store.graph(), self.root, self.concat, index as nat, results.view())
                     && fder::results_bound(store.graph(), self.root@, results.view()), Err(_) => true },
                 state is Ok ==> derivative_results_vocab(store.graph(), self.root@, results.view()),
-            decreases self.count - index);
+            decreases self.count - index))]
+        while index < self.count && matches!(state, Ok(true)) {
+            state = self.child_step(store, cache, index, &mut results, &mut prefix);
+            index += 1;
+        }
         state?;
         proof! {
+            if index < self.count {
+                derivative_results_stop(store.graph(), self.root, index as nat, results.view());
+            }
             derivative_frame(store.graph());
             derivative_result_future(store.graph(), self.root, self.concat, intersect, results.view());
             fder::lemma_derive_future(store.graph(), self.root@, results.view(), intersect);
@@ -495,7 +520,9 @@ impl DerivativeFactors {
                             let i = j - old(tasks).view().len() - 1;
                             assert(0 <= i < self.count);
                             assert(i < derivative_children_ids(store.graph(), self.root).len());
-                            assert(tasks.view()[j].0@ == derivative_children_ids(store.graph(), self.root)[i]);
+                            let pos = if self.concat { self.count - 1 - i } else { i };
+                            assert(tasks.view()[j].0@ == derivative_schedule_order(store.graph(), self.root)[i]);
+                            assert(tasks.view()[j].0@ == derivative_children_ids(store.graph(), self.root)[pos]);
                         }
                     }
                 }
@@ -514,15 +541,17 @@ impl DerivativeFactors {
                 assert forall|child: nat| derivative_dependency(store.graph(), self.root, child)
                     implies exists|j: int| old(tasks).view().len() < j < tasks.view().len() && tasks.view()[j].0@ == child by {
                     let i = choose|i: int| 0 <= i < self.count && derivative_children_ids(store.graph(), self.root)[i] == child
-                        && (!self.concat || derivative_prefix(store.graph(), self.root, i as nat));
-                    let j = old(tasks).view().len() + 1 + i;
+                        && (!self.concat || derivative_suffix(store.graph(), self.root, (i + 1) as nat));
+                    let k = if self.concat { self.count - 1 - i } else { i };
+                    let j = old(tasks).view().len() + 1 + k;
                     if self.concat {
-                        assert(derivative_prefix(store.graph(), self.root, i as nat));
-                        assert(scheduled_from.len() + (i as nat) < tasks.view().len());
+                        assert(derivative_suffix(store.graph(), self.root, (i + 1) as nat));
+                        assert(scheduled_from.len() + k < tasks.view().len());
                     } else {
                         assert(tasks.view().len() == scheduled_from.len() + self.count);
                     }
-                    assert(scheduled_from.len() + i < tasks.view().len());
+                    assert(scheduled_from.len() + k < tasks.view().len());
+                    assert(tasks.view()[j].0@ == derivative_schedule_order(store.graph(), self.root)[k]);
                     assert(tasks.view()[j].0@ == derivative_children_ids(store.graph(), self.root)[i]);
                     assert(tasks.view()[j].0@ == child);
                 }
@@ -759,12 +788,12 @@ impl RegexDerivative for RegexId {
                             }
                         }
                         let d = Self::cached(cache, inner)?;
-                        proof_decl! { let ghost before_append = store.graph(); }
+                        proof_decl! { let ghost before_prepend = store.graph(); }
                         proof! { derivative_cached_bound(store.graph(), cache@, inner, d); }
-                        let out = TransitionId::append(d, store, &[this])?;
+                        let out = TransitionId::prepend(d, store, &[this])?;
                         proof! { derivative_graph_frame(growth_graph, store.graph(), this); }
                         proof! {
-                            lemma_derivative_vocab_stable(before_append, store.graph(), inner@, d@);
+                            lemma_derivative_vocab_stable(before_prepend, store.graph(), inner@, d@);
                             lemma_regex_graph_child_vocab(store.graph(), this@, inner@);
                             norm::lemma_guard_definition(store.graph(), d@);
                             norm::lemma_guard_definition(store.graph(), out@);
@@ -1512,53 +1541,55 @@ impl TestEvaluate for TestId {
     }
 }
 verus! {
-fn collect_append_factors<G: KernelStore>(
-    store: &G, root: TransitionId, head: RegexId, count: usize, xs: &mut WorkVec<RegexId>,
+fn collect_prepend_factors<G: KernelStore>(
+    store: &G, root: TransitionId, value: RegexId, count: usize, xs: &mut WorkVec<RegexId>,
 ) -> (result: KernelResult<()>)
     requires model::graph_wf(store.graph()), store.valid_store(), root@ < store.graph().transitions.len(),
-        store.graph().transitions[root@ as int] is Append, head@ < store.graph().regexes.len(),
-        count == transition_suffix(store.graph(), root).len(), old(xs).view().len() == 0,
+        store.graph().transitions[root@ as int] is Prepend, value@ < store.graph().regexes.len(),
+        count == transition_prefix(store.graph(), root).len(), old(xs).view().len() == 0,
     ensures norm::regex_ids_valid(store.graph(), final(xs).view()),
         store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
         store.errors_are_non_invariant() ==> language::no_invariant_failure(result),
         store.errors_are_resource() && store.valid_store() ==> (result matches Err(error) ==> resource_error(error)),
         store.errors_are_non_invalid_policy() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
-        result is Ok ==> model::regex_ids(final(xs).view()) == seq![head@] + transition_suffix(store.graph(), root),
+        result is Ok ==> model::regex_ids(final(xs).view()) == transition_prefix(store.graph(), root).push(value@),
 {
     proof { model::lemma_graph_transition_wf(store.graph(), root@); }
-    xs.push(head);
     let mut failure = None;
     let mut i = 0;
     while i < count
         invariant i <= count, model::graph_wf(store.graph()), store.valid_store(),
-            root@ < store.graph().transitions.len(), store.graph().transitions[root@ as int] is Append,
-            head@ < store.graph().regexes.len(), count == transition_suffix(store.graph(), root).len(),
+            root@ < store.graph().transitions.len(), store.graph().transitions[root@ as int] is Prepend,
+            value@ < store.graph().regexes.len(), count == transition_prefix(store.graph(), root).len(),
             model::transition_node_wf_at(store.graph(), store.graph().transitions[root@ as int], root@),
             store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
             store.errors_are_non_invariant() ==> (failure matches Some(error) ==> language::no_invariant_failure::<()>(Err(error))),
             store.errors_are_resource() && store.valid_store() ==> (failure matches Some(error) ==> resource_error(error)),
             store.errors_are_non_invalid_policy() ==> !(failure matches Some(HistoryError::InvalidPolicy { .. })),
             norm::regex_ids_valid(store.graph(), xs.view()),
-            model::regex_ids(xs.view()) == seq![head@] + transition_suffix(store.graph(), root).take(i as int),
+            model::regex_ids(xs.view()) == transition_prefix(store.graph(), root).take(i as int),
         ensures failure is None ==> i == count,
         decreases count - i,
     {
-        let child = loop_try!(root.suffix_child(store, i), failure);
+        let child = loop_try!(root.prefix_child(store, i), failure);
         proof {
-            assert(child@ == transition_suffix(store.graph(), root)[i as int]);
+            assert(child@ == transition_prefix(store.graph(), root)[i as int]);
             assert(child@ < store.graph().regexes.len());
         }
         let ghost previous = xs.view();
         xs.push(child);
         proof {
             norm::regex_ids_push(previous, child);
-            assert(transition_suffix(store.graph(), root).take(i as int + 1)
-                =~= transition_suffix(store.graph(), root).take(i as int).push(child@));
+            assert(transition_prefix(store.graph(), root).take(i as int + 1)
+                =~= transition_prefix(store.graph(), root).take(i as int).push(child@));
         }
         i = i.saturating_add(1);
     }
     if let Some(error) = failure { return Err(error); }
-    proof { assert(transition_suffix(store.graph(), root).take(count as int) =~= transition_suffix(store.graph(), root)); }
+    proof { assert(transition_prefix(store.graph(), root).take(count as int) =~= transition_prefix(store.graph(), root)); }
+    let ghost prior = xs.view();
+    xs.push(value);
+    proof { norm::regex_ids_push(prior, value); }
     Ok(())
 }
 
@@ -2039,20 +2070,20 @@ impl TransitionInterpret for TransitionId {
                 Self::interpret_branch(store, this, n, true, finish, tasks, values)?
             }
             TransitionHead::Not(inner) => interpret_not(store, this, inner, finish, tasks, values)?,
-            TransitionHead::Append(inner, n) => {
+            TransitionHead::Prepend(inner, n) => {
                 if finish {
-                    let head = match values.pop() {
+                    let value = match values.pop() {
                         Some(v) => v,
                         None => return Err(HistoryError::symbolic_invariant()),
                     };
                     proof! { model::lemma_graph_transition_wf(store.graph(), this@); }
                     let mut xs = WorkVec::new();
-                    collect_append_factors(store, this, head, n, &mut xs)?;
+                    collect_prepend_factors(store, this, value, n, &mut xs)?;
                     values.push(RegexId::concat(store, &xs)?);
                     proof! {
-                        interp_append_finish(before, store.graph(), this, pending, prior, head, xs.view(), values.view());
+                        interp_prepend_finish(before, store.graph(), this, pending, prior, value, xs.view(), values.view());
                         if fint::ipre(before, pending.push((this, finish)), prior) {
-                            fint::lemma_istep_append(before, store.graph(), this, pending, prior, xs.view(), values.view().last());
+                            fint::lemma_istep_prepend(before, store.graph(), this, pending, prior, xs.view(), values.view().last());
                         }
                     }
                 } else {
@@ -2478,7 +2509,7 @@ pub mod verify {
         }
     }
 
-    /// Primitives tested now; tests in constant residuals and append suffixes are tested later.
+    /// Primitives tested now; tests in constant residuals and fixed prefixes are tested later.
     pub open spec fn transition_primitives(t: language::Transition<model::Test>) -> Set<model::Primitive>
         decreases t, 1nat, 0nat,
     {
@@ -2488,7 +2519,7 @@ pub mod verify {
                 .union(transition_primitives(*a)).union(transition_primitives(*b)),
             language::Transition::Union(cs) | language::Transition::Intersect(cs) =>
                 transition_primitive_prefix(t, cs.len()),
-            language::Transition::Not(b) | language::Transition::Append(b, _) => transition_primitives(*b),
+            language::Transition::Not(b) | language::Transition::Prepend(b, _) => transition_primitives(*b),
         }
     }
 
@@ -2587,7 +2618,7 @@ pub mod verify {
                     assert(transition_primitives(transition_kids(lifted)[i]).contains(p));
                 }
             },
-            model::TransitionNode::Not(child) | model::TransitionNode::Append(child, _) => {
+            model::TransitionNode::Not(child) | model::TransitionNode::Prepend(child, _) => {
                 lemma_transition_primitives_lift(g, child, p);
                 assert(reach::transition_tests(g, id) == Seq::<nat>::empty());
                 assert(reach::transition_edges(g, id) == seq![child]);
@@ -2995,9 +3026,9 @@ pub mod verify {
                 },
                 language::Regex::Star(b) => {
                     assert forall|w: language::Regex<model::Test>| m.star_lit(r, w) implies regex_primitives(w).subset_of(allowed) by {
-                        let v = choose|v: language::Regex<model::Test>| #[trigger] (m.prod)(*b, v) && w == m.cat2(v, r);
+                        let v = choose|v: language::Regex<model::Test>| #[trigger] (m.prod)(*b, v) && w == m.cat2(r, v);
                         lemma_model_product_vocab(*b, v);
-                        lemma_cat_vocab(seq![v, r], allowed);
+                        lemma_cat_vocab(seq![r, v], allowed);
                     }
                     lemma_built_vocab(false, |w: language::Regex<model::Test>| m.star_lit(r, w), out, allowed);
                 },
@@ -3006,21 +3037,21 @@ pub mod verify {
                         lemma_regex_child_vocab(r, i);
                     }
                     assert forall|w: language::Regex<model::Test>| m.list_lit(r, w) implies regex_primitives(w).subset_of(allowed) by {
-                        if exists|i: int, v: language::Regex<model::Test>| 0 <= i < cs.len() - 1 && #[trigger] (m.prod)(cs[i], v)
-                            && w == (m.ncat)(seq![v] + cs.skip(i + 1)) {
-                            let (i, v) = choose|i: int, v: language::Regex<model::Test>| 0 <= i < cs.len() - 1
-                                && #[trigger] (m.prod)(cs[i], v) && w == (m.ncat)(seq![v] + cs.skip(i + 1));
+                        if exists|i: int, v: language::Regex<model::Test>| 0 < i < cs.len() && #[trigger] (m.prod)(cs[i], v)
+                            && w == (m.ncat)(cs.take(i).push(v)) {
+                            let (i, v) = choose|i: int, v: language::Regex<model::Test>| 0 < i < cs.len()
+                                && #[trigger] (m.prod)(cs[i], v) && w == (m.ncat)(cs.take(i).push(v));
                             lemma_model_product_vocab(cs[i], v);
-                            let inputs = seq![v] + cs.skip(i + 1);
+                            let inputs = cs.take(i).push(v);
                             assert forall|j: int| 0 <= j < inputs.len() implies regex_primitives(inputs[j]).subset_of(allowed) by {
-                                if j == 0 { assert(inputs[j] == v); }
-                                else { assert(inputs[j] == cs[i + j]); }
+                                if j == i { assert(inputs[j] == v); }
+                                else { assert(inputs[j] == cs[j]); }
                             }
                             lemma_cat_vocab(inputs, allowed);
                         } else {
-                            assert((m.lit)(cs.last(), w));
-                            lemma_model_literal_vocab(cs.last(), w);
-                            assert(regex_primitives(cs.last()).subset_of(allowed));
+                            assert((m.lit)(cs[0], w));
+                            lemma_model_literal_vocab(cs[0], w);
+                            assert(regex_primitives(cs[0]).subset_of(allowed));
                         }
                     }
                     lemma_built_vocab(false, |w: language::Regex<model::Test>| m.list_lit(r, w), out, allowed);
@@ -3062,8 +3093,8 @@ pub mod verify {
                 language::Regex::Concat(cs) => {
                     if (m.lit)(r, out) { lemma_model_literal_vocab(r, out); }
                     else {
-                        lemma_model_product_vocab(cs.last(), out);
-                        lemma_regex_child_vocab(r, cs.len() as int - 1);
+                        lemma_model_product_vocab(cs[0], out);
+                        lemma_regex_child_vocab(r, 0);
                     }
                 },
                 _ => {},
@@ -3112,7 +3143,7 @@ pub mod verify {
         if !task.1 { 0 } else {
             match g.transitions[task.0@ as int] {
                 model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => cs.len(),
-                model::TransitionNode::Not(_) | model::TransitionNode::Append(_, _) => 1,
+                model::TransitionNode::Not(_) | model::TransitionNode::Prepend(_, _) => 1,
                 _ => 0,
             }
         }
@@ -3353,7 +3384,7 @@ pub mod verify {
         root < g.regexes.len() && out@ < g.transitions.len()
         && forall|theta: Subst, event: EventView, word: Seq<EventView>|
             language::event_wf(theta, theta.len()) ==> norm::transition_lang(g, theta, out, event, word)
-                == model::regex_lang(g, theta, root, seq![event] + word)
+                == model::regex_lang(g, theta, root, word.push(event))
     }
 
     /// The runtime derivative agrees, modulo language, with the independent δ.
@@ -3470,7 +3501,7 @@ pub mod verify {
             model::RegexKindNode::Star(id) | model::RegexKindNode::Not(id) => child == id,
             model::RegexKindNode::Union(cs) | model::RegexKindNode::Intersect(cs) => cs.contains(child),
             model::RegexKindNode::Concat(cs) => exists|i: int| 0 <= i < cs.len() && cs[i] == child
-                && derivative_prefix(g, root, i as nat),
+                && derivative_suffix(g, root, (i + 1) as nat),
             _ => false,
         }
     }
@@ -3604,7 +3635,8 @@ pub mod verify {
     {
         if id >= g.regexes.len() { 0 } else {
             match g.regexes[id as int].kind {
-                model::RegexKindNode::Union(cs) | model::RegexKindNode::Intersect(cs) | model::RegexKindNode::Concat(cs) =>
+                model::RegexKindNode::Concat(cs) => 2 + derivative_children_work(g, cs.reverse(), id),
+                model::RegexKindNode::Union(cs) | model::RegexKindNode::Intersect(cs) =>
                     2 + derivative_children_work(g, cs, id),
                 model::RegexKindNode::Star(c) | model::RegexKindNode::Not(c) =>
                     2 + if c < id { derivative_node_work(g, c) } else { 0 },
@@ -3640,7 +3672,7 @@ pub mod verify {
         match a.regexes[id as int].kind {
             model::RegexKindNode::Union(cs) => { derivative_lemma_children_work_extends(a, b, cs, id); },
             model::RegexKindNode::Intersect(cs) => { derivative_lemma_children_work_extends(a, b, cs, id); },
-            model::RegexKindNode::Concat(cs) => { derivative_lemma_children_work_extends(a, b, cs, id); },
+            model::RegexKindNode::Concat(cs) => { derivative_lemma_children_work_extends(a, b, cs.reverse(), id); },
             model::RegexKindNode::Star(c) => { if c < id { derivative_lemma_node_work_extends(a, b, c); } },
             model::RegexKindNode::Not(c) => { if c < id { derivative_lemma_node_work_extends(a, b, c); } },
             _ => {},
@@ -3680,7 +3712,7 @@ pub mod verify {
         assert(tasks.push(task).drop_last() =~= tasks);
     }
 
-    /// Concat schedules only its nullable prefix, so the scheduled tasks are a prefix of the children.
+    /// The scheduled tasks form a prefix of the visit order, including the first nonnullable concat factor.
     pub proof fn derivative_lemma_work_schedule_prefix(g: model::Graph, tasks: Seq<(RegexId, bool)>,
         scheduled: Seq<(RegexId, bool)>, children: Seq<nat>, bound: nat)
         requires scheduled.len() <= children.len(), model::bounded(children, bound),
@@ -3727,14 +3759,20 @@ pub mod verify {
             g.regexes[id@ as int].kind is Union || g.regexes[id@ as int].kind is Intersect
                 || g.regexes[id@ as int].kind is Concat,
             pending.push((id, true)).is_prefix_of(tasks),
-            tasks.len() <= pending.len() + 1 + derivative_children_ids(g, id).len(),
+            tasks.len() <= pending.len() + 1 + derivative_schedule_order(g, id).len(),
             forall|j: int| pending.len() + 1 <= j < tasks.len() ==> #[trigger] tasks[j].0@
-                == derivative_children_ids(g, id)[j - pending.len() - 1] && !tasks[j].1,
+                == derivative_schedule_order(g, id)[j - pending.len() - 1] && !tasks[j].1,
         ensures derivative_tasks_wf(g, tasks),
             derivative_work(g, tasks) < derivative_work(g, pending.push((id, false))),
     {
         model::lemma_graph_regex_wf(g, id@);
-        let cs = derivative_children_ids(g, id);
+        let cs = derivative_schedule_order(g, id);
+        if g.regexes[id@ as int].kind is Concat {
+            let children = derivative_children_ids(g, id);
+            assert forall|i: int| 0 <= i < cs.len() implies #[trigger] cs[i] < id@ by {
+                assert(cs[i] == children[children.len() - 1 - i]);
+            }
+        }
         let base = pending.push((id, true));
         let scheduled = tasks.subrange(base.len() as int, tasks.len() as int);
         assert(tasks =~= base + scheduled);
@@ -3769,6 +3807,11 @@ pub mod verify {
         }
     }
 
+    pub open spec fn derivative_schedule_order(g: model::Graph, root: RegexId) -> Seq<nat> {
+        let cs = derivative_children_ids(g, root);
+        if g.regexes[root@ as int].kind is Concat { cs.reverse() } else { cs }
+    }
+
     pub open spec fn derivative_factors_wf(g: model::Graph, root: RegexId, count: nat, concat: bool) -> bool {
         root@ < g.regexes.len() && match g.regexes[root@ as int].kind {
             model::RegexKindNode::Concat(cs) => concat && cs.len() == count,
@@ -3777,8 +3820,9 @@ pub mod verify {
         }
     }
 
-    pub open spec fn derivative_prefix(g: model::Graph, root: RegexId, index: nat) -> bool {
-        forall|i: int| 0 <= i < index ==> language::nullable(model::lift_regex(g, derivative_children_ids(g, root)[i]))
+    pub open spec fn derivative_suffix(g: model::Graph, root: RegexId, boundary: nat) -> bool {
+        let cs = derivative_children_ids(g, root);
+        forall|i: int| boundary <= i < cs.len() ==> language::nullable(model::lift_regex(g, cs[i]))
     }
 
     pub open spec fn derivative_factor_language(
@@ -3788,9 +3832,15 @@ pub mod verify {
         let cs = derivative_children_ids(g, root);
         let sem = model::gsem(theta);
         if concat {
-            language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, model::lift_regex(g, cs[index]))]
-                + model::lift_regexes(g, cs.subrange(index + 1, cs.len() as int))), word)
-        } else { model::regex_lang(g, theta, cs[index], seq![event] + word) }
+            language::numeric_lang(sem, language::Regex::Concat(model::lift_regexes(g, cs.take(index)).push(
+                language::derivative(sem, event, model::lift_regex(g, cs[index])))), word)
+        } else { model::regex_lang(g, theta, cs[index], word.push(event)) }
+    }
+
+    pub open spec fn derivative_factor_visited(g: model::Graph, root: RegexId, concat: bool, count: nat, i: int) -> bool {
+        let n = derivative_children_ids(g, root).len();
+        if concat { n - count <= i < n && derivative_suffix(g, root, (i + 1) as nat) }
+        else { 0 <= i < count }
     }
 
     pub open spec fn derivative_factor_combo(
@@ -3798,11 +3848,11 @@ pub mod verify {
         theta: Subst, event: EventView, word: Seq<EventView>,
     ) -> bool {
         if intersect {
-            forall|i: int| 0 <= i < count && (!concat || derivative_prefix(g, root, i as nat))
-                ==> derivative_factor_language(g, root, concat, i, theta, event, word)
+            forall|i: int| derivative_factor_visited(g, root, concat, count, i)
+                ==> #[trigger] derivative_factor_language(g, root, concat, i, theta, event, word)
         } else {
-            exists|i: int| 0 <= i < count && (!concat || derivative_prefix(g, root, i as nat))
-                && derivative_factor_language(g, root, concat, i, theta, event, word)
+            exists|i: int| derivative_factor_visited(g, root, concat, count, i)
+                && #[trigger] derivative_factor_language(g, root, concat, i, theta, event, word)
         }
     }
 
@@ -3818,7 +3868,7 @@ pub mod verify {
     pub proof fn derivative_factor_stable(a: model::Graph, b: model::Graph, root: RegexId)
         requires model::graph_wf(a), model::graph_extends(a, b), root@ < a.regexes.len(),
         ensures derivative_children_ids(a, root) == derivative_children_ids(b, root),
-            forall|n: nat| n <= derivative_children_ids(a, root).len() ==> derivative_prefix(a, root, n) == derivative_prefix(b, root, n),
+            forall|n: nat| n <= derivative_children_ids(a, root).len() ==> derivative_suffix(a, root, n) == derivative_suffix(b, root, n),
             forall|concat: bool, i: int, theta: Subst, event: EventView, word: Seq<EventView>|
                 0 <= i < derivative_children_ids(a, root).len()
                     ==> derivative_factor_language(a, root, concat, i, theta, event, word)
@@ -3831,8 +3881,8 @@ pub mod verify {
         let cs = derivative_children_ids(a, root);
         assert forall|i: int| 0 <= i < cs.len() implies cs[i] < a.regexes.len() by {}
         assert forall|i: int| 0 <= i < cs.len() implies
-            #[trigger] model::lift_regexes(a, cs.subrange(i + 1, cs.len() as int)) == model::lift_regexes(b, cs.subrange(i + 1, cs.len() as int)) by {
-            assert(model::lift_regexes(a, cs.subrange(i + 1, cs.len() as int)) =~= model::lift_regexes(b, cs.subrange(i + 1, cs.len() as int)));
+            #[trigger] model::lift_regexes(a, cs.take(i)) == model::lift_regexes(b, cs.take(i)) by {
+            assert(model::lift_regexes(a, cs.take(i)) =~= model::lift_regexes(b, cs.take(i)));
         }
     }
 
@@ -3842,8 +3892,14 @@ pub mod verify {
         ensures derivative_results(b, root, concat, count, results),
     {
         hide(language::numeric_lang); hide(language::derivative); hide(language::interp_transition);
-        hide(derivative_factor_language); hide(derivative_prefix);
+        hide(derivative_factor_language); hide(derivative_suffix);
         derivative_factor_stable(a, b, root);
+        assert forall|i: int| derivative_factor_visited(a, root, concat, count, i)
+            == derivative_factor_visited(b, root, concat, count, i) by {
+            if 0 <= i < derivative_children_ids(a, root).len() {
+                assert(derivative_suffix(a, root, (i + 1) as nat) == derivative_suffix(b, root, (i + 1) as nat));
+            }
+        }
         model::lemma_graph_wf_elim(a);
         model::lemma_lift_stable_under_extends(a, b);
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>, intersect: bool|
@@ -3854,6 +3910,11 @@ pub mod verify {
                     == norm::transition_lang(b, theta, results[i], event, word) by {}
             assert(norm::transition_combo(a, theta, results, event, word, intersect)
                 == norm::transition_combo(b, theta, results, event, word, intersect));
+            assert forall|i: int| derivative_factor_visited(a, root, concat, count, i) implies
+                derivative_factor_language(a, root, concat, i, theta, event, word)
+                    == derivative_factor_language(b, root, concat, i, theta, event, word) by {
+                assert(0 <= i < derivative_children_ids(a, root).len());
+            }
             assert(derivative_factor_combo(a, root, concat, count, intersect, theta, event, word)
                 == derivative_factor_combo(b, root, concat, count, intersect, theta, event, word));
         }
@@ -3869,9 +3930,9 @@ pub mod verify {
         model::lemma_lift_transition_stable(a, b, out@);
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             implies norm::transition_lang(b, theta, out, event, word)
-                == model::regex_lang(b, theta, root, seq![event] + word) by {
+                == model::regex_lang(b, theta, root, word.push(event)) by {
             assert(norm::transition_lang(a, theta, out, event, word)
-                == model::regex_lang(a, theta, root, seq![event] + word));
+                == model::regex_lang(a, theta, root, word.push(event)));
         }
     }
 
@@ -3885,14 +3946,14 @@ pub mod verify {
             forall|tasks: Seq<(RegexId, bool)>| derivative_tasks_wf(a, tasks) ==> derivative_tasks_wf(b, tasks),
             forall|root: RegexId, count: nat, concat: bool| derivative_factors_wf(a, root, count, concat) ==> derivative_factors_wf(b, root, count, concat),
             forall|root: RegexId, index: nat| root@ < a.regexes.len() && index <= derivative_children_ids(a, root).len()
-                ==> derivative_prefix(a, root, index) == derivative_prefix(b, root, index),
+                ==> derivative_suffix(a, root, index) == derivative_suffix(b, root, index),
             forall|root: RegexId, concat: bool, count: nat, results: Seq<TransitionId>|
                 root@ < a.regexes.len() && count <= derivative_children_ids(a, root).len() && derivative_results(a, root, concat, count, results)
                     ==> derivative_results(b, root, concat, count, results),
     {
         hide(language::numeric_lang); hide(language::derivative); hide(language::interp_transition);
         hide(model::test_holds); hide(model::lift_regex); hide(model::lift_transition);
-        hide(derivative_correct); hide(derivative_results); hide(derivative_prefix); hide(derivative_factor_language);
+        hide(derivative_correct); hide(derivative_results); hide(derivative_suffix); hide(derivative_factor_language);
         model::lemma_graph_wf_elim(a);
         model::lemma_lift_stable_under_extends(a, b);
         assert forall|c: model::Graph| model::graph_extends(b, c) implies model::graph_extends(a, c) by {
@@ -3916,7 +3977,7 @@ pub mod verify {
             }
         }
         assert forall|root: RegexId, index: nat| root@ < a.regexes.len() && index <= derivative_children_ids(a, root).len()
-            implies derivative_prefix(a, root, index) == derivative_prefix(b, root, index) by {
+            implies derivative_suffix(a, root, index) == derivative_suffix(b, root, index) by {
             derivative_factor_stable(a, b, root);
         }
         assert forall|root: RegexId, concat: bool, count: nat, results: Seq<TransitionId>|
@@ -3934,13 +3995,13 @@ pub mod verify {
             && (forall|root: nat, out: TransitionId| derivative_correct(g, root, out) ==> derivative_correct(next, root, out))
             && (forall|root: RegexId, count: nat, concat: bool| derivative_factors_wf(g, root, count, concat) ==> derivative_factors_wf(next, root, count, concat))
             && (forall|root: RegexId, index: nat| root@ < g.regexes.len() && index <= derivative_children_ids(g, root).len()
-                ==> derivative_prefix(g, root, index) == derivative_prefix(next, root, index))
+                ==> derivative_suffix(g, root, index) == derivative_suffix(next, root, index))
             && (forall|root: RegexId, concat: bool, count: nat, results: Seq<TransitionId>|
                 root@ < g.regexes.len() && count <= derivative_children_ids(g, root).len() && derivative_results(g, root, concat, count, results)
                     ==> derivative_results(next, root, concat, count, results))
             && (forall|after: model::Graph| model::graph_extends(next, after) ==> model::graph_extends(g, after))),
     {
-        hide(derivative_correct); hide(derivative_results); hide(derivative_prefix); hide(derivative_factor_language);
+        hide(derivative_correct); hide(derivative_results); hide(derivative_suffix); hide(derivative_factor_language);
         hide(derivative_cache_wf); hide(derivative_factors_wf); hide(derivative_tasks_wf);
         assert forall|next: model::Graph| model::graph_extends(g, next) implies (
             (forall|cache: Seq<Option<TransitionId>>| derivative_cache_wf(g, cache) ==> derivative_cache_wf(next, cache))
@@ -3948,7 +4009,7 @@ pub mod verify {
             && (forall|root: nat, out: TransitionId| derivative_correct(g, root, out) ==> derivative_correct(next, root, out))
             && (forall|root: RegexId, count: nat, concat: bool| derivative_factors_wf(g, root, count, concat) ==> derivative_factors_wf(next, root, count, concat))
             && (forall|root: RegexId, index: nat| root@ < g.regexes.len() && index <= derivative_children_ids(g, root).len()
-                ==> derivative_prefix(g, root, index) == derivative_prefix(next, root, index))
+                ==> derivative_suffix(g, root, index) == derivative_suffix(next, root, index))
             && (forall|root: RegexId, concat: bool, count: nat, results: Seq<TransitionId>|
                 root@ < g.regexes.len() && count <= derivative_children_ids(g, root).len() && derivative_results(g, root, concat, count, results)
                     ==> derivative_results(next, root, concat, count, results))
@@ -3974,17 +4035,25 @@ pub mod verify {
         g: model::Graph, root: RegexId, concat: bool, index: nat, prior: Seq<TransitionId>, out: TransitionId,
     )
         requires derivative_results(g, root, concat, index, prior), out@ < g.transitions.len(),
-            !concat || derivative_prefix(g, root, index),
+            index < derivative_children_ids(g, root).len(),
+            !concat || derivative_suffix(g, root, (derivative_children_ids(g, root).len() - index) as nat),
             forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
-                ==> norm::transition_lang(g, theta, out, event, word)
-                    == derivative_factor_language(g, root, concat, index as int, theta, event, word),
+                ==> #[trigger] norm::transition_lang(g, theta, out, event, word)
+                    == derivative_factor_language(g, root, concat, if concat { derivative_children_ids(g, root).len() - index - 1 } else { index as int }, theta, event, word),
         ensures derivative_results(g, root, concat, index + 1, prior.push(out)),
     {
         hide(language::numeric_lang); hide(language::derivative); hide(language::interp_transition);
         hide(norm::transition_lang); hide(derivative_factor_language);
+        let n = derivative_children_ids(g, root).len();
+        let pos = if concat { n - index - 1 } else { index as int };
+        assert forall|i: int| derivative_factor_visited(g, root, concat, index + 1, i)
+            == (derivative_factor_visited(g, root, concat, index, i) || i == pos) by {}
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>, intersect: bool|
             language::event_wf(theta, theta.len()) implies norm::transition_combo(g, theta, prior.push(out), event, word, intersect)
                 == derivative_factor_combo(g, root, concat, index + 1, intersect, theta, event, word) by {
+            assert(norm::transition_lang(g, theta, out, event, word)
+                == derivative_factor_language(g, root, concat, pos, theta, event, word));
+            assert(derivative_factor_visited(g, root, concat, index + 1, pos));
             if intersect {
                 assert forall|i: int| 0 <= i < prior.push(out).len() implies
                     norm::transition_lang(g, theta, prior.push(out)[i], event, word)
@@ -4026,20 +4095,28 @@ pub mod verify {
         }
     }
 
-    pub proof fn derivative_results_skip(g: model::Graph, root: RegexId, index: nat, results: Seq<TransitionId>)
-        requires derivative_results(g, root, true, index, results), !derivative_prefix(g, root, index),
-        ensures derivative_results(g, root, true, index + 1, results),
-    {}
+    pub proof fn derivative_results_stop(g: model::Graph, root: RegexId, count: nat, results: Seq<TransitionId>)
+        requires count < derivative_children_ids(g, root).len(), derivative_results(g, root, true, count, results),
+            !derivative_suffix(g, root, (derivative_children_ids(g, root).len() - count) as nat),
+        ensures derivative_results(g, root, true, derivative_children_ids(g, root).len(), results),
+    {
+        let n = derivative_children_ids(g, root).len();
+        assert forall|i: int| derivative_factor_visited(g, root, true, n, i) == derivative_factor_visited(g, root, true, count, i) by {
+            if 0 <= i < n - count && derivative_suffix(g, root, (i + 1) as nat) {
+                assert(derivative_suffix(g, root, (n - count) as nat));
+            }
+        }
+    }
 
-    pub proof fn derivative_append_factor(
-        g: model::Graph, root: RegexId, index: int, d: TransitionId, suffix: Seq<RegexId>, out: TransitionId,
+    pub proof fn derivative_prepend_factor(
+        g: model::Graph, root: RegexId, index: int, d: TransitionId, prefix: Seq<RegexId>, out: TransitionId,
     )
         requires 0 <= index < derivative_children_ids(g, root).len(),
             derivative_correct(g, derivative_children_ids(g, root)[index], d),
-            model::regex_ids(suffix) == derivative_children_ids(g, root).subrange(index + 1, derivative_children_ids(g, root).len() as int),
+            model::regex_ids(prefix) == derivative_children_ids(g, root).take(index),
             forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                 ==> norm::transition_lang(g, theta, out, event, word)
-                    == norm::transition_append_combo(g, theta, d, suffix, event, word),
+                    == norm::transition_prepend_combo(g, theta, d, prefix, event, word),
         ensures forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             ==> norm::transition_lang(g, theta, out, event, word)
                 == derivative_factor_language(g, root, true, index, theta, event, word),
@@ -4052,22 +4129,21 @@ pub mod verify {
             let child = model::lift_regex(g, derivative_children_ids(g, root)[index]);
             let actual = language::interp_transition(sem, event, model::lift_transition(g, d@));
             let expected = language::derivative(sem, event, child);
-            let tail = model::lift_regexes(g, model::regex_ids(suffix));
-            language::lemma_concat_prepend(sem, actual, tail, word);
-            language::lemma_concat_prepend(sem, expected, tail, word);
+            let pre = model::lift_regexes(g, model::regex_ids(prefix));
+            language::lemma_concat_snoc(sem, pre, actual, word);
+            language::lemma_concat_snoc(sem, pre, expected, word);
             assert forall|w: Seq<EventView>| language::numeric_lang(sem, actual, w) == language::numeric_lang(sem, expected, w) by {
                 language::lemma_derivative_correct(sem, event, child, w);
                 assert(norm::transition_lang(g, theta, d, event, w)
-                    == model::regex_lang(g, theta, derivative_children_ids(g, root)[index], seq![event] + w));
+                    == model::regex_lang(g, theta, derivative_children_ids(g, root)[index], w.push(event)));
             }
         }
     }
 
     pub open spec fn derivative_sum<L>(sem: spec_fn(L, EventView) -> bool, event: EventView, cs: Seq<language::Regex<L>>, word: Seq<EventView>) -> bool {
         exists|i: int| 0 <= i < cs.len()
-            && (forall|j: int| 0 <= j < i ==> language::nullable(cs[j]))
-            && language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, cs[i])]
-                + cs.subrange(i + 1, cs.len() as int)), word)
+            && (forall|j: int| i < j < cs.len() ==> language::nullable(cs[j]))
+            && language::numeric_lang(sem, language::Regex::Concat(cs.take(i).push(language::derivative(sem, event, cs[i]))), word)
     }
 
     pub proof fn derivative_concat_sum<L>(sem: spec_fn(L, EventView) -> bool, event: EventView, bound: language::Regex<L>, cs: Seq<language::Regex<L>>, word: Seq<EventView>)
@@ -4076,33 +4152,38 @@ pub mod verify {
         decreases cs.len(),
     {
         if cs.len() > 0 {
-            let rest = cs.drop_first();
-            assert forall|i: int| 0 <= i < rest.len() implies is_smaller_than(rest[i], bound) by { assert(rest[i] == cs[i + 1]); }
-            derivative_concat_sum(sem, event, bound, rest, word);
-            let head = language::Regex::Concat(seq![language::derivative(sem, event, cs[0])] + rest);
-            language::lemma_union_optional(sem, head, language::derivative_concat(sem, event, bound, rest), language::nullable(cs[0]), word);
-            assert(cs.subrange(1, cs.len() as int) =~= rest);
+            let pre = cs.drop_last();
+            let last = cs.len() as int - 1;
+            assert(pre =~= cs.take(last));
+            assert forall|i: int| 0 <= i < pre.len() implies is_smaller_than(pre[i], bound) by { assert(pre[i] == cs[i]); }
+            derivative_concat_sum(sem, event, bound, pre, word);
+            let term = language::Regex::Concat(pre.push(language::derivative(sem, event, cs.last())));
+            language::lemma_union_optional(sem, term, language::derivative_concat(sem, event, bound, pre), language::nullable(cs.last()), word);
             if derivative_sum(sem, event, cs, word) {
                 let i = choose|i: int| 0 <= i < cs.len()
-                    && (forall|j: int| 0 <= j < i ==> language::nullable(cs[j]))
-                    && language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, cs[i])]
-                        + cs.subrange(i + 1, cs.len() as int)), word);
-                if i > 0 {
-                    assert(rest[i - 1] == cs[i]);
-                    assert(rest.subrange(i, rest.len() as int) =~= cs.subrange(i + 1, cs.len() as int));
-                    assert forall|j: int| 0 <= j < i - 1 implies language::nullable(rest[j]) by { assert(rest[j] == cs[j + 1]); }
-                    assert(derivative_sum(sem, event, rest, word));
+                    && (forall|j: int| i < j < cs.len() ==> language::nullable(cs[j]))
+                    && language::numeric_lang(sem, language::Regex::Concat(cs.take(i).push(language::derivative(sem, event, cs[i]))), word);
+                if i < last {
+                    assert(language::nullable(cs[last]));
+                    assert(pre[i] == cs[i]);
+                    assert(pre.take(i) =~= cs.take(i));
+                    assert forall|j: int| i < j < pre.len() implies language::nullable(pre[j]) by { assert(pre[j] == cs[j]); }
+                    assert(derivative_sum(sem, event, pre, word));
                 }
             }
-            if language::numeric_lang(sem, head, word) { assert(derivative_sum(sem, event, cs, word)); }
-            if language::nullable(cs[0]) && derivative_sum(sem, event, rest, word) {
-                let i = choose|i: int| 0 <= i < rest.len()
-                    && (forall|j: int| 0 <= j < i ==> language::nullable(rest[j]))
-                    && language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, rest[i])]
-                        + rest.subrange(i + 1, rest.len() as int)), word);
-                assert(cs[i + 1] == rest[i]);
-                assert(cs.subrange(i + 2, cs.len() as int) =~= rest.subrange(i + 1, rest.len() as int));
-                assert forall|j: int| 0 <= j < i + 1 implies language::nullable(cs[j]) by { if j > 0 { assert(cs[j] == rest[j - 1]); } }
+            if language::numeric_lang(sem, term, word) {
+                assert(cs[last] == cs.last());
+                assert(derivative_sum(sem, event, cs, word));
+            }
+            if language::nullable(cs.last()) && derivative_sum(sem, event, pre, word) {
+                let i = choose|i: int| 0 <= i < pre.len()
+                    && (forall|j: int| i < j < pre.len() ==> language::nullable(pre[j]))
+                    && language::numeric_lang(sem, language::Regex::Concat(pre.take(i).push(language::derivative(sem, event, pre[i]))), word);
+                assert(cs[i] == pre[i]);
+                assert(cs.take(i) =~= pre.take(i));
+                assert forall|j: int| i < j < cs.len() implies language::nullable(cs[j]) by {
+                    if j < last { assert(cs[j] == pre[j]); } else { assert(cs[j] == cs.last()); }
+                }
                 assert(derivative_sum(sem, event, cs, word));
             }
         }
@@ -4110,7 +4191,7 @@ pub mod verify {
 
     pub proof fn derivative_sum_correct<L>(sem: spec_fn(L, EventView) -> bool, event: EventView, root: language::Regex<L>, word: Seq<EventView>)
         requires root is Concat,
-        ensures derivative_sum(sem, event, root->Concat_0, word) == language::numeric_lang(sem, root, seq![event] + word),
+        ensures derivative_sum(sem, event, root->Concat_0, word) == language::numeric_lang(sem, root, word.push(event)),
     {
         hide(language::numeric_lang);
         match root {
@@ -4145,13 +4226,13 @@ pub mod verify {
         assert(rs.len() == cs.len());
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             implies norm::transition_lang(g, theta, out, event, word)
-                == model::regex_lang(g, theta, root@, seq![event] + word) by {
+                == model::regex_lang(g, theta, root@, word.push(event)) by {
             let sem = model::gsem(theta);
             assert(norm::transition_lang(g, theta, out, event, word)
                 == derivative_factor_combo(g, root, concat, cs.len(), intersect, theta, event, word));
             assert forall|i: int| 0 <= i < cs.len() implies
                 #[trigger] derivative_factor_language(g, root, false, i, theta, event, word)
-                    == language::numeric_lang(sem, rs[i], seq![event] + word) by {
+                    == language::numeric_lang(sem, rs[i], word.push(event)) by {
                 assert(rs[i] == model::lift_regex(g, cs[i]));
             }
             if concat {
@@ -4159,85 +4240,86 @@ pub mod verify {
                 derivative_sum_correct(sem, event, language::Regex::Concat(rs), word);
                 assert(model::lift_regex(g, root@) == language::Regex::Concat(rs));
                 assert forall|i: int| 0 <= i < cs.len() implies
-                    #[trigger] model::lift_regexes(g, cs.subrange(i + 1, cs.len() as int)) == rs.subrange(i + 1, rs.len() as int) by {
-                    assert(model::lift_regexes(g, cs.subrange(i + 1, cs.len() as int)) =~= rs.subrange(i + 1, rs.len() as int));
+                    #[trigger] model::lift_regexes(g, cs.take(i)) == rs.take(i) by {
+                    assert(model::lift_regexes(g, cs.take(i)) =~= rs.take(i));
                 }
                 assert forall|i: int| 0 <= i < cs.len() implies
-                    #[trigger] derivative_prefix(g, root, i as nat) == (forall|j: int| 0 <= j < i ==> language::nullable(rs[j])) by {
-                    assert forall|j: int| 0 <= j < i implies rs[j] == model::lift_regex(g, cs[j]) by {}
-                    if derivative_prefix(g, root, i as nat) {
-                        assert forall|j: int| 0 <= j < i implies language::nullable(rs[j]) by {
+                    #[trigger] derivative_suffix(g, root, (i + 1) as nat) == (forall|j: int| i < j < cs.len() ==> language::nullable(rs[j])) by {
+                    assert forall|j: int| i < j < cs.len() implies rs[j] == model::lift_regex(g, cs[j]) by {}
+                    if derivative_suffix(g, root, (i + 1) as nat) {
+                        assert forall|j: int| i < j < cs.len() implies language::nullable(rs[j]) by {
                             assert(rs[j] == model::lift_regex(g, cs[j]));
                         }
                     }
-                    if forall|j: int| 0 <= j < i ==> language::nullable(rs[j]) {
-                        assert forall|j: int| 0 <= j < i implies language::nullable(model::lift_regex(g, cs[j])) by {
+                    if forall|j: int| i < j < cs.len() ==> language::nullable(rs[j]) {
+                        assert forall|j: int| i < j < cs.len() implies language::nullable(model::lift_regex(g, cs[j])) by {
                             assert(rs[j] == model::lift_regex(g, cs[j]));
                         }
                     }
                 }
                 assert forall|i: int| 0 <= i < cs.len() implies
                     #[trigger] derivative_factor_language(g, root, true, i, theta, event, word)
-                        == language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, rs[i])]
-                            + rs.subrange(i + 1, rs.len() as int)), word) by {
+                        == language::numeric_lang(sem, language::Regex::Concat(rs.take(i).push(language::derivative(sem, event, rs[i]))), word) by {
                     assert(rs[i] == model::lift_regex(g, cs[i]));
-                    assert(model::lift_regexes(g, cs.subrange(i + 1, cs.len() as int)) == rs.subrange(i + 1, rs.len() as int));
+                    assert(model::lift_regexes(g, cs.take(i)) == rs.take(i));
                 }
                 if derivative_factor_combo(g, root, concat, cs.len(), intersect, theta, event, word) {
-                    let i = choose|i: int| 0 <= i < cs.len() && derivative_prefix(g, root, i as nat)
+                    let i = choose|i: int| 0 <= i < cs.len() && derivative_suffix(g, root, (i + 1) as nat)
                         && derivative_factor_language(g, root, true, i, theta, event, word);
                     assert(0 <= i < rs.len());
                     assert(derivative_sum(sem, event, rs, word));
                 }
                 if derivative_sum(sem, event, rs, word) {
                     let i = choose|i: int| 0 <= i < rs.len()
-                        && (forall|j: int| 0 <= j < i ==> language::nullable(rs[j]))
-                        && language::numeric_lang(sem, language::Regex::Concat(seq![language::derivative(sem, event, rs[i])]
-                            + rs.subrange(i + 1, rs.len() as int)), word);
+                        && (forall|j: int| i < j < cs.len() ==> language::nullable(rs[j]))
+                        && language::numeric_lang(sem, language::Regex::Concat(rs.take(i).push(language::derivative(sem, event, rs[i]))), word);
                     assert(0 <= i < cs.len());
-                    assert(derivative_prefix(g, root, i as nat));
+                    assert(derivative_suffix(g, root, (i + 1) as nat));
+                    assert(derivative_factor_visited(g, root, true, cs.len(), i));
                     assert(derivative_factor_language(g, root, true, i, theta, event, word));
                     assert(derivative_factor_combo(g, root, concat, cs.len(), intersect, theta, event, word));
                 }
                 assert(derivative_factor_combo(g, root, concat, cs.len(), intersect, theta, event, word)
                     == derivative_sum(sem, event, rs, word));
                 assert(norm::transition_lang(g, theta, out, event, word)
-                    == model::regex_lang(g, theta, root@, seq![event] + word));
+                    == model::regex_lang(g, theta, root@, word.push(event)));
             } else if intersect {
-                language::lemma_lang_intersect(sem, rs, seq![event] + word);
+                language::lemma_lang_intersect(sem, rs, word.push(event));
                 assert(model::lift_regex(g, root@) == language::Regex::Intersect(rs));
+                assert forall|i: int| derivative_factor_visited(g, root, false, cs.len(), i) == (0 <= i < cs.len()) by {}
                 assert(derivative_factor_combo(g, root, false, cs.len(), true, theta, event, word)
                     == (forall|i: int| 0 <= i < cs.len() ==> derivative_factor_language(g, root, false, i, theta, event, word)));
                 if derivative_factor_combo(g, root, false, cs.len(), true, theta, event, word) {
-                    assert forall|i: int| 0 <= i < rs.len() implies language::numeric_lang(sem, rs[i], seq![event] + word) by {
+                    assert forall|i: int| 0 <= i < rs.len() implies language::numeric_lang(sem, rs[i], word.push(event)) by {
                         assert(derivative_factor_language(g, root, false, i, theta, event, word));
                     }
                 }
-                if forall|i: int| 0 <= i < rs.len() ==> language::numeric_lang(sem, rs[i], seq![event] + word) {
+                if forall|i: int| 0 <= i < rs.len() ==> language::numeric_lang(sem, rs[i], word.push(event)) {
                     assert forall|i: int| 0 <= i < cs.len() implies derivative_factor_language(g, root, false, i, theta, event, word) by {
-                        assert(language::numeric_lang(sem, rs[i], seq![event] + word));
+                        assert(language::numeric_lang(sem, rs[i], word.push(event)));
                     }
                 }
                 assert(derivative_factor_combo(g, root, false, cs.len(), true, theta, event, word)
-                    == (forall|i: int| 0 <= i < rs.len() ==> language::numeric_lang(sem, rs[i], seq![event] + word)));
+                    == (forall|i: int| 0 <= i < rs.len() ==> language::numeric_lang(sem, rs[i], word.push(event))));
                 assert(norm::transition_lang(g, theta, out, event, word)
-                    == model::regex_lang(g, theta, root@, seq![event] + word));
+                    == model::regex_lang(g, theta, root@, word.push(event)));
             } else {
-                language::lemma_lang_union(sem, rs, seq![event] + word);
+                language::lemma_lang_union(sem, rs, word.push(event));
                 assert(model::lift_regex(g, root@) == language::Regex::Union(rs));
                 if derivative_factor_combo(g, root, false, cs.len(), false, theta, event, word) {
                     let i = choose|i: int| 0 <= i < cs.len() && derivative_factor_language(g, root, false, i, theta, event, word);
-                    assert(language::numeric_lang(sem, rs[i], seq![event] + word));
+                    assert(language::numeric_lang(sem, rs[i], word.push(event)));
                 }
-                if exists|i: int| 0 <= i < rs.len() && language::numeric_lang(sem, rs[i], seq![event] + word) {
-                    let i = choose|i: int| 0 <= i < rs.len() && language::numeric_lang(sem, rs[i], seq![event] + word);
+                if exists|i: int| 0 <= i < rs.len() && language::numeric_lang(sem, rs[i], word.push(event)) {
+                    let i = choose|i: int| 0 <= i < rs.len() && language::numeric_lang(sem, rs[i], word.push(event));
+                    assert(derivative_factor_visited(g, root, false, cs.len(), i));
                     assert(derivative_factor_language(g, root, false, i, theta, event, word));
                     assert(derivative_factor_combo(g, root, false, cs.len(), false, theta, event, word));
                 }
                 assert(derivative_factor_combo(g, root, false, cs.len(), false, theta, event, word)
-                    == (exists|i: int| 0 <= i < rs.len() && language::numeric_lang(sem, rs[i], seq![event] + word)));
+                    == (exists|i: int| 0 <= i < rs.len() && language::numeric_lang(sem, rs[i], word.push(event))));
                 assert(norm::transition_lang(g, theta, out, event, word)
-                    == model::regex_lang(g, theta, root@, seq![event] + word));
+                    == model::regex_lang(g, theta, root@, word.push(event)));
             }
         }
     }
@@ -4263,7 +4345,7 @@ pub mod verify {
             model::RegexKindNode::Star(inner) => exists|d: TransitionId| inner < cache.len() && cache[inner as int] == Some(d)
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     ==> norm::transition_lang(g, theta, out, event, word)
-                        == norm::transition_append_combo(g, theta, d, seq![root], event, word),
+                        == norm::transition_prepend_combo(g, theta, d, seq![root], event, word),
             model::RegexKindNode::Not(inner) => exists|d: TransitionId| inner < cache.len() && cache[inner as int] == Some(d)
                 && norm::transition_result(g, norm::ActionShape::Not(d@), out),
             _ => derivative_correct(g, root@, out),
@@ -4285,28 +4367,28 @@ pub mod verify {
                 let d = choose|d: TransitionId| inner < cache.len() && cache[inner as int] == Some(d)
                     && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                         ==> norm::transition_lang(g, theta, out, event, word)
-                            == norm::transition_append_combo(g, theta, d, seq![root], event, word);
+                            == norm::transition_prepend_combo(g, theta, d, seq![root], event, word);
                 assert(derivative_correct(g, inner, d));
                 assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     implies norm::transition_lang(g, theta, out, event, word)
-                        == model::regex_lang(g, theta, root@, seq![event] + word) by {
+                        == model::regex_lang(g, theta, root@, word.push(event)) by {
                     let sem = model::gsem(theta);
                     let actual = language::interp_transition(sem, event, model::lift_transition(g, d@));
                     let expected = language::derivative(sem, event, model::lift_regex(g, inner));
-                    let tail = seq![model::lift_regex(g, root@)];
-                    assert(model::lift_regexes(g, model::regex_ids(seq![root])) =~= tail);
-                    language::lemma_concat_prepend(sem, actual, tail, word);
-                    language::lemma_concat_prepend(sem, expected, tail, word);
+                    let pre = seq![model::lift_regex(g, root@)];
+                    assert(model::lift_regexes(g, model::regex_ids(seq![root])) =~= pre);
+                    language::lemma_concat_snoc(sem, pre, actual, word);
+                    language::lemma_concat_snoc(sem, pre, expected, word);
                     assert forall|w: Seq<EventView>| language::numeric_lang(sem, actual, w) == language::numeric_lang(sem, expected, w) by {
                         language::lemma_derivative_correct(sem, event, model::lift_regex(g, inner), w);
                         assert(norm::transition_lang(g, theta, d, event, w)
-                            == model::regex_lang(g, theta, inner, seq![event] + w));
+                            == model::regex_lang(g, theta, inner, w.push(event)));
                     }
                     language::lemma_derivative_correct(sem, event, model::lift_regex(g, root@), word);
                     reveal(language::derivative);
-                    assert(seq![expected] + tail =~= seq![expected, model::lift_regex(g, root@)]);
+                    assert(pre.push(expected) =~= seq![model::lift_regex(g, root@), expected]);
                     assert(language::derivative(sem, event, model::lift_regex(g, root@))
-                        == language::Regex::Concat(seq![expected] + tail));
+                        == language::Regex::Concat(pre.push(expected)));
                 }
             },
             model::RegexKindNode::Not(inner) => {
@@ -4316,17 +4398,17 @@ pub mod verify {
                 assert(derivative_correct(g, inner, d));
                 assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     implies norm::transition_lang(g, theta, out, event, word)
-                        == model::regex_lang(g, theta, root@, seq![event] + word) by {
+                        == model::regex_lang(g, theta, root@, word.push(event)) by {
                     reveal(language::numeric_lang);
                 }
             },
             model::RegexKindNode::Empty | model::RegexKindNode::All | model::RegexKindNode::Epsilon | model::RegexKindNode::Test(_) => {
                 assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     implies norm::transition_lang(g, theta, out, event, word)
-                        == model::regex_lang(g, theta, root@, seq![event] + word) by {
+                        == model::regex_lang(g, theta, root@, word.push(event)) by {
                     reveal(language::numeric_lang); reveal(language::interp_transition);
-                    assert((seq![event] + word).len() == 1 + word.len());
-                    assert((seq![event] + word)[0] == event);
+                    assert(word.push(event).len() == 1 + word.len());
+                    if word.len() == 0 { assert(word.push(event)[0] == event); }
                 }
             },
             _ => {},
@@ -4645,7 +4727,7 @@ pub mod verify {
                 model::TransitionNode::If(_, a, b) => 1 + (if a < id { interp_node_work(g, a) } else { 0 })
                     + (if b < id { interp_node_work(g, b) } else { 0 }),
                 model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => 2 + interp_children_work(g, cs, id),
-                model::TransitionNode::Not(c) | model::TransitionNode::Append(c, _) =>
+                model::TransitionNode::Not(c) | model::TransitionNode::Prepend(c, _) =>
                     2 + if c < id { interp_node_work(g, c) } else { 0 },
             }
         }
@@ -4686,7 +4768,7 @@ pub mod verify {
             model::TransitionNode::Union(cs) => { interp_lemma_children_work_extends(a, b, cs, id); },
             model::TransitionNode::Intersect(cs) => { interp_lemma_children_work_extends(a, b, cs, id); },
             model::TransitionNode::Not(c) => { if c < id { interp_lemma_node_work_extends(a, b, c); } },
-            model::TransitionNode::Append(c, _) => { if c < id { interp_lemma_node_work_extends(a, b, c); } },
+            model::TransitionNode::Prepend(c, _) => { if c < id { interp_lemma_node_work_extends(a, b, c); } },
             _ => {},
         }
     }
@@ -4758,7 +4840,7 @@ pub mod verify {
         requires model::graph_wf(g), id@ < g.transitions.len(), interp_tasks_wf(g, pending),
             match g.transitions[id@ as int] {
                 model::TransitionNode::Not(c) => inner@ == c,
-                model::TransitionNode::Append(c, _) => inner@ == c,
+                model::TransitionNode::Prepend(c, _) => inner@ == c,
                 _ => false,
             },
         ensures interp_tasks_wf(g, pending.push((id, true)).push((inner, false))),
@@ -4808,8 +4890,8 @@ pub mod verify {
         match g.transitions[id@ as int] { model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => cs, _ => Seq::empty() }
     }
 
-    pub open spec fn transition_suffix(g: model::Graph, id: TransitionId) -> Seq<nat> {
-        match g.transitions[id@ as int] { model::TransitionNode::Append(_, cs) => cs, _ => Seq::empty() }
+    pub open spec fn transition_prefix(g: model::Graph, id: TransitionId) -> Seq<nat> {
+        match g.transitions[id@ as int] { model::TransitionNode::Prepend(_, cs) => cs, _ => Seq::empty() }
     }
 
     pub open(crate) spec fn child_interp_tasks(g: model::Graph, id: TransitionId, remaining: nat) -> Seq<(TransitionId, bool)> {
@@ -4837,8 +4919,8 @@ pub mod verify {
                 },
                 model::TransitionNode::Not(_) => if values.len() == 0 { None }
                     else { Some(values.drop_last().push(language::Regex::Not(Box::new(values.last())))) },
-                model::TransitionNode::Append(_, cs) => if values.len() == 0 { None }
-                    else { Some(values.drop_last().push(language::Regex::Concat(seq![values.last()] + model::lift_regexes(g, cs)))) },
+                model::TransitionNode::Prepend(_, cs) => if values.len() == 0 { None }
+                    else { Some(values.drop_last().push(language::Regex::Concat(model::lift_regexes(g, cs).push(values.last())))) },
                 _ => Some(values.push(interpreted(g, task.0, theta, event))),
             }
         }
@@ -4931,9 +5013,9 @@ pub mod verify {
                         }
                     }
                 },
-                model::TransitionNode::Append(_, cs) => {
+                model::TransitionNode::Prepend(_, cs) => {
                     if left.len() > 0 {
-                        norm::regex_concat_congruent(sem, seq![left.last()] + model::lift_regexes(g, cs), seq![right.last()] + model::lift_regexes(g, cs));
+                        norm::regex_concat_congruent(sem, model::lift_regexes(g, cs).push(left.last()), model::lift_regexes(g, cs).push(right.last()));
                     }
                 },
                 _ => {},
@@ -5082,7 +5164,7 @@ pub mod verify {
         model::lemma_graph_wf_elim(before);
         model::lemma_lift_transition_stable(before, after, task.0@);
         assert(before.transitions[task.0@ as int] == after.transitions[task.0@ as int]);
-        if let model::TransitionNode::Append(_, cs) = before.transitions[task.0@ as int] {
+        if let model::TransitionNode::Prepend(_, cs) = before.transitions[task.0@ as int] {
             model::lemma_graph_transition_wf(before, task.0@);
             assert(model::lift_regexes(before, cs) =~= model::lift_regexes(after, cs)) by {
                 assert forall|i: int| 0 <= i < cs.len() implies
@@ -5191,7 +5273,7 @@ pub mod verify {
     pub proof fn interp_expand_unary(g: model::Graph, id: TransitionId, inner: TransitionId, tasks: Seq<(TransitionId, bool)>, values: Seq<InterpRegex>, theta: Subst, event: EventView)
         requires model::graph_wf(g), id@ < g.transitions.len(),
             g.transitions[id@ as int] == model::TransitionNode::Not(inner@)
-                || g.transitions[id@ as int] == model::TransitionNode::Append(inner@, transition_suffix(g, id)),
+                || g.transitions[id@ as int] == model::TransitionNode::Prepend(inner@, transition_prefix(g, id)),
         ensures interp_run(g, tasks.push((id, false)), values, theta, event)
             == interp_run(g, tasks.push((id, true)).push((inner, false)), values, theta, event),
     {
@@ -5200,7 +5282,7 @@ pub mod verify {
         let term = model::lift_transition(g, inner@);
         match g.transitions[id@ as int] {
             model::TransitionNode::Not(_) => language::lemma_interp_not(sem, event, term),
-            model::TransitionNode::Append(_, cs) => language::lemma_interp_append(sem, event, term, model::lift_regexes(g, cs)),
+            model::TransitionNode::Prepend(_, cs) => language::lemma_interp_prepend(sem, event, term, model::lift_regexes(g, cs)),
             _ => {},
         }
         assert(tasks.push((id, false)).drop_last() =~= tasks);
@@ -5226,20 +5308,20 @@ pub mod verify {
         interp_run_unfold(g, tasks.push((chosen, false)), values, theta, event);
     }
 
-    pub proof fn interp_append_ids(g: model::Graph, ids: Seq<RegexId>, head: RegexId, suffix: Seq<nat>)
-        requires model::regex_ids(ids) == seq![head@] + suffix,
-        ensures lifted_values(g, ids) == seq![model::lift_regex(g, head@)] + model::lift_regexes(g, suffix),
+    pub proof fn interp_prepend_ids(g: model::Graph, ids: Seq<RegexId>, value: RegexId, prefix: Seq<nat>)
+        requires model::regex_ids(ids) == prefix.push(value@),
+        ensures lifted_values(g, ids) == model::lift_regexes(g, prefix).push(model::lift_regex(g, value@)),
     {
         reveal(model::regex_ids);
         assert(model::regex_ids(ids).len() == ids.len());
-        assert(ids.len() == 1 + suffix.len());
+        assert(ids.len() == 1 + prefix.len());
         assert forall|i: int| 0 <= i < ids.len() implies lifted_values(g, ids)[i]
-            == (seq![model::lift_regex(g, head@)] + model::lift_regexes(g, suffix))[i] by {
+            == (model::lift_regexes(g, prefix).push(model::lift_regex(g, value@)))[i] by {
             assert(model::regex_ids(ids)[i] == ids[i]@);
-            if i == 0 { assert(ids[i]@ == head@); }
-            else { assert(ids[i]@ == suffix[i - 1]); }
+            if i == prefix.len() { assert(ids[i]@ == value@); }
+            else { assert(ids[i]@ == prefix[i]); }
         }
-        assert(lifted_values(g, ids) =~= seq![model::lift_regex(g, head@)] + model::lift_regexes(g, suffix));
+        assert(lifted_values(g, ids) =~= model::lift_regexes(g, prefix).push(model::lift_regex(g, value@)));
     }
 
 
@@ -5248,17 +5330,17 @@ pub mod verify {
     { assert(model::lift_regexes(g, model::regex_ids(ids)) =~= lifted_values(g, ids)); }
 
     #[verifier::spinoff_prover]
-    pub proof fn interp_append_finish(
+    pub proof fn interp_prepend_finish(
         before: model::Graph, after: model::Graph, root: TransitionId,
-        pending: Seq<(TransitionId, bool)>, prior: Seq<RegexId>, head: RegexId,
+        pending: Seq<(TransitionId, bool)>, prior: Seq<RegexId>, value: RegexId,
         xs: Seq<RegexId>, values: Seq<RegexId>,
     )
         requires model::graph_wf(before), model::graph_wf(after), model::graph_extends(before, after),
-            root@ < before.transitions.len(), before.transitions[root@ as int] is Append,
+            root@ < before.transitions.len(), before.transitions[root@ as int] is Prepend,
             interp_tasks_wf(before, pending), norm::regex_ids_valid(before, prior),
-            prior.len() > 0, prior.last() == head, values.len() == prior.len(),
+            prior.len() > 0, prior.last() == value, values.len() == prior.len(),
             values == prior.drop_last().push(values.last()), values.last()@ < after.regexes.len(),
-            model::regex_ids(xs) == seq![head@] + transition_suffix(before, root),
+            model::regex_ids(xs) == transition_prefix(before, root).push(value@),
             forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta, theta.len())
                 ==> #[trigger] model::regex_lang(after, theta, values.last()@, word) == norm::concat_combo(after, theta, xs, word),
         ensures norm::regex_ids_valid(after, values),
@@ -5273,9 +5355,9 @@ pub mod verify {
         hide(model::test_holds); hide(model::lift_transition); hide(model::lift_regex);
         after.transitions.lemma_prefix_index_eq(before.transitions);
         assert(before.transitions[root@ as int] == after.transitions[root@ as int]);
-        assert(transition_suffix(before, root) == transition_suffix(after, root));
+        assert(transition_prefix(before, root) == transition_prefix(after, root));
         lifted_values_stable(before, after, prior);
-        interp_append_ids(after, xs, head, transition_suffix(after, root));
+        interp_prepend_ids(after, xs, value, transition_prefix(after, root));
         regex_concat_ids(after, xs);
         assert forall|i: int| 0 <= i < values.len() implies values[i]@ < after.regexes.len() by {
             if i < prior.len() - 1 { assert(values[i] == prior[i]); }
@@ -5290,22 +5372,22 @@ pub mod verify {
                 interp_run(after, pending, lifted_values(after, values), theta, event)) by {
             interp_same_configuration_extends(before, after, pending.push((root, true)), prior, theta, event);
             assert forall|word: Seq<EventView>| model::regex_lang(after, theta, values.last()@, word)
-                == language::numeric_lang(model::gsem(theta), language::Regex::Concat(seq![model::lift_regex(after, head@)]
-                    + model::lift_regexes(after, transition_suffix(after, root))), word) by {
+                == language::numeric_lang(model::gsem(theta), language::Regex::Concat(model::lift_regexes(after, transition_prefix(after, root))
+                    .push(model::lift_regex(after, value@))), word) by {
                 reveal(norm::concat_combo);
                 assert(model::regex_lang(after, theta, values.last()@, word) == norm::concat_combo(after, theta, xs, word));
                 assert(model::lift_regexes(after, model::regex_ids(xs)) == lifted_values(after, xs));
-                assert(lifted_values(after, xs) == seq![model::lift_regex(after, head@)] + model::lift_regexes(after, transition_suffix(after, root)));
+                assert(lifted_values(after, xs) == model::lift_regexes(after, transition_prefix(after, root)).push(model::lift_regex(after, value@)));
             }
             assert(lifted_values(after, values) =~= lifted_values(after, prior).drop_last().push(model::lift_regex(after, values.last()@)));
-            assert(lifted_values(after, prior).last() == model::lift_regex(after, head@));
+            assert(lifted_values(after, prior).last() == model::lift_regex(after, value@));
             assert forall|i: int, word: Seq<EventView>| 0 <= i < prior.len() implies
                 language::numeric_lang(model::gsem(theta), interp_action(after, (root, true), lifted_values(after, prior), theta, event)->Some_0[i], word)
                     == language::numeric_lang(model::gsem(theta), lifted_values(after, values)[i], word) by {
                 if i == prior.len() - 1 {
                     assert(model::regex_lang(after, theta, values.last()@, word)
-                        == language::numeric_lang(model::gsem(theta), language::Regex::Concat(seq![model::lift_regex(after, head@)]
-                            + model::lift_regexes(after, transition_suffix(after, root))), word));
+                        == language::numeric_lang(model::gsem(theta), language::Regex::Concat(model::lift_regexes(after, transition_prefix(after, root))
+                            .push(model::lift_regex(after, value@))), word));
                 }
             }
             interp_value_reduction(after, root, true, pending, lifted_values(after, prior), lifted_values(after, values), theta, event);

@@ -148,7 +148,7 @@ pub proof fn lemma_arun_set_children(g: model::Graph, cs: Seq<nat>, f: ChildShap
 pub proof fn lemma_xnf_children(g: model::Graph, cs: Seq<nat>, f: ChildShape)
     requires all_nf(g, cs), match f {
         ChildShape::Clean(_) => true, ChildShape::Not => true,
-        ChildShape::Append(r) => r < g.regexes.len() && regex_nf(model::lift_regex(g, r)),
+        ChildShape::Prepend(r) => r < g.regexes.len() && regex_nf(model::lift_regex(g, r)),
         ChildShape::PairLeft(o) => nf_sum(g, o), ChildShape::PairRight(o) => nf_sum(g, o),
     },
     ensures xnf_tasks(g, ctasks(cs, f)),
@@ -165,7 +165,7 @@ pub proof fn lemma_child_effect(e: model::Graph, g: model::Graph, task: ActionSh
     requires xctx(e, g, task, p0, v0), norm::transition_action_pushes(task), id < g.transitions.len(),
         all_nf(g, norm::transition_children(g, id)), match f {
             ChildShape::Clean(_) => true, ChildShape::Not => true,
-            ChildShape::Append(r) => r < g.regexes.len() && regex_nf(model::lift_regex(g, r)),
+            ChildShape::Prepend(r) => r < g.regexes.len() && regex_nf(model::lift_regex(g, r)),
             ChildShape::PairLeft(o) => nf_sum(g, o), ChildShape::PairRight(o) => nf_sum(g, o),
         },
         y == (if inter { av_meet(child_avs(g, norm::transition_children(g, id), f)) }
@@ -338,13 +338,13 @@ pub proof fn lemma_clean_not(e: model::Graph, g: model::Graph, p0: Seq<ActionSha
     assert(p0 + exp =~= p0.push(ActionShape::NotResult).push(t1));
 }
 
-/// `N(w N(ys))` is in the class of an append node over `ys`.
-pub proof fn lemma_app_link(g: model::Graph, t: nat, k: nat, rs: Seq<nat>, w: R)
-    requires model::graph_wf(g), t < g.transitions.len(), g.transitions[t as int] == model::TransitionNode::Append(k, rs),
+/// `N(N(ys) w)` is in the class of a prepend node over `ys`.
+pub proof fn lemma_prepend_link(g: model::Graph, t: nat, k: nat, rs: Seq<nat>, w: R)
+    requires model::graph_wf(g), t < g.transitions.len(), g.transitions[t as int] == model::TransitionNode::Prepend(k, rs),
         nf_sum(g, t), tcls(g, k, w),
     ensures tcls(g, t, cat_r(w, r_cat(model::lift_regexes(g, rs)))), regex_nf(w),
 {
-    lemma_append_cls(g, t, k, rs);
+    lemma_prepend_cls(g, t, k, rs);
     lemma_nf_children(g, t);
     lemma_cls_nf(g, k, w);
     let ys = model::lift_regexes(g, rs);
@@ -368,37 +368,37 @@ pub proof fn lemma_lifts_ids(e: model::Graph, g: model::Graph, xs: Seq<RegexId>)
     assert forall|i: int| 0 <= i < model::regex_ids(xs).len() implies #[trigger] model::regex_ids(xs)[i] < e.regexes.len() by {}
 }
 
-pub proof fn lemma_clean_append(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
+pub proof fn lemma_clean_prepend(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
     id: TransitionId, path: TestId, inner: TransitionId, xs: Seq<RegexId>, r: RegexId)
     requires xctx(e, g, ActionShape::Clean(id@, path@), p0, v0),
-        e.transitions[id@ as int] == model::TransitionNode::Append(inner@, model::regex_ids(xs)),
+        e.transitions[id@ as int] == model::TransitionNode::Prepend(inner@, model::regex_ids(xs)),
         norm::regex_ids_valid(e, xs), r@ < g.regexes.len(), norm::regex_concat_result(e, g, xs, r@),
     ensures xeffect(g, ActionShape::Clean(id@, path@), p0, v0,
-        p0.push(ActionShape::AppendResult(r@)).push(ActionShape::Clean(inner@, path@)), v0),
+        p0.push(ActionShape::PrependResult(r@)).push(ActionShape::Clean(inner@, path@)), v0),
 {
     reveal(xpre); reveal(xeffect); reveal(xrun); reveal(xcfg); reveal(xstep);
     let task = ActionShape::Clean(id@, path@);
     let rs = model::regex_ids(xs);
     lemma_nf_sum_stable(e, g, id@);
     lemma_nf_children(g, id@);
-    lemma_append_cls(g, id@, inner@, rs);
+    lemma_prepend_cls(g, id@, inner@, rs);
     lemma_lifts_ids(e, g, xs);
     lemma_concat_link(e, g, xs, r@);
     let ys = model::lift_regexes(g, rs);
     assert(all_rnf(ys)) by { assert forall|i: int| 0 <= i < ys.len() implies regex_nf(#[trigger] ys[i]) by {} }
     lemma_cat_nf(ys);
     let z = model::lift_regex(g, r@);
-    let y = av_app(av_of(g, inner@), z);
+    let y = av_prepend(av_of(g, inner@), z);
     assert forall|v: R| #[trigger] (y.x)(v) implies tcls(g, id@, v) by {
-        if app_of(av_of(g, inner@), z, v) {
+        if prepend_of(av_of(g, inner@), z, v) {
             let w = choose|w: R| (av_of(g, inner@).x)(w) && v == #[trigger] cat_r(w, z);
-            lemma_app_link(g, id@, inner@, rs, w);
+            lemma_prepend_link(g, id@, inner@, rs, w);
         }
     }
     assert forall|v: R| #[trigger] (y.y)(v) implies ycls(g, id@, v) by {}
     let s = vavs(g, v0);
     let t1 = ActionShape::Clean(inner@, path@);
-    let t2 = ActionShape::AppendResult(r@);
+    let t2 = ActionShape::PrependResult(r@);
     let exp = seq![t2, t1];
     assert(exp =~= seq![t2].push(t1));
     lemma_arun_push(g, seq![t2], t1, s);
@@ -468,7 +468,7 @@ pub proof fn lemma_not_double(e: model::Graph, g: model::Graph, p0: Seq<ActionSh
 
 pub proof fn lemma_not_wrap(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
     id: TransitionId, out: TransitionId)
-    requires xctx(e, g, ActionShape::Not(id@), p0, v0), e.transitions[id@ as int] is Append,
+    requires xctx(e, g, ActionShape::Not(id@), p0, v0), e.transitions[id@ as int] is Prepend,
         out@ < g.transitions.len(), g.transitions[out@ as int] == model::TransitionNode::Not(id@),
     ensures xeffect(g, ActionShape::Not(id@), p0, v0, p0, v0.push(out)),
 {
@@ -501,26 +501,26 @@ pub proof fn lemma_not_flip(e: model::Graph, g: model::Graph, p0: Seq<ActionShap
     lemma_replace_effect(e, g, task, p0, v0, t);
 }
 
-/// Not or Append over a conditional: the action on both branches under the test.
+/// Not or Prepend over a conditional: the action on both branches under the test.
 pub proof fn lemma_unary_if(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
-    id: TransitionId, test: TestId, a: TransitionId, b: TransitionId, suffix: Option<RegexId>)
-    requires xctx(e, g, match suffix { Some(r) => ActionShape::Append(id@, r@), None => ActionShape::Not(id@) }, p0, v0),
+    id: TransitionId, test: TestId, a: TransitionId, b: TransitionId, prefix: Option<RegexId>)
+    requires xctx(e, g, match prefix { Some(r) => ActionShape::Prepend(id@, r@), None => ActionShape::Not(id@) }, p0, v0),
         e.transitions[id@ as int] == model::TransitionNode::If(test@, a@, b@),
-    ensures xeffect(g, match suffix { Some(r) => ActionShape::Append(id@, r@), None => ActionShape::Not(id@) }, p0, v0,
-        norm::machine_unary_if_tasks(g, test, a, b, suffix, p0), v0),
+    ensures xeffect(g, match prefix { Some(r) => ActionShape::Prepend(id@, r@), None => ActionShape::Not(id@) }, p0, v0,
+        norm::machine_unary_if_tasks(g, test, a, b, prefix, p0), v0),
 {
     reveal(xpre); reveal(xeffect); reveal(xrun); reveal(xcfg); reveal(xstep);
-    let task = match suffix { Some(r) => ActionShape::Append(id@, r@), None => ActionShape::Not(id@) };
+    let task = match prefix { Some(r) => ActionShape::Prepend(id@, r@), None => ActionShape::Not(id@) };
     lemma_xpre_stable(e, g, task, p0, v0);
     lemma_nf_sum_stable(e, g, id@);
     lemma_if_cls(g, id@, test@, a@, b@);
     lemma_nf_children(g, id@);
-    let ta = match suffix { Some(r) => ActionShape::Append(a@, r@), None => ActionShape::Not(a@) };
-    let tb = match suffix { Some(r) => ActionShape::Append(b@, r@), None => ActionShape::Not(b@) };
-    match suffix {
+    let ta = match prefix { Some(r) => ActionShape::Prepend(a@, r@), None => ActionShape::Not(a@) };
+    let tb = match prefix { Some(r) => ActionShape::Prepend(b@, r@), None => ActionShape::Not(b@) };
+    match prefix {
         Some(r) => {
-            lemma_app_mono(av_of(g, a@), av_of(g, id@), model::lift_regex(g, r@));
-            lemma_app_mono(av_of(g, b@), av_of(g, id@), model::lift_regex(g, r@));
+            lemma_prepend_mono(av_of(g, a@), av_of(g, id@), model::lift_regex(g, r@));
+            lemma_prepend_mono(av_of(g, b@), av_of(g, id@), model::lift_regex(g, r@));
         },
         None => {
             lemma_neg_mono(av_of(g, a@), av_of(g, id@));
@@ -530,12 +530,12 @@ pub proof fn lemma_unary_if(e: model::Graph, g: model::Graph, p0: Seq<ActionShap
     lemma_cond_effect(e, g, task, p0, v0, ActionShape::CleanIf(test@, g.constants.test_true), tb, ta);
 }
 
-/// Not or Append over a set node: the action on each child, combined by the dual or same set action.
+/// Not or Prepend over a set node: the action on each child, combined by the dual or same set action.
 pub proof fn lemma_unary_children(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
-    id: TransitionId, suffix: Option<RegexId>, inter: bool)
-    requires xctx(e, g, match suffix { Some(r) => ActionShape::Append(id@, r@), None => ActionShape::Not(id@) }, p0, v0),
+    id: TransitionId, prefix: Option<RegexId>, inter: bool)
+    requires xctx(e, g, match prefix { Some(r) => ActionShape::Prepend(id@, r@), None => ActionShape::Not(id@) }, p0, v0),
         id@ < e.transitions.len(),
-        match suffix {
+        match prefix {
             Some(r) => !inter && e.transitions[id@ as int] is Union,
             None => match e.transitions[id@ as int] {
                 model::TransitionNode::Union(_) => inter,
@@ -543,12 +543,12 @@ pub proof fn lemma_unary_children(e: model::Graph, g: model::Graph, p0: Seq<Acti
                 _ => false,
             },
         },
-    ensures xeffect(g, match suffix { Some(r) => ActionShape::Append(id@, r@), None => ActionShape::Not(id@) }, p0, v0,
-        norm::machine_unary_child_tasks(g, id, suffix, inter, p0), v0),
+    ensures xeffect(g, match prefix { Some(r) => ActionShape::Prepend(id@, r@), None => ActionShape::Not(id@) }, p0, v0,
+        norm::machine_unary_child_tasks(g, id, prefix, inter, p0), v0),
 {
     reveal(xpre); reveal(xeffect); reveal(xrun); reveal(xcfg); reveal(xstep);
-    let task = match suffix { Some(r) => ActionShape::Append(id@, r@), None => ActionShape::Not(id@) };
-    let f = match suffix { Some(r) => ChildShape::Append(r@), None => ChildShape::Not };
+    let task = match prefix { Some(r) => ActionShape::Prepend(id@, r@), None => ActionShape::Not(id@) };
+    let f = match prefix { Some(r) => ChildShape::Prepend(r@), None => ChildShape::Not };
     lemma_xpre_stable(e, g, task, p0, v0);
     lemma_nf_sum_stable(e, g, id@);
     lemma_nf_children(g, id@);
@@ -570,13 +570,13 @@ pub proof fn lemma_unary_children(e: model::Graph, g: model::Graph, p0: Seq<Acti
     assert forall|i: int| 0 <= i < xs.len() implies #[trigger] av_le(xs[i], t) by {
         assert(xs[i] == push_av(g, norm::transition_child_shape(f, cs[i])));
         assert(av_le(av_of(g, cs[i]), av_of(g, id@)));
-        match suffix {
-            Some(r) => { lemma_app_mono(av_of(g, cs[i]), av_of(g, id@), model::lift_regex(g, r@)); },
+        match prefix {
+            Some(r) => { lemma_prepend_mono(av_of(g, cs[i]), av_of(g, id@), model::lift_regex(g, r@)); },
             None => { lemma_neg_mono(av_of(g, cs[i]), av_of(g, id@)); },
         }
     }
     assert forall|v: R| rconst(v) implies #[trigger] (t.x)(v) by {
-        match suffix {
+        match prefix {
             Some(r) => {},
             None => { lemma_cl_const(true, |w: R| neg_of(av_of(g, id@), w), v); },
         }
@@ -594,7 +594,7 @@ pub proof fn lemma_unary_children(e: model::Graph, g: model::Graph, p0: Seq<Acti
     lemma_child_effect(e, g, task, p0, v0, id@, f, inter, y);
 }
 
-// ===== append_step =====
+// ===== prepend_step =====
 
 /// Pushing a constant transition below an action whose class contains the constants.
 pub proof fn lemma_push_const(e: model::Graph, g: model::Graph, task: ActionShape, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
@@ -608,17 +608,17 @@ pub proof fn lemma_push_const(e: model::Graph, g: model::Graph, task: ActionShap
     lemma_effect_value(e, g, task, p0, v0, out);
 }
 
-pub proof fn lemma_append_eps(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
+pub proof fn lemma_prepend_eps(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
     id: TransitionId, r: RegexId)
-    requires xctx(e, g, ActionShape::Append(id@, r@), p0, v0), r@ == e.constants.epsilon,
-    ensures xeffect(g, ActionShape::Append(id@, r@), p0, v0, p0, v0.push(id)),
+    requires xctx(e, g, ActionShape::Prepend(id@, r@), p0, v0), r@ == e.constants.epsilon,
+    ensures xeffect(g, ActionShape::Prepend(id@, r@), p0, v0, p0, v0.push(id)),
 {
     reveal(xpre); reveal(xeffect); reveal(xrun); reveal(xcfg); reveal(xstep);
-    let task = ActionShape::Append(id@, r@);
+    let task = ActionShape::Prepend(id@, r@);
     lemma_nf_sum_stable(e, g, id@);
     norm::regex_constants(g);
     let s = model::lift_regex(g, r@);
-    assert forall|v: R| #[trigger] tcls(g, id@, v) implies (av_app(av_of(g, id@), s).x)(v) by {
+    assert forall|v: R| #[trigger] tcls(g, id@, v) implies (av_prepend(av_of(g, id@), s).x)(v) by {
         lemma_cls_nf(g, id@, v);
         lemma_cat_eps(v);
         assert(v == cat_r(v, s));
@@ -626,29 +626,29 @@ pub proof fn lemma_append_eps(e: model::Graph, g: model::Graph, p0: Seq<ActionSh
     lemma_effect_value(e, g, task, p0, v0, id);
 }
 
-pub proof fn lemma_append_empty(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
+pub proof fn lemma_prepend_empty(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
     id: TransitionId, r: RegexId, out: TransitionId)
-    requires xctx(e, g, ActionShape::Append(id@, r@), p0, v0), out@ == g.constants.transition_empty,
-    ensures xeffect(g, ActionShape::Append(id@, r@), p0, v0, p0, v0.push(out)),
+    requires xctx(e, g, ActionShape::Prepend(id@, r@), p0, v0), out@ == g.constants.transition_empty,
+    ensures xeffect(g, ActionShape::Prepend(id@, r@), p0, v0, p0, v0.push(out)),
 {
     reveal(xpre); reveal(xeffect); reveal(xrun); reveal(xcfg); reveal(xstep);
-    lemma_push_const(e, g, ActionShape::Append(id@, r@), p0, v0, out);
+    lemma_push_const(e, g, ActionShape::Prepend(id@, r@), p0, v0, out);
 }
 
-pub proof fn lemma_append_const(e: model::Graph, g1: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
+pub proof fn lemma_prepend_const(e: model::Graph, g1: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
     id: TransitionId, r: RegexId, head: RegexId, out_r: RegexId, out: TransitionId)
-    requires xctx(e, g, ActionShape::Append(id@, r@), p0, v0), model::graph_wf(g1), model::graph_extends(e, g1), model::graph_extends(g1, g),
+    requires xctx(e, g, ActionShape::Prepend(id@, r@), p0, v0), model::graph_wf(g1), model::graph_extends(e, g1), model::graph_extends(g1, g),
         e.transitions[id@ as int] == model::TransitionNode::Const(head@),
-        out_r@ < g1.regexes.len(), norm::regex_concat_result(e, g1, seq![head, r], out_r@),
+        out_r@ < g1.regexes.len(), norm::regex_concat_result(e, g1, seq![r, head], out_r@),
         out@ < g.transitions.len(), g.transitions[out@ as int] == model::TransitionNode::Const(out_r@),
-    ensures xeffect(g, ActionShape::Append(id@, r@), p0, v0, p0, v0.push(out)),
+    ensures xeffect(g, ActionShape::Prepend(id@, r@), p0, v0, p0, v0.push(out)),
 {
     reveal(xpre); reveal(xeffect); reveal(xrun); reveal(xcfg); reveal(xstep);
-    let task = ActionShape::Append(id@, r@);
+    let task = ActionShape::Prepend(id@, r@);
     lemma_xpre_stable(e, g, task, p0, v0);
     lemma_nf_sum_stable(e, g, id@);
     lemma_nf_children(e, id@);
-    let hs = seq![head, r];
+    let hs = seq![r, head];
     assert(norm::regex_ids_valid(e, hs)) by {
         assert forall|i: int| 0 <= i < hs.len() implies hs[i]@ < e.regexes.len() by {}
     }
@@ -658,37 +658,37 @@ pub proof fn lemma_append_const(e: model::Graph, g1: model::Graph, g: model::Gra
     lemma_regex_nf_stable(g1, g, out_r@);
     let x = model::lift_regex(g, head@);
     let s = model::lift_regex(g, r@);
-    assert(lifts(e, hs) =~= seq![x, s]);
-    assert(seq![x, s] =~= seq![x] + seq![s]);
-    lemma_rnf_seq2(seq![x, s]);
-    lemma_cat_nf(seq![x, s]);
+    assert(lifts(e, hs) =~= seq![s, x]);
+    assert(seq![s, x] =~= seq![s] + seq![x]);
+    lemma_rnf_seq2(seq![s, x]);
+    lemma_cat_nf(seq![s, x]);
     lemma_const_cls(g, id@, head@);
     lemma_const_cls(g, out@, out_r@);
     assert((av_of(g, id@).x)(x));
-    assert(app_of(av_of(g, id@), s, cat_r(x, s)));
+    assert(prepend_of(av_of(g, id@), s, cat_r(x, s)));
     lemma_nf_weaken(g, out@);
     lemma_effect_value(e, g, task, p0, v0, out);
 }
 
-pub proof fn lemma_append_nested(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
+pub proof fn lemma_prepend_nested(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
     id: TransitionId, r: RegexId, inner: TransitionId, children: Seq<RegexId>, combined: RegexId)
-    requires xctx(e, g, ActionShape::Append(id@, r@), p0, v0),
-        e.transitions[id@ as int] == model::TransitionNode::Append(inner@, model::regex_ids(children)),
+    requires xctx(e, g, ActionShape::Prepend(id@, r@), p0, v0),
+        e.transitions[id@ as int] == model::TransitionNode::Prepend(inner@, model::regex_ids(children)),
         norm::regex_ids_valid(e, children), combined@ < g.regexes.len(),
-        norm::regex_concat_result(e, g, children.push(r), combined@),
-    ensures xeffect(g, ActionShape::Append(id@, r@), p0, v0, p0.push(ActionShape::Append(inner@, combined@)), v0),
+        norm::regex_concat_result(e, g, seq![r] + children, combined@),
+    ensures xeffect(g, ActionShape::Prepend(id@, r@), p0, v0, p0.push(ActionShape::Prepend(inner@, combined@)), v0),
 {
     reveal(xpre); reveal(xeffect); reveal(xrun); reveal(xcfg); reveal(xstep);
-    let task = ActionShape::Append(id@, r@);
+    let task = ActionShape::Prepend(id@, r@);
     lemma_xpre_stable(e, g, task, p0, v0);
     lemma_nf_sum_stable(e, g, id@);
     lemma_nf_children(g, id@);
     let rs = model::regex_ids(children);
-    lemma_append_cls(g, id@, inner@, rs);
-    let cr = children.push(r);
+    lemma_prepend_cls(g, id@, inner@, rs);
+    let cr = seq![r] + children;
     assert(norm::regex_ids_valid(e, cr)) by {
         assert forall|i: int| 0 <= i < cr.len() implies cr[i]@ < e.regexes.len() by {
-            if i < children.len() { assert(cr[i] == children[i]); }
+            if i > 0 { assert(cr[i] == children[i - 1]); }
         }
     }
     lemma_concat_link(e, g, cr, combined@);
@@ -696,18 +696,23 @@ pub proof fn lemma_append_nested(e: model::Graph, g: model::Graph, p0: Seq<Actio
     lemma_regex_nf_stable(e, g, r@);
     let ys = model::lift_regexes(g, rs);
     let z = model::lift_regex(g, r@);
-    assert(lifts(e, cr) =~= ys.push(z));
-    assert(all_rnf(ys)) by { assert forall|i: int| 0 <= i < ys.len() implies regex_nf(#[trigger] ys[i]) by {} }
-    assert(all_rnf(ys.push(z))) by {
-        assert forall|i: int| 0 <= i < ys.push(z).len() implies regex_nf(#[trigger] ys.push(z)[i]) by {
-            if i < ys.len() { assert(ys.push(z)[i] == ys[i]); }
+    let joined = seq![z] + ys;
+    assert(lifts(e, cr) =~= joined) by {
+        assert forall|i: int| 0 <= i < cr.len() implies lifts(e, cr)[i] == joined[i] by {
+            if i > 0 { assert(cr[i] == children[i - 1]); assert(ys[i - 1] == lifts(e, children)[i - 1]); }
         }
     }
-    lemma_cat_nf(ys.push(z));
+    assert(all_rnf(ys)) by { assert forall|i: int| 0 <= i < ys.len() implies regex_nf(#[trigger] ys[i]) by {} }
+    assert(all_rnf(joined)) by {
+        assert forall|i: int| 0 <= i < joined.len() implies regex_nf(#[trigger] joined[i]) by {
+            if i > 0 { assert(joined[i] == ys[i - 1]); }
+        }
+    }
+    lemma_cat_nf(joined);
     let lc = model::lift_regex(g, combined@);
-    let t = ActionShape::Append(inner@, combined@);
-    assert forall|v: R| #[trigger] (push_av(g, t).x)(v) implies (av_app(av_of(g, id@), z).x)(v) by {
-        if app_of(av_of(g, inner@), lc, v) {
+    let t = ActionShape::Prepend(inner@, combined@);
+    assert forall|v: R| #[trigger] (push_av(g, t).x)(v) implies (av_prepend(av_of(g, id@), z).x)(v) by {
+        if prepend_of(av_of(g, inner@), lc, v) {
             let w = choose|w: R| (av_of(g, inner@).x)(w) && v == #[trigger] cat_r(w, lc);
             lemma_cls_nf(g, inner@, w);
             lemma_cat_shift(w, ys, z);
@@ -719,17 +724,17 @@ pub proof fn lemma_append_nested(e: model::Graph, g: model::Graph, p0: Seq<Actio
     lemma_replace_effect(e, g, task, p0, v0, t);
 }
 
-pub proof fn lemma_append_raw(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
+pub proof fn lemma_prepend_raw(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>,
     id: TransitionId, r: RegexId, xs: Seq<RegexId>, out: TransitionId)
-    requires xctx(e, g, ActionShape::Append(id@, r@), p0, v0),
+    requires xctx(e, g, ActionShape::Prepend(id@, r@), p0, v0),
         e.transitions[id@ as int] is Intersect || e.transitions[id@ as int] is Not,
         xs == seq![r] || e.regexes[r@ as int].kind == model::RegexKindNode::Concat(model::regex_ids(xs)),
         norm::regex_ids_valid(e, xs),
-        out@ < g.transitions.len(), g.transitions[out@ as int] == model::TransitionNode::Append(id@, model::regex_ids(xs)),
-    ensures xeffect(g, ActionShape::Append(id@, r@), p0, v0, p0, v0.push(out)),
+        out@ < g.transitions.len(), g.transitions[out@ as int] == model::TransitionNode::Prepend(id@, model::regex_ids(xs)),
+    ensures xeffect(g, ActionShape::Prepend(id@, r@), p0, v0, p0, v0.push(out)),
 {
     reveal(xpre); reveal(xeffect); reveal(xrun); reveal(xcfg); reveal(xstep);
-    let task = ActionShape::Append(id@, r@);
+    let task = ActionShape::Prepend(id@, r@);
     lemma_xpre_stable(e, g, task, p0, v0);
     lemma_nf_sum_stable(e, g, id@);
     let rs = model::regex_ids(xs);
@@ -740,7 +745,7 @@ pub proof fn lemma_append_raw(e: model::Graph, g: model::Graph, p0: Seq<ActionSh
     if xs == seq![r] {
         assert(ls =~= seq![z]);
         assert(all_rnf(ls)) by { assert forall|i: int| 0 <= i < 1 implies regex_nf(#[trigger] ls[i]) by {} }
-        assert forall|w: R| #[trigger] ccat(g, w, rs) == cat_r(w, z) by { assert(seq![w] + ls =~= seq![w, z]); }
+        assert forall|w: R| #[trigger] ccat(g, w, rs) == cat_r(w, z) by { assert(ls.push(w) =~= seq![z, w]); }
     } else {
         lemma_regex_lift(e, r@);
         assert(model::lift_regexes(e, rs) =~= ls) by {
@@ -752,8 +757,8 @@ pub proof fn lemma_append_raw(e: model::Graph, g: model::Graph, p0: Seq<ActionSh
         lemma_cat_list(ls);
         assert forall|w: R| regex_nf(w) implies #[trigger] ccat(g, w, rs) == cat_r(w, z) by { lemma_cat_nest(w, ls); }
     }
-    lemma_append_cls(g, out@, id@, rs);
-    assert forall|v: R| #[trigger] tcls(g, out@, v) implies (av_app(av_of(g, id@), z).x)(v) by {
+    lemma_prepend_cls(g, out@, id@, rs);
+    assert forall|v: R| #[trigger] tcls(g, out@, v) implies (av_prepend(av_of(g, id@), z).x)(v) by {
         if !rconst(v) {
             let w = choose|w: R| tcls(g, id@, w) && v == #[trigger] ccat(g, w, rs);
             lemma_cls_nf(g, id@, w);
@@ -1280,14 +1285,14 @@ pub proof fn lemma_step_clean_if(e: model::Graph, g: model::Graph, p0: Seq<Actio
     assert(p0 + seq![t] =~= p0.push(t));
 }
 
-/// `NotResult` and `AppendResult(r)`: the unary action on the last value.
-pub proof fn lemma_step_result(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>, suffix: Option<nat>)
-    requires xctx(e, g, match suffix { Some(r) => ActionShape::AppendResult(r), None => ActionShape::NotResult }, p0, v0), v0.len() > 0,
-    ensures xeffect(g, match suffix { Some(r) => ActionShape::AppendResult(r), None => ActionShape::NotResult }, p0, v0,
-        p0.push(match suffix { Some(r) => ActionShape::Append(v0.last()@, r), None => ActionShape::Not(v0.last()@) }), v0.drop_last()),
+/// `NotResult` and `PrependResult(r)`: the unary action on the last value.
+pub proof fn lemma_step_result(e: model::Graph, g: model::Graph, p0: Seq<ActionShape>, v0: Seq<TransitionId>, prefix: Option<nat>)
+    requires xctx(e, g, match prefix { Some(r) => ActionShape::PrependResult(r), None => ActionShape::NotResult }, p0, v0), v0.len() > 0,
+    ensures xeffect(g, match prefix { Some(r) => ActionShape::PrependResult(r), None => ActionShape::NotResult }, p0, v0,
+        p0.push(match prefix { Some(r) => ActionShape::Prepend(v0.last()@, r), None => ActionShape::Not(v0.last()@) }), v0.drop_last()),
 {
     reveal(xpre); reveal(xeffect); reveal(xrun); reveal(xcfg); reveal(xstep);
-    let task = match suffix { Some(r) => ActionShape::AppendResult(r), None => ActionShape::NotResult };
+    let task = match prefix { Some(r) => ActionShape::PrependResult(r), None => ActionShape::NotResult };
     lemma_xpre_stable(e, g, task, p0, v0);
     let n = v0.len() as int;
     let s = vavs(g, v0);
@@ -1295,7 +1300,7 @@ pub proof fn lemma_step_result(e: model::Graph, g: model::Graph, p0: Seq<ActionS
     lemma_vavs_take(g, v0, n - 1);
     assert(v0.drop_last() == v0.take(n - 1));
     assert(s.drop_last() =~= s.take(n - 1));
-    let t = match suffix { Some(r) => ActionShape::Append(v0.last()@, r), None => ActionShape::Not(v0.last()@) };
+    let t = match prefix { Some(r) => ActionShape::Prepend(v0.last()@, r), None => ActionShape::Not(v0.last()@) };
     lemma_arun_one(g, t, s.take(n - 1));
     lemma_aref_refl(s.take(n - 1).push(push_av(g, t)));
     lemma_xnf_values_sub(g, v0, 0, n - 1);
@@ -1430,37 +1435,37 @@ pub proof fn lemma_ite_start(e: model::Graph, g1: model::Graph, test: nat, a: na
     lemma_ite_future(g1, a, b, id1, path);
 }
 
-/// `append` before running the append action: the action is typed, and its run bound is the
-/// class bound of `append` over the lifted suffix.
-pub proof fn lemma_app_future(e: model::Graph, g1: model::Graph, this: nat, suffix: Seq<RegexId>, r: nat)
+/// `prepend` before running the prepend action: the action is typed, and its run bound is the
+/// class bound of `prepend` over the lifted prefix.
+pub proof fn lemma_prepend_future(e: model::Graph, g1: model::Graph, this: nat, prefix: Seq<RegexId>, r: nat)
     requires model::graph_wf(e), model::graph_wf(g1), model::graph_extends(e, g1), this < e.transitions.len(),
-        nf_sum(e, this), ids_nf(e, suffix), norm::regex_ids_valid(e, suffix),
-        r < g1.regexes.len(), norm::regex_concat_result(e, g1, suffix, r),
-    ensures xnf_task(g1, ActionShape::Append(this, r)),
-        forall|h: model::Graph, out: nat| model::graph_extends(g1, h) && #[trigger] run_bound(h, ActionShape::Append(this, r), out)
-            ==> app_bound(h, out, this, lifts(h, suffix)),
+        nf_sum(e, this), ids_nf(e, prefix), norm::regex_ids_valid(e, prefix),
+        r < g1.regexes.len(), norm::regex_concat_result(e, g1, prefix, r),
+    ensures xnf_task(g1, ActionShape::Prepend(this, r)),
+        forall|h: model::Graph, out: nat| model::graph_extends(g1, h) && #[trigger] run_bound(h, ActionShape::Prepend(this, r), out)
+            ==> prepend_bound(h, out, this, lifts(h, prefix)),
 {
     lemma_nf_sum_stable(e, g1, this);
-    lemma_concat_link(e, g1, suffix, r);
-    let ys = lifts(e, suffix);
+    lemma_concat_link(e, g1, prefix, r);
+    let ys = lifts(e, prefix);
     assert(all_rnf(ys)) by {
         assert forall|i: int| 0 <= i < ys.len() implies regex_nf(#[trigger] ys[i]) by {}
     }
     lemma_cat_nf(ys);
-    assert forall|h: model::Graph, out: nat| model::graph_extends(g1, h) && #[trigger] run_bound(h, ActionShape::Append(this, r), out)
-        implies app_bound(h, out, this, lifts(h, suffix)) by {
+    assert forall|h: model::Graph, out: nat| model::graph_extends(g1, h) && #[trigger] run_bound(h, ActionShape::Prepend(this, r), out)
+        implies prepend_bound(h, out, this, lifts(h, prefix)) by {
         lemma_regex_nf_stable(g1, h, r);
-        lemma_lifts_ids(e, h, suffix);
+        lemma_lifts_ids(e, h, prefix);
         lemma_nf_sum_stable(g1, h, this);
         norm::transition_lemma_extends_transitive(e, g1, h);
         let z = model::lift_regex(h, r);
-        assert forall|v: R| #[trigger] tcls(h, out, v) implies rconst(v) || exists|w: R| tcls(h, this, w) && v == #[trigger] cat_front(w, ys) by {
+        assert forall|v: R| #[trigger] tcls(h, out, v) implies rconst(v) || exists|w: R| tcls(h, this, w) && v == #[trigger] cat_back(w, ys) by {
             assert((av_of(h, out).x)(v));
             if !rconst(v) {
                 let w = choose|w: R| (av_of(h, this).x)(w) && v == #[trigger] cat_r(w, z);
                 lemma_cls_nf(h, this, w);
                 lemma_cat_nest(w, ys);
-                assert(tcls(h, this, w) && v == cat_front(w, ys));
+                assert(tcls(h, this, w) && v == cat_back(w, ys));
             }
         }
     }

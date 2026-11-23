@@ -216,7 +216,7 @@ pub proof fn lemma_ids_nf1(g: model::Graph, s: Seq<RegexId>, r: RegexId)
 pub proof fn lemma_dbound_star(g0: model::Graph, g: model::Graph, root: RegexId, inner: nat, d: nat, out: nat)
     requires model::graph_wf(g0), model::graph_wf(g), model::graph_extends(g0, g), root@ < g0.regexes.len(),
         g0.regexes[root@ as int].kind == model::RegexKindNode::Star(inner), d < g0.transitions.len(),
-        dbound(g0, inner, d), (nf_sum(g0, d) && ids_nf(g0, seq![root])) ==> app_bound(g, out, d, lifts(g, seq![root])),
+        dbound(g0, inner, d), (nf_sum(g0, d) && ids_nf(g0, seq![root])) ==> prepend_bound(g, out, d, lifts(g, seq![root])),
     ensures dbound(g, root@, out),
 {
     reveal(dbound);
@@ -236,11 +236,11 @@ pub proof fn lemma_dbound_star(g0: model::Graph, g: model::Graph, root: RegexId,
         assert forall|v: R| #[trigger] tcls(g, out, v) implies lp(p, v) by {
             lemma_cls_nf(g, out, v);
             if rconst(v) { lemma_const_lp(p, v); } else {
-                let w = choose|w: R| tcls(g, d, w) && v == #[trigger] cat_front(w, lifts(g, seq![root]));
+                let w = choose|w: R| tcls(g, d, w) && v == #[trigger] cat_back(w, lifts(g, seq![root]));
                 assert(tcls(g0, d, w));
                 assert((m.prod)(b, w));
-                assert(seq![w] + seq![p] =~= seq![w, p]);
-                assert(v == m.cat2(w, p));
+                assert(seq![p].push(w) =~= seq![p, w]);
+                assert(v == m.cat2(p, w));
                 assert((m.body)(p) == b);
                 assert(m.star_lit(p, v));
                 lemma_cl_base(false, |x: R| m.star_lit(p, x), v);
@@ -337,17 +337,16 @@ pub proof fn lemma_factor_set(g: model::Graph, root: nat, i: int, d: nat)
     }
 }
 
-/// The append of the derivative of a list element to the following elements is a factor of the
-/// list's derivative.
-pub proof fn lemma_factor_concat(g: model::Graph, root: nat, i: int, d: nat, suffix: Seq<RegexId>, out: nat)
+/// Prepending the preceding list elements to a child derivative yields a factor of the list derivative.
+pub proof fn lemma_factor_concat(g: model::Graph, root: nat, i: int, d: nat, prefix: Seq<RegexId>, out: nat)
     requires model::graph_wf(g), root < g.regexes.len(), d < g.transitions.len(),
         match g.regexes[root as int].kind {
             model::RegexKindNode::Concat(cs) => 0 <= i < cs.len() && dbound(g, cs[i], d)
-                && model::regex_ids(suffix) == cs.subrange(i + 1, cs.len() as int),
+                && model::regex_ids(prefix) == cs.subrange(0, i),
             _ => false,
         },
-        norm::regex_ids_valid(g, suffix),
-        (nf_sum(g, d) && ids_nf(g, suffix)) ==> app_bound(g, out, d, lifts(g, suffix)),
+        norm::regex_ids_valid(g, prefix),
+        (nf_sum(g, d) && ids_nf(g, prefix)) ==> prepend_bound(g, out, d, lifts(g, prefix)),
     ensures regex_nf(model::lift_regex(g, root)) ==> fbound(g, root, out),
 {
     reveal(dbound);
@@ -364,37 +363,36 @@ pub proof fn lemma_factor_concat(g: model::Graph, root: nat, i: int, d: nat, suf
         assert(o == model::lift_regex(g, cs[i]));
         assert(regex_nf(o));
         assert(dclass(g, d, o));
-        let ys = lifts(g, suffix);
-        let sub = cs.subrange(i + 1, cs.len() as int);
-        assert(model::regex_ids(suffix).len() == suffix.len());
-        assert(ys.len() == es.skip(i + 1).len());
-        assert forall|j: int| 0 <= j < ys.len() implies ys[j] == es.skip(i + 1)[j] && regex_nf(#[trigger] model::lift_regex(g, suffix[j]@)) by {
-            assert(model::regex_ids(suffix)[j] == suffix[j]@);
-            assert(model::regex_ids(suffix)[j] == sub[j]);
-            assert(sub[j] == cs[i + 1 + j]);
-            assert(es.skip(i + 1)[j] == es[i + 1 + j]);
-            assert(es[i + 1 + j] == model::lift_regex(g, cs[i + 1 + j]));
-            assert(ys[j] == model::lift_regex(g, suffix[j]@));
+        let ys = lifts(g, prefix);
+        let sub = cs.subrange(0, i);
+        assert(model::regex_ids(prefix).len() == prefix.len());
+        assert(ys.len() == es.take(i).len());
+        assert forall|j: int| 0 <= j < ys.len() implies ys[j] == es.take(i)[j] && regex_nf(#[trigger] model::lift_regex(g, prefix[j]@)) by {
+            assert(model::regex_ids(prefix)[j] == prefix[j]@);
+            assert(model::regex_ids(prefix)[j] == sub[j]);
+            assert(sub[j] == cs[j]);
+            assert(es.take(i)[j] == es[j]);
+            assert(es[j] == model::lift_regex(g, cs[j]));
+            assert(ys[j] == model::lift_regex(g, prefix[j]@));
         }
-        assert(ys =~= es.skip(i + 1));
-        assert(ids_nf(g, suffix));
+        assert(ys =~= es.take(i));
+        assert(ids_nf(g, prefix));
         assert forall|v: R| #[trigger] tcls(g, out, v) implies lp(p, v) by {
             lemma_cls_nf(g, out, v);
             if rconst(v) { lemma_const_lp(p, v); } else {
-                let w = choose|w: R| tcls(g, d, w) && v == #[trigger] cat_front(w, ys);
+                let w = choose|w: R| tcls(g, d, w) && v == #[trigger] cat_back(w, ys);
                 assert((m.prod)(o, w) && (m.lit)(o, w));
                 lemma_cls_nf(g, d, w);
-                if i < es.len() - 1 {
-                    assert(v == (m.ncat)(seq![w] + es.skip(i + 1)));
-                    assert(m.list_lit(p, v));
-                } else {
-                    assert(es.skip(i + 1) =~= Seq::<R>::empty());
-                    assert(seq![w] + es.skip(i + 1) =~= seq![w]);
+                if i == 0 {
+                    assert(es.take(i) =~= Seq::<R>::empty());
+                    assert(es.take(i).push(w) =~= seq![w]);
                     lemma_cat_single(m, w);
                     assert(v == w);
-                    assert(es.last() == o);
-                    assert(m.list_lit(p, v));
+                    assert(es[0] == o);
+                } else {
+                    assert(v == (m.ncat)(es.take(i).push(w)));
                 }
+                assert(m.list_lit(p, v));
                 lemma_cl_base(false, |x: R| m.list_lit(p, x), v);
                 assert(m.lit_shape(p, v));
                 lemma_lit_to_lp(p, v);
@@ -403,16 +401,16 @@ pub proof fn lemma_factor_concat(g: model::Graph, root: nat, i: int, d: nat, suf
     }
 }
 
-/// `lemma_factor_concat` with the cache and suffix read in the graph `g0` before the append.
-pub proof fn lemma_factor_concat2(g0: model::Graph, g: model::Graph, root: nat, i: int, d: nat, suffix: Seq<RegexId>, out: nat)
+/// `lemma_factor_concat` with the cache and prefix read in the graph `g0` before the prepend.
+pub proof fn lemma_factor_concat2(g0: model::Graph, g: model::Graph, root: nat, i: int, d: nat, prefix: Seq<RegexId>, out: nat)
     requires model::graph_wf(g0), model::graph_wf(g), model::graph_extends(g0, g), root < g0.regexes.len(), d < g0.transitions.len(),
         match g0.regexes[root as int].kind {
             model::RegexKindNode::Concat(cs) => 0 <= i < cs.len() && dbound(g0, cs[i], d)
-                && model::regex_ids(suffix) == cs.subrange(i + 1, cs.len() as int),
+                && model::regex_ids(prefix) == cs.subrange(0, i),
             _ => false,
         },
-        norm::regex_ids_valid(g0, suffix),
-        (nf_sum(g0, d) && ids_nf(g0, suffix)) ==> app_bound(g, out, d, lifts(g, suffix)),
+        norm::regex_ids_valid(g0, prefix),
+        (nf_sum(g0, d) && ids_nf(g0, prefix)) ==> prepend_bound(g, out, d, lifts(g, prefix)),
     ensures regex_nf(model::lift_regex(g, root)) ==> fbound(g, root, out),
 {
     lemma_regex_nf_stable(g0, g, root);
@@ -426,18 +424,18 @@ pub proof fn lemma_factor_concat2(g0: model::Graph, g: model::Graph, root: nat, 
     assert(cs[i] < g0.regexes.len());
     lemma_dbound_stable(g0, g, cs[i], d);
     lemma_nf_sum_stable(g0, g, d);
-    lemma_lifts_ids(g0, g, suffix);
-    if ids_nf(g, suffix) {
-        assert forall|j: int| 0 <= j < suffix.len() implies regex_nf(#[trigger] model::lift_regex(g0, suffix[j]@)) by {
-            assert(lifts(g0, suffix)[j] == lifts(g, suffix)[j]);
-            assert(regex_nf(model::lift_regex(g, suffix[j]@)));
+    lemma_lifts_ids(g0, g, prefix);
+    if ids_nf(g, prefix) {
+        assert forall|j: int| 0 <= j < prefix.len() implies regex_nf(#[trigger] model::lift_regex(g0, prefix[j]@)) by {
+            assert(lifts(g0, prefix)[j] == lifts(g, prefix)[j]);
+            assert(regex_nf(model::lift_regex(g, prefix[j]@)));
         }
-        assert(ids_nf(g0, suffix));
+        assert(ids_nf(g0, prefix));
     }
-    assert(norm::regex_ids_valid(g, suffix)) by {
-        assert forall|j: int| 0 <= j < suffix.len() implies suffix[j]@ < g.regexes.len() by {}
+    assert(norm::regex_ids_valid(g, prefix)) by {
+        assert forall|j: int| 0 <= j < prefix.len() implies prefix[j]@ < g.regexes.len() by {}
     }
-    lemma_factor_concat(g, root, i, d, suffix, out);
+    lemma_factor_concat(g, root, i, d, prefix, out);
 }
 
 /// A closure of literals and products of an intersection state consists of literals and
@@ -524,7 +522,7 @@ pub proof fn lemma_derive_future(g0: model::Graph, root: nat, results: Seq<Trans
 
 /// What `RegexId::derivative_step` establishes for the transition `out` it builds for `root`
 /// (`g0` is the graph before the constructors, `cache` the derivative cache): constants, the
-/// conditional of a test, the class bounds of `append`/`not` on the cached derivative of the
+/// conditional of a test, the class bounds of `prepend`/`not` on the cached derivative of the
 /// body, and [`dbound`] itself for sets and lists (from `DerivativeFactors::derive`).
 pub open spec fn native_bound(g0: model::Graph, g: model::Graph, root: RegexId, cache: Seq<Option<TransitionId>>, out: nat) -> bool {
     match g0.regexes[root@ as int].kind {
@@ -535,7 +533,7 @@ pub open spec fn native_bound(g0: model::Graph, g: model::Graph, root: RegexId, 
             ==> ite_bound(g, out, g0.constants.transition_epsilon, g0.constants.transition_empty),
         model::RegexKindNode::Star(inner) => inner < cache.len() && cache[inner as int] is Some
             && ((nf_sum(g0, cache[inner as int]->Some_0@) && ids_nf(g0, seq![root]))
-                ==> app_bound(g, out, cache[inner as int]->Some_0@, lifts(g, seq![root]))),
+                ==> prepend_bound(g, out, cache[inner as int]->Some_0@, lifts(g, seq![root]))),
         model::RegexKindNode::Not(inner) => inner < cache.len() && cache[inner as int] is Some
             && (nf_sum(g0, cache[inner as int]->Some_0@) ==> run_bound(g, ActionShape::Not(cache[inner as int]->Some_0@), out)),
         _ => dbound(g, root@, out),

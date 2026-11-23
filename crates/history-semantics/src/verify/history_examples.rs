@@ -167,8 +167,8 @@ pub(crate) fn fold_decision<L: Limits>(
         let word = history_store::store::verify::events_view(events@);
         assert(progress::residual_folds(*pair, bindings@, residual, word, out));
         assert(model::regex_lang(graph, bindings@, out@, Seq::<EventView>::empty())
-            == model::regex_lang(graph, bindings@, residual@, word + Seq::<EventView>::empty()));
-        assert(word + Seq::<EventView>::empty() =~= word);
+            == model::regex_lang(graph, bindings@, residual@, Seq::<EventView>::empty() + word));
+        assert(Seq::<EventView>::empty() + word =~= word);
         language::lemma_nullable_iff_nil(model::gsem(bindings@), model::lift_regex(graph, out@));
         model::lemma_graph_wf_elim(entry.store.graph());
         model::lemma_lift_regex_stable(entry.store.graph(), graph, residual@);
@@ -191,22 +191,23 @@ pub(crate) proof fn cache_rejects_wrong_residual(
         pair.root@ == pair.store.graph().constants.empty,
         cursor.residual@ == pair.store.graph().constants.all,
         snapshots.contains_key((cursor.history, cursor.revision)),
-        cursor.consumed <= snapshots[(cursor.history, cursor.revision)].len(),
+        cursor.consumed <= cursor.target_len <= snapshots[(cursor.history, cursor.revision)].len(),
         language::event_wf(cursor.bindings@, cursor.bindings@.len()),
     ensures !cache::cursor_matches_snapshot(pair, cursor, snapshots),
         !cache::cursor_cache_wf(pair, seq![cursor], snapshots),
 {
     let graph = pair.store.graph();
     let empty = Seq::<EventView>::empty();
-    let prefix = snapshots[(cursor.history, cursor.revision)].take(cursor.consumed as int);
+    let suffix = snapshots[(cursor.history, cursor.revision)].subrange(
+        cursor.target_len - cursor.consumed, cursor.target_len as int);
     model::lemma_graph_wf_elim(graph);
     assert(model::lift_regex(graph, pair.root@) == Regex::Empty);
     assert(model::lift_regex(graph, cursor.residual@) == Regex::All);
     assert(model::regex_lang(graph, cursor.bindings@, cursor.residual@, empty));
-    assert(!model::regex_lang(graph, cursor.bindings@, pair.root@, prefix + empty));
+    assert(!model::regex_lang(graph, cursor.bindings@, pair.root@, empty + suffix));
     if cache::cursor_matches_snapshot(pair, cursor, snapshots) {
         assert(model::regex_lang(graph, cursor.bindings@, cursor.residual@, empty)
-            == model::regex_lang(graph, cursor.bindings@, pair.root@, prefix + empty));
+            == model::regex_lang(graph, cursor.bindings@, pair.root@, empty + suffix));
     }
     if cache::cursor_cache_wf(pair, seq![cursor], snapshots) {
         assert(seq![cursor][0] == cursor);
@@ -251,7 +252,7 @@ pub(crate) fn cached_decision<L: Limits>(
             runtime.snapshots@[(stored.id(), stored.revision())] == stored@.events,
             cache::batch_matches_snapshot(runtime.pair, cursor, stored.id(), stored.revision(),
                 *bindings, runtime.snapshots@),
-            cursor.consumed <= target_len, target_len <= stored@.events.len(),
+            cursor.target_len == target_len, cursor.consumed <= target_len <= stored@.events.len(),
             language::event_wf(bindings@, bindings@.len()), batch_size > 0,
         decreases target_len - cursor.consumed,
     {

@@ -275,10 +275,12 @@ capabilities.
 
 Related policies and histories share one `Arc<Store<E>>`. Constants, candidates and
 appended events use coordinate-specific codebooks, so evaluation reuses numeric
-history without encoding its raw events again. Rules retain up to 16 residual cursors
-keyed by history owner and bindings. An unchanged history reuses its progress; an
-append processes the new suffix. Shortening a history invalidates that owner's
-cursors.
+history without encoding its raw events again. Each rule retains up to 16 cursors
+keyed by history owner and bindings. A cursor scans backwards from the requested
+endpoint. Repeating that endpoint resumes where it stopped. After an append, recent
+events may settle the decision on their own. If they return the matcher to its root,
+it can reuse the cached result for the older history; otherwise it rereads as far
+back as needed. Shortening a history invalidates that owner's cursors.
 
 Optional precompilation explores at most 64 states per rule. States beyond that
 frontier use the exact transition-DAG evaluator, so reaching the budget changes the
@@ -287,17 +289,17 @@ execution path without approximating the language.
 ### Benchmark results
 
 The following are historical same-host medians against `origin/main` at `684911c`.
-They predate the shared-core extraction and do not measure that extraction's latency.
+They predate both the shared-core extraction and right derivatives.
 The runs used 10 Criterion samples, a one-second warmup and a three-second measurement
 window on an Azure development host. They are regression evidence, not portable
 latency claims or a ranking against other engines.
 
 #### Growing residuals
 
-The policy language is $\Sigma^* \cdot Read \cdot \Sigma^{w+1}$. On an all-read history
-shorter than the required suffix, each derivative adds another candidate suffix to the
-residual DAG. The complete DFA grows exponentially with $w$; precompilation stops at
-the per-rule state budget.
+The benchmark uses $\Sigma^* \cdot Read \cdot \Sigma^{w+1}$. In the measured
+left-derivative implementation, each read in a history shorter than the required
+suffix added a candidate suffix to the residual DAG. Precompilation stopped at the
+per-rule state budget.
 
 | Window | Main compile | Precompiled | Compile cost |
 |---:|---:|---:|---:|

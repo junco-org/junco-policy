@@ -54,12 +54,12 @@ pub open spec fn neg_of(a: AV, w: R) -> bool {
     exists|x: R| (a.x)(x) && w == #[trigger] r_not(x)
 }
 
-/// `N(w s)`.
+/// `N(s w)`.
 pub open spec fn cat_r(w: R, s: R) -> R {
-    r_cat(seq![w, s])
+    r_cat(seq![s, w])
 }
 
-pub open spec fn app_of(a: AV, s: R, v: R) -> bool {
+pub open spec fn prepend_of(a: AV, s: R, v: R) -> bool {
     exists|w: R| (a.x)(w) && v == #[trigger] cat_r(w, s)
 }
 
@@ -83,8 +83,8 @@ pub open spec fn av_neg(a: AV) -> AV {
     AV { x: |v: R| cl(true, |w: R| neg_of(a, w), v), y: top_cls() }
 }
 
-pub open spec fn av_app(a: AV, s: R) -> AV {
-    AV { x: |v: R| rconst(v) || app_of(a, s, v), y: top_cls() }
+pub open spec fn av_prepend(a: AV, s: R) -> AV {
+    AV { x: |v: R| rconst(v) || prepend_of(a, s, v), y: top_cls() }
 }
 
 /// Abstract effect of an action (mirrors `guarded_apply`).
@@ -92,7 +92,7 @@ pub open spec fn aapply(g: model::Graph, action: ActionShape, s: Seq<AV>) -> Opt
     match action {
         ActionShape::Clean(id, path) => Some(s.push(av_of(g, id))),
         ActionShape::Not(id) => Some(s.push(av_neg(av_of(g, id)))),
-        ActionShape::Append(id, r) => Some(s.push(av_app(av_of(g, id), model::lift_regex(g, r)))),
+        ActionShape::Prepend(id, r) => Some(s.push(av_prepend(av_of(g, id), model::lift_regex(g, r)))),
         ActionShape::Pair(a, b) => Some(s.push(av_meet(seq![av_of(g, a), av_of(g, b)]))),
         ActionShape::Union(count) => if count <= s.len() {
             let start = s.len() as int - count as int;
@@ -116,8 +116,8 @@ pub open spec fn aapply(g: model::Graph, action: ActionShape, s: Seq<AV>) -> Opt
             } else { None }
         } else { Some(s) },
         ActionShape::NotResult => if s.len() > 0 { Some(s.drop_last().push(av_neg(s.last()))) } else { None },
-        ActionShape::AppendResult(r) => if s.len() > 0 {
-            Some(s.drop_last().push(av_app(s.last(), model::lift_regex(g, r))))
+        ActionShape::PrependResult(r) => if s.len() > 0 {
+            Some(s.drop_last().push(av_prepend(s.last(), model::lift_regex(g, r))))
         } else { None },
         ActionShape::SwapThen => if s.len() >= 2 {
             Some(s.take(s.len() as int - 2).push(s.last()).push(s[s.len() as int - 2]))
@@ -253,12 +253,12 @@ pub proof fn lemma_neg_mono(a: AV, b: AV)
     }
 }
 
-pub proof fn lemma_app_mono(a: AV, b: AV, s: R)
+pub proof fn lemma_prepend_mono(a: AV, b: AV, s: R)
     requires av_le(a, b),
-    ensures av_le(av_app(a, s), av_app(b, s)),
+    ensures av_le(av_prepend(a, s), av_prepend(b, s)),
 {
-    assert forall|v: R| #[trigger] (av_app(a, s).x)(v) implies (av_app(b, s).x)(v) by {
-        if app_of(a, s, v) {
+    assert forall|v: R| #[trigger] (av_prepend(a, s).x)(v) implies (av_prepend(b, s).x)(v) by {
+        if prepend_of(a, s, v) {
             let w = choose|w: R| (a.x)(w) && v == #[trigger] cat_r(w, s);
             assert((b.x)(w));
         }
@@ -277,8 +277,8 @@ pub proof fn lemma_aapply_mono(g: model::Graph, action: ActionShape, s1: Seq<AV>
     match action {
         ActionShape::Clean(id, path) => { lemma_stack_le_push(s1, s2, av_of(g, id), av_of(g, id)); },
         ActionShape::Not(id) => { lemma_stack_le_push(s1, s2, av_neg(av_of(g, id)), av_neg(av_of(g, id))); },
-        ActionShape::Append(id, r) => {
-            let a = av_app(av_of(g, id), model::lift_regex(g, r));
+        ActionShape::Prepend(id, r) => {
+            let a = av_prepend(av_of(g, id), model::lift_regex(g, r));
             lemma_stack_le_push(s1, s2, a, a);
         },
         ActionShape::Pair(a, b) => {
@@ -343,15 +343,15 @@ pub proof fn lemma_aapply_mono(g: model::Graph, action: ActionShape, s1: Seq<AV>
                 lemma_stack_le_push(s1.drop_last(), s2.drop_last(), av_neg(s1.last()), av_neg(s2.last()));
             }
         },
-        ActionShape::AppendResult(r) => {
+        ActionShape::PrependResult(r) => {
             if s2.len() > 0 {
                 assert(av_le(s1[s1.len() - 1], s2[s2.len() - 1]));
-                lemma_app_mono(s1.last(), s2.last(), model::lift_regex(g, r));
+                lemma_prepend_mono(s1.last(), s2.last(), model::lift_regex(g, r));
                 lemma_stack_le_sub(s1, s2, 0, s1.len() - 1);
                 assert(s1.drop_last() == s1.subrange(0, s1.len() - 1));
                 assert(s2.drop_last() == s2.subrange(0, s2.len() - 1));
                 lemma_stack_le_push(s1.drop_last(), s2.drop_last(),
-                    av_app(s1.last(), model::lift_regex(g, r)), av_app(s2.last(), model::lift_regex(g, r)));
+                    av_prepend(s1.last(), model::lift_regex(g, r)), av_prepend(s2.last(), model::lift_regex(g, r)));
             }
         },
         ActionShape::SwapThen => {
@@ -476,7 +476,7 @@ pub proof fn lemma_aapply_stable(a: model::Graph, b: model::Graph, action: Actio
     match action {
         ActionShape::Clean(id, path) => { lemma_av_stable(a, b, id); },
         ActionShape::Not(id) => { lemma_av_stable(a, b, id); },
-        ActionShape::Append(id, r) => { lemma_av_stable(a, b, id); model::lemma_lift_regex_stable(a, b, r); },
+        ActionShape::Prepend(id, r) => { lemma_av_stable(a, b, id); model::lemma_lift_regex_stable(a, b, r); },
         ActionShape::Pair(x, y) => { lemma_av_stable(a, b, x); lemma_av_stable(a, b, y); },
         ActionShape::Fold(terms, index) => {
             lemma_avs_stable(a, b, terms);
@@ -490,7 +490,7 @@ pub proof fn lemma_aapply_stable(a: model::Graph, b: model::Graph, action: Actio
                 lemma_avs_stable(a, b, sub);
             }
         },
-        ActionShape::AppendResult(r) => { model::lemma_lift_regex_stable(a, b, r); },
+        ActionShape::PrependResult(r) => { model::lemma_lift_regex_stable(a, b, r); },
         _ => {},
     }
 }

@@ -3380,13 +3380,13 @@ pub(crate) trait TransitionNormalize: Sized {
             result matches Ok(id) ==> guard_vocab(final(store).graph(), id@).subset_of(guard_vocab(final(store).graph(), this@)),
     ;
 
-    fn append<G: KernelStore>(
+    fn prepend<G: KernelStore>(
         this: TransitionId,
         store: &mut G,
-        suffix: &[RegexId],
+        prefix: &[RegexId],
     ) -> (result: KernelResult<TransitionId>)
         requires model::graph_wf(old(store).graph()), old(store).valid_store(), this@ < old(store).graph().transitions.len(),
-            regex_ids_valid(old(store).graph(), suffix@),
+            regex_ids_valid(old(store).graph(), prefix@),
         ensures model::graph_extends(old(store).graph(), final(store).graph()),
             final(store).restoration() == old(store).restoration(),
             final(store).errors_are_non_owner() == old(store).errors_are_non_owner(),
@@ -3399,11 +3399,11 @@ pub(crate) trait TransitionNormalize: Sized {
             old(store).errors_are_resource() && old(store).valid_store() ==> (result matches Err(e) ==> resource_error(e)),
             model::graph_wf(final(store).graph()), final(store).valid_store(),
             match result { Ok(id) => id@ < final(store).graph().transitions.len()
-                && ((ftr::nf_sum(old(store).graph(), this@) && flink::ids_nf(old(store).graph(), suffix@))
-                    ==> fsteps::app_bound(final(store).graph(), id@, this@, flink::lifts(final(store).graph(), suffix@)))
+                && ((ftr::nf_sum(old(store).graph(), this@) && flink::ids_nf(old(store).graph(), prefix@))
+                    ==> fsteps::prepend_bound(final(store).graph(), id@, this@, flink::lifts(final(store).graph(), prefix@)))
                 && forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                     ==> transition_lang(final(store).graph(), theta, id, event, word)
-                        == transition_append_combo(final(store).graph(), theta, this, suffix@, event, word),
+                        == transition_prepend_combo(final(store).graph(), theta, this, prefix@, event, word),
                 Err(_) => true },
             result matches Ok(id) ==> guard_vocab(final(store).graph(), id@).subset_of(guard_vocab(final(store).graph(), this@)),
     ;
@@ -3640,21 +3640,21 @@ impl TransitionNormalize for TransitionId {
     #[verus_verify]
     #[cfg_attr(verus_keep_ghost, verifier::spinoff_prover)]
 
-    fn append<G: KernelStore>(
+    fn prepend<G: KernelStore>(
         this: TransitionId,
         store: &mut G,
-        suffix: &[RegexId],
+        prefix: &[RegexId],
     ) -> KernelResult<TransitionId> {
         proof_decl! { let ghost entry = store.graph(); }
-        let r = RegexId::concat(store, suffix)?;
+        let r = RegexId::concat(store, prefix)?;
         proof! {
             machine_driver_extension_future(entry, store.graph());
-            machine_driver_append_future(store.graph(), this, suffix@, r);
-            if ftr::nf_sum(entry, this@) && flink::ids_nf(entry, suffix@) {
-                fbr::lemma_app_future(entry, store.graph(), this@, suffix@, r@);
+            machine_driver_prepend_future(store.graph(), this, prefix@, r);
+            if ftr::nf_sum(entry, this@) && flink::ids_nf(entry, prefix@) {
+                fbr::lemma_prepend_future(entry, store.graph(), this@, prefix@, r@);
             }
         }
-        Action::Append(this, r).run(store)
+        Action::Prepend(this, r).run(store)
     }
 
     #[verus_verify]
@@ -3947,7 +3947,7 @@ impl TransitionNormalize for TransitionId {
 enum Action {
     Clean(TransitionId, TestId),
     Not(TransitionId),
-    Append(TransitionId, RegexId),
+    Prepend(TransitionId, RegexId),
     Pair(TransitionId, TransitionId),
     Union(usize),
     Intersect(usize),
@@ -3955,7 +3955,7 @@ enum Action {
     CleanIf(TestId, TestId),
     Fold(WorkVec<TransitionId>, usize),
     NotResult,
-    AppendResult(RegexId),
+    PrependResult(RegexId),
     SwapThen,
 }
 #[verus_verify]
@@ -3964,7 +3964,7 @@ enum Action {
 enum ChildAction {
     Clean(TestId),
     Not,
-    Append(RegexId),
+    Prepend(RegexId),
     PairLeft(TransitionId),
     PairRight(TransitionId),
 }
@@ -4037,7 +4037,7 @@ impl ChildAction {
             tasks.push(match self {
                 ChildAction::Clean(path) => Action::Clean(child, path),
                 ChildAction::Not => Action::Not(child),
-                ChildAction::Append(r) => Action::Append(child, r),
+                ChildAction::Prepend(r) => Action::Prepend(child, r),
                 ChildAction::PairLeft(other) => Action::Pair(child, other),
                 ChildAction::PairRight(other) => Action::Pair(other, child),
             });
@@ -4092,54 +4092,35 @@ impl Action {
 
     #[verus_verify]
     #[verus_spec(result =>
-        requires model::graph_wf(store.graph()), transition_suffix_count(store.graph(), id@, count as nat),
+        requires model::graph_wf(store.graph()), id@ < store.graph().transitions.len(),
+            store.graph().transitions[id@ as int] is Prepend,
         ensures store.errors_are_non_owner() ==> result != Err(HistoryError::WrongHistoryOwner),
                 store.errors_are_non_invariant() && store.valid_store() ==> language::no_invariant_failure(result),
                 store.errors_are_non_invalid_policy() && store.valid_store() ==> !(result matches Err(HistoryError::InvalidPolicy { .. })),
                 store.errors_are_resource() && store.valid_store() ==> (result matches Err(e) ==> resource_error(e)),
             match result {
-            Ok(values) => regex_ids_valid(store.graph(), values.view())
-                && model::regex_ids(values.view()) == transition_suffix(store.graph(), id@),
+            Ok(prefix) => regex_ids_valid(store.graph(), prefix@)
+                && transition_prefix_count(store.graph(), id@, prefix@.len())
+                && model::regex_ids(prefix@) == transition_prefix(store.graph(), id@),
             Err(_) => true,
         },
     )]
-    fn suffix_values<G: KernelStore>(
+    fn prefix_values<G: KernelStore>(
         store: &G,
         id: TransitionId,
-        count: usize,
-    ) -> KernelResult<WorkVec<RegexId>> {
-        proof! { transition_lemma_suffix(store.graph(), id@); }
-        let mut values = WorkVec::new();
-        let mut failure = None;
-        let mut i = 0;
-        #[cfg_attr(verus_keep_ghost, verus_spec(
-            invariant i <= count, regex_ids_valid(store.graph(), values.view()), values.view().len() == i,
-                model::graph_wf(store.graph()), transition_suffix_count(store.graph(), id@, count as nat),
-                transition_suffix(store.graph(), id@).len() == count,
-                model::regex_ids(values.view()) == transition_suffix(store.graph(), id@).take(i as int),
-                store.errors_are_non_owner() ==> failure != Some(HistoryError::WrongHistoryOwner),
-                store.errors_are_non_invariant() && store.valid_store() ==> (match failure { Some(error) => language::no_invariant_failure::<()>(Err(error)), None => true }),
-                store.errors_are_non_invalid_policy() && store.valid_store() ==> (match failure { Some(error) => !(error is InvalidPolicy), None => true }),
-                store.errors_are_resource() && store.valid_store() ==> (failure matches Some(e) ==> resource_error(e)),
-            ensures failure.is_none() ==> i == count,
-            decreases count - i,
-        ))]
-        while i < count {
-            let child = loop_try!(id.suffix_child(store, i), failure);
-            proof_decl! { let ghost prior = values.view(); }
-            proof! { transition_lemma_suffix_child(store.graph(), id@, i as nat, child@); }
-            values.push(child);
-            proof! {
-                regex_ids_push(prior, child);
-                assert(transition_suffix(store.graph(), id@).take(i as int).push(child@)
-                    =~= transition_suffix(store.graph(), id@).take(i as int + 1));
+    ) -> KernelResult<&[RegexId]> {
+        proof! { transition_lemma_prefix(store.graph(), id@); }
+        match store.transition(id)? {
+            TransitionView::Prepend { prefix, .. } => {
+                proof! {
+                    assert forall|i: int| 0 <= i < prefix@.len() implies prefix@[i]@ < store.graph().regexes.len() by {
+                        assert(transition_prefix(store.graph(), id@)[i] == prefix@[i]@);
+                    }
+                }
+                Ok(prefix)
             }
-            i = i.saturating_add(1);
+            _ => Err(HistoryError::normalization_invariant()),
         }
-        if let Some(error) = failure {
-            return Err(error);
-        }
-        Ok(values)
     }
 
     #[verus_verify]
@@ -4723,22 +4704,23 @@ impl Action {
                     }
                 }
             }
-            TransitionHead::Append(inner, n) => {
-                let xs = Self::suffix_values(store, id, n)?;
+            TransitionHead::Prepend(inner, _) => {
+                let mut xs = WorkVec::new();
+                xs.extend_from_slice(Self::prefix_values(store, id)?);
                 proof! {
-                    transition_lemma_suffix(store.graph(), id@);
-                    assert(entry.transitions[id@ as int] == model::TransitionNode::Append(inner@, model::regex_ids(xs.view())));
+                    transition_lemma_prefix(store.graph(), id@);
+                    assert(entry.transitions[id@ as int] == model::TransitionNode::Prepend(inner@, model::regex_ids(xs.view())));
                 }
                 let r = RegexId::concat(store, &xs)?;
-                tasks.push(Action::AppendResult(r));
+                tasks.push(Action::PrependResult(r));
                 tasks.push(Action::Clean(inner, path));
                 proof! {
-                    transition_lemma_suffix(store.graph(), id@);
-                    transition_lemma_clean_append_effect(store.graph(), id, path, inner, xs.view(), r, p0);
-                    assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::AppendResult(r@)).push(ActionShape::Clean(inner@, path@)));
-                    machine_clean_append(entry, store.graph(), p0, id, path, inner, r, v0);
+                    transition_lemma_prefix(store.graph(), id@);
+                    transition_lemma_clean_prepend_effect(store.graph(), id, path, inner, xs.view(), r, p0);
+                    assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::PrependResult(r@)).push(ActionShape::Clean(inner@, path@)));
+                    machine_clean_prepend(entry, store.graph(), p0, id, path, inner, r, v0);
                     if fsteps::xpre(entry, ActionShape::Clean(id@, path@), p0, v0) {
-                        fbr::lemma_clean_append(entry, store.graph(), p0, v0, id, path, inner, xs.view(), r);
+                        fbr::lemma_clean_prepend(entry, store.graph(), p0, v0, id, path, inner, xs.view(), r);
                     }
                 }
             }
@@ -4849,7 +4831,7 @@ impl Action {
                     }
                 }
             }
-            TransitionHead::Append(_, _) => {
+            TransitionHead::Prepend(_, _) => {
                 values.push(TransitionId::intern(store, TransitionView::Not(id))?);
                 proof! {
                     reveal(guard_node_vocab);
@@ -4996,21 +4978,21 @@ impl Action {
             transition_configuration_valid(final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
             transition_action_views(old(tasks).view()).is_prefix_of(transition_action_views(final(tasks).view())),
                 result is Ok ==> guard_effect(final(store).graph(), transition_action_views(old(tasks).view()),
-                    ActionShape::Append(id@, r@), old(values).view(), transition_action_views(final(tasks).view()), final(values).view()),
+                    ActionShape::Prepend(id@, r@), old(values).view(), transition_action_views(final(tasks).view()), final(values).view()),
             match result {
-                Ok(()) => transition_effect(final(store).graph(), ActionShape::Append(id@, r@),
+                Ok(()) => transition_effect(final(store).graph(), ActionShape::Prepend(id@, r@),
                     transition_action_views(old(tasks).view()), old(values).view(),
                     transition_action_views(final(tasks).view()), final(values).view())
-                    && (fsteps::xpre(old(store).graph(), ActionShape::Append(id@, r@), transition_action_views(old(tasks).view()), old(values).view())
-                        ==> fsteps::xeffect(final(store).graph(), ActionShape::Append(id@, r@), transition_action_views(old(tasks).view()),
+                    && (fsteps::xpre(old(store).graph(), ActionShape::Prepend(id@, r@), transition_action_views(old(tasks).view()), old(values).view())
+                        ==> fsteps::xeffect(final(store).graph(), ActionShape::Prepend(id@, r@), transition_action_views(old(tasks).view()),
                             old(values).view(), transition_action_views(final(tasks).view()), final(values).view()))
                     && machine_progress(old(store).graph(), transition_action_views(old(tasks).view()),
-                        ActionShape::Append(id@, r@), old(values).view(),
+                        ActionShape::Prepend(id@, r@), old(values).view(),
                         final(store).graph(), transition_action_views(final(tasks).view()), final(values).view()),
                 Err(_) => true,
             },
     )]
-    fn append_step<G: KernelStore>(
+    fn prepend_step<G: KernelStore>(
         store: &mut G,
         id: TransitionId,
         r: RegexId,
@@ -5034,49 +5016,49 @@ impl Action {
             if r == c.epsilon {
                 values.push(id);
                 proof! {
-                    machine_unary_append_identity_result(store.graph(), id, r, id);
-                    transition_lemma_push_result(store.graph(), ActionShape::Append(id@, r@), base, prior, id);
-                    machine_value_result(entry, store.graph(), base, ActionShape::Append(id@, r@), prior, id);
-                    if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
-                        fbr::lemma_append_eps(entry, store.graph(), base, prior, id, r);
+                    machine_unary_prepend_identity_result(store.graph(), id, r, id);
+                    transition_lemma_push_result(store.graph(), ActionShape::Prepend(id@, r@), base, prior, id);
+                    machine_value_result(entry, store.graph(), base, ActionShape::Prepend(id@, r@), prior, id);
+                    if fsteps::xpre(entry, ActionShape::Prepend(id@, r@), base, prior) {
+                        fbr::lemma_prepend_eps(entry, store.graph(), base, prior, id, r);
                     }
                 }
             } else if r == c.empty {
                 values.push(c.transition_empty);
                 proof! {
-                    machine_unary_append_identity_result(store.graph(), id, r, c.transition_empty);
-                    transition_lemma_push_result(store.graph(), ActionShape::Append(id@, r@), base, prior, c.transition_empty);
-                    machine_value_result(entry, store.graph(), base, ActionShape::Append(id@, r@), prior, c.transition_empty);
-                    if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
-                        fbr::lemma_append_empty(entry, store.graph(), base, prior, id, r, c.transition_empty);
+                    machine_unary_prepend_identity_result(store.graph(), id, r, c.transition_empty);
+                    transition_lemma_push_result(store.graph(), ActionShape::Prepend(id@, r@), base, prior, c.transition_empty);
+                    machine_value_result(entry, store.graph(), base, ActionShape::Prepend(id@, r@), prior, c.transition_empty);
+                    if fsteps::xpre(entry, ActionShape::Prepend(id@, r@), base, prior) {
+                        fbr::lemma_prepend_empty(entry, store.graph(), base, prior, id, r, c.transition_empty);
                     }
                 }
             } else {
                 match id.head(store)? {
                     TransitionHead::Const(head) => {
-                        let out = RegexId::concat(store, &[head, r])?;
+                        let out = RegexId::concat(store, &[r, head])?;
                         proof_decl! { let ghost before_const = store.graph(); }
                         values.push(TransitionId::constant(store, out)?);
                         proof! {
-                            machine_unary_append_const_result(before_const, store.graph(), id, head, r, out, values.view().last());
-                            transition_lemma_push_result(store.graph(), ActionShape::Append(id@, r@), base, prior, values.view().last());
+                            machine_unary_prepend_const_result(before_const, store.graph(), id, head, r, out, values.view().last());
+                            transition_lemma_push_result(store.graph(), ActionShape::Prepend(id@, r@), base, prior, values.view().last());
                             transition_lemma_extends_transitive(entry, before_const, store.graph());
                             assert(values.view() == prior.push(values.view().last()));
-                            machine_value_result(entry, store.graph(), base, ActionShape::Append(id@, r@), prior, values.view().last());
-                            if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
-                                fbr::lemma_append_const(entry, before_const, store.graph(), base, prior, id, r, head, out, values.view().last());
+                            machine_value_result(entry, store.graph(), base, ActionShape::Prepend(id@, r@), prior, values.view().last());
+                            if fsteps::xpre(entry, ActionShape::Prepend(id@, r@), base, prior) {
+                                fbr::lemma_prepend_const(entry, before_const, store.graph(), base, prior, id, r, head, out, values.view().last());
                             }
                         }
                     }
                     TransitionHead::If(test, a, b) => {
                         tasks.push(Action::CleanIf(test, c.test_true));
-                        tasks.push(Action::Append(b, r));
-                        tasks.push(Action::Append(a, r));
+                        tasks.push(Action::Prepend(b, r));
+                        tasks.push(Action::Prepend(a, r));
                         proof! {
                             machine_unary_if_effect(store.graph(), id, test, a, b, Some(r), base, prior);
                             assert(transition_action_views(tasks.view()) =~= machine_unary_if_tasks(store.graph(), test, a, b, Some(r), base));
                             machine_unary_if(entry, store.graph(), base, id, test, a, b, Some(r), prior);
-                            if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
+                            if fsteps::xpre(entry, ActionShape::Prepend(id@, r@), base, prior) {
                                 fbr::lemma_unary_if(entry, store.graph(), base, prior, id, test, a, b, Some(r));
                             }
                         }
@@ -5088,33 +5070,39 @@ impl Action {
                             assert(transition_action_views(tasks.view()) =~= base.push(ActionShape::Union(n as nat)));
                             assert(transition_tasks_valid(store.graph(), transition_action_views(tasks.view())));
                         }
-                        ChildAction::Append(r).schedule(store, id, n, tasks)?;
-                        proof! { broadcast use vstd::set::group_set_lemmas; lemma_guard_scheduled(store.graph(), id@, ChildShape::Append(r@), ActionShape::Union(n as nat), ActionShape::Append(id@, r@), base, prior); }
+                        ChildAction::Prepend(r).schedule(store, id, n, tasks)?;
+                        proof! { broadcast use vstd::set::group_set_lemmas; lemma_guard_scheduled(store.graph(), id@, ChildShape::Prepend(r@), ActionShape::Union(n as nat), ActionShape::Prepend(id@, r@), base, prior); }
                         proof! {
                             machine_unary_children_effect(store.graph(), id, Some(r), false, base, prior);
                             assert(transition_action_views(tasks.view()) =~= machine_unary_child_tasks(store.graph(), id, Some(r), false, base));
                             machine_unary_children(store.graph(), base, id, Some(r), false, prior);
-                            if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
+                            if fsteps::xpre(entry, ActionShape::Prepend(id@, r@), base, prior) {
                                 fbr::lemma_unary_children(entry, store.graph(), base, prior, id, Some(r), false);
                             }
                         }
                     }
-                    TransitionHead::Append(inner, n) => {
-                        let mut xs = Self::suffix_values(store, id, n)?;
-                        proof_decl! { let ghost children = xs.view(); }
-                        proof! {
-                            transition_lemma_suffix(store.graph(), id@);
-                            assert(entry.transitions[id@ as int] == model::TransitionNode::Append(inner@, model::regex_ids(children)));
-                        }
+                    TransitionHead::Prepend(inner, _) => {
+                        let inner_prefix = Self::prefix_values(store, id)?;
+                        proof_decl! { let ghost children = inner_prefix@; }
+                        let mut xs = WorkVec::new();
                         xs.push(r);
-                        let combined = RegexId::concat(store, &xs)?;
-                        tasks.push(Action::Append(inner, combined));
+                        xs.extend_from_slice(inner_prefix);
                         proof! {
-                            machine_unary_append_nested_effect(store.graph(), id, inner, r, combined, children, base, prior);
-                            assert(transition_action_views(tasks.view()) =~= base.push(ActionShape::Append(inner@, combined@)));
-                            machine_append_nested(entry, store.graph(), base, id, r, inner, combined, prior);
-                            if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
-                                fbr::lemma_append_nested(entry, store.graph(), base, prior, id, r, inner, children, combined);
+                            transition_lemma_prefix(store.graph(), id@);
+                            assert(entry.transitions[id@ as int] == model::TransitionNode::Prepend(inner@, model::regex_ids(children)));
+                            assert(xs.view() =~= seq![r] + children);
+                            assert forall|i: int| 0 <= i < xs.view().len() implies xs.view()[i]@ < entry.regexes.len() by {
+                                if i > 0 { assert(xs.view()[i] == children[i - 1]); }
+                            }
+                        }
+                        let combined = RegexId::concat(store, &xs)?;
+                        tasks.push(Action::Prepend(inner, combined));
+                        proof! {
+                            machine_unary_prepend_nested_effect(store.graph(), id, inner, r, combined, children, base, prior);
+                            assert(transition_action_views(tasks.view()) =~= base.push(ActionShape::Prepend(inner@, combined@)));
+                            machine_prepend_nested(entry, store.graph(), base, id, r, inner, combined, prior);
+                            if fsteps::xpre(entry, ActionShape::Prepend(id@, r@), base, prior) {
+                                fbr::lemma_prepend_nested(entry, store.graph(), base, prior, id, r, inner, children, combined);
                             }
                         }
                     }
@@ -5129,26 +5117,26 @@ impl Action {
                         }
                         proof! {
                             regex_children_count(store.graph(), r@);
-                            machine_unary_suffix_language(store.graph(), r, xs.view());
+                            machine_unary_prefix_language(store.graph(), r, xs.view());
                         }
                         proof_decl! { let ghost before_intern = store.graph(); }
                         values.push(TransitionId::intern(
                             store,
-                            TransitionView::Append {
+                            TransitionView::Prepend {
                                 transition: id,
-                                suffix: &xs,
+                                prefix: &xs,
                             },
                         )?);
                         proof! {
                             reveal(guard_node_vocab);
                             assert(guard_vocab(store.graph(), values.view().last()@) == guard_vocab(store.graph(), id@));
-                            machine_unary_append_raw_result(before_intern, store.graph(), id, r, xs.view(), values.view().last());
-                            transition_lemma_push_result(store.graph(), ActionShape::Append(id@, r@), base, prior, values.view().last());
+                            machine_unary_prepend_raw_result(before_intern, store.graph(), id, r, xs.view(), values.view().last());
+                            transition_lemma_push_result(store.graph(), ActionShape::Prepend(id@, r@), base, prior, values.view().last());
                             transition_lemma_extends_transitive(entry, before_intern, store.graph());
                             assert(values.view() == prior.push(values.view().last()));
-                            machine_wrap_interned(entry, store.graph(), base, ActionShape::Append(id@, r@), prior, values.view().last());
-                            if fsteps::xpre(entry, ActionShape::Append(id@, r@), base, prior) {
-                                fbr::lemma_append_raw(entry, store.graph(), base, prior, id, r, xs.view(), values.view().last());
+                            machine_wrap_interned(entry, store.graph(), base, ActionShape::Prepend(id@, r@), prior, values.view().last());
+                            if fsteps::xpre(entry, ActionShape::Prepend(id@, r@), base, prior) {
+                                fbr::lemma_prepend_raw(entry, store.graph(), base, prior, id, r, xs.view(), values.view().last());
                             }
                         }
                     }
@@ -5158,7 +5146,7 @@ impl Action {
         proof! {
             lemma_guards_stable(entry, store.graph());
             assert forall|allowed: Set<model::Primitive>| guard_config(store.graph(), base, prior, allowed)
-                && guard_task_vocab(store.graph(), ActionShape::Append(id@, r@)).subset_of(allowed)
+                && guard_task_vocab(store.graph(), ActionShape::Prepend(id@, r@)).subset_of(allowed)
                 implies guard_config(store.graph(), transition_action_views(tasks.view()), values.view(), allowed) by {
                 broadcast use vstd::set::group_set_lemmas;
                 assert forall|i: int| 0 <= i < tasks.view().len() implies
@@ -5572,7 +5560,7 @@ impl Action {
             }
             Action::Clean(id, path) => Action::clean_step(store, id, path, &c, tasks, values)?,
             Action::Not(id) => Action::not_step(store, id, &c, tasks, values)?,
-            Action::Append(id, r) => Action::append_step(store, id, r, &c, tasks, values)?,
+            Action::Prepend(id, r) => Action::prepend_step(store, id, r, &c, tasks, values)?,
             Action::Pair(a, b) => Action::pair_step(store, a, b, &c, tasks, values)?,
             Action::NotResult => {
                 let id = match values.pop() {
@@ -5590,18 +5578,18 @@ impl Action {
                     }
                 }
             }
-            Action::AppendResult(r) => {
+            Action::PrependResult(r) => {
                 let id = match values.pop() {
                     Some(v) => v,
                     None => return Err(HistoryError::normalization_invariant()),
                 };
                 proof! { assert(values.view() =~= v0.drop_last()); }
-                tasks.push(Action::Append(id, r));
+                tasks.push(Action::Prepend(id, r));
                 proof! {
-                    machine_driver_result_effect(store.graph(), ActionShape::AppendResult(r@), p0, v0);
-                    assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::Append(id@, r@)));
+                    machine_driver_result_effect(store.graph(), ActionShape::PrependResult(r@), p0, v0);
+                    assert(transition_action_views(tasks.view()) =~= p0.push(ActionShape::Prepend(id@, r@)));
                     machine_driver_result(store.graph(), p0, Some(r@), v0);
-                    if fsteps::xpre(entry, ActionShape::AppendResult(r@), p0, v0) {
+                    if fsteps::xpre(entry, ActionShape::PrependResult(r@), p0, v0) {
                         fbr::lemma_step_result(entry, store.graph(), p0, v0, Some(r@));
                     }
                 }
@@ -5859,7 +5847,7 @@ pub mod verify {
     pub open spec fn guard_task_vocab(g: model::Graph, task: ActionShape) -> Set<model::Primitive> {
         match task {
             ActionShape::Clean(t, p) => guard_vocab(g, t).union(test_vocab(g, p)),
-            ActionShape::Not(t) | ActionShape::Append(t, _) => guard_vocab(g, t),
+            ActionShape::Not(t) | ActionShape::Prepend(t, _) => guard_vocab(g, t),
             ActionShape::Pair(a, b) => guard_vocab(g, a).union(guard_vocab(g, b)),
             ActionShape::If(t) => test_vocab(g, t),
             ActionShape::CleanIf(t, p) => test_vocab(g, t).union(test_vocab(g, p)),
@@ -5916,7 +5904,7 @@ pub mod verify {
             match g.transitions[id as int] {
                 model::TransitionNode::If(t, a, b) => test_vocab(g, t).subset_of(guard_vocab(g, id))
                     && guard_vocab(g, a).subset_of(guard_vocab(g, id)) && guard_vocab(g, b).subset_of(guard_vocab(g, id)),
-                model::TransitionNode::Not(t) | model::TransitionNode::Append(t, _) => guard_vocab(g, t).subset_of(guard_vocab(g, id)),
+                model::TransitionNode::Not(t) | model::TransitionNode::Prepend(t, _) => guard_vocab(g, t).subset_of(guard_vocab(g, id)),
                 model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => forall|i: int| 0 <= i < cs.len()
                     ==> guard_vocab(g, cs[i]).subset_of(guard_vocab(g, id)),
                 _ => true,
@@ -5951,7 +5939,7 @@ pub mod verify {
                 assert(crate::progress::verify::transition_edges(g, id)[0] == a);
                 assert(crate::progress::verify::transition_edges(g, id)[1] == b);
             },
-            model::TransitionNode::Not(t) | model::TransitionNode::Append(t, _) => {
+            model::TransitionNode::Not(t) | model::TransitionNode::Prepend(t, _) => {
                 assert(crate::progress::verify::transition_edges(g, id)[0] == t);
             },
             model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => {
@@ -6206,7 +6194,7 @@ pub mod verify {
             model::TransitionNode::Const(_) => Set::empty(),
             model::TransitionNode::If(t, a, b) => test_vocab(g, t).union(guard_vocab(g, a)).union(guard_vocab(g, b)),
             model::TransitionNode::Union(cs) | model::TransitionNode::Intersect(cs) => guard_task_vocab(g, ActionShape::Fold(cs, 0)),
-            model::TransitionNode::Not(t) | model::TransitionNode::Append(t, _) => guard_vocab(g, t),
+            model::TransitionNode::Not(t) | model::TransitionNode::Prepend(t, _) => guard_vocab(g, t),
         }
     }
 
@@ -6232,7 +6220,7 @@ pub mod verify {
                 assert(crate::progress::verify::transition_edges(g, id)[0] == a);
                 assert(crate::progress::verify::transition_edges(g, id)[1] == b);
             },
-            model::TransitionNode::Not(t) | model::TransitionNode::Append(t, _) => {
+            model::TransitionNode::Not(t) | model::TransitionNode::Prepend(t, _) => {
                 assert(crate::progress::verify::transition_edges(g, id)[0] == t);
             },
             _ => {},
@@ -8141,42 +8129,7 @@ pub mod verify {
                 && language::numeric_lang(sem, language::Regex::Concat(a), u)
                 && language::numeric_lang(sem, language::Regex::Concat(b), v)),
     {
-        if language::numeric_lang(sem, language::Regex::Concat(a + b), word) {
-            let parts = choose|p: Seq<Seq<EventView>>| p.len() == (a + b).len() && word == p.flatten()
-                && forall|i: int| 0 <= i < (a + b).len() ==> language::numeric_lang(sem, (a + b)[i], p[i]);
-            let ap = parts.subrange(0, a.len() as int);
-            let bp = parts.subrange(a.len() as int, parts.len() as int);
-            assert(parts =~= ap + bp);
-            vstd::seq_lib::lemma_flatten_concat(ap, bp);
-            assert(parts.flatten() == ap.flatten() + bp.flatten());
-            assert forall|i: int| 0 <= i < a.len() implies language::numeric_lang(sem, a[i], ap[i]) by {
-                assert(a[i] == (a + b)[i]);
-            }
-            assert forall|i: int| 0 <= i < b.len() implies language::numeric_lang(sem, b[i], bp[i]) by {
-                assert(b[i] == (a + b)[a.len() + i]);
-                assert(bp[i] == parts[a.len() + i]);
-            }
-            assert(language::numeric_lang(sem, language::Regex::Concat(a), ap.flatten()));
-            assert(language::numeric_lang(sem, language::Regex::Concat(b), bp.flatten()));
-        }
-        if exists|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-            && language::numeric_lang(sem, language::Regex::Concat(a), u)
-            && language::numeric_lang(sem, language::Regex::Concat(b), v) {
-            let (u, v) = choose|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-                && language::numeric_lang(sem, language::Regex::Concat(a), u)
-                && language::numeric_lang(sem, language::Regex::Concat(b), v);
-            let ap = choose|p: Seq<Seq<EventView>>| p.len() == a.len() && u == p.flatten()
-                && forall|i: int| 0 <= i < a.len() ==> language::numeric_lang(sem, a[i], p[i]);
-            let bp = choose|p: Seq<Seq<EventView>>| p.len() == b.len() && v == p.flatten()
-                && forall|i: int| 0 <= i < b.len() ==> language::numeric_lang(sem, b[i], p[i]);
-            let parts = ap + bp;
-            vstd::seq_lib::lemma_flatten_concat(ap, bp);
-            assert(parts.flatten() == word);
-            assert forall|i: int| 0 <= i < (a + b).len() implies language::numeric_lang(sem, (a + b)[i], parts[i]) by {
-                if i < a.len() { assert((a + b)[i] == a[i]); assert(parts[i] == ap[i]); }
-                else { assert((a + b)[i] == b[i - a.len()]); assert(parts[i] == bp[i - a.len()]); }
-            }
-        }
+        language::lemma_concat_split(sem, a, b, word);
     }
 
     pub proof fn regex_concat_empty<L>(sem: spec_fn(L, EventView) -> bool, word: Seq<EventView>)
@@ -9485,12 +9438,12 @@ pub mod verify {
         GuardedTransition { guard: value.guard, term: language::Transition::Not(Box::new(value.term)) }
     }
 
-    pub open spec fn guarded_append<L, C>(
-        value: GuardedTransition<L, C>, suffix: language::Regex<L>,
+    pub open spec fn guarded_prepend<L, C>(
+        value: GuardedTransition<L, C>, prefix: language::Regex<L>,
     ) -> GuardedTransition<L, C> {
         GuardedTransition {
             guard: value.guard,
-            term: language::Transition::Append(Box::new(value.term), seq![suffix]),
+            term: language::Transition::Prepend(Box::new(value.term), seq![prefix]),
         }
     }
 
@@ -9668,42 +9621,42 @@ pub mod verify {
         }
     }
 
-    pub proof fn guarded_lemma_append_congruent<L, C>(
+    pub proof fn guarded_lemma_prepend_congruent<L, C>(
         sem: spec_fn(C, L, EventView) -> bool, valid: spec_fn(C) -> bool,
-        before: GuardedTransition<L, C>, after: GuardedTransition<L, C>, suffix: language::Regex<L>,
+        before: GuardedTransition<L, C>, after: GuardedTransition<L, C>, prefix: language::Regex<L>,
     )
         requires guarded_refines(sem, valid, before, after),
-        ensures guarded_refines(sem, valid, guarded_append(before, suffix), guarded_append(after, suffix)),
+        ensures guarded_refines(sem, valid, guarded_prepend(before, prefix), guarded_prepend(after, prefix)),
     {
         assert forall|ctx: C, event: EventView| valid(ctx)
-            && #[trigger] (guarded_append(before, suffix).guard)(ctx, event)
-            implies (guarded_append(after, suffix).guard)(ctx, event) && forall|word: Seq<EventView>|
-                guarded_language(sem, ctx, event, guarded_append(before, suffix), word)
-                    == guarded_language(sem, ctx, event, guarded_append(after, suffix), word) by {
+            && #[trigger] (guarded_prepend(before, prefix).guard)(ctx, event)
+            implies (guarded_prepend(after, prefix).guard)(ctx, event) && forall|word: Seq<EventView>|
+                guarded_language(sem, ctx, event, guarded_prepend(before, prefix), word)
+                    == guarded_language(sem, ctx, event, guarded_prepend(after, prefix), word) by {
             assert((before.guard)(ctx, event));
             assert((after.guard)(ctx, event));
             let context_sem = guarded_semantics(sem, ctx);
-            let left = seq![language::interp_transition(context_sem, event, before.term), suffix];
-            let right = seq![language::interp_transition(context_sem, event, after.term), suffix];
+            let left = seq![prefix, language::interp_transition(context_sem, event, before.term)];
+            let right = seq![prefix, language::interp_transition(context_sem, event, after.term)];
             assert forall|i: int, word: Seq<EventView>| 0 <= i < left.len() implies
                 language::numeric_lang(context_sem, left[i], word) == language::numeric_lang(context_sem, right[i], word) by {
-                if i == 0 {
+                if i == 1 {
                     assert(guarded_language(sem, ctx, event, before, word)
                         == guarded_language(sem, ctx, event, after, word));
-                } else { assert(i == 1); }
+                } else { assert(i == 0); }
             }
             regex_concat_congruent(context_sem, left, right);
-            language::lemma_interp_append(context_sem, event, before.term, seq![suffix]);
-            language::lemma_interp_append(context_sem, event, after.term, seq![suffix]);
-            assert(seq![language::interp_transition(context_sem, event, before.term)] + seq![suffix] =~= left);
-            assert(seq![language::interp_transition(context_sem, event, after.term)] + seq![suffix] =~= right);
+            language::lemma_interp_prepend(context_sem, event, before.term, seq![prefix]);
+            language::lemma_interp_prepend(context_sem, event, after.term, seq![prefix]);
+            assert(seq![prefix].push(language::interp_transition(context_sem, event, before.term)) =~= left);
+            assert(seq![prefix].push(language::interp_transition(context_sem, event, after.term)) =~= right);
         }
     }
 
     pub enum GuardedAction<L> {
         Clean(language::Transition<L>, L),
         Not(language::Transition<L>),
-        Append(language::Transition<L>, language::Regex<L>),
+        Prepend(language::Transition<L>, language::Regex<L>),
         Pair(language::Transition<L>, language::Transition<L>),
         Union(nat),
         Intersect(nat),
@@ -9711,7 +9664,7 @@ pub mod verify {
         CleanIf(L, L),
         Fold(Seq<language::Transition<L>>, nat),
         NotResult,
-        AppendResult(language::Regex<L>),
+        PrependResult(language::Regex<L>),
         SwapThen,
     }
 
@@ -9722,8 +9675,8 @@ pub mod verify {
         match action {
             GuardedAction::Clean(term, path) => Some(values.push(guarded_clean(sem, path, term))),
             GuardedAction::Not(term) => Some(values.push(guarded_constant(language::Transition::Not(Box::new(term))))),
-            GuardedAction::Append(term, suffix) => Some(values.push(guarded_constant(
-                language::Transition::Append(Box::new(term), seq![suffix])))),
+            GuardedAction::Prepend(term, prefix) => Some(values.push(guarded_constant(
+                language::Transition::Prepend(Box::new(term), seq![prefix])))),
             GuardedAction::Pair(left, right) => Some(values.push(guarded_constant(
                 language::Transition::Intersect(seq![left, right])))),
             GuardedAction::Union(count) => if count <= values.len() {
@@ -9754,8 +9707,8 @@ pub mod verify {
             GuardedAction::NotResult => if values.len() > 0 {
                 Some(values.drop_last().push(guarded_not(values.last())))
             } else { None },
-            GuardedAction::AppendResult(suffix) => if values.len() > 0 {
-                Some(values.drop_last().push(guarded_append(values.last(), suffix)))
+            GuardedAction::PrependResult(prefix) => if values.len() > 0 {
+                Some(values.drop_last().push(guarded_prepend(values.last(), prefix)))
             } else { None },
             GuardedAction::SwapThen => if values.len() >= 2 {
                 Some(values.take(values.len() as int - 2).push(values.last()).push(values[values.len() as int - 2]))
@@ -9955,8 +9908,8 @@ pub mod verify {
                 guarded_lemma_refines_refl(sem, valid, value);
                 guarded_lemma_stack_push(sem, valid, before, after, value, value);
             },
-            GuardedAction::Append(term, suffix) => {
-                let value = guarded_constant(language::Transition::Append(Box::new(term), seq![suffix]));
+            GuardedAction::Prepend(term, prefix) => {
+                let value = guarded_constant(language::Transition::Prepend(Box::new(term), seq![prefix]));
                 guarded_lemma_refines_refl(sem, valid, value);
                 guarded_lemma_stack_push(sem, valid, before, after, value, value);
             },
@@ -10020,12 +9973,12 @@ pub mod verify {
                         guarded_not(before.last()), guarded_not(after.last()));
                 }
             },
-            GuardedAction::AppendResult(suffix) => {
+            GuardedAction::PrependResult(prefix) => {
                 if before.len() > 0 {
                     guarded_lemma_stack_slice(sem, valid, before, after, 0, before.len() as int - 1);
-                    guarded_lemma_append_congruent(sem, valid, before.last(), after.last(), suffix);
+                    guarded_lemma_prepend_congruent(sem, valid, before.last(), after.last(), prefix);
                     guarded_lemma_stack_push(sem, valid, before.drop_last(), after.drop_last(),
-                        guarded_append(before.last(), suffix), guarded_append(after.last(), suffix));
+                        guarded_prepend(before.last(), prefix), guarded_prepend(after.last(), prefix));
                 }
             },
             GuardedAction::SwapThen => {
@@ -10075,12 +10028,12 @@ pub mod verify {
     }
 
     pub enum ActionShape {
-        Clean(nat, nat), Not(nat), Append(nat, nat), Pair(nat, nat),
+        Clean(nat, nat), Not(nat), Prepend(nat, nat), Pair(nat, nat),
         Union(nat), Intersect(nat), If(nat), CleanIf(nat, nat),
-        Fold(Seq<nat>, nat), NotResult, AppendResult(nat), SwapThen,
+        Fold(Seq<nat>, nat), NotResult, PrependResult(nat), SwapThen,
     }
 
-    pub enum ChildShape { Clean(nat), Not, Append(nat), PairLeft(nat), PairRight(nat) }
+    pub enum ChildShape { Clean(nat), Not, Prepend(nat), PairLeft(nat), PairRight(nat) }
 
     impl View for Action {
         type V = ActionShape;
@@ -10088,7 +10041,7 @@ pub mod verify {
             match self {
                 Action::Clean(id, path) => ActionShape::Clean(id@, path@),
                 Action::Not(id) => ActionShape::Not(id@),
-                Action::Append(id, suffix) => ActionShape::Append(id@, suffix@),
+                Action::Prepend(id, prefix) => ActionShape::Prepend(id@, prefix@),
                 Action::Pair(a, b) => ActionShape::Pair(a@, b@),
                 Action::Union(count) => ActionShape::Union(*count as nat),
                 Action::Intersect(count) => ActionShape::Intersect(*count as nat),
@@ -10096,7 +10049,7 @@ pub mod verify {
                 Action::CleanIf(test, path) => ActionShape::CleanIf(test@, path@),
                 Action::Fold(ids, index) => ActionShape::Fold(model::transition_ids(ids.view()), *index as nat),
                 Action::NotResult => ActionShape::NotResult,
-                Action::AppendResult(suffix) => ActionShape::AppendResult(suffix@),
+                Action::PrependResult(prefix) => ActionShape::PrependResult(prefix@),
                 Action::SwapThen => ActionShape::SwapThen,
             }
         }
@@ -10108,7 +10061,7 @@ pub mod verify {
             match self {
                 ChildAction::Clean(path) => ChildShape::Clean(path@),
                 ChildAction::Not => ChildShape::Not,
-                ChildAction::Append(suffix) => ChildShape::Append(suffix@),
+                ChildAction::Prepend(prefix) => ChildShape::Prepend(prefix@),
                 ChildAction::PairLeft(other) => ChildShape::PairLeft(other@),
                 ChildAction::PairRight(other) => ChildShape::PairRight(other@),
             }
@@ -10123,12 +10076,12 @@ pub mod verify {
         match task {
             ActionShape::Clean(id, path) => id < g.transitions.len() && path < g.tests.len(),
             ActionShape::Not(id) => id < g.transitions.len(),
-            ActionShape::Append(id, suffix) => id < g.transitions.len() && suffix < g.regexes.len(),
+            ActionShape::Prepend(id, prefix) => id < g.transitions.len() && prefix < g.regexes.len(),
             ActionShape::Pair(a, b) => a < g.transitions.len() && b < g.transitions.len(),
             ActionShape::If(test) => test < g.tests.len(),
             ActionShape::CleanIf(test, path) => test < g.tests.len() && path < g.tests.len(),
             ActionShape::Fold(ids, index) => model::bounded(ids, g.transitions.len()),
-            ActionShape::AppendResult(suffix) => suffix < g.regexes.len(),
+            ActionShape::PrependResult(prefix) => prefix < g.regexes.len(),
             _ => true,
         }
     }
@@ -10141,7 +10094,7 @@ pub mod verify {
         match task {
             ActionShape::Clean(id, path) => GuardedAction::Clean(model::lift_transition(g, id), model::lift_test(g, path)),
             ActionShape::Not(id) => GuardedAction::Not(model::lift_transition(g, id)),
-            ActionShape::Append(id, suffix) => GuardedAction::Append(model::lift_transition(g, id), model::lift_regex(g, suffix)),
+            ActionShape::Prepend(id, prefix) => GuardedAction::Prepend(model::lift_transition(g, id), model::lift_regex(g, prefix)),
             ActionShape::Pair(a, b) => GuardedAction::Pair(model::lift_transition(g, a), model::lift_transition(g, b)),
             ActionShape::Union(count) => GuardedAction::Union(count),
             ActionShape::Intersect(count) => GuardedAction::Intersect(count),
@@ -10149,7 +10102,7 @@ pub mod verify {
             ActionShape::CleanIf(test, path) => GuardedAction::CleanIf(model::lift_test(g, test), model::lift_test(g, path)),
             ActionShape::Fold(ids, index) => GuardedAction::Fold(ids.map(|i: int, id: nat| model::lift_transition(g, id)), index),
             ActionShape::NotResult => GuardedAction::NotResult,
-            ActionShape::AppendResult(suffix) => GuardedAction::AppendResult(model::lift_regex(g, suffix)),
+            ActionShape::PrependResult(prefix) => GuardedAction::PrependResult(model::lift_regex(g, prefix)),
             ActionShape::SwapThen => GuardedAction::SwapThen,
         }
     }
@@ -10178,7 +10131,7 @@ pub mod verify {
         ensures match task {
             ActionShape::Union(n) | ActionShape::Intersect(n) => n <= values.len(),
             ActionShape::If(_) | ActionShape::CleanIf(_, _) | ActionShape::SwapThen => values.len() >= 2,
-            ActionShape::NotResult | ActionShape::AppendResult(_) => values.len() > 0,
+            ActionShape::NotResult | ActionShape::PrependResult(_) => values.len() > 0,
             ActionShape::Fold(ids, index) => 0 < index < ids.len() ==> values.len() > 0,
             _ => true,
         },
@@ -10189,7 +10142,7 @@ pub mod verify {
         match task {
             ActionShape::Union(_) | ActionShape::Intersect(_) | ActionShape::If(_)
             | ActionShape::CleanIf(_, _) | ActionShape::SwapThen
-            | ActionShape::NotResult | ActionShape::AppendResult(_) | ActionShape::Fold(_, _) => {},
+            | ActionShape::NotResult | ActionShape::PrependResult(_) | ActionShape::Fold(_, _) => {},
             _ => {},
         }
     }
@@ -10316,8 +10269,8 @@ pub mod verify {
                 == language::Transition::Intersect(ids.map(|i: int, child: nat| model::lift_transition(g, child))),
             model::TransitionNode::Not(inner) => model::lift_transition(g, id)
                 == language::Transition::Not(Box::new(model::lift_transition(g, inner))),
-            model::TransitionNode::Append(inner, suffix) => model::lift_transition(g, id)
-                == language::Transition::Append(Box::new(model::lift_transition(g, inner)), model::lift_regexes(g, suffix)),
+            model::TransitionNode::Prepend(inner, prefix) => model::lift_transition(g, id)
+                == language::Transition::Prepend(Box::new(model::lift_transition(g, inner)), model::lift_regexes(g, prefix)),
         },
     {
         model::lemma_graph_transition_wf(g, id);
@@ -10344,8 +10297,8 @@ pub mod verify {
             model::TransitionNode::Intersect(ids) => language::Transition::Intersect(
                 ids.map(|i: int, child: nat| model::lift_transition(g, child))),
             model::TransitionNode::Not(inner) => language::Transition::Not(Box::new(model::lift_transition(g, inner))),
-            model::TransitionNode::Append(inner, suffix) => language::Transition::Append(
-                Box::new(model::lift_transition(g, inner)), model::lift_regexes(g, suffix)),
+            model::TransitionNode::Prepend(inner, prefix) => language::Transition::Prepend(
+                Box::new(model::lift_transition(g, inner)), model::lift_regexes(g, prefix)),
         }
     }
 
@@ -10453,42 +10406,42 @@ pub mod verify {
     }
 
     #[verifier::opaque]
-    pub open spec fn transition_suffix(g: model::Graph, id: nat) -> Seq<nat> {
+    pub open spec fn transition_prefix(g: model::Graph, id: nat) -> Seq<nat> {
         match g.transitions[id as int] {
-            model::TransitionNode::Append(inner, suffix) => suffix,
+            model::TransitionNode::Prepend(inner, prefix) => prefix,
             _ => Seq::empty(),
         }
     }
 
-    pub open spec fn transition_suffix_count(g: model::Graph, id: nat, count: nat) -> bool {
+    pub open spec fn transition_prefix_count(g: model::Graph, id: nat, count: nat) -> bool {
         id < g.transitions.len() && match g.transitions[id as int] {
-            model::TransitionNode::Append(inner, suffix) => suffix.len() == count,
+            model::TransitionNode::Prepend(inner, prefix) => prefix.len() == count,
             _ => false,
         }
     }
 
-    pub proof fn transition_lemma_suffix(g: model::Graph, id: nat)
+    pub proof fn transition_lemma_prefix(g: model::Graph, id: nat)
         requires model::graph_wf(g), id < g.transitions.len(),
-        ensures model::bounded(transition_suffix(g, id), g.regexes.len()),
+        ensures model::bounded(transition_prefix(g, id), g.regexes.len()),
             match g.transitions[id as int] {
-                model::TransitionNode::Append(inner, suffix) => transition_suffix(g, id) == suffix,
-                _ => transition_suffix(g, id).len() == 0,
+                model::TransitionNode::Prepend(inner, prefix) => transition_prefix(g, id) == prefix,
+                _ => transition_prefix(g, id).len() == 0,
             },
     {
-        reveal(transition_suffix);
+        reveal(transition_prefix);
         model::lemma_graph_transition_wf(g, id);
     }
 
-    pub proof fn transition_lemma_suffix_child(g: model::Graph, id: nat, index: nat, child: nat)
+    pub proof fn transition_lemma_prefix_child(g: model::Graph, id: nat, index: nat, child: nat)
         requires model::graph_wf(g), id < g.transitions.len(),
-            model::transition_node_suffix(g.transitions[id as int], index) == Some(child),
-        ensures index < transition_suffix(g, id).len(), transition_suffix(g, id)[index as int] == child,
+            model::transition_node_prefix(g.transitions[id as int], index) == Some(child),
+        ensures index < transition_prefix(g, id).len(), transition_prefix(g, id)[index as int] == child,
             child < g.regexes.len(),
     {
-        transition_lemma_suffix(g, id);
-        reveal(transition_suffix);
+        transition_lemma_prefix(g, id);
+        reveal(transition_prefix);
         match g.transitions[id as int] {
-            model::TransitionNode::Append(inner, suffix) => {},
+            model::TransitionNode::Prepend(inner, prefix) => {},
             _ => {},
         }
     }
@@ -10660,7 +10613,7 @@ pub mod verify {
     {
         if d <= 1 { 1 } else {
             4 + d + 3 * clean_cost((d - 1) as nat) + pair_cost_upto(d, d)
-                + not_cost(log4_floor(d)) + append_cost(((d - 1) as nat) / 2)
+                + not_cost(log4_floor(d)) + prepend_cost(((d - 1) as nat) / 2)
         }
     }
 
@@ -10674,11 +10627,11 @@ pub mod verify {
         }
     }
 
-    /// Cost of `Append` on a node of depth bound `d`.
-    pub open spec fn append_cost(d: nat) -> nat
+    /// Cost of `Prepend` on a node of depth bound `d`.
+    pub open spec fn prepend_cost(d: nat) -> nat
         decreases 2 * d + 1, 2nat, 0nat,
     {
-        if d <= 1 { 1 } else { 3 + 3 * append_cost((d - 1) as nat) + clean_cost(2 * d) }
+        if d <= 1 { 1 } else { 3 + 3 * prepend_cost((d - 1) as nat) + clean_cost(2 * d) }
     }
 
     /// Cost of `Pair` on nodes of depth bounds `x` and `y`.
@@ -10714,12 +10667,12 @@ pub mod verify {
     pub open spec fn all_pos(ds: Seq<nat>) -> bool { forall|i: int| 0 <= i < ds.len() ==> #[trigger] ds[i] >= 1 }
     pub open spec fn le_pointwise(a: Seq<nat>, b: Seq<nat>) -> bool { a.len() == b.len() && forall|i: int| 0 <= i < a.len() ==> #[trigger] a[i] <= b[i] }
     pub open spec fn n4s(ds: Seq<nat>) -> Seq<nat> { Seq::new(ds.len(), |i: int| n4(ds[i])) }
-    pub open spec fn appends(ds: Seq<nat>) -> Seq<nat> { Seq::new(ds.len(), |i: int| 2 * ds[i] + 1) }
+    pub open spec fn prepends(ds: Seq<nat>) -> Seq<nat> { Seq::new(ds.len(), |i: int| 2 * ds[i] + 1) }
     pub open spec fn pairs_left(ds: Seq<nat>, y: nat) -> Seq<nat> { Seq::new(ds.len(), |i: int| pair_bound(ds[i], y)) }
     pub open spec fn pairs_right(x: nat, ds: Seq<nat>) -> Seq<nat> { Seq::new(ds.len(), |i: int| pair_bound(x, ds[i])) }
     pub open spec fn clean_cost_fn() -> spec_fn(nat) -> nat { |d: nat| clean_cost(d) }
     pub open spec fn not_cost_fn() -> spec_fn(nat) -> nat { |d: nat| not_cost(d) }
-    pub open spec fn append_cost_fn() -> spec_fn(nat) -> nat { |d: nat| append_cost(d) }
+    pub open spec fn prepend_cost_fn() -> spec_fn(nat) -> nat { |d: nat| prepend_cost(d) }
     pub open spec fn pair_cost_left_fn(y: nat) -> spec_fn(nat) -> nat { |d: nat| pair_cost(d, y) }
     pub open spec fn pair_cost_right_fn(x: nat) -> spec_fn(nat) -> nat { |d: nat| pair_cost(x, d) }
     /// Abstract cost of the intersect fold from index k with accumulator bound acc.
@@ -10789,7 +10742,7 @@ pub mod verify {
     // ---------------------------------------------------------------- costs: positivity, steps
 
     pub proof fn lemma_costs_pos(d: nat)
-        ensures clean_cost(d) >= 1, not_cost(d) >= 1, append_cost(d) >= 1,
+        ensures clean_cost(d) >= 1, not_cost(d) >= 1, prepend_cost(d) >= 1,
     {
     }
 
@@ -10812,8 +10765,8 @@ pub mod verify {
         assert(((d + 1) - 1) as nat == d);
     }
 
-    proof fn lemma_append_step(d: nat)
-        ensures append_cost(d) <= append_cost(d + 1), d >= 1 ==> 2 * append_cost(d) <= append_cost(d + 1),
+    proof fn lemma_prepend_step(d: nat)
+        ensures prepend_cost(d) <= prepend_cost(d + 1), d >= 1 ==> 2 * prepend_cost(d) <= prepend_cost(d + 1),
     {
         lemma_costs_pos(d);
         assert(((d + 1) - 1) as nat == d);
@@ -10998,14 +10951,14 @@ pub mod verify {
     }
 
     #[verifier::spinoff_prover]
-    proof fn lemma_append_steps_ok()
-        ensures steps_ok(append_cost_fn()),
+    proof fn lemma_prepend_steps_ok()
+        ensures steps_ok(prepend_cost_fn()),
     {
-        hide(append_cost);
+        hide(prepend_cost);
         reveal(steps_ok);
-        assert forall|d: nat| #[trigger] append_cost_fn()(d) <= append_cost_fn()(d + 1)
-            && (d >= 1 ==> 2 * append_cost_fn()(d) <= append_cost_fn()(d + 1)) by {
-            lemma_append_step(d);
+        assert forall|d: nat| #[trigger] prepend_cost_fn()(d) <= prepend_cost_fn()(d + 1)
+            && (d >= 1 ==> 2 * prepend_cost_fn()(d) <= prepend_cost_fn()(d + 1)) by {
+            lemma_prepend_step(d);
         }
     }
 
@@ -11047,12 +11000,12 @@ pub mod verify {
         lemma_f_mono(not_cost_fn(), a, b);
     }
 
-    pub proof fn lemma_append_cost_mono(a: nat, b: nat)
+    pub proof fn lemma_prepend_cost_mono(a: nat, b: nat)
         requires a <= b,
-        ensures append_cost(a) <= append_cost(b),
+        ensures prepend_cost(a) <= prepend_cost(b),
     {
-        lemma_append_steps_ok();
-        lemma_f_mono(append_cost_fn(), a, b);
+        lemma_prepend_steps_ok();
+        lemma_f_mono(prepend_cost_fn(), a, b);
     }
 
     proof fn lemma_pair_cost_mono_x(x1: nat, x2: nat, y: nat)
@@ -11244,14 +11197,14 @@ pub mod verify {
         lemma_f_sum_bounds(not_cost_fn(), ds);
     }
 
-    pub proof fn lemma_append_sum(ds: Seq<nat>)
+    pub proof fn lemma_prepend_sum(ds: Seq<nat>)
         requires all_pos(ds),
         ensures
-            sum_map(append_cost_fn(), ds) <= append_cost((union_bound(ds) - 1) as nat),
-            sum_map(append_cost_fn(), ds) <= append_cost((intersect_bound(ds) - 1) as nat),
+            sum_map(prepend_cost_fn(), ds) <= prepend_cost((union_bound(ds) - 1) as nat),
+            sum_map(prepend_cost_fn(), ds) <= prepend_cost((intersect_bound(ds) - 1) as nat),
     {
-        lemma_append_steps_ok();
-        lemma_f_sum_bounds(append_cost_fn(), ds);
+        lemma_prepend_steps_ok();
+        lemma_f_sum_bounds(prepend_cost_fn(), ds);
     }
 
     pub proof fn lemma_pair_left_sum(ds: Seq<nat>, y: nat)
@@ -11369,23 +11322,23 @@ pub mod verify {
         }
     }
 
-    // ---------------------------------------------------------------- Append / Pair over unions
+    // ---------------------------------------------------------------- Prepend / Pair over unions
 
-    proof fn lemma_appends_sum(ds: Seq<nat>)
-        ensures sum_plus1(appends(ds)) == 2 * sum_plus1(ds),
+    proof fn lemma_prepends_sum(ds: Seq<nat>)
+        ensures sum_plus1(prepends(ds)) == 2 * sum_plus1(ds),
         decreases ds.len(),
     {
         if ds.len() >= 1 {
-            assert(appends(ds).drop_last() =~= appends(ds.drop_last()));
-            lemma_appends_sum(ds.drop_last());
+            assert(prepends(ds).drop_last() =~= prepends(ds.drop_last()));
+            lemma_prepends_sum(ds.drop_last());
         }
     }
 
-    pub proof fn lemma_append_union(ds: Seq<nat>)
+    pub proof fn lemma_prepend_union(ds: Seq<nat>)
         requires all_pos(ds),
-        ensures union_bound(appends(ds)) <= 2 * union_bound(ds) + 1,
+        ensures union_bound(prepends(ds)) <= 2 * union_bound(ds) + 1,
     {
-        lemma_appends_sum(ds);
+        lemma_prepends_sum(ds);
         lemma_sum_ge(ds);
     }
 
@@ -11563,7 +11516,7 @@ pub mod verify {
     // ===== Action::run termination: per-node depth bounds and an abstract run of the task stack =====
 
     /// Depth bound of a transition node: `1 + max` at `If`, additive at `Union`, multiplicative at
-    /// `Intersect`, `4^d` at `Not`, `2d + 1` at `Append`.
+    /// `Intersect`, `4^d` at `Not`, `2d + 1` at `Prepend`.
     pub open spec fn tdepth(g: model::Graph, id: nat) -> nat
         decreases id, 1nat,
     {
@@ -11575,7 +11528,7 @@ pub mod verify {
                 model::TransitionNode::Union(cs) => union_bound(tdepths_bounded(g, cs, id)),
                 model::TransitionNode::Intersect(cs) => intersect_bound(tdepths_bounded(g, cs, id)),
                 model::TransitionNode::Not(c) => n4(if c < id { tdepth(g, c) } else { 1 }),
-                model::TransitionNode::Append(c, _) => 2 * (if c < id { tdepth(g, c) } else { 1 }) + 1,
+                model::TransitionNode::Prepend(c, _) => 2 * (if c < id { tdepth(g, c) } else { 1 }) + 1,
             }
         }
     }
@@ -11601,7 +11554,7 @@ pub mod verify {
             model::TransitionNode::Union(cs) => union_bound(tdepths(g, cs)),
             model::TransitionNode::Intersect(cs) => intersect_bound(tdepths(g, cs)),
             model::TransitionNode::Not(c) => n4(tdepth(g, c)),
-            model::TransitionNode::Append(c, _) => 2 * tdepth(g, c) + 1,
+            model::TransitionNode::Prepend(c, _) => 2 * tdepth(g, c) + 1,
         }
     }
 
@@ -11683,7 +11636,7 @@ pub mod verify {
                 assert(tdepths_bounded(a, cs, id) =~= tdepths_bounded(b, cs, id));
             },
             model::TransitionNode::Not(c) => { if c < id { tdepth_lemma_extends(a, b, c); } },
-            model::TransitionNode::Append(c, _) => { if c < id { tdepth_lemma_extends(a, b, c); } },
+            model::TransitionNode::Prepend(c, _) => { if c < id { tdepth_lemma_extends(a, b, c); } },
             _ => {},
         }
     }
@@ -11753,7 +11706,7 @@ pub mod verify {
         match task {
             ActionShape::Clean(id, _) => clean_cost(tdepth(g, id)),
             ActionShape::Not(id) => not_cost(tdepth(g, id)),
-            ActionShape::Append(id, _) => append_cost(tdepth(g, id)),
+            ActionShape::Prepend(id, _) => prepend_cost(tdepth(g, id)),
             ActionShape::Pair(a, b) => pair_cost(tdepth(g, a), tdepth(g, b)),
             ActionShape::Union(_) => 1,
             ActionShape::If(_) => 1,
@@ -11765,7 +11718,7 @@ pub mod verify {
                 } else if k >= xs.len() { 1 } else { fold_cost(tdepths(g, xs), k, abs_peek(stack, 0)) },
             ActionShape::CleanIf(_, _) => 1 + clean_cost(if_bound(abs_peek(stack, 1), abs_peek(stack, 0))),
             ActionShape::NotResult => 1 + not_cost(abs_peek(stack, 0)),
-            ActionShape::AppendResult(_) => 1 + append_cost(abs_peek(stack, 0)),
+            ActionShape::PrependResult(_) => 1 + prepend_cost(abs_peek(stack, 0)),
         }
     }
 
@@ -11773,7 +11726,7 @@ pub mod verify {
         match task {
             ActionShape::Clean(id, _) => stack.push(tdepth(g, id)),
             ActionShape::Not(id) => stack.push(n4(tdepth(g, id))),
-            ActionShape::Append(id, _) => stack.push(2 * tdepth(g, id) + 1),
+            ActionShape::Prepend(id, _) => stack.push(2 * tdepth(g, id) + 1),
             ActionShape::Pair(a, b) => stack.push(pair_bound(tdepth(g, a), tdepth(g, b))),
             ActionShape::Union(n) => abs_pop(stack, n).push(union_bound(abs_top(stack, n))),
             ActionShape::Intersect(n) => abs_pop(stack, n).push(intersect_bound(abs_top(stack, n))),
@@ -11783,7 +11736,7 @@ pub mod verify {
             ActionShape::If(_) => abs_pop(stack, 2).push(if_bound(abs_peek(stack, 1), abs_peek(stack, 0))),
             ActionShape::CleanIf(_, _) => abs_pop(stack, 2).push(if_bound(abs_peek(stack, 1), abs_peek(stack, 0))),
             ActionShape::NotResult => abs_pop(stack, 1).push(n4(abs_peek(stack, 0))),
-            ActionShape::AppendResult(_) => abs_pop(stack, 1).push(2 * abs_peek(stack, 0) + 1),
+            ActionShape::PrependResult(_) => abs_pop(stack, 1).push(2 * abs_peek(stack, 0) + 1),
             ActionShape::SwapThen => abs_pop(stack, 2).push(abs_peek(stack, 0)).push(abs_peek(stack, 1)),
         }
     }
@@ -11855,7 +11808,7 @@ pub mod verify {
         match task {
             ActionShape::Clean(id, _) => { le_pointwise_push(s1, s2, tdepth(g, id), tdepth(g, id)); },
             ActionShape::Not(id) => { le_pointwise_push(s1, s2, n4(tdepth(g, id)), n4(tdepth(g, id))); },
-            ActionShape::Append(id, _) => { le_pointwise_push(s1, s2, 2 * tdepth(g, id) + 1, 2 * tdepth(g, id) + 1); },
+            ActionShape::Prepend(id, _) => { le_pointwise_push(s1, s2, 2 * tdepth(g, id) + 1, 2 * tdepth(g, id) + 1); },
             ActionShape::Pair(a, b) => {
                 let v = pair_bound(tdepth(g, a), tdepth(g, b));
                 le_pointwise_push(s1, s2, v, v);
@@ -11893,8 +11846,8 @@ pub mod verify {
                 lemma_n4_mono(p0, q0);
                 le_pointwise_push(abs_pop(s1, 1), abs_pop(s2, 1), n4(p0), n4(q0));
             },
-            ActionShape::AppendResult(_) => {
-                lemma_append_cost_mono(p0, q0);
+            ActionShape::PrependResult(_) => {
+                lemma_prepend_cost_mono(p0, q0);
                 le_pointwise_push(abs_pop(s1, 1), abs_pop(s2, 1), 2 * p0 + 1, 2 * q0 + 1);
             },
             ActionShape::SwapThen => {
@@ -11938,7 +11891,7 @@ pub mod verify {
         match task {
             ActionShape::Clean(id, _) => { tdepth_lemma_extends(g0, g1, id); },
             ActionShape::Not(id) => { tdepth_lemma_extends(g0, g1, id); },
-            ActionShape::Append(id, _) => { tdepth_lemma_extends(g0, g1, id); },
+            ActionShape::Prepend(id, _) => { tdepth_lemma_extends(g0, g1, id); },
             ActionShape::Pair(a, b) => { tdepth_lemma_extends(g0, g1, a); tdepth_lemma_extends(g0, g1, b); },
             ActionShape::Fold(xs, _) => { tdepths_lemma_extends(g0, g1, xs); },
             _ => {},
@@ -12009,7 +11962,7 @@ pub mod verify {
         match action {
             ChildShape::Clean(_) => clean_cost_fn(),
             ChildShape::Not => not_cost_fn(),
-            ChildShape::Append(_) => append_cost_fn(),
+            ChildShape::Prepend(_) => prepend_cost_fn(),
             ChildShape::PairLeft(other) => pair_cost_left_fn(tdepth(g, other)),
             ChildShape::PairRight(other) => pair_cost_right_fn(tdepth(g, other)),
         }
@@ -12019,7 +11972,7 @@ pub mod verify {
         match action {
             ChildShape::Clean(_) => d,
             ChildShape::Not => n4(d),
-            ChildShape::Append(_) => 2 * d + 1,
+            ChildShape::Prepend(_) => 2 * d + 1,
             ChildShape::PairLeft(other) => pair_bound(d, tdepth(g, other)),
             ChildShape::PairRight(other) => pair_bound(tdepth(g, other), d),
         }
@@ -12148,17 +12101,17 @@ pub mod verify {
         match task {
             ActionShape::Clean(id, _) => tdepth(g, id),
             ActionShape::Not(id) => n4(tdepth(g, id)),
-            ActionShape::Append(id, _) => 2 * tdepth(g, id) + 1,
+            ActionShape::Prepend(id, _) => 2 * tdepth(g, id) + 1,
             ActionShape::Pair(a, b) => pair_bound(tdepth(g, a), tdepth(g, b)),
             _ => 0,
         }
     }
 
     pub open spec fn value_task(task: ActionShape) -> bool {
-        task is Clean || task is Not || task is Append || task is Pair
+        task is Clean || task is Not || task is Prepend || task is Pair
     }
 
-    /// A value-producing task (`Clean`/`Not`/`Append`/`Pair`) that directly pushes `out`.
+    /// A value-producing task (`Clean`/`Not`/`Prepend`/`Pair`) that directly pushes `out`.
     pub proof fn machine_value_result(
         g0: model::Graph, g1: model::Graph, pending: Seq<ActionShape>, task: ActionShape,
         v0: Seq<TransitionId>, out: TransitionId,
@@ -12172,7 +12125,7 @@ pub mod verify {
         match task {
             ActionShape::Clean(id, _) => { lemma_costs_pos(tdepth(g0, id)); tdepth_lemma_pos(g0, id); },
             ActionShape::Not(id) => { lemma_costs_pos(tdepth(g0, id)); lemma_n4_pos(tdepth(g0, id)); },
-            ActionShape::Append(id, _) => { lemma_costs_pos(tdepth(g0, id)); },
+            ActionShape::Prepend(id, _) => { lemma_costs_pos(tdepth(g0, id)); },
             ActionShape::Pair(a, b) => {
                 lemma_pair_cost_mono(tdepth(g0, a), tdepth(g0, b), tdepth(g0, a), tdepth(g0, b));
                 tdepth_lemma_pos(g0, a);
@@ -12199,7 +12152,7 @@ pub mod verify {
         // Keep irrelevant recursive costs opaque while proving this local scheduling bound.
         hide(clean_cost);
         hide(not_cost);
-        hide(append_cost);
+        hide(prepend_cost);
         hide(pair_cost);
         hide(pair_cost_upto);
         hide(tdepth);
@@ -12323,14 +12276,14 @@ pub mod verify {
         machine_lemma_step(g0, g1, pending, ActionShape::Clean(id@, path@), added, v0, v0);
     }
 
-    pub proof fn machine_clean_append(
+    pub proof fn machine_clean_prepend(
         g0: model::Graph, g1: model::Graph, pending: Seq<ActionShape>, id: TransitionId, path: TestId,
         inner: TransitionId, r: RegexId, v0: Seq<TransitionId>,
     )
         requires model::graph_wf(g0), model::graph_extends(g0, g1), transition_tasks_valid(g0, pending),
             transition_ids_valid(g0, v0), id@ < g0.transitions.len(),
-            match g0.transitions[id@ as int] { model::TransitionNode::Append(c, _) => c == inner@, _ => false },
-        ensures machine_cost(g1, pending.push(ActionShape::AppendResult(r@)).push(ActionShape::Clean(inner@, path@)), v0)
+            match g0.transitions[id@ as int] { model::TransitionNode::Prepend(c, _) => c == inner@, _ => false },
+        ensures machine_cost(g1, pending.push(ActionShape::PrependResult(r@)).push(ActionShape::Clean(inner@, path@)), v0)
             < machine_cost(g0, pending.push(ActionShape::Clean(id@, path@)), v0),
     {
         model::lemma_graph_transition_wf(g0, id@);
@@ -12343,8 +12296,8 @@ pub mod verify {
         lemma_clean_cost_mono(dc, (d - 1) as nat);
         let s0 = value_depths(g0, v0);
         value_depths_lemma_extends(g0, g1, v0);
-        let added = seq![ActionShape::AppendResult(r@), ActionShape::Clean(inner@, path@)];
-        assert(pending.push(ActionShape::AppendResult(r@)).push(ActionShape::Clean(inner@, path@)) =~= pending + added);
+        let added = seq![ActionShape::PrependResult(r@), ActionShape::Clean(inner@, path@)];
+        assert(pending.push(ActionShape::PrependResult(r@)).push(ActionShape::Clean(inner@, path@)) =~= pending + added);
         machine_lemma_run2(g1, added[0], added[1], s0);
         assert(abs_peek(s0.push(dc), 0) == dc);
         assert(abs_pop(s0.push(dc), 1) =~= s0);
@@ -12352,7 +12305,7 @@ pub mod verify {
         machine_lemma_step(g0, g1, pending, ActionShape::Clean(id@, path@), added, v0, v0);
     }
 
-    // ----- Not / Append -----
+    // ----- Not / Prepend -----
 
     pub proof fn machine_not_double(
         g0: model::Graph, g1: model::Graph, pending: Seq<ActionShape>, id: TransitionId, inner: TransitionId,
@@ -12371,7 +12324,7 @@ pub mod verify {
         machine_value_result(g0, g1, pending, ActionShape::Not(id@), v0, inner);
     }
 
-    /// `out` is a freshly interned `Not(id)` / `Append(id, _)` node.
+    /// `out` is a freshly interned `Not(id)` / `Prepend(id, _)` node.
     pub proof fn machine_wrap_interned(
         g0: model::Graph, g1: model::Graph, pending: Seq<ActionShape>, task: ActionShape,
         v0: Seq<TransitionId>, out: TransitionId,
@@ -12380,8 +12333,8 @@ pub mod verify {
             transition_ids_valid(g0, v0), transition_action_valid(g0, task), out@ < g1.transitions.len(),
             match task {
                 ActionShape::Not(id) => g1.transitions[out@ as int] == model::TransitionNode::Not(id),
-                ActionShape::Append(id, _) => match g1.transitions[out@ as int] {
-                    model::TransitionNode::Append(c, _) => c == id,
+                ActionShape::Prepend(id, _) => match g1.transitions[out@ as int] {
+                    model::TransitionNode::Prepend(c, _) => c == id,
                     _ => false,
                 },
                 _ => false,
@@ -12391,7 +12344,7 @@ pub mod verify {
         tdepth_lemma_unfold(g1, out@);
         match task {
             ActionShape::Not(id) => { tdepth_lemma_extends(g0, g1, id); },
-            ActionShape::Append(id, _) => { tdepth_lemma_extends(g0, g1, id); },
+            ActionShape::Prepend(id, _) => { tdepth_lemma_extends(g0, g1, id); },
             _ => {},
         }
         machine_value_result(g0, g1, pending, task, v0, out);
@@ -12424,19 +12377,19 @@ pub mod verify {
         machine_lemma_step(g0, g1, pending, ActionShape::Not(id@), added, v0, v0);
     }
 
-    pub open spec fn unary_task(id: TransitionId, suffix: Option<RegexId>) -> ActionShape {
-        match suffix { Some(r) => ActionShape::Append(id@, r@), None => ActionShape::Not(id@) }
+    pub open spec fn unary_task(id: TransitionId, prefix: Option<RegexId>) -> ActionShape {
+        match prefix { Some(r) => ActionShape::Prepend(id@, r@), None => ActionShape::Not(id@) }
     }
 
     pub proof fn machine_unary_if(
         g0: model::Graph, g1: model::Graph, pending: Seq<ActionShape>, id: TransitionId, test: TestId,
-        a: TransitionId, b: TransitionId, suffix: Option<RegexId>, v0: Seq<TransitionId>,
+        a: TransitionId, b: TransitionId, prefix: Option<RegexId>, v0: Seq<TransitionId>,
     )
         requires model::graph_wf(g0), model::graph_extends(g0, g1), transition_tasks_valid(g0, pending),
             transition_ids_valid(g0, v0), id@ < g0.transitions.len(),
             g0.transitions[id@ as int] == model::TransitionNode::If(test@, a@, b@),
-        ensures machine_cost(g1, machine_unary_if_tasks(g1, test, a, b, suffix, pending), v0)
-            < machine_cost(g0, pending.push(unary_task(id, suffix)), v0),
+        ensures machine_cost(g1, machine_unary_if_tasks(g1, test, a, b, prefix, pending), v0)
+            < machine_cost(g0, pending.push(unary_task(id, prefix)), v0),
     {
         model::lemma_graph_transition_wf(g0, id@);
         tdepth_lemma_unfold(g0, id@);
@@ -12450,14 +12403,14 @@ pub mod verify {
         let m = (d - 1) as nat;
         let s0 = value_depths(g0, v0);
         value_depths_lemma_extends(g0, g1, v0);
-        let task = unary_task(id, suffix);
+        let task = unary_task(id, prefix);
         let added = seq![
             ActionShape::CleanIf(test@, g1.constants.test_true),
-            match suffix { Some(r) => ActionShape::Append(b@, r@), None => ActionShape::Not(b@) },
-            match suffix { Some(r) => ActionShape::Append(a@, r@), None => ActionShape::Not(a@) }];
-        assert(machine_unary_if_tasks(g1, test, a, b, suffix, pending) =~= pending + added);
+            match prefix { Some(r) => ActionShape::Prepend(b@, r@), None => ActionShape::Not(b@) },
+            match prefix { Some(r) => ActionShape::Prepend(a@, r@), None => ActionShape::Not(a@) }];
+        assert(machine_unary_if_tasks(g1, test, a, b, prefix, pending) =~= pending + added);
         machine_lemma_run3(g1, added[0], added[1], added[2], s0);
-        match suffix {
+        match prefix {
             Some(r) => {
                 let s2 = s0.push(2 * da + 1).push(2 * db + 1);
                 assert(abs_pop(s2, 2) =~= s0);
@@ -12465,8 +12418,8 @@ pub mod verify {
                 assert(abs_peek(s2, 0) == 2 * db + 1);
                 let ib = if_bound(2 * da + 1, 2 * db + 1);
                 assert(ib <= 2 * d);
-                lemma_append_cost_mono(da, m);
-                lemma_append_cost_mono(db, m);
+                lemma_prepend_cost_mono(da, m);
+                lemma_prepend_cost_mono(db, m);
                 lemma_clean_cost_mono(ib, 2 * d);
                 le_pointwise_push(s0, s0, ib, 2 * d + 1);
             },
@@ -12490,18 +12443,18 @@ pub mod verify {
     }
 
     pub proof fn machine_unary_children(
-        g: model::Graph, pending: Seq<ActionShape>, id: TransitionId, suffix: Option<RegexId>, intersect: bool,
+        g: model::Graph, pending: Seq<ActionShape>, id: TransitionId, prefix: Option<RegexId>, intersect: bool,
         v0: Seq<TransitionId>,
     )
         requires model::graph_wf(g), transition_tasks_valid(g, pending), transition_ids_valid(g, v0),
             id@ < g.transitions.len(),
             match g.transitions[id@ as int] {
-                model::TransitionNode::Union(_) => intersect == (suffix is None),
-                model::TransitionNode::Intersect(_) => !intersect && suffix is None,
+                model::TransitionNode::Union(_) => intersect == (prefix is None),
+                model::TransitionNode::Intersect(_) => !intersect && prefix is None,
                 _ => false,
             },
-        ensures machine_cost(g, machine_unary_child_tasks(g, id, suffix, intersect, pending), v0)
-            < machine_cost(g, pending.push(unary_task(id, suffix)), v0),
+        ensures machine_cost(g, machine_unary_child_tasks(g, id, prefix, intersect, pending), v0)
+            < machine_cost(g, pending.push(unary_task(id, prefix)), v0),
     {
         transition_lemma_children(g, id@);
         tdepth_lemma_unfold(g, id@);
@@ -12511,18 +12464,18 @@ pub mod verify {
         tdepths_lemma_pos(g, cs);
         lemma_bounds_pos(ds);
         let d = tdepth(g, id@);
-        let action = match suffix { Some(r) => ChildShape::Append(r@), None => ChildShape::Not };
+        let action = match prefix { Some(r) => ChildShape::Prepend(r@), None => ChildShape::Not };
         let marker = if intersect { ActionShape::Intersect(cs.len()) } else { ActionShape::Union(cs.len()) };
         let added = seq![marker] + transition_child_actions(g, id@, action);
-        assert(machine_unary_child_tasks(g, id, suffix, intersect, pending) =~= pending + added);
+        assert(machine_unary_child_tasks(g, id, prefix, intersect, pending) =~= pending + added);
         let s0 = value_depths(g, v0);
         machine_lemma_set_run(g, id@, action, intersect, s0);
         let bs = child_bounds(g, action, ds);
-        match suffix {
+        match prefix {
             Some(r) => {
-                assert(bs =~= appends(ds));
-                lemma_append_sum(ds);
-                lemma_append_union(ds);
+                assert(bs =~= prepends(ds));
+                lemma_prepend_sum(ds);
+                lemma_prepend_union(ds);
                 le_pointwise_push(s0, s0, union_bound(bs), 2 * d + 1);
             },
             None => {
@@ -12538,18 +12491,18 @@ pub mod verify {
                 }
             },
         }
-        machine_lemma_step(g, g, pending, unary_task(id, suffix), added, v0, v0);
+        machine_lemma_step(g, g, pending, unary_task(id, prefix), added, v0, v0);
     }
 
-    pub proof fn machine_append_nested(
+    pub proof fn machine_prepend_nested(
         g0: model::Graph, g1: model::Graph, pending: Seq<ActionShape>, id: TransitionId, r: RegexId,
         inner: TransitionId, combined: RegexId, v0: Seq<TransitionId>,
     )
         requires model::graph_wf(g0), model::graph_extends(g0, g1), transition_tasks_valid(g0, pending),
             transition_ids_valid(g0, v0), id@ < g0.transitions.len(),
-            match g0.transitions[id@ as int] { model::TransitionNode::Append(c, _) => c == inner@, _ => false },
-        ensures machine_cost(g1, pending.push(ActionShape::Append(inner@, combined@)), v0)
-            < machine_cost(g0, pending.push(ActionShape::Append(id@, r@)), v0),
+            match g0.transitions[id@ as int] { model::TransitionNode::Prepend(c, _) => c == inner@, _ => false },
+        ensures machine_cost(g1, pending.push(ActionShape::Prepend(inner@, combined@)), v0)
+            < machine_cost(g0, pending.push(ActionShape::Prepend(id@, r@)), v0),
     {
         model::lemma_graph_transition_wf(g0, id@);
         tdepth_lemma_unfold(g0, id@);
@@ -12557,14 +12510,14 @@ pub mod verify {
         tdepth_lemma_pos(g0, inner@);
         let dc = tdepth(g0, inner@);
         let d = tdepth(g0, id@);
-        lemma_append_cost_mono(dc, (d - 1) as nat);
+        lemma_prepend_cost_mono(dc, (d - 1) as nat);
         let s0 = value_depths(g0, v0);
         value_depths_lemma_extends(g0, g1, v0);
-        let added = seq![ActionShape::Append(inner@, combined@)];
+        let added = seq![ActionShape::Prepend(inner@, combined@)];
         assert(pending.push(added[0]) =~= pending + added);
         machine_lemma_run1(g1, added[0], s0);
         le_pointwise_push(s0, s0, 2 * dc + 1, 2 * d + 1);
-        machine_lemma_step(g0, g1, pending, ActionShape::Append(id@, r@), added, v0, v0);
+        machine_lemma_step(g0, g1, pending, ActionShape::Prepend(id@, r@), added, v0, v0);
     }
 
     // ----- Pair -----
@@ -13037,24 +12990,24 @@ pub mod verify {
     }
 
     pub proof fn machine_driver_result(
-        g: model::Graph, pending: Seq<ActionShape>, suffix: Option<nat>, v0: Seq<TransitionId>,
+        g: model::Graph, pending: Seq<ActionShape>, prefix: Option<nat>, v0: Seq<TransitionId>,
     )
         requires transition_tasks_valid(g, pending), v0.len() >= 1,
-        ensures machine_cost(g, pending.push(match suffix {
-                Some(r) => ActionShape::Append(v0.last()@, r), None => ActionShape::Not(v0.last()@) }), v0.drop_last())
-            < machine_cost(g, pending.push(match suffix {
-                Some(r) => ActionShape::AppendResult(r), None => ActionShape::NotResult }), v0),
+        ensures machine_cost(g, pending.push(match prefix {
+                Some(r) => ActionShape::Prepend(v0.last()@, r), None => ActionShape::Not(v0.last()@) }), v0.drop_last())
+            < machine_cost(g, pending.push(match prefix {
+                Some(r) => ActionShape::PrependResult(r), None => ActionShape::NotResult }), v0),
     {
         graph_lemma_extends_refl(g);
         let s0 = value_depths(g, v0);
         let rest = value_depths(g, v0.drop_last());
         assert(abs_pop(s0, 1) =~= rest);
         assert(abs_peek(s0, 0) == tdepth(g, v0.last()@));
-        let task = match suffix { Some(r) => ActionShape::Append(v0.last()@, r), None => ActionShape::Not(v0.last()@) };
+        let task = match prefix { Some(r) => ActionShape::Prepend(v0.last()@, r), None => ActionShape::Not(v0.last()@) };
         let added = seq![task];
         assert(pending.push(task) =~= pending + added);
         machine_lemma_run1(g, task, rest);
-        let old_task = match suffix { Some(r) => ActionShape::AppendResult(r), None => ActionShape::NotResult };
+        let old_task = match prefix { Some(r) => ActionShape::PrependResult(r), None => ActionShape::NotResult };
         le_pointwise_refl(action_next(g, old_task, s0));
         machine_lemma_step(g, g, pending, old_task, added, v0, v0.drop_last());
     }
@@ -14037,7 +13990,7 @@ pub mod verify {
         match action {
             ChildShape::Clean(path) => path < g.tests.len(),
             ChildShape::Not => true,
-            ChildShape::Append(suffix) => suffix < g.regexes.len(),
+            ChildShape::Prepend(prefix) => prefix < g.regexes.len(),
             ChildShape::PairLeft(other) => other < g.transitions.len(),
             ChildShape::PairRight(other) => other < g.transitions.len(),
         }
@@ -14047,7 +14000,7 @@ pub mod verify {
         match action {
             ChildShape::Clean(path) => ActionShape::Clean(child, path),
             ChildShape::Not => ActionShape::Not(child),
-            ChildShape::Append(suffix) => ActionShape::Append(child, suffix),
+            ChildShape::Prepend(prefix) => ActionShape::Prepend(child, prefix),
             ChildShape::PairLeft(other) => ActionShape::Pair(child, other),
             ChildShape::PairRight(other) => ActionShape::Pair(other, child),
         }
@@ -14148,7 +14101,7 @@ pub mod verify {
 
     pub open spec fn guarded_action_pushes<L>(action: GuardedAction<L>) -> bool {
         match action {
-            GuardedAction::Clean(_, _) | GuardedAction::Not(_) | GuardedAction::Append(_, _) | GuardedAction::Pair(_, _) => true,
+            GuardedAction::Clean(_, _) | GuardedAction::Not(_) | GuardedAction::Prepend(_, _) | GuardedAction::Pair(_, _) => true,
             GuardedAction::Fold(_, index) => index == 0,
             _ => false,
         }
@@ -14179,7 +14132,7 @@ pub mod verify {
         match action {
             GuardedAction::Clean(_, _) => {},
             GuardedAction::Not(_) => {},
-            GuardedAction::Append(_, _) => {},
+            GuardedAction::Prepend(_, _) => {},
             GuardedAction::Pair(_, _) => {},
             GuardedAction::Fold(_, index) => {},
             _ => {},
@@ -14254,7 +14207,7 @@ pub mod verify {
 
     pub open spec fn transition_action_pushes(task: ActionShape) -> bool {
         match task {
-            ActionShape::Clean(_, _) | ActionShape::Not(_) | ActionShape::Append(_, _) | ActionShape::Pair(_, _) => true,
+            ActionShape::Clean(_, _) | ActionShape::Not(_) | ActionShape::Prepend(_, _) | ActionShape::Pair(_, _) => true,
             ActionShape::Fold(_, index) => index == 0,
             _ => false,
         }
@@ -14312,7 +14265,7 @@ pub mod verify {
         match task {
             ActionShape::Clean(_, _) => {},
             ActionShape::Not(_) => {},
-            ActionShape::Append(_, _) => {},
+            ActionShape::Prepend(_, _) => {},
             ActionShape::Pair(_, _) => {},
             ActionShape::Fold(_, index) => {},
             _ => {},
@@ -15204,16 +15157,16 @@ pub mod verify {
         }
     }
 
-    pub proof fn transition_lemma_clean_append_effect(
+    pub proof fn transition_lemma_clean_prepend_effect(
         g: model::Graph, id: TransitionId, path: TestId, inner: TransitionId,
-        suffix: Seq<RegexId>, combined: RegexId, base: Seq<ActionShape>,
+        prefix: Seq<RegexId>, combined: RegexId, base: Seq<ActionShape>,
     )
         requires model::graph_wf(g), id@ < g.transitions.len(),
-            g.transitions[id@ as int] == model::TransitionNode::Append(inner@, model::regex_ids(suffix)),
+            g.transitions[id@ as int] == model::TransitionNode::Prepend(inner@, model::regex_ids(prefix)),
             forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta, theta.len())
-                ==> model::regex_lang(g, theta, combined@, word) == concat_combo(g, theta, suffix, word),
+                ==> model::regex_lang(g, theta, combined@, word) == concat_combo(g, theta, prefix, word),
         ensures forall|prior: Seq<TransitionId>| #[trigger] transition_effect(g, ActionShape::Clean(id@, path@), base, prior,
-            base.push(ActionShape::AppendResult(combined@)).push(ActionShape::Clean(inner@, path@)), prior),
+            base.push(ActionShape::PrependResult(combined@)).push(ActionShape::Clean(inner@, path@)), prior),
     {
         transition_unfold(g, id@);
         let sem = transition_context_sem();
@@ -15222,32 +15175,51 @@ pub mod verify {
         let term = model::lift_transition(g, inner@);
         let combined_term = model::lift_regex(g, combined@);
         let before = guarded_clean(sem, path_term, model::lift_transition(g, id@));
-        let after = guarded_append(guarded_clean(sem, path_term, term), combined_term);
+        let after = guarded_prepend(guarded_clean(sem, path_term, term), combined_term);
         assert forall|ctx: TransitionContext, event: EventView| valid(ctx) && #[trigger] (before.guard)(ctx, event)
             implies (after.guard)(ctx, event) && forall|word: Seq<EventView>|
                 guarded_language(sem, ctx, event, before, word) == guarded_language(sem, ctx, event, after, word) by {
             transition_lemma_context_sem(ctx);
             let context_sem = model::gsem(ctx.bindings);
-            let suffix_terms = model::lift_regexes(g, model::regex_ids(suffix));
-            language::lemma_interp_append(context_sem, event, term, suffix_terms);
-            language::lemma_interp_append(context_sem, event, term, seq![combined_term]);
-            assert forall|word: Seq<EventView>| language::numeric_lang(context_sem, language::Regex::Concat(suffix_terms), word)
+            let prefix_terms = model::lift_regexes(g, model::regex_ids(prefix));
+            language::lemma_interp_prepend(context_sem, event, term, prefix_terms);
+            language::lemma_interp_prepend(context_sem, event, term, seq![combined_term]);
+            assert forall|word: Seq<EventView>| language::numeric_lang(context_sem, language::Regex::Concat(prefix_terms), word)
                 == language::numeric_lang(context_sem, combined_term, word) by {
                 assert(model::regex_lang(g, ctx.bindings, combined@, word)
-                    == concat_combo(g, ctx.bindings, suffix, word));
+                    == concat_combo(g, ctx.bindings, prefix, word));
             }
-            regex_concat_replace(context_sem, seq![language::interp_transition(context_sem, event, term)], suffix_terms, combined_term);
+            let child = language::interp_transition(context_sem, event, term);
+            regex_concat_replace_prefix(context_sem, prefix_terms, combined_term, child);
+            assert(seq![combined_term].push(child) =~= seq![combined_term, child]);
         }
         assert forall|prior: Seq<TransitionId>| #[trigger] transition_effect(g, ActionShape::Clean(id@, path@), base, prior,
-            base.push(ActionShape::AppendResult(combined@)).push(ActionShape::Clean(inner@, path@)), prior) by {
+            base.push(ActionShape::PrependResult(combined@)).push(ActionShape::Clean(inner@, path@)), prior) by {
             let known = transition_known_values(g, prior);
             guarded_lemma_stack_refl(sem, valid, known);
             guarded_lemma_stack_push(sem, valid, known, known, before, after);
-            let tasks = base.push(ActionShape::AppendResult(combined@)).push(ActionShape::Clean(inner@, path@));
+            let tasks = base.push(ActionShape::PrependResult(combined@)).push(ActionShape::Clean(inner@, path@));
             assert(transition_freeze_tasks(g, tasks.subrange(base.len() as int, tasks.len() as int))
-                =~= seq![GuardedAction::AppendResult(combined_term), GuardedAction::Clean(term, path_term)]);
+                =~= seq![GuardedAction::PrependResult(combined_term), GuardedAction::Clean(term, path_term)]);
             reveal_with_fuel(guarded_run, 3);
         }
+    }
+
+    proof fn regex_concat_replace_prefix<L>(
+        sem: spec_fn(L, EventView) -> bool, prefix: Seq<language::Regex<L>>, combined: language::Regex<L>, child: language::Regex<L>,
+    )
+        requires forall|w: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(prefix), w)
+            == language::numeric_lang(sem, combined, w),
+        ensures forall|w: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(prefix.push(child)), w)
+            == language::numeric_lang(sem, language::Regex::Concat(seq![combined, child]), w),
+    {
+        assert forall|w: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(prefix), w)
+            == language::numeric_lang(sem, language::Regex::Concat(seq![combined]), w) by {
+            language::lemma_concat_singleton(sem, combined, w);
+        }
+        regex_concat_append_congruent(sem, prefix, seq![combined], seq![child]);
+        assert(prefix + seq![child] =~= prefix.push(child));
+        assert(seq![combined] + seq![child] =~= seq![combined, child]);
     }
 
     pub proof fn machine_unary_not_result(g: model::Graph, id: TransitionId, out: TransitionId)
@@ -15265,74 +15237,58 @@ pub mod verify {
         }
     }
 
-    pub open spec fn machine_unary_append_language(
-        g: model::Graph, theta: Subst, id: TransitionId, suffix: RegexId,
+    pub open spec fn machine_unary_prepend_language(
+        g: model::Graph, theta: Subst, id: TransitionId, prefix: RegexId,
         event: EventView, word: Seq<EventView>,
     ) -> bool {
         language::numeric_lang(model::gsem(theta), language::Regex::Concat(seq![
+            model::lift_regex(g, prefix@),
             language::interp_transition(model::gsem(theta), event, model::lift_transition(g, id@)),
-            model::lift_regex(g, suffix@),
         ]), word)
     }
 
-    pub proof fn machine_unary_append_result(g: model::Graph, id: TransitionId, suffix: RegexId, out: TransitionId)
+    pub proof fn machine_unary_prepend_result(g: model::Graph, id: TransitionId, prefix: RegexId, out: TransitionId)
         requires forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             ==> transition_lang(g, theta, out, event, word)
-                == machine_unary_append_language(g, theta, id, suffix, event, word),
-        ensures transition_result(g, ActionShape::Append(id@, suffix@), out),
+                == machine_unary_prepend_language(g, theta, id, prefix, event, word),
+        ensures transition_result(g, ActionShape::Prepend(id@, prefix@), out),
     {
-        let expected = transition_initial_value(g, ActionShape::Append(id@, suffix@)).unwrap();
+        let expected = transition_initial_value(g, ActionShape::Prepend(id@, prefix@)).unwrap();
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             && (expected.guard)(TransitionContext { bindings: theta }, event)
             implies guarded_language(transition_context_sem(), TransitionContext { bindings: theta }, event, expected, word)
                 == transition_lang(g, theta, out, event, word) by {
             transition_lemma_context_sem(TransitionContext { bindings: theta });
-            language::lemma_interp_append(model::gsem(theta), event, model::lift_transition(g, id@), seq![model::lift_regex(g, suffix@)]);
-            assert(seq![language::interp_transition(model::gsem(theta), event, model::lift_transition(g, id@))]
-                + seq![model::lift_regex(g, suffix@)] =~= seq![
-                    language::interp_transition(model::gsem(theta), event, model::lift_transition(g, id@)), model::lift_regex(g, suffix@)]);
+            language::lemma_interp_prepend(model::gsem(theta), event, model::lift_transition(g, id@), seq![model::lift_regex(g, prefix@)]);
+            let child = language::interp_transition(model::gsem(theta), event, model::lift_transition(g, id@));
+            assert(seq![model::lift_regex(g, prefix@)].push(child) =~= seq![model::lift_regex(g, prefix@), child]);
         }
     }
 
-    pub proof fn machine_unary_append_identity<L>(sem: spec_fn(L, EventView) -> bool, head: language::Regex<L>, word: Seq<EventView>)
-        ensures language::numeric_lang(sem, language::Regex::Concat(seq![head, language::Regex::Epsilon]), word) == language::numeric_lang(sem, head, word),
-            !language::numeric_lang(sem, language::Regex::Concat(seq![head, language::Regex::Empty]), word),
+    pub proof fn machine_unary_prepend_identity<L>(sem: spec_fn(L, EventView) -> bool, child: language::Regex<L>, word: Seq<EventView>)
+        ensures language::numeric_lang(sem, language::Regex::Concat(seq![language::Regex::Epsilon, child]), word) == language::numeric_lang(sem, child, word),
+            !language::numeric_lang(sem, language::Regex::Concat(seq![language::Regex::Empty, child]), word),
     {
-        language::lemma_concat_pair(sem, head, language::Regex::Epsilon, word);
-        language::lemma_concat_pair(sem, head, language::Regex::Empty, word);
-        if language::numeric_lang(sem, head, word) {
+        language::lemma_concat_pair(sem, language::Regex::Epsilon, child, word);
+        language::lemma_concat_pair(sem, language::Regex::Empty, child, word);
+        if language::numeric_lang(sem, child, word) {
             let empty = Seq::<EventView>::empty();
-            assert(word == word + empty);
+            assert(word == empty + word);
             assert(language::numeric_lang(sem, language::Regex::Epsilon, empty));
         }
     }
 
-    pub proof fn machine_unary_append_reassociate<L>(
-        sem: spec_fn(L, EventView) -> bool, head: language::Regex<L>, suffix: Seq<language::Regex<L>>, last: language::Regex<L>,
+    pub proof fn machine_unary_prepend_reassociate<L>(
+        sem: spec_fn(L, EventView) -> bool, child: language::Regex<L>, inner: Seq<language::Regex<L>>, outer: language::Regex<L>,
     )
         ensures forall|word: Seq<EventView>| language::numeric_lang(sem,
-            language::Regex::Concat(seq![language::Regex::Concat(seq![head] + suffix), last]), word)
-            == language::numeric_lang(sem, language::Regex::Concat(seq![head, language::Regex::Concat(suffix.push(last))]), word),
+            language::Regex::Concat(seq![outer, language::Regex::Concat(inner.push(child))]), word)
+            == language::numeric_lang(sem, language::Regex::Concat((seq![outer] + inner).push(child)), word),
     {
-        let flat = seq![head] + suffix;
-        assert forall|word: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(seq![language::Regex::Concat(flat)]), word)
-            == language::numeric_lang(sem, language::Regex::Concat(flat), word) by {
-            language::lemma_concat_singleton(sem, language::Regex::Concat(flat), word);
-        }
-        regex_concat_append_congruent(sem, seq![language::Regex::Concat(flat)], flat, seq![last]);
-        let tail = suffix.push(last);
-        regex_concat_replace(sem, seq![head], tail, language::Regex::Concat(tail));
-        assert(flat + seq![last] =~= seq![head] + tail);
-        assert(seq![language::Regex::Concat(flat)] + seq![last] =~= seq![language::Regex::Concat(flat), last]);
-        assert(seq![head].push(language::Regex::Concat(tail)) =~= seq![head, language::Regex::Concat(tail)]);
-        assert forall|word: Seq<EventView>| language::numeric_lang(sem,
-            language::Regex::Concat(seq![language::Regex::Concat(flat), last]), word)
-            == language::numeric_lang(sem, language::Regex::Concat(seq![head, language::Regex::Concat(tail)]), word) by {
-            assert(language::numeric_lang(sem, language::Regex::Concat(seq![language::Regex::Concat(flat)] + seq![last]), word)
-                == language::numeric_lang(sem, language::Regex::Concat(flat + seq![last]), word));
-            assert(language::numeric_lang(sem, language::Regex::Concat(seq![head] + tail), word)
-                == language::numeric_lang(sem, language::Regex::Concat(seq![head].push(language::Regex::Concat(tail))), word));
-        }
+        let nested = inner.push(child);
+        regex_concat_replace(sem, seq![outer], nested, language::Regex::Concat(nested));
+        assert(seq![outer] + nested =~= (seq![outer] + inner).push(child));
+        assert(seq![outer].push(language::Regex::Concat(nested)) =~= seq![outer, language::Regex::Concat(nested)]);
     }
 
     pub proof fn machine_unary_demorgan<L>(
@@ -15368,58 +15324,58 @@ pub mod verify {
         }
     }
 
-    pub proof fn machine_unary_append_union<L>(
-        sem: spec_fn(L, EventView) -> bool, event: EventView, terms: Seq<language::Transition<L>>, suffix: language::Regex<L>, word: Seq<EventView>,
+    pub proof fn machine_unary_prepend_union<L>(
+        sem: spec_fn(L, EventView) -> bool, event: EventView, terms: Seq<language::Transition<L>>, prefix: language::Regex<L>, word: Seq<EventView>,
     )
         ensures language::numeric_lang(sem, language::interp_transition(sem, event,
-            language::Transition::Append(Box::new(language::Transition::Union(terms)), seq![suffix])), word)
+            language::Transition::Prepend(Box::new(language::Transition::Union(terms)), seq![prefix])), word)
             == language::numeric_lang(sem, language::interp_transition(sem, event, language::Transition::Union(
-                terms.map(|i: int, term: language::Transition<L>| language::Transition::Append(Box::new(term), seq![suffix])))), word),
+                terms.map(|i: int, term: language::Transition<L>| language::Transition::Prepend(Box::new(term), seq![prefix])))), word),
     {
-        let head = language::interp_transition(sem, event, language::Transition::Union(terms));
-        let appended = terms.map(|i: int, term: language::Transition<L>| language::Transition::Append(Box::new(term), seq![suffix]));
-        language::lemma_interp_append(sem, event, language::Transition::Union(terms), seq![suffix]);
-        assert(seq![head] + seq![suffix] =~= seq![head, suffix]);
-        language::lemma_concat_pair(sem, head, suffix, word);
-        language::lemma_interp_union(sem, event, appended, word);
+        let choice = language::interp_transition(sem, event, language::Transition::Union(terms));
+        let prepended = terms.map(|i: int, term: language::Transition<L>| language::Transition::Prepend(Box::new(term), seq![prefix]));
+        language::lemma_interp_prepend(sem, event, language::Transition::Union(terms), seq![prefix]);
+        assert(seq![prefix].push(choice) =~= seq![prefix, choice]);
+        language::lemma_concat_pair(sem, prefix, choice, word);
+        language::lemma_interp_union(sem, event, prepended, word);
         assert forall|i: int| 0 <= i < terms.len() implies
-            language::numeric_lang(sem, language::interp_transition(sem, event, appended[i]), word)
+            language::numeric_lang(sem, language::interp_transition(sem, event, prepended[i]), word)
                 == (exists|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-                    && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), u) && language::numeric_lang(sem, suffix, v)) by {
-            language::lemma_interp_append(sem, event, terms[i], seq![suffix]);
+                    && language::numeric_lang(sem, prefix, u) && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), v)) by {
+            language::lemma_interp_prepend(sem, event, terms[i], seq![prefix]);
             let r = language::interp_transition(sem, event, terms[i]);
-            assert(seq![r] + seq![suffix] =~= seq![r, suffix]);
-            language::lemma_concat_pair(sem, r, suffix, word);
+            assert(seq![prefix].push(r) =~= seq![prefix, r]);
+            language::lemma_concat_pair(sem, prefix, r, word);
         }
-        if language::numeric_lang(sem, language::Regex::Concat(seq![head, suffix]), word) {
-            let (u, v) = choose|u: Seq<EventView>, v: Seq<EventView>| word == u + v && language::numeric_lang(sem, head, u) && language::numeric_lang(sem, suffix, v);
-            language::lemma_interp_union(sem, event, terms, u);
-            let i = choose|i: int| 0 <= i < terms.len() && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), u);
-            assert(language::numeric_lang(sem, language::interp_transition(sem, event, appended[i]), word));
+        if language::numeric_lang(sem, language::Regex::Concat(seq![prefix, choice]), word) {
+            let (u, v) = choose|u: Seq<EventView>, v: Seq<EventView>| word == u + v && language::numeric_lang(sem, prefix, u) && language::numeric_lang(sem, choice, v);
+            language::lemma_interp_union(sem, event, terms, v);
+            let i = choose|i: int| 0 <= i < terms.len() && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), v);
+            assert(language::numeric_lang(sem, language::interp_transition(sem, event, prepended[i]), word));
         }
-        if language::numeric_lang(sem, language::interp_transition(sem, event, language::Transition::Union(appended)), word) {
-            let i = choose|i: int| 0 <= i < appended.len() && language::numeric_lang(sem, language::interp_transition(sem, event, appended[i]), word);
+        if language::numeric_lang(sem, language::interp_transition(sem, event, language::Transition::Union(prepended)), word) {
+            let i = choose|i: int| 0 <= i < prepended.len() && language::numeric_lang(sem, language::interp_transition(sem, event, prepended[i]), word);
             let (u, v) = choose|u: Seq<EventView>, v: Seq<EventView>| word == u + v
-                && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), u) && language::numeric_lang(sem, suffix, v);
-            language::lemma_interp_union(sem, event, terms, u);
-            assert(language::numeric_lang(sem, head, u));
-            assert(language::numeric_lang(sem, language::Regex::Concat(seq![head, suffix]), word));
+                && language::numeric_lang(sem, prefix, u) && language::numeric_lang(sem, language::interp_transition(sem, event, terms[i]), v);
+            language::lemma_interp_union(sem, event, terms, v);
+            assert(language::numeric_lang(sem, choice, v));
+            assert(language::numeric_lang(sem, language::Regex::Concat(seq![prefix, choice]), word));
         }
     }
 
     pub open spec fn machine_unary_child_tasks(
-        g: model::Graph, id: TransitionId, suffix: Option<RegexId>, intersect: bool, base: Seq<ActionShape>,
+        g: model::Graph, id: TransitionId, prefix: Option<RegexId>, intersect: bool, base: Seq<ActionShape>,
     ) -> Seq<ActionShape> {
         base.push(if intersect { ActionShape::Intersect(transition_children(g, id@).len()) }
             else { ActionShape::Union(transition_children(g, id@).len()) })
-            + transition_child_actions(g, id@, match suffix { Some(r) => ChildShape::Append(r@), None => ChildShape::Not })
+            + transition_child_actions(g, id@, match prefix { Some(r) => ChildShape::Prepend(r@), None => ChildShape::Not })
     }
 
     pub proof fn machine_unary_children_effect(
-        g: model::Graph, id: TransitionId, suffix: Option<RegexId>, intersect: bool, base: Seq<ActionShape>, prior: Seq<TransitionId>,
+        g: model::Graph, id: TransitionId, prefix: Option<RegexId>, intersect: bool, base: Seq<ActionShape>, prior: Seq<TransitionId>,
     )
         requires model::graph_wf(g), id@ < g.transitions.len(),
-            match suffix {
+            match prefix {
                 Some(r) => r@ < g.regexes.len() && !intersect && g.transitions[id@ as int] matches model::TransitionNode::Union(_),
                 None => match g.transitions[id@ as int] {
                     model::TransitionNode::Union(_) => intersect,
@@ -15427,8 +15383,8 @@ pub mod verify {
                     _ => false,
                 },
             },
-        ensures transition_effect(g, match suffix { Some(r) => ActionShape::Append(id@, r@), None => ActionShape::Not(id@) },
-            base, prior, machine_unary_child_tasks(g, id, suffix, intersect, base), prior),
+        ensures transition_effect(g, match prefix { Some(r) => ActionShape::Prepend(id@, r@), None => ActionShape::Not(id@) },
+            base, prior, machine_unary_child_tasks(g, id, prefix, intersect, base), prior),
     {
         transition_unfold(g, id@);
         transition_lemma_children(g, id@);
@@ -15436,17 +15392,17 @@ pub mod verify {
         let valid = transition_context_valid();
         let children = transition_children(g, id@);
         let terms = children.map(|i: int, child: nat| model::lift_transition(g, child));
-        let actions = terms.map(|i: int, term: language::Transition<model::Test>| match suffix {
-            Some(r) => GuardedAction::Append(term, model::lift_regex(g, r@)), None => GuardedAction::Not(term),
+        let actions = terms.map(|i: int, term: language::Transition<model::Test>| match prefix {
+            Some(r) => GuardedAction::Prepend(term, model::lift_regex(g, r@)), None => GuardedAction::Not(term),
         });
         let count = children.len();
         let set_shape = if intersect { ActionShape::Intersect(count) } else { ActionShape::Union(count) };
         let set_action = if intersect { GuardedAction::Intersect(count) } else { GuardedAction::Union(count) };
-        let child_shape = match suffix { Some(r) => ChildShape::Append(r@), None => ChildShape::Not };
+        let child_shape = match prefix { Some(r) => ChildShape::Prepend(r@), None => ChildShape::Not };
         let expansion = transition_child_actions(g, id@, child_shape);
         assert(transition_freeze_tasks(g, expansion) =~= actions.reverse());
         let mapped = guarded_atomic_values(sem, actions);
-        let task = match suffix { Some(r) => ActionShape::Append(id@, r@), None => ActionShape::Not(id@) };
+        let task = match prefix { Some(r) => ActionShape::Prepend(id@, r@), None => ActionShape::Not(id@) };
         let expected = transition_initial_value(g, task).unwrap();
         let result = guarded_set(mapped, intersect);
         assert(result.term == if intersect { language::Transition::Intersect(mapped.map(|i: int, value: TransitionMeaning| value.term)) }
@@ -15455,16 +15411,16 @@ pub mod verify {
             implies (result.guard)(ctx, event) && forall|word: Seq<EventView>| guarded_language(sem, ctx, event, expected, word)
                 == guarded_language(sem, ctx, event, result, word) by {
             assert forall|i: int| 0 <= i < mapped.len() implies (mapped[i].guard)(ctx, event) by {
-                match suffix { Some(r) => {}, None => {} }
+                match prefix { Some(r) => {}, None => {} }
             }
             let context_sem = guarded_semantics(sem, ctx);
-            match suffix {
+            match prefix {
                 Some(r) => {
                     assert(mapped.map(|i: int, value: TransitionMeaning| value.term) =~= terms.map(|i: int, term: language::Transition<model::Test>|
-                        language::Transition::Append(Box::new(term), seq![model::lift_regex(g, r@)])));
+                        language::Transition::Prepend(Box::new(term), seq![model::lift_regex(g, r@)])));
                     assert forall|word: Seq<EventView>| guarded_language(sem, ctx, event, expected, word)
                         == guarded_language(sem, ctx, event, result, word) by {
-                        machine_unary_append_union(context_sem, event, terms, model::lift_regex(g, r@), word);
+                        machine_unary_prepend_union(context_sem, event, terms, model::lift_regex(g, r@), word);
                     }
                 },
                 None => {
@@ -15484,7 +15440,7 @@ pub mod verify {
         guarded_lemma_apply_set_suffix(sem, known, mapped, intersect);
         guarded_lemma_stack_refl(sem, valid, known);
         guarded_lemma_stack_push(sem, valid, known, known, expected, result);
-        let tasks = machine_unary_child_tasks(g, id, suffix, intersect, base);
+        let tasks = machine_unary_child_tasks(g, id, prefix, intersect, base);
         assert(tasks.subrange(base.len() as int, tasks.len() as int) =~= seq![set_shape] + expansion);
         assert(transition_freeze_tasks(g, seq![set_shape] + expansion) =~= seq![set_action] + actions.reverse());
     }
@@ -15531,30 +15487,30 @@ pub mod verify {
     }
 
     pub open spec fn machine_unary_if_tasks(
-        g: model::Graph, test: TestId, yes: TransitionId, no: TransitionId, suffix: Option<RegexId>, base: Seq<ActionShape>,
+        g: model::Graph, test: TestId, yes: TransitionId, no: TransitionId, prefix: Option<RegexId>, base: Seq<ActionShape>,
     ) -> Seq<ActionShape> {
         base.push(ActionShape::CleanIf(test@, g.constants.test_true))
-            .push(match suffix { Some(r) => ActionShape::Append(no@, r@), None => ActionShape::Not(no@) })
-            .push(match suffix { Some(r) => ActionShape::Append(yes@, r@), None => ActionShape::Not(yes@) })
+            .push(match prefix { Some(r) => ActionShape::Prepend(no@, r@), None => ActionShape::Not(no@) })
+            .push(match prefix { Some(r) => ActionShape::Prepend(yes@, r@), None => ActionShape::Not(yes@) })
     }
 
     pub proof fn machine_unary_if_effect(
         g: model::Graph, id: TransitionId, test: TestId, yes: TransitionId, no: TransitionId,
-        suffix: Option<RegexId>, base: Seq<ActionShape>, prior: Seq<TransitionId>,
+        prefix: Option<RegexId>, base: Seq<ActionShape>, prior: Seq<TransitionId>,
     )
         requires model::graph_wf(g), id@ < g.transitions.len(),
             g.transitions[id@ as int] == model::TransitionNode::If(test@, yes@, no@),
-        ensures transition_effect(g, match suffix { Some(r) => ActionShape::Append(id@, r@), None => ActionShape::Not(id@) },
-            base, prior, machine_unary_if_tasks(g, test, yes, no, suffix, base), prior),
+        ensures transition_effect(g, match prefix { Some(r) => ActionShape::Prepend(id@, r@), None => ActionShape::Not(id@) },
+            base, prior, machine_unary_if_tasks(g, test, yes, no, prefix, base), prior),
     {
         transition_unfold(g, id@);
         // Expose only constants; full table facts unfold irrelevant recursive semantics.
         assert(model::constants_wf(g)) by { model::lemma_graph_wf_elim(g); }
         let sem = transition_context_sem();
         let valid = transition_context_valid();
-        let task = match suffix { Some(r) => ActionShape::Append(id@, r@), None => ActionShape::Not(id@) };
-        let a = match suffix { Some(r) => ActionShape::Append(yes@, r@), None => ActionShape::Not(yes@) };
-        let b = match suffix { Some(r) => ActionShape::Append(no@, r@), None => ActionShape::Not(no@) };
+        let task = match prefix { Some(r) => ActionShape::Prepend(id@, r@), None => ActionShape::Not(id@) };
+        let a = match prefix { Some(r) => ActionShape::Prepend(yes@, r@), None => ActionShape::Not(yes@) };
+        let b = match prefix { Some(r) => ActionShape::Prepend(no@, r@), None => ActionShape::Not(no@) };
         let av = transition_initial_value(g, a).unwrap();
         let bv = transition_initial_value(g, b).unwrap();
         let expected = transition_initial_value(g, task).unwrap();
@@ -15567,11 +15523,11 @@ pub mod verify {
             let test_term = model::lift_test(g, test@);
             language::lemma_interp_if(context_sem, event, test_term, av.term, bv.term);
             language::lemma_interp_if(context_sem, event, test_term, model::lift_transition(g, yes@), model::lift_transition(g, no@));
-            match suffix {
+            match prefix {
                 Some(r) => {
-                    language::lemma_interp_append(context_sem, event, model::lift_transition(g, id@), seq![model::lift_regex(g, r@)]);
-                    language::lemma_interp_append(context_sem, event, model::lift_transition(g, yes@), seq![model::lift_regex(g, r@)]);
-                    language::lemma_interp_append(context_sem, event, model::lift_transition(g, no@), seq![model::lift_regex(g, r@)]);
+                    language::lemma_interp_prepend(context_sem, event, model::lift_transition(g, id@), seq![model::lift_regex(g, r@)]);
+                    language::lemma_interp_prepend(context_sem, event, model::lift_transition(g, yes@), seq![model::lift_regex(g, r@)]);
+                    language::lemma_interp_prepend(context_sem, event, model::lift_transition(g, no@), seq![model::lift_regex(g, r@)]);
                 },
                 None => {
                     language::lemma_interp_not(context_sem, event, model::lift_transition(g, id@));
@@ -15589,7 +15545,7 @@ pub mod verify {
         assert(guarded_run(sem, frozen, known) == Some(known.push(result)));
         guarded_lemma_stack_refl(sem, valid, known);
         guarded_lemma_stack_push(sem, valid, known, known, expected, result);
-        let tasks = machine_unary_if_tasks(g, test, yes, no, suffix, base);
+        let tasks = machine_unary_if_tasks(g, test, yes, no, prefix, base);
         assert(tasks.subrange(base.len() as int, tasks.len() as int) =~= expansion);
     }
 
@@ -15629,11 +15585,11 @@ pub mod verify {
         machine_unary_not_result(g, id, inner);
     }
 
-    pub proof fn machine_unary_append_identity_result(g: model::Graph, id: TransitionId, suffix: RegexId, out: TransitionId)
+    pub proof fn machine_unary_prepend_identity_result(g: model::Graph, id: TransitionId, prefix: RegexId, out: TransitionId)
         requires model::graph_wf(g),
-            (suffix@ == g.constants.epsilon && out == id)
-                || (suffix@ == g.constants.empty && out@ == g.constants.transition_empty),
-        ensures transition_result(g, ActionShape::Append(id@, suffix@), out),
+            (prefix@ == g.constants.epsilon && out == id)
+                || (prefix@ == g.constants.empty && out@ == g.constants.transition_empty),
+        ensures transition_result(g, ActionShape::Prepend(id@, prefix@), out),
     {
         assert(model::constants_wf(g)) by { model::lemma_graph_wf_elim(g); }
         transition_unfold(g, g.constants.transition_empty);
@@ -15641,23 +15597,23 @@ pub mod verify {
         regex_unfold(g, g.constants.epsilon);
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             implies transition_lang(g, theta, out, event, word)
-                == machine_unary_append_language(g, theta, id, suffix, event, word) by {
-            machine_unary_append_identity(model::gsem(theta),
+                == machine_unary_prepend_language(g, theta, id, prefix, event, word) by {
+            machine_unary_prepend_identity(model::gsem(theta),
                 language::interp_transition(model::gsem(theta), event, model::lift_transition(g, id@)), word);
             language::lemma_interp_const(model::gsem(theta), event, language::Regex::Empty);
         }
-        machine_unary_append_result(g, id, suffix, out);
+        machine_unary_prepend_result(g, id, prefix, out);
     }
 
-    pub proof fn machine_unary_append_const_language(
-        before: model::Graph, after: model::Graph, id: TransitionId, head: RegexId, suffix: RegexId,
+    pub proof fn machine_unary_prepend_const_language(
+        before: model::Graph, after: model::Graph, id: TransitionId, head: RegexId, prefix: RegexId,
         theta: Subst, event: EventView, word: Seq<EventView>,
     )
         requires model::graph_wf(before), model::graph_wf(after), model::graph_extends(before, after),
             id@ < before.transitions.len(), before.transitions[id@ as int] == model::TransitionNode::Const(head@),
-            suffix@ < before.regexes.len(),
-        ensures machine_unary_append_language(after, theta, id, suffix, event, word)
-            == concat_combo(before, theta, seq![head, suffix], word),
+            prefix@ < before.regexes.len(),
+        ensures machine_unary_prepend_language(after, theta, id, prefix, event, word)
+            == concat_combo(before, theta, seq![prefix, head], word),
     {
         hide(language::numeric_lang);
         hide(model::test_holds);
@@ -15666,25 +15622,25 @@ pub mod verify {
         model::lemma_graph_transition_wf(before, id@);
         model::lemma_graph_wf_elim(before);
         model::lemma_lift_regex_stable(before, after, head@);
-        model::lemma_lift_regex_stable(before, after, suffix@);
+        model::lemma_lift_regex_stable(before, after, prefix@);
         transition_unfold(after, id@);
         language::lemma_interp_const(model::gsem(theta), event, model::lift_regex(after, head@));
-        assert(model::lift_regexes(before, model::regex_ids(seq![head, suffix]))
-            =~= seq![model::lift_regex(before, head@), model::lift_regex(before, suffix@)]);
+        assert(model::lift_regexes(before, model::regex_ids(seq![prefix, head]))
+            =~= seq![model::lift_regex(before, prefix@), model::lift_regex(before, head@)]);
     }
 
     #[verifier::spinoff_prover]
-    pub proof fn machine_unary_append_const_result(
-        before: model::Graph, after: model::Graph, id: TransitionId, head: RegexId, suffix: RegexId, combined: RegexId, out: TransitionId,
+    pub proof fn machine_unary_prepend_const_result(
+        before: model::Graph, after: model::Graph, id: TransitionId, head: RegexId, prefix: RegexId, combined: RegexId, out: TransitionId,
     )
         requires model::graph_wf(before), model::graph_wf(after), model::graph_extends(before, after),
             id@ < before.transitions.len(), before.transitions[id@ as int] == model::TransitionNode::Const(head@),
-            suffix@ < before.regexes.len(), combined@ < before.regexes.len(),
+            prefix@ < before.regexes.len(), combined@ < before.regexes.len(),
             forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta, theta.len())
-                ==> model::regex_lang(before, theta, combined@, word) == concat_combo(before, theta, seq![head, suffix], word),
+                ==> model::regex_lang(before, theta, combined@, word) == concat_combo(before, theta, seq![prefix, head], word),
             forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
                 ==> transition_lang(after, theta, out, event, word) == model::regex_lang(after, theta, combined@, word),
-        ensures transition_result(after, ActionShape::Append(id@, suffix@), out),
+        ensures transition_result(after, ActionShape::Prepend(id@, prefix@), out),
     {
         hide(model::test_holds);
         hide(language::numeric_lang);
@@ -15697,11 +15653,11 @@ pub mod verify {
         model::lemma_lift_regex_stable(before, after, combined@);
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             implies transition_lang(after, theta, out, event, word)
-                == machine_unary_append_language(after, theta, id, suffix, event, word) by {
-            machine_unary_append_const_language(before, after, id, head, suffix, theta, event, word);
-            assert(model::regex_lang(before, theta, combined@, word) == concat_combo(before, theta, seq![head, suffix], word));
+                == machine_unary_prepend_language(after, theta, id, prefix, event, word) by {
+            machine_unary_prepend_const_language(before, after, id, head, prefix, theta, event, word);
+            assert(model::regex_lang(before, theta, combined@, word) == concat_combo(before, theta, seq![prefix, head], word));
         }
-        machine_unary_append_result(after, id, suffix, out);
+        machine_unary_prepend_result(after, id, prefix, out);
     }
 
     pub proof fn machine_unary_flip_result(
@@ -15739,89 +15695,86 @@ pub mod verify {
         machine_unary_not_result(after, id, out);
     }
 
-    pub proof fn machine_unary_append_nested_effect(
-        g: model::Graph, id: TransitionId, inner: TransitionId, suffix: RegexId, combined: RegexId,
+    pub proof fn machine_unary_prepend_nested_effect(
+        g: model::Graph, id: TransitionId, inner: TransitionId, prefix: RegexId, combined: RegexId,
         children: Seq<RegexId>, base: Seq<ActionShape>, prior: Seq<TransitionId>,
     )
         requires model::graph_wf(g), id@ < g.transitions.len(),
-            g.transitions[id@ as int] == model::TransitionNode::Append(inner@, model::regex_ids(children)),
+            g.transitions[id@ as int] == model::TransitionNode::Prepend(inner@, model::regex_ids(children)),
             forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta, theta.len())
-                ==> model::regex_lang(g, theta, combined@, word) == concat_combo(g, theta, children.push(suffix), word),
-        ensures transition_effect(g, ActionShape::Append(id@, suffix@), base, prior,
-            base.push(ActionShape::Append(inner@, combined@)), prior),
+                ==> model::regex_lang(g, theta, combined@, word) == concat_combo(g, theta, seq![prefix] + children, word),
+        ensures transition_effect(g, ActionShape::Prepend(id@, prefix@), base, prior,
+            base.push(ActionShape::Prepend(inner@, combined@)), prior),
     {
         transition_unfold(g, id@);
         let sem = transition_context_sem();
         let valid = transition_context_valid();
-        let task = ActionShape::Append(id@, suffix@);
-        let next = ActionShape::Append(inner@, combined@);
+        let task = ActionShape::Prepend(id@, prefix@);
+        let next = ActionShape::Prepend(inner@, combined@);
         let expected = transition_initial_value(g, task).unwrap();
         let result = transition_initial_value(g, next).unwrap();
-        let tail = model::lift_regexes(g, model::regex_ids(children));
-        assert(model::lift_regexes(g, model::regex_ids(children.push(suffix))) =~= tail.push(model::lift_regex(g, suffix@)));
+        let inner_prefix = model::lift_regexes(g, model::regex_ids(children));
+        let outer = model::lift_regex(g, prefix@);
+        let full_prefix = seq![outer] + inner_prefix;
+        assert(model::lift_regexes(g, model::regex_ids(seq![prefix] + children)) =~= full_prefix);
         assert forall|ctx: TransitionContext, event: EventView| valid(ctx) && #[trigger] (expected.guard)(ctx, event)
             implies (result.guard)(ctx, event) && forall|word: Seq<EventView>| guarded_language(sem, ctx, event, expected, word)
                 == guarded_language(sem, ctx, event, result, word) by {
             transition_lemma_context_sem(ctx);
             let context_sem = model::gsem(ctx.bindings);
-            let head = language::interp_transition(context_sem, event, model::lift_transition(g, inner@));
-            let last = model::lift_regex(g, suffix@);
+            let term = model::lift_transition(g, inner@);
+            let child = language::interp_transition(context_sem, event, term);
+            let nested = language::Regex::Concat(inner_prefix.push(child));
             let combined_term = model::lift_regex(g, combined@);
-            language::lemma_interp_append(context_sem, event, model::lift_transition(g, inner@), tail);
-            language::lemma_interp_append(context_sem, event, model::lift_transition(g, id@), seq![last]);
-            language::lemma_interp_append(context_sem, event, model::lift_transition(g, inner@), seq![combined_term]);
-            machine_unary_append_reassociate(context_sem, head, tail, last);
-            assert forall|word: Seq<EventView>| language::numeric_lang(context_sem, language::Regex::Concat(tail.push(last)), word)
+            language::lemma_interp_prepend(context_sem, event, term, inner_prefix);
+            language::lemma_interp_prepend(context_sem, event, model::lift_transition(g, id@), seq![outer]);
+            language::lemma_interp_prepend(context_sem, event, term, seq![combined_term]);
+            assert(seq![outer].push(nested) =~= seq![outer, nested]);
+            assert(seq![combined_term].push(child) =~= seq![combined_term, child]);
+            machine_unary_prepend_reassociate(context_sem, child, inner_prefix, outer);
+            assert forall|word: Seq<EventView>| language::numeric_lang(context_sem, language::Regex::Concat(full_prefix), word)
                 == language::numeric_lang(context_sem, combined_term, word) by {
                 assert(model::regex_lang(g, ctx.bindings, combined@, word)
-                    == concat_combo(g, ctx.bindings, children.push(suffix), word));
+                    == concat_combo(g, ctx.bindings, seq![prefix] + children, word));
             }
-            regex_concat_replace(context_sem, seq![head], tail.push(last), combined_term);
-            regex_concat_replace(context_sem, seq![head], tail.push(last), language::Regex::Concat(tail.push(last)));
-            assert(seq![head].push(language::Regex::Concat(tail.push(last))) =~= seq![head, language::Regex::Concat(tail.push(last))]);
-            assert(seq![head] + tail.push(last) =~= (seq![head] + tail).push(last));
-            assert(seq![head].push(combined_term) =~= seq![head, combined_term]);
-            assert(seq![language::Regex::Concat(seq![head] + tail)] + seq![last] =~= seq![language::Regex::Concat(seq![head] + tail), last]);
-            assert(seq![head] + seq![combined_term] =~= seq![head, combined_term]);
+            regex_concat_replace_prefix(context_sem, full_prefix, combined_term, child);
             assert forall|word: Seq<EventView>| guarded_language(sem, ctx, event, expected, word)
                 == guarded_language(sem, ctx, event, result, word) by {
-                assert(language::numeric_lang(context_sem, language::Regex::Concat(seq![language::Regex::Concat(seq![head] + tail), last]), word)
-                    == language::numeric_lang(context_sem, language::Regex::Concat(seq![head, language::Regex::Concat(tail.push(last))]), word));
-                assert(language::numeric_lang(context_sem, language::Regex::Concat(seq![head] + tail.push(last)), word)
-                    == language::numeric_lang(context_sem, language::Regex::Concat(seq![head, language::Regex::Concat(tail.push(last))]), word));
-                assert(language::numeric_lang(context_sem, language::Regex::Concat(seq![head] + tail.push(last)), word)
-                    == language::numeric_lang(context_sem, language::Regex::Concat(seq![head, combined_term]), word));
+                assert(language::numeric_lang(context_sem, language::Regex::Concat(seq![outer, nested]), word)
+                    == language::numeric_lang(context_sem, language::Regex::Concat(full_prefix.push(child)), word));
+                assert(language::numeric_lang(context_sem, language::Regex::Concat(full_prefix.push(child)), word)
+                    == language::numeric_lang(context_sem, language::Regex::Concat(seq![combined_term, child]), word));
             }
         }
         machine_unary_replace_effect(g, task, next, base, prior);
     }
 
-    pub proof fn machine_unary_suffix_language(g: model::Graph, suffix: RegexId, children: Seq<RegexId>)
-        requires model::graph_wf(g), suffix@ < g.regexes.len(),
-            children == seq![suffix] || g.regexes[suffix@ as int].kind == model::RegexKindNode::Concat(model::regex_ids(children)),
+    pub proof fn machine_unary_prefix_language(g: model::Graph, prefix: RegexId, children: Seq<RegexId>)
+        requires model::graph_wf(g), prefix@ < g.regexes.len(),
+            children == seq![prefix] || g.regexes[prefix@ as int].kind == model::RegexKindNode::Concat(model::regex_ids(children)),
         ensures forall|theta: Subst, word: Seq<EventView>|
-            model::regex_lang(g, theta, suffix@, word) == concat_combo(g, theta, children, word),
+            model::regex_lang(g, theta, prefix@, word) == concat_combo(g, theta, children, word),
     {
-        if children == seq![suffix] {
-            assert(model::lift_regexes(g, model::regex_ids(children)) =~= seq![model::lift_regex(g, suffix@)]);
+        if children == seq![prefix] {
+            assert(model::lift_regexes(g, model::regex_ids(children)) =~= seq![model::lift_regex(g, prefix@)]);
             assert forall|theta: Subst, word: Seq<EventView>|
-                model::regex_lang(g, theta, suffix@, word) == concat_combo(g, theta, children, word) by {
-                language::lemma_concat_singleton(model::gsem(theta), model::lift_regex(g, suffix@), word);
+                model::regex_lang(g, theta, prefix@, word) == concat_combo(g, theta, children, word) by {
+                language::lemma_concat_singleton(model::gsem(theta), model::lift_regex(g, prefix@), word);
             }
-        } else { regex_unfold(g, suffix@); }
+        } else { regex_unfold(g, prefix@); }
     }
 
     #[verifier::spinoff_prover]
-    pub proof fn machine_unary_append_raw_result(
-        before: model::Graph, after: model::Graph, id: TransitionId, suffix: RegexId, children: Seq<RegexId>, out: TransitionId,
+    pub proof fn machine_unary_prepend_raw_result(
+        before: model::Graph, after: model::Graph, id: TransitionId, prefix: RegexId, children: Seq<RegexId>, out: TransitionId,
     )
         requires model::graph_wf(before), model::graph_wf(after), model::graph_extends(before, after),
-            id@ < before.transitions.len(), suffix@ < before.regexes.len(), regex_ids_valid(before, children),
+            id@ < before.transitions.len(), prefix@ < before.regexes.len(), regex_ids_valid(before, children),
             forall|theta: Subst, word: Seq<EventView>|
-                model::regex_lang(before, theta, suffix@, word) == concat_combo(before, theta, children, word),
+                model::regex_lang(before, theta, prefix@, word) == concat_combo(before, theta, children, word),
             model::lift_transition(after, out@) == transition_unbounded_node(after,
-                model::TransitionNode::Append(id@, model::regex_ids(children))),
-        ensures transition_result(after, ActionShape::Append(id@, suffix@), out),
+                model::TransitionNode::Prepend(id@, model::regex_ids(children))),
+        ensures transition_result(after, ActionShape::Prepend(id@, prefix@), out),
     {
         // Only the table facts: `unique_nodes` adds a quadratic `no_duplicates` matching loop.
         assert(model::tables_wf(before)) by { model::lemma_graph_wf_elim(before); }
@@ -15829,19 +15782,19 @@ pub mod verify {
         assert(model::lift_regexes(before, model::regex_ids(children)) =~= model::lift_regexes(after, model::regex_ids(children)));
         assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
             implies transition_lang(after, theta, out, event, word)
-                == machine_unary_append_language(after, theta, id, suffix, event, word) by {
+                == machine_unary_prepend_language(after, theta, id, prefix, event, word) by {
             let sem = model::gsem(theta);
-            let head = language::interp_transition(sem, event, model::lift_transition(after, id@));
-            let tail = model::lift_regexes(after, model::regex_ids(children));
-            let last = model::lift_regex(after, suffix@);
-            language::lemma_interp_append(sem, event, model::lift_transition(after, id@), tail);
-            assert forall|w: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(tail), w) == language::numeric_lang(sem, last, w) by {
-                assert(model::regex_lang(before, theta, suffix@, w) == concat_combo(before, theta, children, w));
+            let child = language::interp_transition(sem, event, model::lift_transition(after, id@));
+            let prefix_terms = model::lift_regexes(after, model::regex_ids(children));
+            let combined = model::lift_regex(after, prefix@);
+            language::lemma_interp_prepend(sem, event, model::lift_transition(after, id@), prefix_terms);
+            assert forall|w: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(prefix_terms), w) == language::numeric_lang(sem, combined, w) by {
+                assert(model::regex_lang(before, theta, prefix@, w) == concat_combo(before, theta, children, w));
             }
-            regex_concat_replace(sem, seq![head], tail, last);
-            assert(seq![head].push(last) =~= seq![head, last]);
+            regex_concat_replace_prefix(sem, prefix_terms, combined, child);
+            assert(seq![combined].push(child) =~= seq![combined, child]);
         }
-        machine_unary_append_result(after, id, suffix, out);
+        machine_unary_prepend_result(after, id, prefix, out);
     }
 
 
@@ -16051,13 +16004,13 @@ pub mod verify {
     pub open spec fn machine_driver_result_action(task: ActionShape, id: TransitionId) -> ActionShape {
         match task {
             ActionShape::NotResult => ActionShape::Not(id@),
-            ActionShape::AppendResult(suffix) => ActionShape::Append(id@, suffix),
+            ActionShape::PrependResult(prefix) => ActionShape::Prepend(id@, prefix),
             _ => task,
         }
     }
 
     pub proof fn machine_driver_result_effect(g: model::Graph, task: ActionShape, pending: Seq<ActionShape>, prior: Seq<TransitionId>)
-        requires prior.len() > 0, task is NotResult || task is AppendResult,
+        requires prior.len() > 0, task is NotResult || task is PrependResult,
         ensures transition_effect(g, task, pending, prior, pending.push(machine_driver_result_action(task, prior.last())), prior.drop_last()),
     {
         let sem = transition_context_sem();
@@ -16070,7 +16023,7 @@ pub mod verify {
         let after = guarded_apply(sem, transition_freeze_action(g, next), prefix);
         assert(before == after) by {
             assert(prefix.push(last).drop_last() =~= prefix);
-            match task { ActionShape::NotResult => {}, ActionShape::AppendResult(suffix) => {}, _ => {} }
+            match task { ActionShape::NotResult => {}, ActionShape::PrependResult(prefix) => {}, _ => {} }
         }
         guarded_lemma_stack_refl(sem, valid, after.unwrap());
         guarded_lemma_run_singleton(sem, transition_freeze_action(g, next), prefix);
@@ -16109,12 +16062,12 @@ pub mod verify {
     }
 
 
-    pub open spec fn transition_append_combo(
-        g: model::Graph, theta: Subst, root: TransitionId, suffix: Seq<RegexId>, event: EventView, word: Seq<EventView>,
+    pub open spec fn transition_prepend_combo(
+        g: model::Graph, theta: Subst, root: TransitionId, prefix: Seq<RegexId>, event: EventView, word: Seq<EventView>,
     ) -> bool {
         let sem = model::gsem(theta);
-        language::numeric_lang(sem, language::Regex::Concat(seq![language::interp_transition(sem, event, model::lift_transition(g, root@))]
-            + model::lift_regexes(g, model::regex_ids(suffix))), word)
+        language::numeric_lang(sem, language::Regex::Concat(model::lift_regexes(g, model::regex_ids(prefix))
+            .push(language::interp_transition(sem, event, model::lift_transition(g, root@)))), word)
     }
 
     pub proof fn machine_driver_extension_future(before: model::Graph, middle: model::Graph)
@@ -16162,43 +16115,48 @@ pub mod verify {
         }
     }
 
-    pub proof fn machine_driver_append_future(
-        before: model::Graph, root: TransitionId, suffix: Seq<RegexId>, combined: RegexId,
+    pub proof fn machine_driver_prepend_future(
+        before: model::Graph, root: TransitionId, prefix: Seq<RegexId>, combined: RegexId,
     )
-        requires model::graph_wf(before), combined@ < before.regexes.len(), regex_ids_valid(before, suffix),
+        requires model::graph_wf(before), combined@ < before.regexes.len(), regex_ids_valid(before, prefix),
             forall|theta: Subst, word: Seq<EventView>| language::event_wf(theta, theta.len())
-                ==> model::regex_lang(before, theta, combined@, word) == concat_combo(before, theta, suffix, word),
+                ==> model::regex_lang(before, theta, combined@, word) == concat_combo(before, theta, prefix, word),
         ensures forall|after: model::Graph, out: TransitionId| model::graph_extends(before, after) && model::graph_wf(after)
-            && #[trigger] transition_result(after, ActionShape::Append(root@, combined@), out)
+            && #[trigger] transition_result(after, ActionShape::Prepend(root@, combined@), out)
             ==> forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
-                ==> transition_lang(after, theta, out, event, word) == transition_append_combo(after, theta, root, suffix, event, word),
+                ==> transition_lang(after, theta, out, event, word) == transition_prepend_combo(after, theta, root, prefix, event, word),
     {
-        model::lemma_graph_wf_elim(before);
+        hide(language::numeric_lang);
+        hide(language::interp_transition);
+        hide(model::lift_transition);
+        hide(model::lift_regex);
+        hide(model::tables_wf);
+        assert(model::tables_wf(before)) by { model::lemma_graph_wf_elim(before); }
         assert forall|after: model::Graph, out: TransitionId| model::graph_extends(before, after) && model::graph_wf(after)
-            && #[trigger] transition_result(after, ActionShape::Append(root@, combined@), out)
+            && #[trigger] transition_result(after, ActionShape::Prepend(root@, combined@), out)
             implies forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
-                ==> transition_lang(after, theta, out, event, word) == transition_append_combo(after, theta, root, suffix, event, word) by {
+                ==> transition_lang(after, theta, out, event, word) == transition_prepend_combo(after, theta, root, prefix, event, word) by {
             model::lemma_lift_regex_stable(before, after, combined@);
-            regex_concat_extends(before, after, suffix);
-            let expected = transition_initial_value(after, ActionShape::Append(root@, combined@)).unwrap();
+            regex_concat_extends(before, after, prefix);
+            let expected = transition_initial_value(after, ActionShape::Prepend(root@, combined@)).unwrap();
             assert forall|theta: Subst, event: EventView, word: Seq<EventView>| language::event_wf(theta, theta.len())
-                implies transition_lang(after, theta, out, event, word) == transition_append_combo(after, theta, root, suffix, event, word) by {
+                implies transition_lang(after, theta, out, event, word) == transition_prepend_combo(after, theta, root, prefix, event, word) by {
                 let ctx = TransitionContext { bindings: theta };
                 transition_lemma_context_sem(ctx);
                 let sem = model::gsem(theta);
-                let head = language::interp_transition(sem, event, model::lift_transition(after, root@));
-                let tail = model::lift_regexes(after, model::regex_ids(suffix));
+                let child = language::interp_transition(sem, event, model::lift_transition(after, root@));
+                let prefix_terms = model::lift_regexes(after, model::regex_ids(prefix));
                 let combined_term = model::lift_regex(after, combined@);
-                language::lemma_interp_append(sem, event, model::lift_transition(after, root@), seq![combined_term]);
-                assert forall|w: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(tail), w) == language::numeric_lang(sem, combined_term, w) by {
-                    assert(model::regex_lang(before, theta, combined@, w) == concat_combo(before, theta, suffix, w));
-                    assert(concat_combo(before, theta, suffix, w) == concat_combo(after, theta, suffix, w));
+                language::lemma_interp_prepend(sem, event, model::lift_transition(after, root@), seq![combined_term]);
+                assert forall|w: Seq<EventView>| language::numeric_lang(sem, language::Regex::Concat(prefix_terms), w) == language::numeric_lang(sem, combined_term, w) by {
+                    assert(model::regex_lang(before, theta, combined@, w) == concat_combo(before, theta, prefix, w));
+                    assert(concat_combo(before, theta, prefix, w) == concat_combo(after, theta, prefix, w));
                 }
-                regex_concat_replace(sem, seq![head], tail, combined_term);
+                regex_concat_replace_prefix(sem, prefix_terms, combined_term, child);
                 assert((expected.guard)(ctx, event));
                 assert(guarded_language(transition_context_sem(), ctx, event, expected, word)
                     == transition_lang(after, theta, out, event, word));
-                assert(seq![head] + seq![combined_term] =~= seq![head].push(combined_term));
+                assert(seq![combined_term].push(child) =~= seq![combined_term, child]);
             }
         }
     }

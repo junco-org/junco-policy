@@ -66,11 +66,11 @@ pub open spec fn atom_pairs(atoms: Set<model::Primitive>) -> Pairs {
         && atoms.contains(model::Primitive::Eq(p.0, model::GTerm::Constant(p.1))))
 }
 
-/// `next` is the successor of `q` for `α`: `L_θ(next) = e⁻¹ L_θ(q)` whenever `(θ, e)` realizes `α`
+/// `next` is the right quotient of `q` by `e` whenever `(θ, e)` realizes `α`
 /// (the implementation's `successor_entries_wf` in `history-semantics/src/progress.rs`).
 pub open spec fn successor_ok(q: Regex<model::Test>, alpha: Assignment, next: Regex<model::Test>) -> bool {
     forall|theta: Subst, e: EventView, w: Seq<EventView>| language::event_wf(theta, theta.len()) && #[trigger] realizes(theta, e, alpha)
-        ==> (#[trigger] n_lang(theta, next, w) == n_lang(theta, q, seq![e] + w))
+        ==> (#[trigger] n_lang(theta, next, w) == n_lang(theta, q, w.push(e)))
 }
 
 /// One successor case `(Γ', α, q')`.
@@ -112,7 +112,7 @@ pub open spec fn atoms_complete(q: Regex<model::Test>, atoms: Set<model::Primiti
     forall|theta: Subst, e1: EventView, e2: EventView, w: Seq<EventView>|
         theta.len() <= history_syntax::MAX_ARITY
             && (forall|p: model::Primitive| atoms.contains(p) ==> #[trigger] model::primitive_holds(theta, p, e1) == model::primitive_holds(theta, p, e2))
-            ==> (#[trigger] n_lang(theta, q, seq![e1] + w) == #[trigger] n_lang(theta, q, seq![e2] + w))
+            ==> (#[trigger] n_lang(theta, q, w.push(e1)) == #[trigger] n_lang(theta, q, w.push(e2)))
 }
 
 /// Component-locality of atoms (`sec:events`): a variable atom compares a component only with the
@@ -181,7 +181,7 @@ pub open spec fn chain(nodes: Seq<Node>, n: int, fuel: nat) -> Seq<Assignment>
     if fuel == 0 || n < 0 || n >= nodes.len() { Seq::empty() } else {
         match nodes[n].parent {
             None => Seq::empty(),
-            Some((p, alpha)) => chain(nodes, p as int, (fuel - 1) as nat).push(alpha),
+            Some((p, alpha)) => seq![alpha] + chain(nodes, p as int, (fuel - 1) as nat),
         }
     }
 }
@@ -775,43 +775,45 @@ pub open spec fn trace_steps_ok(d: NDomains, cases_of: spec_fn(Item) -> Set<Case
         cases_of(t.nodes[p].item))
 }
 
-pub proof fn lemma_follows_push(d: NDomains, letters: Seq<Assignment>, theta: Subst,
+pub proof fn lemma_follows_cons(d: NDomains, letters: Seq<Assignment>, theta: Subst,
     u: Seq<EventView>, alpha: Assignment, e: EventView)
     requires follows(d, letters, theta, u), n_event_in(d, e), realizes(theta, e, alpha),
-    ensures follows(d, letters.push(alpha), theta, u.push(e)),
+    ensures follows(d, seq![alpha] + letters, theta, seq![e] + u),
 {
-    assert(n_history_in(d, u.push(e))) by {
-        assert forall|i: int| 0 <= i < u.push(e).len()
-            implies #[trigger] n_event_in(d, u.push(e)[i]) by {
-            if i < u.len() { assert(u.push(e)[i] == u[i]); }
+    let events = seq![e] + u;
+    let assignments = seq![alpha] + letters;
+    assert(n_history_in(d, events)) by {
+        assert forall|i: int| 0 <= i < events.len()
+            implies #[trigger] n_event_in(d, events[i]) by {
+            if i > 0 { assert(events[i] == u[i - 1]); }
         }
     }
-    assert forall|i: int| 0 <= i < u.push(e).len()
-        implies #[trigger] realizes(theta, u.push(e)[i], letters.push(alpha)[i]) by {
-        if i < u.len() { assert(u.push(e)[i] == u[i]); }
+    assert forall|i: int| 0 <= i < events.len()
+        implies #[trigger] realizes(theta, events[i], assignments[i]) by {
+        if i > 0 { assert(realizes(theta, u[i - 1], letters[i - 1])); }
     }
 }
 
-pub proof fn lemma_follows_unpush(d: NDomains, letters: Seq<Assignment>, theta: Subst,
+pub proof fn lemma_follows_uncons(d: NDomains, letters: Seq<Assignment>, theta: Subst,
     u: Seq<EventView>, alpha: Assignment)
-    requires follows(d, letters.push(alpha), theta, u),
-    ensures follows(d, letters, theta, u.drop_last()), n_event_in(d, u.last()),
-        realizes(theta, u.last(), alpha), u.drop_last().push(u.last()) == u,
+    requires follows(d, seq![alpha] + letters, theta, u),
+    ensures follows(d, letters, theta, u.drop_first()), n_event_in(d, u[0]),
+        realizes(theta, u[0], alpha), seq![u[0]] + u.drop_first() == u,
 {
     assert(u.len() > 0);
-    assert(u.drop_last().push(u.last()) =~= u);
-    assert(n_history_in(d, u.drop_last())) by {
-        assert forall|i: int| 0 <= i < u.drop_last().len()
-            implies #[trigger] n_event_in(d, u.drop_last()[i]) by {
-            assert(u.drop_last()[i] == u[i]);
+    assert(seq![u[0]] + u.drop_first() =~= u);
+    assert(n_history_in(d, u.drop_first())) by {
+        assert forall|i: int| 0 <= i < u.drop_first().len()
+            implies #[trigger] n_event_in(d, u.drop_first()[i]) by {
+            assert(u.drop_first()[i] == u[i + 1]);
         }
     }
-    assert forall|i: int| 0 <= i < u.drop_last().len()
-        implies #[trigger] realizes(theta, u.drop_last()[i], letters[i]) by {
-        assert(u.drop_last()[i] == u[i]);
-        assert(letters.push(alpha)[i] == letters[i]);
+    assert forall|i: int| 0 <= i < u.drop_first().len()
+        implies #[trigger] realizes(theta, u.drop_first()[i], letters[i]) by {
+        assert(u.drop_first()[i] == u[i + 1]);
+        assert(realizes(theta, u[i + 1], (seq![alpha] + letters)[i + 1]));
     }
-    assert(realizes(theta, u[u.len() - 1], letters.push(alpha)[letters.len() as int]));
+    assert(realizes(theta, u[0], (seq![alpha] + letters)[0]));
 }
 
 pub proof fn lemma_node_realizable(d: NDomains, g0: Constraint, q0: Regex<model::Test>,
@@ -857,27 +859,27 @@ pub proof fn lemma_node_realizable(d: NDomains, g0: Constraint, q0: Regex<model:
         lemma_entails_trans(d, c.constraint, t.nodes[p as int].item.constraint, g0);
         lemma_chain_len(d, g0, q0, cases_of, t, p as int,
             (t.nodes[j].depth - 1) as nat);
-        let prefix = chain(t.nodes, p as int, t.nodes[p as int].depth);
-        assert(chain(t.nodes, j, t.nodes[j].depth) == prefix.push(alpha));
+        let suffix = chain(t.nodes, p as int, t.nodes[p as int].depth);
+        assert(chain(t.nodes, j, t.nodes[j].depth) == seq![alpha] + suffix);
         assert forall|theta: Subst| n_theta_ok(d, theta) && sat_by(theta, c.constraint)
             implies exists|u: Seq<EventView>| #[trigger] follows(d,
                 chain(t.nodes, j, t.nodes[j].depth), theta, u) by {
             assert(sat_by(theta, t.nodes[p as int].item.constraint)) by { reveal(entails); }
-            let u = choose|u: Seq<EventView>| #[trigger] follows(d, prefix, theta, u);
+            let u = choose|u: Seq<EventView>| #[trigger] follows(d, suffix, theta, u);
             let e = choose|e: EventView| n_event_in(d, e) && #[trigger] realizes(theta, e, c.alpha);
-            lemma_follows_push(d, prefix, theta, u, alpha, e);
+            lemma_follows_cons(d, suffix, theta, u, alpha, e);
         }
     }
 }
 
-// Keep the suffix explicit to avoid recursively generating larger SMT language terms.
+// Keep the remaining word explicit to avoid recursively generating larger SMT language terms.
 pub proof fn lemma_node_language(d: NDomains, g0: Constraint, q0: Regex<model::Test>,
     cases_of: spec_fn(Item) -> Set<Case>, t: Trace, j: int, theta: Subst,
     u: Seq<EventView>, w: Seq<EventView>)
     requires trace_steps_ok(d, cases_of, t), trace_wf(d, g0, q0, cases_of, t),
         0 <= j < t.nodes.len(), n_theta_ok(d, theta), sat_by(theta, t.nodes[j].item.constraint),
         follows(d, chain(t.nodes, j, t.nodes[j].depth), theta, u),
-    ensures n_lang(theta, t.nodes[j].item.state, w) == n_lang(theta, q0, u + w),
+    ensures n_lang(theta, t.nodes[j].item.state, w) == n_lang(theta, q0, w + u),
     decreases j,
 {
     hide(language::numeric_lang);
@@ -893,7 +895,7 @@ pub proof fn lemma_node_language(d: NDomains, g0: Constraint, q0: Regex<model::T
     lemma_chain_len(d, g0, q0, cases_of, t, j, t.nodes[j].depth);
     if j == 0 {
         assert(u =~= Seq::<EventView>::empty()) by { reveal(follows); }
-        assert(u + w =~= w);
+        assert(w + u =~= w);
     } else {
         assert(parent_ok(cases_of, t, j));
         let (p, alpha) = t.nodes[j].parent.unwrap();
@@ -902,20 +904,20 @@ pub proof fn lemma_node_language(d: NDomains, g0: Constraint, q0: Regex<model::T
         assert(steps_ok(d, t.nodes[p as int].item, cases_of(t.nodes[p as int].item)));
         lemma_chain_len(d, g0, q0, cases_of, t, p as int,
             (t.nodes[j].depth - 1) as nat);
-        let prefix = chain(t.nodes, p as int, t.nodes[p as int].depth);
-        assert(chain(t.nodes, j, t.nodes[j].depth) == prefix.push(alpha));
-        lemma_follows_unpush(d, prefix, theta, u, alpha);
+        let suffix = chain(t.nodes, p as int, t.nodes[p as int].depth);
+        assert(chain(t.nodes, j, t.nodes[j].depth) == seq![alpha] + suffix);
+        lemma_follows_uncons(d, suffix, theta, u, alpha);
         assert(sat_by(theta, t.nodes[p as int].item.constraint)) by { reveal(entails); }
-        let e = u.last();
-        let before = u.drop_last();
+        let e = u[0];
+        let after = u.drop_first();
         assert(successor_ok(t.nodes[p as int].item.state, c.alpha, c.next));
         assert(n_lang(theta, c.next, w)
-            == n_lang(theta, t.nodes[p as int].item.state, seq![e] + w)) by {
+            == n_lang(theta, t.nodes[p as int].item.state, w.push(e))) by {
             reveal(successor_ok);
             reveal(n_theta_ok);
         }
-        lemma_node_language(d, g0, q0, cases_of, t, p as int, theta, before, seq![e] + w);
-        assert(before + (seq![e] + w) =~= u + w);
+        lemma_node_language(d, g0, q0, cases_of, t, p as int, theta, after, w.push(e));
+        assert(w.push(e) + after =~= w + u);
     }
 }
 
@@ -931,7 +933,7 @@ pub proof fn lemma_node_semantics(d: NDomains, g0: Constraint, q0: Regex<model::
         forall|theta: Subst, u: Seq<EventView>, w: Seq<EventView>|
             n_theta_ok(d, theta) && sat_by(theta, t.nodes[j].item.constraint)
             && #[trigger] follows(d, chain(t.nodes, j, t.nodes[j].depth), theta, u)
-            ==> #[trigger] n_lang(theta, t.nodes[j].item.state, w) == n_lang(theta, q0, u + w),
+            ==> #[trigger] n_lang(theta, t.nodes[j].item.state, w) == n_lang(theta, q0, w + u),
 {
     hide(language::numeric_lang);
     hide(follows);
@@ -944,7 +946,7 @@ pub proof fn lemma_node_semantics(d: NDomains, g0: Constraint, q0: Regex<model::
     assert forall|theta: Subst, u: Seq<EventView>, w: Seq<EventView>|
         n_theta_ok(d, theta) && sat_by(theta, t.nodes[j].item.constraint)
         && #[trigger] follows(d, chain(t.nodes, j, t.nodes[j].depth), theta, u)
-        implies #[trigger] n_lang(theta, t.nodes[j].item.state, w) == n_lang(theta, q0, u + w) by {
+        implies #[trigger] n_lang(theta, t.nodes[j].item.state, w) == n_lang(theta, q0, w + u) by {
         lemma_node_language(d, g0, q0, cases_of, t, j, theta, u, w);
     }
 }
@@ -975,23 +977,23 @@ pub proof fn lemma_no_witness_below(d: NDomains, g0: Constraint, q0: Regex<model
         language::lemma_nullable_iff_nil(model::gsem(theta), t.nodes[j].item.state);
     } else {
         assert(steps_ok(d, t.nodes[j].item, cases_of(t.nodes[j].item)));
-        let e = w[0];
-        let tail = w.drop_first();
-        assert(w =~= seq![e] + tail);
+        let e = w.last();
+        let prefix = w.drop_last();
+        assert(w =~= prefix.push(e));
         assert(n_event_in(d, e)) by { reveal(n_history_in); }
         let c = choose|c: Case| #[trigger] cases_of(t.nodes[j].item).contains(c)
             && sat_by(theta, c.constraint) && realizes(theta, e, c.alpha);
-        assert(n_lang(theta, c.next, tail)) by {
+        assert(n_lang(theta, c.next, prefix)) by {
             reveal(successor_ok);
             reveal(n_theta_ok);
             assert(successor_ok(t.nodes[j].item.state, c.alpha, c.next));
         }
-        assert(n_history_in(d, tail)) by {
+        assert(n_history_in(d, prefix)) by {
             reveal(n_history_in);
-            assert forall|i: int| 0 <= i < tail.len()
-                implies #[trigger] n_event_in(d, tail[i]) by { assert(tail[i] == w[i + 1]); }
+            assert forall|i: int| 0 <= i < prefix.len()
+                implies #[trigger] n_event_in(d, prefix[i]) by { assert(prefix[i] == w[i]); }
         }
-        assert(witness(d, case_item(c), theta, tail));
+        assert(witness(d, case_item(c), theta, prefix));
         if exists|k: int| 0 < k < t.nodes.len()
             && t.nodes[k].parent == Some((j as nat, c.alpha)) && t.nodes[k].item == case_item(c) {
             let k = choose|k: int| 0 < k < t.nodes.len()
@@ -999,24 +1001,24 @@ pub proof fn lemma_no_witness_below(d: NDomains, g0: Constraint, q0: Regex<model
                 && t.nodes[k].item == case_item(c);
             assert(parent_ok(cases_of, t, k));
             assert(t.nodes[k].depth == t.nodes[j].depth + 1);
-            lemma_no_witness_below(d, g0, q0, cases_of, t, k, theta, tail);
+            lemma_no_witness_below(d, g0, q0, cases_of, t, k, theta, prefix);
         } else {
             assert(may_discard(d, t.nodes, case_item(c), t.nodes[j].depth + 1));
             if c.next == Regex::<model::Test>::Empty {
                 reveal(language::numeric_lang);
             } else if no_witness(d, case_item(c)) {
-                assert(!witness(d, case_item(c), theta, tail));
+                assert(!witness(d, case_item(c), theta, prefix));
             } else {
                 let k = choose|k: int| 0 <= k < t.nodes.len()
                     && t.nodes[k].depth <= t.nodes[j].depth + 1
                     && #[trigger] witnesses_within(d, case_item(c), t.nodes[k].item);
-                assert(witness(d, t.nodes[k].item, theta, tail));
+                assert(witness(d, t.nodes[k].item, theta, prefix));
                 assert forall|h: int| #![trigger t.nodes[h]] 0 <= h < t.nodes.len()
-                    && t.nodes[h].depth <= t.nodes[k].depth + tail.len()
+                    && t.nodes[h].depth <= t.nodes[k].depth + prefix.len()
                     implies h < t.expanded by {
                     assert(t.nodes[h].depth <= t.nodes[j].depth + w.len());
                 }
-                lemma_no_witness_below(d, g0, q0, cases_of, t, k, theta, tail);
+                lemma_no_witness_below(d, g0, q0, cases_of, t, k, theta, prefix);
             }
         }
     }
@@ -1060,7 +1062,7 @@ pub proof fn lemma_search_correct(d: NDomains, g0: Constraint, r: Regex<model::T
                 language::lemma_nullable_iff_nil(model::gsem(theta), t.nodes[j].item.state);
                 assert(n_lang(theta, t.nodes[j].item.state, Seq::empty()));
                 lemma_node_language(d, g0, q0, cases_of, t, j, theta, u, Seq::empty());
-                assert(u + Seq::<EventView>::empty() =~= u);
+                assert(Seq::<EventView>::empty() + u =~= u);
                 assert(n_lang(theta, q0, u));
                 assert(sat_by(theta, g0));
             }
