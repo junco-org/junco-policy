@@ -1,6 +1,7 @@
 mod bridge;
 mod camel;
 mod events;
+mod llm;
 mod tools;
 
 use std::collections::{BTreeMap, VecDeque};
@@ -16,7 +17,8 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
 use bridge::{Bridge, SCRIPT};
-use camel::{CamelEvent, FirstDenial, Llm, Run, Script};
+use camel::{CamelEvent, FirstDenial, Run};
+use llm::{Llm, Script};
 
 const SUITES: &[&str] = &["workspace", "banking", "travel", "slack"];
 const HELP: &str = "cargo bench --bench agentdojo -- [options]\n\

@@ -155,23 +155,47 @@ impl<P: Label, V: Label, L: Label> FlowRule<P, V, L> {
     /// and handle as the candidate contact. Only declassifying that label for that
     /// principal and handle clears it. Returns one rule per sink label.
     pub fn no_contact_after_read(tainted: L, sinks: &[L]) -> RuleSet<FlowEvent<P, V, L>> {
-        let taint = TestExpr::and([
-            component_is(Component(0), PRINCIPAL_VAR, Comparison::Eq),
-            component_is(Component(1), HANDLE_VAR, Comparison::Eq),
-            TestExpr::or([
-                component_equals(
-                    Component(2),
-                    FlowComponent::Action(FlowAction::Read),
+        Self::taint_rules(tainted, sinks, true)
+    }
+
+    /// Forbids a principal that has read or received `tainted` data on any handle from passing
+    /// any handle to `sinks` until that handle is declassified after the latest tainted read.
+    ///
+    /// For an agent whose whole context may be derived from what it read, taint is a property of
+    /// the principal, not of one copy; declassification still names the handle being passed.
+    /// Returns one rule per sink label.
+    pub fn no_contact_after_any_read(tainted: L, sinks: &[L]) -> RuleSet<FlowEvent<P, V, L>> {
+        Self::taint_rules(tainted, sinks, false)
+    }
+
+    /// `same_handle` scopes taint to the candidate's handle; otherwise any handle of the
+    /// candidate's principal taints it.
+    fn taint_rules(tainted: L, sinks: &[L], same_handle: bool) -> RuleSet<FlowEvent<P, V, L>> {
+        let taint = TestExpr::and(
+            [
+                Some(component_is(Component(0), PRINCIPAL_VAR, Comparison::Eq)),
+                same_handle.then(|| component_is(Component(1), HANDLE_VAR, Comparison::Eq)),
+                Some(TestExpr::or([
+                    component_equals(
+                        Component(2),
+                        FlowComponent::Action(FlowAction::Read),
+                        Comparison::Eq,
+                    ),
+                    component_equals(
+                        Component(2),
+                        FlowComponent::Action(FlowAction::Receive),
+                        Comparison::Eq,
+                    ),
+                ])),
+                Some(component_equals(
+                    Component(3),
+                    FlowComponent::Label(tainted),
                     Comparison::Eq,
-                ),
-                component_equals(
-                    Component(2),
-                    FlowComponent::Action(FlowAction::Receive),
-                    Comparison::Eq,
-                ),
-            ]),
-            component_equals(Component(3), FlowComponent::Label(tainted), Comparison::Eq),
-        ]);
+                )),
+            ]
+            .into_iter()
+            .flatten(),
+        );
         let kept = TestExpr::or([
             component_is(Component(0), PRINCIPAL_VAR, Comparison::Neq),
             component_is(Component(1), HANDLE_VAR, Comparison::Neq),

@@ -56,6 +56,11 @@ path = "benches/agentdojo/main.rs"
 harness = false
 
 [[bench]]
+name = "multiagentdojo"
+path = "benches/multiagentdojo/main.rs"
+harness = false
+
+[[bench]]
 name = "resharp"
 path = "benches/resharp/main.rs"
 harness = false

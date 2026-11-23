@@ -31,6 +31,10 @@ fn policy() -> Policy {
     FlowPolicy::new().rule(FlowRule::no_contact_after_read("untrusted", &["sink"]))
 }
 
+fn policy_any() -> Policy {
+    FlowPolicy::new().rule(FlowRule::no_contact_after_any_read("untrusted", &["sink"]))
+}
+
 fn paper_history() -> History<Observation> {
     history(&[
         event("A", "$1", FlowAction::Read, "untrusted"),
@@ -189,4 +193,33 @@ fn custom_rules_convert_into_a_flow_policy() {
         policy.decide(&history, &event("B", "$2", FlowAction::Read, "sink")),
         None
     );
+}
+
+#[test]
+fn principal_scoped_taint_covers_every_handle_until_declassified() {
+    let read = history(&[event("A", "$1", FlowAction::Read, "untrusted")]);
+    let other_handle = event("A", "$2", FlowAction::Contact, "sink");
+    let denial = policy_any().decide(&read, &other_handle).unwrap();
+    assert_eq!(
+        denial.failed_precondition,
+        "A passed $2 to a sink sink after receiving untrusted data"
+    );
+    assert_eq!(policy().decide(&read, &other_handle), None);
+
+    let declassified = history(&[
+        event("A", "$1", FlowAction::Read, "untrusted"),
+        event("A", "$2", FlowAction::Declassify, "untrusted"),
+    ]);
+    assert_eq!(policy_any().decide(&declassified, &other_handle), None);
+
+    let other_principal = event("B", "$2", FlowAction::Contact, "sink");
+    assert_eq!(policy_any().decide(&read, &other_principal), None);
+    assert_eq!(policy_any().decide(&declassified, &other_principal), None);
+
+    let retainted = history(&[
+        event("A", "$1", FlowAction::Read, "untrusted"),
+        event("A", "$2", FlowAction::Declassify, "untrusted"),
+        event("A", "$3", FlowAction::Receive, "untrusted"),
+    ]);
+    assert!(policy_any().decide(&retainted, &other_handle).is_some());
 }

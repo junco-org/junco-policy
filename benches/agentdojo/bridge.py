@@ -1,4 +1,4 @@
-"""AgentDojo 0.1.34 environment and scorer; stdout is reserved for JSON RPC."""
+"""AgentDojo environment and scorer (0.1.34, or the multiagentdojo fork for `multi_agent`); stdout is reserved for JSON RPC."""
 
 import contextlib
 import json
@@ -99,8 +99,8 @@ def shape(value):
 
 
 class Worker:
-    def list_tasks(self, suite):
-        suite = get_suite("v1.2", suite)
+    def list_tasks(self, suite, version="v1.2"):
+        suite = get_suite(version, suite)
         return {
             "user_tasks": list(suite.user_tasks),
             "injection_tasks": list(suite.injection_tasks),
@@ -114,9 +114,9 @@ class Worker:
         self.runtime = FunctionsRuntime(self.suite.tools)
         self.trace = []
 
-    def load_task(self, suite, user_task_id, injection_task_id, pipeline_name, model_prose):
+    def load_task(self, suite, user_task_id, injection_task_id, pipeline_name, model_prose, version="v1.2"):
         MODEL_NAMES[pipeline_name] = model_prose
-        self.suite = get_suite("v1.2", suite)
+        self.suite = get_suite(version, suite)
         self.user_task = self.suite.get_user_task_by_id(user_task_id)
         self.injection_task = (
             self.suite.get_injection_task_by_id(injection_task_id)
@@ -193,12 +193,41 @@ class Worker:
             self.execute(call["name"], call["args"])
         return self.evaluate(model_output)
 
+    def multi_agent(self):
+        """The fork's sub-agent partition and prompts for the loaded suite (multiagentdojo only)."""
+        from agentdojo.agent_pipeline.agent_pipeline import load_system_message
+        from agentdojo.agent_pipeline.multi_agent import (
+            SUITE_PARTITIONS,
+            _ORCHESTRATOR_ADDENDUM,
+            _SUBAGENT_ADDENDUM,
+            _TASK_PARAM_DESCRIPTION,
+            _format_agent_roster,
+            _subagent_tool_description,
+        )
+
+        specs = SUITE_PARTITIONS[self.suite.name]
+        tools = {spec.name: [self.runtime.functions[n] for n in spec.tool_names] for spec in specs}
+        base = load_system_message(None)
+        return {
+            "orchestrator_system_message": f"{base}\n\n{_ORCHESTRATOR_ADDENDUM.format(agents=_format_agent_roster(specs, tools))}",
+            "task_param_description": _TASK_PARAM_DESCRIPTION,
+            "agents": [
+                {
+                    "name": spec.name,
+                    "description": _subagent_tool_description(spec, tools[spec.name]),
+                    "system_message": f"{base}\n\n{_SUBAGENT_ADDENDUM.format(agent_name=spec.name, agent_description=spec.description)}",
+                    "tool_names": list(spec.tool_names),
+                }
+                for spec in specs
+            ],
+        }
+
 
 def main():
     worker = Worker()
     methods = {
         name: getattr(worker, name)
-        for name in ("list_tasks", "load_task", "call_tool", "recipients", "evaluate", "replay_evaluate")
+        for name in ("list_tasks", "load_task", "call_tool", "recipients", "evaluate", "replay_evaluate", "multi_agent")
     }
     for line in sys.stdin:
         request_id = None
