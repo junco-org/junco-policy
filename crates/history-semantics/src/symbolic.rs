@@ -261,7 +261,11 @@ impl DerivativeFactors {
         proof! { derivative_frame(store.graph()); model::lemma_graph_regex_wf(store.graph(), self.root@); }
         proof! { derivative_dependency_frame(store.graph(), self.root); }
         store.checkpoint()?;
-        let pos = if self.concat { self.count - 1 - index } else { index };
+        let pos = if self.concat {
+            self.count - 1 - index
+        } else {
+            index
+        };
         let child = if self.concat {
             proof! {
                 norm::regex_ids_shape(prefix.view());

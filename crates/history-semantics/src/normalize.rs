@@ -4105,10 +4105,7 @@ impl Action {
             Err(_) => true,
         },
     )]
-    fn prefix_values<G: KernelStore>(
-        store: &G,
-        id: TransitionId,
-    ) -> KernelResult<&[RegexId]> {
+    fn prefix_values<G: KernelStore>(store: &G, id: TransitionId) -> KernelResult<&[RegexId]> {
         proof! { transition_lemma_prefix(store.graph(), id@); }
         match store.transition(id)? {
             TransitionView::Prepend { prefix, .. } => {

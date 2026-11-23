@@ -727,9 +727,18 @@ impl RuleRuntime {
                 history, stored.revision(), history_store::store::verify::events_view(history_store::history::verify::stored_events(&stored)));
             *self.snapshots = self.snapshots@.insert((history, stored.revision()), history_store::store::verify::events_view(history_store::history::verify::stored_events(&stored)));
         }
-        let key = HistoryCursor { history, revision: stored.revision(), bindings: *bindings,
-            target_len, consumed: 0, residual: self.pair.root };
-        let mut batch = BatchCursor { target_len, ..self.root_cursor() };
+        let key = HistoryCursor {
+            history,
+            revision: stored.revision(),
+            bindings: *bindings,
+            target_len,
+            consumed: 0,
+            residual: self.pair.root,
+        };
+        let mut batch = BatchCursor {
+            target_len,
+            ..self.root_cursor()
+        };
         proof! {
             lemma_root_suffix(self.pair, history_store::store::verify::events_view(raw::stored_events(stored)),
                 bindings@, target_len as nat);
@@ -751,8 +760,10 @@ impl RuleRuntime {
                 if cursor.target_len == target_len {
                     batch.consumed = cursor.consumed;
                     batch.residual = cursor.residual;
-                } else if cursor.consumed == cursor.target_len && cursor.consumed > 0
-                    && cursor.consumed < target_len {
+                } else if cursor.consumed == cursor.target_len
+                    && cursor.consumed > 0
+                    && cursor.consumed < target_len
+                {
                     batch.prior_slot = Some(index);
                 }
             }
@@ -765,7 +776,10 @@ impl RuleRuntime {
         clippy::too_many_arguments,
         reason = "Keep the locked history transaction inputs explicit."
     )]
-    #[expect(clippy::collapsible_if, reason = "Pinned Verus does not support let chains.")]
+    #[expect(
+        clippy::collapsible_if,
+        reason = "Pinned Verus does not support let chains."
+    )]
     #[verus_spec(result =>
         requires advance_requires(*old(self), *old(cursor), *bindings, *stored),
         ensures advance_ensures(*old(self), *final(self), *old(cursor), *final(cursor),
@@ -818,16 +832,24 @@ impl RuleRuntime {
             fresh
         } else {
             proof! { lemma_root_suffix(self.pair, stored@.events, bindings@, target_len as nat); }
-            BatchCursor { target_len, ..self.root_cursor() }
+            BatchCursor {
+                target_len,
+                ..self.root_cursor()
+            }
         };
         let hi = target_len - staged.consumed;
         let mut prior = None;
         if hi > 0 && hi <= batch_size {
             if let Some(index) = staged.prior_slot {
                 if let Some(old) = self.cursors.entries().get(index) {
-                    if old.history == history && old.revision == stored.revision()
-                        && old.bindings == *bindings && old.target_len == old.consumed
-                        && old.consumed > 0 && old.consumed < target_len && old.consumed <= hi {
+                    if old.history == history
+                        && old.revision == stored.revision()
+                        && old.bindings == *bindings
+                        && old.target_len == old.consumed
+                        && old.consumed > 0
+                        && old.consumed < target_len
+                        && old.consumed <= hi
+                    {
                         proof! { assert(cursor_matches_snapshot(self.pair, *old, self.snapshots@)); }
                         prior = Some((old.consumed, old.residual));
                     }
@@ -1025,11 +1047,7 @@ impl BatchCursor {
             return Err(HistoryError::invariant("invalid history batch bounds"));
         }
         let hi = target_len - self.consumed;
-        let count = if batch_size < hi {
-            batch_size
-        } else {
-            hi
-        };
+        let count = if batch_size < hi { batch_size } else { hi };
         let end = self.consumed + count;
         let lo = target_len - end;
         proof! {

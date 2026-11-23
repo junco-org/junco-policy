@@ -395,7 +395,11 @@ mod tests {
             assert_eq!(old.consumed, new.consumed);
             assert_eq!(old.residual, new.residual);
         }
-        cache.publish(HistoryCursor { target_len: 6, consumed: 1, ..replacement });
+        cache.publish(HistoryCursor {
+            target_len: 6,
+            consumed: 1,
+            ..replacement
+        });
         assert_eq!(cache.entries()[0].target_len, 6);
         assert_eq!(cache.entries()[0].consumed, 1);
         Ok(())
