@@ -35,7 +35,7 @@ jobs:
         # Criterion) and the fuzz `other` target (needs a patched VeriMon build).
         run: |
           cargo bench --locked --bench validator --bench progress --bench smt --bench resharp
-          cargo bench --locked --manifest-path fuzz/Cargo.toml --bench lock_policy --bench lock
+          cargo bench --locked --manifest-path fuzz/Cargo.toml --bench lock_policy --bench lock --bench refunds --bench binding_churn
           echo '<meta http-equiv="refresh" content="0; url=report/">' > "$CRITERION_HOME/index.html"
 
       - name: Upload Pages artifact
