@@ -501,6 +501,8 @@ pub mod verify {
 pub struct RuleRuntime {
     pub(crate) pair: crate::progress::CompiledPair,
     pub(crate) cursors: CursorCache,
+    #[cfg(feature = "bench-cursor-cache")]
+    pub(crate) skip_cursor_cache: bool,
     pub(crate) store: Arc<HistoryStore>,
     #[cfg(verus_keep_ghost)]
     pub(crate) snapshots: Ghost<verify::HistorySnapshots>,
@@ -591,6 +593,8 @@ impl RuleRuntime {
         let runtime = Self {
             pair,
             cursors,
+            #[cfg(feature = "bench-cursor-cache")]
+            skip_cursor_cache: false,
             store: Arc::clone(store),
             #[cfg(verus_keep_ghost)]
             snapshots: verus_exec_expr! { Ghost(Map::empty()) },
@@ -876,6 +880,12 @@ impl RuleRuntime {
         match result {
             Err(error) => Err(error),
             Ok(answer) => {
+                // Benchmark builders disable retention before the first decision.
+                #[cfg(feature = "bench-cursor-cache")]
+                if self.skip_cursor_cache {
+                    *cursor = staged;
+                    return Ok(answer);
+                }
                 let published = HistoryCursor {
                     history,
                     bindings: *bindings,

@@ -15,6 +15,7 @@ runtime = ["junco-core/runtime", "history-store/runtime", "dep:smallvec"]
 std = ["junco-core/std", "history-store/std", "history-syntax/std", "vstd/std"]
 cache = []
 test-util = ["runtime", "history-store/test-util", "junco-core/test-util"]
+bench-cursor-cache = ["runtime"]
 
 [dependencies]
 vstd = { version = "=0.0.0-2026-10-04-0306", default-features = false, features = ["alloc"] }

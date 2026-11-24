@@ -1,11 +1,13 @@
 //! Cold tagged-event replay versus warm residual progress at long committed histories.
 //!
-//! Both groups time only `Validator::permits`, with `Instant` around that call alone.
+//! Each group times only `Validator::permits`, with `Instant` around that call alone.
 //! `tagged_replay` forces a progress-cursor validity miss before every timed call: it rolls back
 //! the final committed read and re-appends the identical event through `check` (untimed). The tail
 //! is unchanged and derivative tables stay warm, so the timed call replays the whole compact-event
 //! history from the root. `progress_warm` decides repeatedly over an unchanged history, so every
 //! timed call resumes its cached residual and folds no events.
+//! With `bench-cursor-cache`, `cursor_after_append` compares the same decision after one more read,
+//! with and without cursor retention. Both validators keep their compiled graph and derivatives.
 //!
 //! The policies, seeds, and preflight verdicts mirror the cross-repository comparison scenario.
 
@@ -349,5 +351,54 @@ fn progress_warm(criterion: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(feature = "bench-cursor-cache")]
+fn cursor_after_append(criterion: &mut Criterion) {
+    let mut group = configure(criterion, "cursor_after_append");
+    let read = LockEvent::new(ALICE, Action::Read, RESOURCE);
+    let release = candidate();
+    for length in HISTORY_LENGTHS {
+        for (mode, retain) in [("enabled", true), ("disabled", false)] {
+            let store = Arc::new(Store::new().unwrap());
+            let mut builder = Validator::builder(store);
+            builder.add_rule(prior_edit_rule()).unwrap();
+            let mut validator = if retain {
+                builder.finish()
+            } else {
+                builder.finish_without_cursor_cache()
+            }
+            .unwrap();
+            for _ in 0..length {
+                assert!(validator.check(Request::new(read, ())).unwrap().is_grant());
+            }
+            let prefix = validator.checkpoint();
+            group.bench_function(BenchmarkId::new(mode, length), |bencher| {
+                bencher.iter_custom(|iterations| {
+                    let mut elapsed = Duration::ZERO;
+                    for _ in 0..iterations {
+                        // No edit exists: the new read returns to root, so only a retained
+                        // cursor can avoid scanning the older reads to deny the release.
+                        assert!(!validator.permits(&release).unwrap());
+                        assert!(validator.check(Request::new(read, ())).unwrap().is_grant());
+                        #[cfg(feature = "test-util")]
+                        validator.reset_work_events();
+                        let start = Instant::now();
+                        let permitted = validator.permits(black_box(&release)).unwrap();
+                        elapsed += start.elapsed();
+                        assert!(!permitted);
+                        #[cfg(feature = "test-util")]
+                        assert_eq!(validator.work_events(), if retain { 1 } else { length + 1 });
+                        validator.rollback(prefix).unwrap();
+                    }
+                    elapsed
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+#[cfg(feature = "bench-cursor-cache")]
+criterion_group!(benches, tagged_replay, progress_warm, cursor_after_append);
+#[cfg(not(feature = "bench-cursor-cache"))]
 criterion_group!(benches, tagged_replay, progress_warm);
 criterion_main!(benches);

@@ -614,6 +614,10 @@ impl<E: Event> CompiledRule<E> {
                     limits,
                     world,
                 )?;
+                #[cfg(feature = "bench-cursor-cache")]
+                {
+                    replacement.skip_cursor_cache = self.runtime.skip_cursor_cache;
+                }
                 proof_decl! { let tracked mut replacement_observations = Map::<(usize, u64), ObservedHistory>::tracked_empty(); }
                 proof! {
                     history_store::history::lemma_stored_history_view(*history.numeric());

@@ -187,6 +187,17 @@ impl<E: Event> ValidatorBuilder<E> {
     }
 }
 
+#[cfg(feature = "bench-cursor-cache")]
+impl<E: Event> ValidatorBuilder<E> {
+    /// Benchmark the same compiled rules without retaining history cursors between decisions.
+    pub fn finish_without_cursor_cache(mut self) -> Result<Validator<E>, HistoryError> {
+        for rule in &mut self.rules {
+            rule.runtime.skip_cursor_cache = true;
+        }
+        self.finish()
+    }
+}
+
 /// Stateful validator for a fixed ordered rule set.
 #[verus_verify]
 pub struct Validator<E: Event> {

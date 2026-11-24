@@ -25,6 +25,7 @@ history-syntax = { path = "crates/history-syntax", default-features = false, fea
 # Work counters and fault injection for `tests/progress.rs`; off for benchmarks so they build the
 # verified `runtime,std,cache` configuration (`cargo test --features test-util` runs those tests).
 test-util = ["history-semantics/test-util"]
+bench-cursor-cache = ["history-semantics/bench-cursor-cache"]
 
 [dev-dependencies]
 criterion = "0.5"
