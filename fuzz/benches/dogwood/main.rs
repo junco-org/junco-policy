@@ -8,13 +8,6 @@
 //! Temporal predicates see responses only, so denied requests cannot change lock state.
 //! One-second timestamps keep the largest stream (2,048 events) inside `within 24h`.
 //!
-//! VeriMon (`jshs/monpoly` commit `025a142321e4cd9174164568e38c399ec336a076` plus
-//! `verimon/timed.patch`, `-verified`) runs as a child process per iteration. A prelude sentinel
-//! proves readiness and a trailing sentinel marks completion. Timing covers streaming the log and
-//! reading verdicts, not process start-up, formula parsing, or exit. Each request time point
-//! decides; a commit time point follows only when granted. The three MFOTL disjuncts encode
-//! `owned_by_other`, `stale_view`, and `read_by_other`.
-//!
 //! | Junco rule | Dogwood `@id` |
 //! | --- | --- |
 //! | edit × owned_by_other | edit_owned_by_other |
@@ -30,31 +23,23 @@
 //! Dogwood probe: every `is_authorized` appends. `../lock_policy.rs` covers junco's warm probe.
 //!
 //! `deny_scaling` times one denied decision over committed histories of 2^4 ..= 2^16 granted
-//! events (the `lock_scaling` trace): Junco warm with a retained policy, Dogwood over a freshly
-//! ingested authorizer (ingestion untimed), VeriMon as one long-lived process per length with the
-//! history streamed before timing, so the timed region is one request time point.
-//!
-//! `deny_cold` decides the same candidates cold: Junco folds a never-seen clone of the prefix,
-//! Dogwood decides as above, and a fresh `-timed` VeriMon process parses the log untimed and
-//! reports the kernel's time over every time point, so each engine pays the whole history.
+//! events (the `lock_scaling` trace): Junco warm with a retained policy, Dogwood with the
+//! history ingested before timing. `deny_cold` uses the same Dogwood setup but gives Junco
+//! a fresh history clone so it cannot reuse a warm cursor.
 
-use std::env;
 use std::fmt::Write as _;
 use std::fs;
 use std::hint::black_box;
-use std::io::{BufRead, BufReader, Write as IoWrite};
-use std::path::Path;
-use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use criterion::{
     BatchSize, BenchmarkId, Criterion, PlottingBackend, SamplingMode, Throughput, criterion_group,
     criterion_main,
 };
 use dogwood_language::{
-    Authorizer, Event, ParsedPolicySet, PolicySchema, ProviderDeclarations, ServiceSchema,
-    Validator, parse_trace,
+    Authorizer, Event, InMemoryTemporalEngine, ParsedPolicySet, PolicySchema, ProviderDeclarations,
+    ServiceSchema, Validator, parse_trace,
 };
 use history_store::{History, Store};
 use junco_policy::{Action, LockEvent, LockPolicy};
@@ -233,7 +218,10 @@ impl Dogwood {
     }
 
     fn authorizer(&self) -> Authorizer {
-        Authorizer::new(self.parsed.lower(&self.schema).expect("policy lowers"))
+        Authorizer::builder(self.parsed.lower(&self.schema).expect("policy lowers"))
+            .temporal_engine(InMemoryTemporalEngine::new().slice_leaves())
+            .build()
+            .expect("authorizer builds")
     }
 }
 
@@ -253,226 +241,6 @@ fn dogwood_event(event: &LockEvent<Agent, PooledPath>, kind: &str, ts: i64) -> E
         .principal_for("Lock::Agent", &event.principal.to_string())
         .resource_for("Lock::Path", &event.resource.to_string())
         .build()
-}
-
-const VERIMON_SIG: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/benches/dogwood/verimon/lock.sig"
-);
-const VERIMON_FORMULA: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/benches/dogwood/verimon/lock.mfotl"
-);
-const VERIMON_PRELUDE: &str =
-    "@0 edit(\"sentinel_owner\",\"sentinel\")\n@1 edit_req(\"sentinel_other\",\"sentinel\")\n@2\n";
-const VERIMON_FIRST_TP: usize = 3;
-
-fn predicate(action: Action) -> &'static str {
-    match action {
-        Action::Read => "read",
-        Action::Edit => "edit",
-        Action::Release => "release",
-        Action::Remove => "remove",
-    }
-}
-
-struct VerimonLog {
-    text: String,
-    denied: Vec<usize>,
-    sentinel: usize,
-}
-
-fn verimon_log<'a>(
-    candidates: impl IntoIterator<Item = (&'a LockEvent<Agent, PooledPath>, bool)>,
-) -> VerimonLog {
-    let mut text = String::new();
-    let mut denied = Vec::new();
-    let mut tp = VERIMON_FIRST_TP;
-    for (event, granted) in candidates {
-        writeln!(
-            text,
-            "@{tp} {}_req(\"{}\",\"{}\")",
-            predicate(event.action),
-            event.principal,
-            event.resource
-        )
-        .expect("write to string");
-        if !granted {
-            denied.push(tp);
-        }
-        tp += 1;
-        if granted {
-            writeln!(
-                text,
-                "@{tp} {}(\"{}\",\"{}\")",
-                predicate(event.action),
-                event.principal,
-                event.resource
-            )
-            .expect("write to string");
-            tp += 1;
-        }
-    }
-    let sentinel = tp;
-    write!(
-        text,
-        "@{tp} edit_req(\"sentinel_other\",\"sentinel\")\n@{}\n",
-        tp + 1
-    )
-    .expect("write to string");
-    VerimonLog {
-        text,
-        denied,
-        sentinel,
-    }
-}
-
-/// `VERIMON`, falling back to `monpoly` on `PATH`.
-fn verimon_binary() -> std::ffi::OsString {
-    env::var_os("VERIMON").unwrap_or_else(|| "monpoly".into())
-}
-
-/// The time point of a VeriMon verdict line, if `line` is one.
-fn verdict_time_point(line: &str) -> Option<usize> {
-    let (_, suffix) = line.split_once("(time point ")?;
-    Some(
-        suffix
-            .split_once(')')
-            .expect("VeriMon time point terminator")
-            .0
-            .parse()
-            .expect("VeriMon numeric time point"),
-    )
-}
-
-/// Cold VeriMon: a fresh `-timed` process (`verimon/timed.patch`) parses `log` untimed, then
-/// reports the time the verified kernel spent stepping every time point. Returns that time and
-/// the violated time points.
-fn verimon_cold(log: &Path) -> (Duration, Vec<usize>) {
-    let output = Command::new(verimon_binary())
-        .args([
-            "-verified",
-            "-timed",
-            "-nonewlastts",
-            "-sig",
-            VERIMON_SIG,
-            "-formula",
-            VERIMON_FORMULA,
-            "-log",
-        ])
-        .arg(log)
-        .stderr(Stdio::inherit())
-        .output()
-        .expect("run VeriMon");
-    assert!(
-        output.status.success(),
-        "VeriMon failed on {}",
-        log.display()
-    );
-    let stdout = String::from_utf8(output.stdout).expect("VeriMon output is UTF-8");
-    let mut elapsed = None;
-    let mut violated = Vec::new();
-    for line in stdout.lines() {
-        if let Some(ns) = line
-            .strip_prefix("# monitor time: ")
-            .and_then(|rest| rest.strip_suffix(" ns"))
-        {
-            elapsed = Some(Duration::from_nanos(
-                ns.parse().expect("VeriMon nanoseconds"),
-            ));
-        } else if let Some(time_point) = verdict_time_point(line) {
-            violated.push(time_point);
-        }
-    }
-    (
-        elapsed.expect("VeriMon -timed report; build it with verimon/timed.patch applied"),
-        violated,
-    )
-}
-
-struct Verimon {
-    child: Child,
-    stdout: BufReader<ChildStdout>,
-    line: String,
-}
-
-impl Verimon {
-    fn spawn() -> Self {
-        let mut child = Command::new(verimon_binary())
-            .args([
-                "-verified",
-                "-sig",
-                VERIMON_SIG,
-                "-formula",
-                VERIMON_FORMULA,
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap_or_else(|error| {
-                panic!(
-                    "cannot start VeriMon: {error}; set VERIMON or install it per fuzz/benches/dogwood/README.md"
-                )
-            });
-        let stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
-        child
-            .stdin
-            .as_mut()
-            .expect("piped stdin")
-            .write_all(VERIMON_PRELUDE.as_bytes())
-            .expect("write VeriMon prelude");
-        let mut verimon = Self {
-            child,
-            stdout,
-            line: String::new(),
-        };
-        assert!(verimon.violations_until(1).is_empty());
-        verimon
-    }
-
-    fn violations_until(&mut self, sentinel: usize) -> Vec<usize> {
-        let mut violated = Vec::new();
-        loop {
-            self.line.clear();
-            if self
-                .stdout
-                .read_line(&mut self.line)
-                .expect("read VeriMon output")
-                == 0
-            {
-                panic!("VeriMon exited before time point {sentinel}; see its stderr above");
-            }
-            let Some(time_point) = verdict_time_point(&self.line) else {
-                continue;
-            };
-            if time_point == sentinel {
-                break;
-            }
-            violated.push(time_point);
-        }
-        violated
-    }
-
-    fn run(&mut self, log: &VerimonLog) -> (Duration, Vec<usize>) {
-        let start = Instant::now();
-        // The log produces far less than a pipe buffer of output, so writing it first cannot block.
-        self.child
-            .stdin
-            .as_mut()
-            .expect("piped stdin")
-            .write_all(log.text.as_bytes())
-            .expect("write VeriMon log");
-        let violated = self.violations_until(log.sentinel);
-        (start.elapsed(), violated)
-    }
-}
-
-impl Drop for Verimon {
-    fn drop(&mut self) {
-        self.child.stdin.take();
-        let _ = self.child.wait();
-    }
 }
 
 struct Junco {
@@ -518,7 +286,6 @@ fn replay(criterion: &mut Criterion) {
                 )
             })
             .collect();
-        let verimon_log = verimon_log(events.iter().map(|event| (event, true)));
         let mut authorizer = dogwood.authorizer();
         let mut prefix = junco.history();
         for (index, (event, (request, response))) in events.iter().zip(&dogwood_events).enumerate()
@@ -534,11 +301,6 @@ fn replay(criterion: &mut Criterion) {
             assert!(authorizer.is_authorized(response).is_none());
             prefix.push(*event).expect("append");
         }
-        let (_, violated) = Verimon::spawn().run(&verimon_log);
-        assert!(
-            violated.is_empty(),
-            "verimon denies a granted event at length {length}: {violated:?}"
-        );
         eprintln!("replay preflight: {length} granted events agree");
 
         group.throughput(Throughput::Elements(length as u64));
@@ -571,17 +333,6 @@ fn replay(criterion: &mut Criterion) {
                 },
                 BatchSize::PerIteration,
             )
-        });
-        group.bench_function(BenchmarkId::new("verimon", length), |bencher| {
-            bencher.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
-                for _ in 0..iters {
-                    let (elapsed, violated) = Verimon::spawn().run(&verimon_log);
-                    assert!(violated.is_empty());
-                    total += elapsed;
-                }
-                total
-            })
         });
     }
     group.finish();
@@ -624,10 +375,6 @@ fn fuzz(criterion: &mut Criterion) {
                 .collect()
         })
         .collect();
-    let verimon_traces: Vec<_> = traces
-        .iter()
-        .map(|trace| verimon_log(trace.iter().map(|(event, granted)| (event, *granted))))
-        .collect();
     let dogwood = Dogwood::lock_policy();
     let mut junco = Junco::lock_policy();
     let mut total = 0;
@@ -661,16 +408,10 @@ fn fuzz(criterion: &mut Criterion) {
             }
             total += 1;
         }
-        let verimon_log = &verimon_traces[trace_index];
-        let (_, violated) = Verimon::spawn().run(verimon_log);
-        assert_eq!(
-            violated, verimon_log.denied,
-            "trace {trace_index}: verimon denials differ from junco"
-        );
     }
     assert!(denied > 0, "seeded traces must exercise denials");
     eprintln!(
-        "fuzz preflight: {total} candidates ({denied} denied) in {} traces agree across all three engines",
+        "fuzz preflight: Junco and Dogwood agree on {total} candidates ({denied} denied) in {} traces",
         traces.len()
     );
 
@@ -724,19 +465,6 @@ fn fuzz(criterion: &mut Criterion) {
             },
             BatchSize::PerIteration,
         )
-    });
-    group.bench_function("verimon", |bencher| {
-        bencher.iter_custom(|iters| {
-            let mut total = Duration::ZERO;
-            for _ in 0..iters {
-                for log in &verimon_traces {
-                    let (elapsed, violated) = Verimon::spawn().run(log);
-                    assert_eq!(violated, log.denied);
-                    total += elapsed;
-                }
-            }
-            total
-        })
     });
     group.finish();
 }
@@ -890,22 +618,6 @@ fn denied_candidate(
         .find(|candidate| !check(policy, prefix, candidate).expect("decision"))
 }
 
-/// One request time point whose denial is the sentinel; the empty `@{tp + 1}` closes it so
-/// VeriMon emits the verdict. Only valid once the request is known to be denied.
-fn verimon_request(tp: usize, event: &LockEvent<Agent, PooledPath>) -> VerimonLog {
-    VerimonLog {
-        text: format!(
-            "@{tp} {}_req(\"{}\",\"{}\")\n@{}\n",
-            predicate(event.action),
-            event.principal,
-            event.resource,
-            tp + 1
-        ),
-        denied: Vec::new(),
-        sentinel: tp,
-    }
-}
-
 /// Same lengths, seed and prefixes as `../lock-policy/main.rs`, so junco points match its panel.
 const DENY_LENGTHS: [usize; 13] = [
     16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536,
@@ -974,58 +686,6 @@ fn deny(criterion: &mut Criterion) {
             );
         }
 
-        // Stream the commits once; commits are never requests, so nothing precedes the sentinel.
-        let mut verimon = Verimon::spawn();
-        let mut text = String::new();
-        for (index, event) in events.iter().enumerate() {
-            writeln!(
-                text,
-                "@{} {}(\"{}\",\"{}\")",
-                VERIMON_FIRST_TP + index,
-                predicate(event.action),
-                event.principal,
-                event.resource
-            )
-            .expect("write to string");
-        }
-        let sentinel = VERIMON_FIRST_TP + length;
-        write!(
-            text,
-            "@{sentinel} edit_req(\"sentinel_other\",\"sentinel\")\n@{}\n",
-            sentinel + 1
-        )
-        .expect("write to string");
-        let ingest = VerimonLog {
-            text,
-            denied: Vec::new(),
-            sentinel,
-        };
-        let (_, violated) = verimon.run(&ingest);
-        assert!(
-            violated.is_empty(),
-            "verimon violations during ingest at length {length}: {violated:?}"
-        );
-        // Preflight with a guaranteed sentinel so a VeriMon grant cannot hang the reader.
-        let mut tp = sentinel + 2;
-        let preflight = VerimonLog {
-            text: format!(
-                "@{tp} {}_req(\"{}\",\"{}\")\n@{} edit_req(\"sentinel_other\",\"sentinel\")\n@{}\n",
-                predicate(candidate.action),
-                candidate.principal,
-                candidate.resource,
-                tp + 1,
-                tp + 2
-            ),
-            denied: Vec::new(),
-            sentinel: tp + 1,
-        };
-        assert_eq!(
-            verimon.run(&preflight).1,
-            vec![tp],
-            "verimon grants {candidate:?} at length {length}"
-        );
-        tp += 3;
-
         group.bench_function(BenchmarkId::new("junco", length), |bencher| {
             bencher.iter(|| {
                 check(&mut policy, black_box(&prefix), black_box(&candidate)).expect("decision")
@@ -1047,27 +707,10 @@ fn deny(criterion: &mut Criterion) {
                 )
             });
         }
-        group.bench_function(BenchmarkId::new("verimon", length), |bencher| {
-            bencher.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
-                for _ in 0..iters {
-                    let (elapsed, violated) = verimon.run(&verimon_request(tp, &candidate));
-                    assert!(violated.is_empty());
-                    total += elapsed;
-                    tp += 2;
-                }
-                total
-            })
-        });
     }
     group.finish();
 }
 
-/// `deny_cold`: the `deny_scaling` candidates decided cold, every engine paying the whole history
-/// inside timing with parsing outside it. Junco folds a never-seen clone of the prefix with a
-/// retained compiled policy, Dogwood decides on a freshly ingested authorizer, and a fresh `-timed`
-/// VeriMon process (`verimon/timed.patch`) parses the log first and reports the kernel's time over
-/// all time points.
 fn deny_cold(criterion: &mut Criterion) {
     let longest = DENY_LENGTHS[DENY_LENGTHS.len() - 1];
     let history = granted_history(&entropy(DENY_SEED, longest * BYTES_PER_EVENT), longest)
@@ -1099,36 +742,6 @@ fn deny_cold(criterion: &mut Criterion) {
             "dogwood grants {candidate:?} at length {length}"
         );
 
-        // Commits at time points 0..length, the request at `length`, an empty close so VeriMon
-        // emits its verdict; no sentinel, since the process ends after the log.
-        let mut text = String::new();
-        for (index, event) in events.iter().enumerate() {
-            writeln!(
-                text,
-                "@{index} {}(\"{}\",\"{}\")",
-                predicate(event.action),
-                event.principal,
-                event.resource
-            )
-            .expect("write to string");
-        }
-        write!(
-            text,
-            "@{length} {}_req(\"{}\",\"{}\")\n@{}\n",
-            predicate(candidate.action),
-            candidate.principal,
-            candidate.resource,
-            length + 1
-        )
-        .expect("write to string");
-        let log = env::temp_dir().join(format!("junco-deny-cold-{length}.log"));
-        fs::write(&log, text).expect("write VeriMon log");
-        assert_eq!(
-            verimon_cold(&log).1,
-            [length],
-            "verimon grants {candidate:?} at length {length}"
-        );
-
         group.bench_function(BenchmarkId::new("junco", length), |bencher| {
             bencher.iter_batched(
                 || prefix.try_clone().expect("history clone"),
@@ -1151,17 +764,6 @@ fn deny_cold(criterion: &mut Criterion) {
                 },
                 BatchSize::PerIteration,
             )
-        });
-        group.bench_function(BenchmarkId::new("verimon", length), |bencher| {
-            bencher.iter_custom(|iters| {
-                (0..iters)
-                    .map(|_| {
-                        let (elapsed, violated) = verimon_cold(&log);
-                        assert_eq!(violated, [length]);
-                        elapsed
-                    })
-                    .sum()
-            })
         });
     }
     group.finish();

@@ -346,7 +346,7 @@ cargo bench --bench validator -- stress_growing_residual --noplot
 cargo bench --bench validator -- stress_many_rules --noplot
 ```
 
-The `other` benchmark drives Dogwood and VeriMon; build VeriMon and set `VERIMON` as described in `fuzz/benches/dogwood/README.md`.
+The [`other` benchmark](fuzz/benches/dogwood/README.md) compares Junco with leaf-sliced Dogwood on lock-policy workloads and replays Dogwood's documentation examples.
 
 The `lock_policy` benchmark repeatedly decides over unchanged histories with a
 retained policy; it reports warm-progress latency. `progress` compares that reuse with

@@ -31,11 +31,10 @@ jobs:
         run: rustup toolchain install 1.98.1 --profile minimal
 
       - name: Run benchmarks
-        # Not run: `agentdojo` (needs the AgentDojo Python environment and model access; not
-        # Criterion) and the fuzz `other` target (needs a patched VeriMon build).
+        # `agentdojo` needs the AgentDojo Python environment and model access; it is not Criterion.
         run: |
           cargo bench --locked --bench validator --bench progress --bench smt --bench resharp
-          cargo bench --locked --manifest-path fuzz/Cargo.toml --bench lock_policy --bench lock --bench refunds --bench binding_churn
+          cargo bench --locked --manifest-path fuzz/Cargo.toml --bench lock_policy --bench lock --bench other --bench refunds --bench binding_churn
           echo '<meta http-equiv="refresh" content="0; url=report/">' > "$CRITERION_HOME/index.html"
 
       - name: Upload Pages artifact

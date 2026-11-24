@@ -5,17 +5,19 @@ cargo +1.98.1 bench --manifest-path fuzz/Cargo.toml --bench other
 cargo +1.98.1 bench --manifest-path fuzz/Cargo.toml --bench other -- 'dogwood_fuzz/'
 ```
 
-`dogwood_replay`: cold replay of 16, 64, 256, and 1,024 granted events from the lock-policy fuzz harness, through all three engines. Throughput counts granted events; preflight checks every verdict.
+`dogwood_replay`: Junco and Dogwood replay 16, 64, 256, and 1,024 granted events from the lock-policy fuzz harness. Throughput counts granted events; preflight checks every verdict.
 
-`dogwood_fuzz`: the harness's 32 deterministic seeded traces, including denials in generation order. All three engines must match all 449 candidates (42 denied) before timing; throughput counts candidates, not committed events.
+`dogwood_fuzz`: the harness's 32 deterministic seeded traces, including denials in generation order. Junco and Dogwood must match the expected verdict on all 449 candidates (42 denied) before timing; throughput counts candidates, not committed events.
 
 `dogwood_examples`: Dogwood alone replays 52 default-feature doc examples. Preflight matches the CLI's verdict/rule/error stream against `expected.out`; throughput counts all input events. Dogwood has no benchmark suite at the pinned commit, so these are documentation workloads, not upstream benchmarks.
 
-`deny_scaling`: one denied decision over committed histories of 2^4 ..= 2^16 granted events (the `lock_scaling` trace and seed). Per length the first candidate Junco denies, in order Edit, Remove, Release × agent0..2 × src/file0..3.txt, is decided by all three engines; preflight asserts each denies it. Junco decides warm with a retained policy; Dogwood decides on a fresh authorizer with the history ingested outside timing; VeriMon is one long-lived process per length with the history streamed before timing, so the timed region is a single request time point.
+`deny_scaling`: one denied decision over committed histories of 2^4 ..= 2^16 granted events (the `lock_scaling` trace and seed). At each length, preflight checks that Dogwood denies the first candidate Junco denies, in order Edit, Remove, Release × agent0..2 × src/file0..3.txt. Junco decides warm with a retained policy; Dogwood decides on a fresh authorizer with the history ingested before timing.
 
-`deny_cold`: the same candidates decided cold, every engine paying the whole history inside timing with parsing outside it. Junco folds a never-seen clone of the prefix with a retained compiled policy; Dogwood decides on a fresh authorizer with the history ingested outside timing (as in `deny_scaling`); VeriMon is a fresh process per sample built with `verimon/timed.patch`, whose `-timed` flag parses the whole log first and prints the time the verified kernel spent stepping every time point. Criterion records that reported time.
+`deny_cold`: the same denied decisions, but Junco gets a fresh clone of the prefix for each iteration. The compiled policy is retained; the timed decision cannot reuse a warm cursor. Dogwood's timing boundary is unchanged from `deny_scaling`.
 
-Junco retains its compiled policy/store with fresh histories; Dogwood re-lowers and rebuilds each authorizer outside timing because it consumes the policy set and has no reset. Timed routines include ingestion and teardown. Events are prebuilt: a request decides; only grants add a response visible to temporal predicates. Timestamps advance by one second, inside the 24h window. No warm Dogwood single-decision probe exists: every call appends; `../lock_policy.rs` covers junco's warm decisions.
+All Dogwood benchmarks and preflight checks use `InMemoryTemporalEngine::new().slice_leaves()`, which skips temporal leaves irrelevant to the decision. Each fresh authorizer is lowered and built outside timing because it consumes the policy set and has no reset.
+
+For lock-policy replay, Junco retains its compiled policy and store across fresh histories. Both engines time decisions and committed-history ingestion with prebuilt events: a request decides, and only grants add a response visible to temporal predicates. Timestamps advance by one second, inside the 24h window.
 
 | Junco rule | Dogwood `@id` |
 | --- | --- |
@@ -58,24 +60,3 @@ for d in $names; do
   done
 done
 ```
-
-## VeriMon
-
-The verified MFOTL baseline is [VeriMon](https://bitbucket.org/jshs/monpoly), pinned to commit `025a142321e4cd9174164568e38c399ec336a076` plus `verimon/timed.patch`. Build and install it once from a checkout of this repository:
-
-```sh
-git clone https://bitbucket.org/jshs/monpoly.git ~/git/monpoly
-cd ~/git/monpoly
-git checkout 025a142321e4cd9174164568e38c399ec336a076
-git apply path/to/junco-policy/fuzz/benches/dogwood/verimon/timed.patch
-eval "$(opam env --switch=default --set-switch)"
-opam install -y --deps-only --ignore-constraints-on=libmonpoly .
-dune build --release
-dune install --prefix "$HOME/.local"
-export VERIMON="$HOME/.local/bin/monpoly"
-"$VERIMON" -version
-```
-
-The final command prints `MonPoly, version 025a142-dirty`: the patch adds the `-timed` flag that `deny_cold` needs and changes nothing else. The benchmark reads `VERIMON`, falling back to `monpoly` on `PATH`, and always passes `-verified`. `verimon/lock.sig` defines the event vocabulary; `verimon/lock.mfotl` encodes the three lock-policy denial predicates.
-
-Time points 0–2 are the readiness prelude. Candidate requests and granted commits start at time point 3; denied requests have no commit. A guaranteed trailing violation marks completion. The timed region covers writing the prepared log and reading verdicts. Process start-up, formula parsing, and process exit are outside timing.
